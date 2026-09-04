@@ -8,7 +8,7 @@
 //
 // 注意：这里没有调用 app.requestSingleInstanceLock()。每次从系统启动应用都会
 // 创建独立的 Electron 进程与本地 Core，可分别绑定不同项目。
-const { app, BrowserWindow, Menu, session, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const pty = require("node-pty");
 const fs = require("fs");
@@ -340,7 +340,24 @@ async function createLocalWindow(workspace = null) {
   const window = createWindow(loadingUrl);
   try {
     const instance = await spawnLocalCore(workspace);
-    const record = { window, ...instance, workspace };
+    // 后端可能恢复了上次的 workspace（如 CLI --workspace 参数）；启动时
+    // 从 /api/status 拉取一次，保证终端 cwd 等主进程状态与后端一致
+    let effectiveWorkspace = workspace;
+    if (!effectiveWorkspace && instance.url) {
+      try {
+        const statusUrl = new URL("/api/status", instance.url).href;
+        const resp = await net.fetch(statusUrl);
+        if (resp.ok) {
+          const status = await resp.json();
+          if (status && typeof status.workspace === "string" && status.workspace) {
+            effectiveWorkspace = status.workspace;
+          }
+        }
+      } catch (e) {
+        writeLog("log", `启动时拉取 workspace 失败（终端可能提示先打开项目）: ${e.message}`);
+      }
+    }
+    const record = { window, ...instance, workspace: effectiveWorkspace };
     const winId = window.webContents.id;
     localInstances.set(winId, record);
     window.once("closed", () => {

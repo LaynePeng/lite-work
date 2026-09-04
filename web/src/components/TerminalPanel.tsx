@@ -6,11 +6,13 @@ import "@xterm/xterm/css/xterm.css";
 export default function TerminalPanel({ workspace }: { workspace: string | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // 有效工作区：非空且非哨兵值（Sidebar 无项目时传"未打开项目"）
+  const validWorkspace = workspace && workspace !== "未打开项目" ? workspace : null;
 
   useEffect(() => {
     const bridge = window.liteWork;
     const host = hostRef.current;
-    if (!bridge || !host || !workspace) return;
+    if (!bridge || !host || !validWorkspace) return;
 
     const terminal = new Terminal({
       convertEol: true,
@@ -45,9 +47,9 @@ export default function TerminalPanel({ workspace }: { workspace: string | null 
       bridge.terminalStop();
       terminal.dispose();
     };
-  }, [workspace]);
+  }, [validWorkspace]);
 
   if (!window.liteWork) return <div className="terminal-empty">终端仅在桌面应用中可用</div>;
-  if (!workspace) return <div className="terminal-empty">打开项目后启动终端</div>;
+  if (!validWorkspace) return <div className="terminal-empty">打开项目后启动终端</div>;
   return <div className="terminal-wrap">{error && <div className="terminal-error">{error}</div>}<div className="terminal-host" ref={hostRef} /></div>;
 }
