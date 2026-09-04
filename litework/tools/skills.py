@@ -483,5 +483,8 @@ class SkillsTools:
         skill_name = str(args.get("skillName") or "").strip()
         content = self.read_skill(skill_name)
         if content is None:
-            return f"[Error]: 未找到技能 {skill_name!r}"
+            # 失败时附带可用技能清单：Agent 无需自己去文件系统寻找
+            available = [s["name"] for s in self.list_skills()]
+            avail_hint = ("可用技能：" + ", ".join(available)) if available else "当前没有发现任何技能"
+            return f"[Error]: 未找到技能 {skill_name!r}（{avail_hint}）"
         return f"技能 {skill_name}：\n\n{content}"

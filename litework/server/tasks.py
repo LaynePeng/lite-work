@@ -280,7 +280,10 @@ class TaskManager:
                     if content:
                         skill_content += content
                     else:
-                        skill_content += f"[未找到技能 {name!r}，请检查名称]"
+                        # 未命中时给出可用技能清单，Agent 不需要自己去文件系统瞎找
+                        available = [s["name"] for s in skills_tools.list_skills()]
+                        avail_hint = ("；可用技能：" + ", ".join(available)) if available else "（当前没有发现任何技能）"
+                        skill_content += f"[未找到技能 {name!r}，请检查名称{avail_hint}]"
                     loaded_names.append(name)
             # triggers 自动匹配（/skill 命令时跳过，避免重复注入）
             if not cmd:
