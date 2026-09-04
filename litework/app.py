@@ -123,6 +123,16 @@ class AgentApp:
         # 最近打开的项目（侧边栏「项目」页签：打开/新建后记录，最多保留 20 个）
         self.recent_projects_path = os.path.join(self.config_dir, "recent_projects.json")
 
+        # 内置技能安装到用户级 ~/.agents/skills/（幂等；Agent 依赖稳定路径
+        # 跑技能脚本，仓库/_internal 内置位置换机器/升级后会漂移）
+        try:
+            from .tools.skills import sync_builtin_skills_to_user
+            n = sync_builtin_skills_to_user()
+            if n:
+                logger.info("[App] 已安装/升级 %d 个内置技能到 ~/.agents/skills/", n)
+        except Exception:
+            logger.debug("[App] 内置技能同步失败（不影响启动）", exc_info=True)
+
         # 兼容旧配置：base_url/model 回填
         if base_url and not self.llm_registry.get_active_provider_settings().get("base_url"):
             self.llm_registry.providers["deepseek"]["base_url"] = base_url

@@ -55,9 +55,10 @@ def test_builtin_skills_visible_in_any_workspace(tmp_path):
     names = {s["name"] for s in tools.list_skills()}
     assert "diagram-to-office" in names
     assert "weekly-report" in names
-    # scope 标记为 builtin
+    # 同步安装后技能位于用户级（scope=user，稳定路径）；未同步环境
+    # （如隔离 HOME）下回退 builtin 也可发现——两处任一可见即满足需求
     scopes = {s["name"]: s["scope"] for s in tools.list_skills()}
-    assert scopes["diagram-to-office"] == "builtin"
+    assert scopes["diagram-to-office"] in ("user", "builtin")
 
     # load_skill 可加载内置技能
     result = asyncio.run(tools.execute("load_skill", {"skillName": "diagram-to-office"}))
@@ -90,7 +91,50 @@ def test_project_instructions_support_claude_uppercase(tmp_path):
     assert "load_skill" in prompt
 
 
-# ---------------------------------------------------------------- frontmatter
+# ---------------------------------------------------------------- 内置技能同步安装到用户级
+
+def test_sync_builtin_skills_to_user(tmp_path, monkeypatch):
+    """内置技能装到 ~/.agents/skills/：缺失安装、版本升级覆盖、用户自有不动。"""
+    from litework.tools import skills as skills_mod
+
+    builtin = skills_mod._builtin_skills_dir()
+    assert builtin is not None
+
+    # 隔离 HOME（同步目标 ~/.agents/skills 跟随 HOME）
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    # 1) 首次同步：全部安装 + 版本标记
+    n = skills_mod.sync_builtin_skills_to_user()
+    assert n >= 7
+    user_root = tmp_path / ".agents" / "skills"
+    assert (user_root / "diagram-to-office" / "SKILL.md").is_file()
+    assert (user_root / "diagram-to-office" / ".litework-builtin").is_file()
+    import litework
+    assert (user_root / "diagram-to-office" / ".litework-builtin").read_text().strip() == litework.__version__
+
+    # 2) 幂等：版本未变，重复同步不再安装
+    assert skills_mod.sync_builtin_skills_to_user() == 0
+
+    # 3) 版本变化 → 覆盖升级
+    (user_root / "diagram-to-office" / ".litework-builtin").write_text("0.0.1", encoding="utf-8")
+    assert skills_mod.sync_builtin_skills_to_user() >= 1
+    assert (user_root / "diagram-to-office" / ".litework-builtin").read_text().strip() == litework.__version__
+
+    # 4) 用户自有同名技能（无标记）→ 不覆盖
+    custom = user_root / "weekly-report"
+    (custom / ".litework-builtin").unlink()
+    (custom / "SKILL.md").write_text("---\nname: weekly-report\ndescription: 我的定制版\n---\n定制内容", encoding="utf-8")
+    assert skills_mod.sync_builtin_skills_to_user() == 0
+    assert "定制内容" in (custom / "SKILL.md").read_text(encoding="utf-8")
+
+    # 5) 同步后 load_skill 返回用户级稳定路径
+    tools = SkillsTools(None)
+    result = asyncio.run(tools.execute("load_skill", {"skillName": "diagram-to-office"}))
+    assert str(user_root / "diagram-to-office") in result
+
+
+
 
 def test_parse_frontmatter_flat_and_nested():
     text = "---\nname: my-skill\ndescription: 测试技能\nlicense: MIT\nmetadata:\n  audience: devs\n---\nbody"

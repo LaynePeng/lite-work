@@ -130,6 +130,64 @@ def _builtin_skills_dir() -> Optional[Path]:
     return None
 
 
+# 内置技能安装到用户级目录的标记文件（内容为安装时的产品版本）
+BUILTIN_SKILL_MARKER = ".litework-builtin"
+
+
+def sync_builtin_skills_to_user() -> int:
+    """把内置技能同步安装到 ~/.agents/skills/（用户级标准位置）。
+
+    为什么必须装到用户目录：内置位置（开发态=仓库 skills/、打包态=
+    _internal/skills/）对 Agent 不稳定——换机器/升级应用后路径漂移，
+    SKILL.md 里的脚本相对路径无从解析。用户级目录 ~/.agents/skills/
+    持久稳定且 SkillsTools 原生扫描。
+
+    同步策略（幂等，启动时执行）：
+    - 目标不存在 → 安装；
+    - 目标带 .litework-builtin 标记（我们装的）→ 版本变化时覆盖升级；
+    - 用户自有的同名技能（无标记）→ 不动。
+    返回本次安装/升级的技能数。
+    """
+    import shutil as _shutil
+
+    from litework import __version__
+
+    builtin = _builtin_skills_dir()
+    if builtin is None:
+        return 0
+    user_root = Path.home() / ".agents" / "skills"
+    installed = 0
+    try:
+        for skill_dir in builtin.iterdir():
+            if not skill_dir.is_dir() or not (skill_dir / "SKILL.md").is_file():
+                continue
+            target = user_root / skill_dir.name
+            marker = target / BUILTIN_SKILL_MARKER
+            need_install = False
+            if not target.is_dir():
+                need_install = True
+            elif marker.is_file():
+                # 我们装的：版本变化才升级
+                try:
+                    need_install = marker.read_text(encoding="utf-8").strip() != __version__
+                except OSError:
+                    need_install = True
+            # 用户自有同名技能（无标记）→ 不覆盖
+            if not need_install:
+                continue
+            user_root.mkdir(parents=True, exist_ok=True)
+            _shutil.copytree(
+                skill_dir, target,
+                dirs_exist_ok=True,
+                ignore=_shutil.ignore_patterns("__pycache__", BUILTIN_SKILL_MARKER),
+            )
+            marker.write_text(__version__, encoding="utf-8")
+            installed += 1
+    except Exception:
+        return installed
+    return installed
+
+
 class SkillsTools:
     def __init__(self, workspace: Optional[str]) -> None:
         self.workspace = Path(workspace).resolve() if workspace else None
