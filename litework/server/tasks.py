@@ -278,7 +278,11 @@ class TaskManager:
                 else:
                     content = skills_tools.read_skill(name)
                     if content:
-                        skill_content += content
+                        # 附带技能目录绝对路径：SKILL.md 中的相对路径（脚本等）
+                        # 以技能目录为基准，而非用户工作区——缺路径 Agent 只能瞎找
+                        skill_path = skills_tools._skills().get(name)
+                        skill_dir = str(skill_path.parent) if skill_path else "（未知）"
+                        skill_content += f"[技能 {name} 目录：{skill_dir}，文档中的相对路径以该目录为基准]\n\n{content}"
                     else:
                         # 未命中时给出可用技能清单，Agent 不需要自己去文件系统瞎找
                         available = [s["name"] for s in skills_tools.list_skills()]
@@ -300,7 +304,10 @@ class TaskManager:
                         continue
                     content = skills_tools.read_skill(name)
                     if content:
-                        skill_content += ("\n\n" if skill_content else "") + content
+                        skill_path = skills_tools._skills().get(name)
+                        skill_dir = str(skill_path.parent) if skill_path else "（未知）"
+                        header = f"[技能 {name} 目录：{skill_dir}，文档中的相对路径以该目录为基准]\n\n"
+                        skill_content += ("\n\n" if skill_content else "") + header + content
                         loaded_names.append(name)
             return (skill_content or None), loaded_names, ask_names
         except Exception:

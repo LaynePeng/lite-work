@@ -32,6 +32,9 @@ def test_skill_index_and_load(tmp_path):
     assert "review: Review workflow" in tools.index()
     result = asyncio.run(tools.execute("load_skill", {"skillName": "review"}))
     assert "Run tests first." in result
+    # load_skill 附带技能目录绝对路径：Agent 工作区不是技能目录，缺路径只能瞎找
+    assert "技能目录：" in result
+    assert str(tmp_path / ".agents" / "skills" / "review") in result
 
 
 def test_builtin_skills_visible_in_any_workspace(tmp_path):

@@ -487,4 +487,12 @@ class SkillsTools:
             available = [s["name"] for s in self.list_skills()]
             avail_hint = ("可用技能：" + ", ".join(available)) if available else "当前没有发现任何技能"
             return f"[Error]: 未找到技能 {skill_name!r}（{avail_hint}）"
-        return f"技能 {skill_name}：\n\n{content}"
+        # 附带技能目录的绝对路径：SKILL.md 中的相对路径（如脚本、示例文件）
+        # 以该目录为基准——Agent 工作区通常不是技能目录，缺路径只能瞎找
+        skill_path = self._skills().get(skill_name)
+        skill_dir = str(skill_path.parent) if skill_path else "（未知）"
+        return (
+            f"技能 {skill_name}\n"
+            f"技能目录：{skill_dir}（文档中的相对路径均以该目录为基准）\n\n"
+            f"{content}"
+        )

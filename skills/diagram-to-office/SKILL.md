@@ -83,11 +83,18 @@ Mermaid 仅在用户**明确指定**或源码已是 mermaid 语法时使用（�
 
 ## 四、渲染成图片
 
-优先使用技能自带脚本（**默认离线优先，绝不联网拉取**）：
+> **最快路径（多数场景用这个）**：把 PlantUML/Mermaid 代码块直接写进
+> docx_create / docx_append 的 content，工具会**自动渲染成图片嵌入**
+> （渲染失败会保留源码文本，内容不丢）——不需要手动跑下面的脚本。
+> PPT 的 content 中的图表代码块同样会自动渲染为该页图片。
+
+需要精细控制（多图命名、暗色模式、独立 SVG 输出等）时，才用技能自带的
+渲染脚本（**位于本技能目录下**——load_skill / /skill 注入内容开头的
+「技能目录」即为其实际位置，用绝对路径调用）：
 
 ```bash
-python3 skills/diagram-to-office/render_diagram.py <input> -o <output.png> [--type plantuml|mermaid|auto]
-python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（离线可用性）
+python3 <技能目录>/render_diagram.py <input> -o <output.png> [--type plantuml|mermaid|auto]
+python3 <技能目录>/render_diagram.py --check   # 环境诊断（离线可用性）
 ```
 
 - `<input>`：PlantUML/Mermaid 源码文本文件（含 `@startuml...@enduml` 或 ` ```mermaid ` 代码块），
@@ -128,7 +135,7 @@ python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（�
 **离线部署建议**（一次性准备，之后完全离线）：
 1. **一键预装**（推荐，需要联网一次）：
    ```bash
-   python3 skills/diagram-to-office/render_diagram.py --install
+   python3 <技能目录>/render_diagram.py --install
    ```
    脚本会自动执行：
    - `npm install -g @plantuml/core`（PlantUML 纯 JS 引擎，无需 Java）
