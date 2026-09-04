@@ -157,3 +157,40 @@ async def test_external_file_access_requires_matching_capability(tmp_path):
         "_approved_external_access": "write",
     })
     assert external.read_text(encoding="utf-8") == "changed"
+
+
+# ---------------------------------------------------------------- 技能目录受信（读取免审批）
+
+def test_trusted_skill_path_read_allowed(tmp_path):
+    """读取技能目录（用户级/安装包内置）不应触发"项目外路径"审批。"""
+    import asyncio
+
+    from litework.security.approval import ApprovalGate
+    from litework.security.guard import SecurityGuard
+    from litework.security.plugin import SecurityPlugin
+
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    skill_dir = tmp_path / "agentshome" / ".agents" / "skills" / "diagram-to-office"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+
+    # HOME 指向隔离目录 → 受信前缀 = <隔离>/~/.agents/skills
+    import os
+    import litework.security.plugin as plugin_mod
+
+    orig_home = os.environ.get("HOME")
+    os.environ["HOME"] = str(tmp_path / "agentshome")
+    try:
+        sp = SecurityPlugin(SecurityGuard(), ApprovalGate(), str(ws), None)
+        # 读取受信路径 → 放行（不发审批）
+        assert sp._is_trusted_skill_path(str(skill_dir / "render_diagram.py")) is True
+        assert sp._is_trusted_skill_path(str(skill_dir)) is True
+        # 非技能路径 → 仍走审批
+        assert sp._is_trusted_skill_path(str(tmp_path / "other" / "x.txt")) is False
+        assert sp._is_trusted_skill_path("/etc/passwd") is False
+    finally:
+        if orig_home is not None:
+            os.environ["HOME"] = orig_home
+        else:
+            os.environ.pop("HOME", None)
