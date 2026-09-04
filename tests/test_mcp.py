@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from litecode.mcp.client import MCPClient
+from litework.mcp.client import MCPClient
 
 MOCK_SERVER_SOURCE = '''import json, sys
 for line in sys.stdin:
@@ -31,7 +31,7 @@ async def _run_mock_flow(client: MCPClient) -> None:
     try:
         tools = await client.list_tools()
         assert tools[0]["inputSchema"]["properties"]["name"]["type"] == "string"
-        assert await client.call_tool("hello", {"name": "lite-code"}) == "hello lite-code"
+        assert await client.call_tool("hello", {"name": "lite-work"}) == "hello lite-work"
     finally:
         await client.close()
 

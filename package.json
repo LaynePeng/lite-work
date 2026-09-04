@@ -1,9 +1,9 @@
 {
-  "name": "lite-code",
-  "version": "1.0.0",
-  "description": "lite-code：手写内核的 Code 开发 Agent 桌面工具（Electron + Python Core + Web UI）",
+  "name": "lite-work",
+  "version": "0.1.0",
+  "description": "lite-work：手写内核的 Code 开发 Agent 桌面工具（Electron + Python Core + Web UI）",
   "main": "electron/main.js",
-  "author": "lite-code",
+  "author": "lite-work",
   "license": "MIT",
   "scripts": {
     "dev": "concurrently -k -n core,web,app -c blue,green,magenta \"npm run dev:core\" \"npm run dev:web\" \"npm run dev:electron\"",
@@ -24,8 +24,8 @@
     "sharp": "^0.35.4"
   },
   "build": {
-    "appId": "com.litecode.app",
-    "productName": "lite-code",
+    "appId": "com.litework.app",
+    "productName": "lite-work",
     "directories": {
       "output": "release",
       "buildResources": "scripts"
@@ -41,8 +41,8 @@
     ],
     "extraResources": [
       {
-        "from": "release/backend/lite-code-backend",
-        "to": "litecode-bin/lite-code-backend"
+        "from": "release/backend/lite-work-backend",
+        "to": "litework-bin/lite-work-backend"
       }
     ],
     "mac": {
@@ -67,7 +67,7 @@
       "createStartMenuShortcut": true
     },
     "dmg": {
-      "artifactName": "lite-code-${version}-${arch}.${ext}"
+      "artifactName": "lite-work-${version}-${arch}.${ext}"
     }
   },
   "dependencies": {

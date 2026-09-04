@@ -4,9 +4,9 @@ import os
 
 import pytest
 
-from litecode.app import AgentApp
-from litecode.core.types import Message
-from litecode.security.skill_permissions import normalize_rules, resolve
+from litework.app import AgentApp
+from litework.core.types import Message
+from litework.security.skill_permissions import normalize_rules, resolve
 from tests.conftest import MockLLMAdapter
 
 
@@ -63,8 +63,8 @@ def test_commands_list_excludes_denied(tmp_path):
 
 
 def test_system_prompt_index_filters_denied(tmp_path):
-    from litecode.core.system_prompt import SystemPromptBuilder
-    from litecode.core.types import ToolDefinition
+    from litework.core.system_prompt import SystemPromptBuilder
+    from litework.core.types import ToolDefinition
     _make_skill(str(tmp_path), "public-tool", description="公开技能")
     _make_skill(str(tmp_path), "secret-tool", description="秘密技能")
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lc"))
@@ -84,7 +84,7 @@ def test_system_prompt_index_filters_denied(tmp_path):
 # ---------------------------------------------------------------- load_skill 拦截
 
 def test_load_skill_middleware_deny_and_ask(tmp_path):
-    from litecode.app import AgentApp  # noqa: F401
+    from litework.app import AgentApp  # noqa: F401
     _make_skill(str(tmp_path), "secret-tool")
     _make_skill(str(tmp_path), "ask-tool")
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lc"))
@@ -147,7 +147,7 @@ def test_agent_loop_cancels_denied_load_skill(tmp_path):
     kernel = app.create_kernel("s-denied", registry=registry)
     loop = app.create_loop(kernel, registry)
 
-    from litecode.core.types import ToolCall
+    from litework.core.types import ToolCall
     stats = {"blocked": 0, "tool_calls": 0}
     call = ToolCall(id="c1", name="load_skill", arguments='{"skillName": "secret-tool"}')
     result = asyncio.run(loop._execute_tool_call(call, stats))
@@ -162,7 +162,7 @@ def test_agent_loop_cancels_denied_load_skill(tmp_path):
 # ---------------------------------------------------------------- 任务启动解析
 
 def test_resolve_skill_extra_permissions(tmp_path):
-    from litecode.server.tasks import TaskManager
+    from litework.server.tasks import TaskManager
     _make_skill(str(tmp_path), "free-tool", triggers="自由触发")
     _make_skill(str(tmp_path), "locked-tool", triggers="锁定触发")
     _make_skill(str(tmp_path), "gate-tool", triggers="门禁触发")

@@ -16,7 +16,7 @@ if (!fs.existsSync(python)) {
   process.exit(1);
 }
 
-const args = ["-m", "litecode", "serve", "--port", "8787", "--log-level", "info"];
+const args = ["-m", "litework", "serve", "--port", "8787", "--log-level", "info"];
 console.log(`[dev] ${python} ${args.join(" ")}`);
 const child = spawn(python, args, { cwd: root, stdio: "inherit" });
 child.on("exit", (code) => process.exit(code ?? 0));

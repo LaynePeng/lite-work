@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import os
 
-from litecode.app import AgentApp
-from litecode.core.system_prompt import FINAL_REPORT_REQUIREMENT, SystemPromptBuilder
-from litecode.server.tasks import TaskManager
+from litework.app import AgentApp
+from litework.core.system_prompt import FINAL_REPORT_REQUIREMENT, SystemPromptBuilder
+from litework.server.tasks import TaskManager
 from tests.conftest import MockLLMAdapter, tool_call
 
 
@@ -29,14 +29,14 @@ WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff",
 
 
 def test_all_agent_prompts_require_final_report(tmp_path):
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     tools = app.build_registry().get_tools()
     assert FINAL_REPORT_REQUIREMENT in SystemPromptBuilder.build(str(tmp_path), tools)
 
 
 def test_plan_agent_prompt_injects_role_into_system_prompt(tmp_path):
     """Plan 的角色提示必须进入发给 LLM 的 System Prompt（模型需知道自己的工具边界）。"""
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     registry = app.create_agent_registry("plan")
     plan_prompt = SystemPromptBuilder.build(
         str(tmp_path), registry.get_tools(), agent_prompt=app.get_agent("plan").system_prompt
@@ -72,7 +72,7 @@ def test_project_instruction_files_are_included(tmp_path):
 
 async def test_plan_mode_never_leaks_write_tools(tmp_path):
     """plan 任务：发给 LLM 的 schema 只含只读工具，尝试写文件也不会执行。"""
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     app._mock_adapter = RecAdapter([
         ("", [tool_call("write_file", '{"filePath":"x.txt","content":"hi"}', cid="c1")]),
         ("（plan 完成）", []),
@@ -97,7 +97,7 @@ async def test_plan_mode_never_leaks_write_tools(tmp_path):
 
 async def test_build_mode_keeps_full_tools(tmp_path):
     """对照：build 模式仍拥有全部工具，写文件正常执行。"""
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     app._mock_adapter = RecAdapter([
         ("", [tool_call("write_file", '{"filePath":"y.txt","content":"hi"}', cid="c2")]),
         ("（build 完成）", []),
@@ -112,9 +112,9 @@ async def test_build_mode_keeps_full_tools(tmp_path):
 
 async def test_create_kernel_without_registry_installs_full_tools(tmp_path):
     """create_kernel 不传 registry 时：默认全量工具内核仍可用。"""
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     kernel = app.create_kernel("bare")
-    from litecode.tools.registry import ToolRegistry
+    from litework.tools.registry import ToolRegistry
 
     registry = kernel.get_service("tools")
     assert isinstance(registry, ToolRegistry)

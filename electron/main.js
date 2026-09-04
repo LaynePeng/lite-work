@@ -1,8 +1,8 @@
-// lite-code Electron 主进程
+// lite-work Electron 主进程
 // 职责：
-//   1. 读取客户端配置（~/.lite-code/client.json），支持远程 Core 直连
+//   1. 读取客户端配置（~/.lite-work/client.json），支持远程 Core 直连
 //   2. 无配置时自动拉起本地 Python Core（打包后使用内置二进制）
-//   3. 等待 LITECODE_CORE_READY 就绪标记后打开窗口
+//   3. 等待 LITEWORK_CORE_READY 就绪标记后打开窗口
 //   4. 「打开项目」：通过当前 Core 热切换 workspace，不新建或重启后端
 //   5. 退出时回收后端进程
 //
@@ -15,8 +15,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const CLIENT_CONFIG = path.join(os.homedir(), ".lite-code", "client.json");
-const LOG_DIR = path.join(os.homedir(), ".lite-code", "logs");
+const CLIENT_CONFIG = path.join(os.homedir(), ".lite-work", "client.json");
+const LOG_DIR = path.join(os.homedir(), ".lite-work", "logs");
 const ELECTRON_LOG_FILE = path.join(LOG_DIR, "electron.log");
 const LOG_MAX_BYTES = 5 * 1024 * 1024;
 const LOG_BACKUP_COUNT = 3;
@@ -39,7 +39,7 @@ function writeLog(level, ...messages) {
   const text = messages.map((message) => (
     message instanceof Error ? message.stack || message.message : String(message)
   )).join(" ");
-  console[level](`[lite-code] ${text}`);
+  console[level](`[lite-work] ${text}`);
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     rotateLogFile();
@@ -79,7 +79,7 @@ function createWindow(url) {
       sandbox: true,
       preload: path.join(__dirname, "preload.js"),
       // 把应用版本传给 preload（app.getVersion 自动读 package.json，dev/打包都正确）
-      additionalArguments: [`--litecode-version=${app.getVersion()}`],
+      additionalArguments: [`--litework-version=${app.getVersion()}`],
     },
   });
 
@@ -122,15 +122,15 @@ function createWindow(url) {
 }
 
 function resolvePython() {
-  // 打包模式：使用内置后端二进制（PyInstaller --onedir 结构：litecode-bin/lite-code-backend/lite-code-backend）
+  // 打包模式：使用内置后端二进制（PyInstaller --onedir 结构：litework-bin/lite-work-backend/lite-work-backend）
   if (app.isPackaged) {
     const isWin = process.platform === "win32";
-    const exe = isWin ? "lite-code-backend.exe" : "lite-code-backend";
-    const dir = path.join(process.resourcesPath, "litecode-bin", "lite-code-backend");
+    const exe = isWin ? "lite-work-backend.exe" : "lite-work-backend";
+    const dir = path.join(process.resourcesPath, "litework-bin", "lite-work-backend");
     const bundled = path.join(dir, exe);
     if (fs.existsSync(bundled)) return bundled;
     // 兼容旧版单文件
-    const legacy = path.join(process.resourcesPath, "litecode-bin", exe);
+    const legacy = path.join(process.resourcesPath, "litework-bin", exe);
     if (fs.existsSync(legacy)) return legacy;
   }
   // 开发模式：优先项目 venv，其次系统 python3
@@ -164,8 +164,8 @@ function spawnLocalCore(workspace) {
     const projectRoot = coreCwd();
     const args = app.isPackaged
       ? ["serve", "--port", "0"]
-      : ["-m", "litecode", "serve", "--port", "0"];
-    args.push("--config-dir", path.join(os.homedir(), ".lite-code"));
+      : ["-m", "litework", "serve", "--port", "0"];
+    args.push("--config-dir", path.join(os.homedir(), ".lite-work"));
     if (workspace) args.push("--workspace", workspace);
     const env = {
       ...process.env,
@@ -179,7 +179,7 @@ function spawnLocalCore(workspace) {
         path.join(process.env.HOME || "", ".cargo/bin"),
         path.join(process.env.HOME || "", ".local/bin"),
       ].filter(Boolean).join(path.delimiter),
-      LITECODE_SPAWNED: "1",
+      LITEWORK_SPAWNED: "1",
     };
 
     writeLog("log", `启动本地 Core: ${python} ${args.join(" ")}`);
@@ -203,7 +203,7 @@ function spawnLocalCore(workspace) {
       for (const line of text.split(/\r?\n/)) {
         if (line) writeLog("log", `Core: ${line}`);
       }
-      const m = text.match(/LITECODE_CORE_READY port=(\d+)/);
+      const m = text.match(/LITEWORK_CORE_READY port=(\d+)/);
       if (m && !resolved) {
         resolved = true;
         clearTimeout(timer);
@@ -411,9 +411,9 @@ app.whenReady().then(async () => {
   setupMenu();
 
   // 开发模式：直接加载 Vite dev server
-  if (process.env.LITECODE_DEV_URL) {
+  if (process.env.LITEWORK_DEV_URL) {
     coreMode = "dev";
-    createWindow(process.env.LITECODE_DEV_URL);
+    createWindow(process.env.LITEWORK_DEV_URL);
     app.on("window-all-closed", () => app.quit());
     return;
   }

@@ -370,7 +370,7 @@ export default function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-brand">
         <span className="brand-logo"><AppIcon size={30} /></span>
-        <span className="brand-name">lite-code</span>
+        <span className="brand-name">lite-work</span>
       </div>
 
       <div className="sidebar-tabs">
@@ -443,8 +443,8 @@ export default function Sidebar({
         <button className="btn-open-settings" onClick={onOpenSettings}>
           ⚙️ 设置
         </button>
-        <button className="footer-version footer-version-btn" onClick={onOpenAbout} title="关于 lite-code">
-          lite-code v{version} · 手写 Agent Harness
+        <button className="footer-version footer-version-btn" onClick={onOpenAbout} title="关于 lite-work">
+          lite-work v{version} · 手写 Agent Harness
         </button>
       </div>
     </aside>

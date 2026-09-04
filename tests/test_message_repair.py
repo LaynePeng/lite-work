@@ -1,12 +1,12 @@
 """工具调用原子对修复测试：不完整历史续聊不再触发 LLM HTTP 400。"""
 from __future__ import annotations
 
-from litecode.core.agent_loop import AgentLoop
-from litecode.core.context_manager import repair_tool_call_pairs
-from litecode.core.kernel import Kernel
-from litecode.core.session_store import SessionStore
-from litecode.core.types import Message
-from litecode.tools.registry import ToolRegistry
+from litework.core.agent_loop import AgentLoop
+from litework.core.context_manager import repair_tool_call_pairs
+from litework.core.kernel import Kernel
+from litework.core.session_store import SessionStore
+from litework.core.types import Message
+from litework.tools.registry import ToolRegistry
 from tests.conftest import MockLLMAdapter, tool_call
 
 
@@ -123,8 +123,8 @@ def test_empty_id_pair_with_missing_result_dropped():
 
 def test_finalize_tool_calls_fills_missing_ids():
     """适配器兜底：供应商流式响应缺 id 时补齐合成 id。"""
-    from litecode.llm.openai_compat import OpenAICompatAdapter
-    from litecode.core.types import ToolCall
+    from litework.llm.openai_compat import OpenAICompatAdapter
+    from litework.core.types import ToolCall
 
     calls = OpenAICompatAdapter._finalize_tool_calls({
         0: ToolCall(id="", name="webfetch", arguments="{}"),
@@ -176,7 +176,7 @@ def _json(d) -> str:
 
 async def test_parse_sse_with_id_in_first_chunk():
     """正常供应商：id 只出现在首个 chunk，解析后 id 保留。"""
-    from litecode.llm.openai_compat import OpenAICompatAdapter
+    from litework.llm.openai_compat import OpenAICompatAdapter
 
     adapter = OpenAICompatAdapter(api_key="k")
     _, calls, _ = await adapter._parse_sse(FakeSSEResponse([_build_sse_payload(True)]), None)
@@ -189,7 +189,7 @@ async def test_parse_sse_with_id_in_first_chunk():
 async def test_parse_sse_without_id_reproduces_400_root_cause():
     """复现用户问题：供应商全程不带 id → 解析后必须补齐合成 id，
     否则 assistant(tool_calls) 与 tool 消息无法匹配，API 返回 400。"""
-    from litecode.llm.openai_compat import OpenAICompatAdapter
+    from litework.llm.openai_compat import OpenAICompatAdapter
 
     adapter = OpenAICompatAdapter(api_key="k")
     _, calls, _ = await adapter._parse_sse(FakeSSEResponse([_build_sse_payload(False)]), None)

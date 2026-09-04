@@ -4,12 +4,12 @@ import os
 
 import pytest
 
-from litecode.core.agent_loop import AgentLoop
-from litecode.core.kernel import Kernel
-from litecode.core.session_store import SessionStore
-from litecode.core.types import Message
-from litecode.llm import LLMError
-from litecode.tools.registry import ToolRegistry
+from litework.core.agent_loop import AgentLoop
+from litework.core.kernel import Kernel
+from litework.core.session_store import SessionStore
+from litework.core.types import Message
+from litework.llm import LLMError
+from litework.tools.registry import ToolRegistry
 from tests.conftest import MockLLMAdapter, tool_call
 
 SYSTEM_PROMPT = "你是测试 Agent。"

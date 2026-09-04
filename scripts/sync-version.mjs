@@ -1,4 +1,4 @@
-// Sync npm-side version fields from the single source of truth: litecode/__init__.py __version__.
+// Sync npm-side version fields from the single source of truth: litework/__init__.py __version__.
 // Updates the top-level "version" in package.json, web/package.json and both lockfiles.
 // Runs automatically at the start of every build; also guarded by tests/test_version_sync.py.
 import { execSync } from "node:child_process";
@@ -9,10 +9,10 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function readVersion() {
-  const init = fs.readFileSync(path.join(root, "litecode", "__init__.py"), "utf-8");
+  const init = fs.readFileSync(path.join(root, "litework", "__init__.py"), "utf-8");
   const m = init.match(/^__version__\s*=\s*["']([^"']+)["']/m);
   if (!m) {
-    console.error("[sync-version] __version__ not found in litecode/__init__.py");
+    console.error("[sync-version] __version__ not found in litework/__init__.py");
     process.exit(1);
   }
   return m[1];

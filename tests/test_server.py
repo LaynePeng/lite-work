@@ -13,14 +13,14 @@ import httpx
 import pytest
 import uvicorn
 
-from litecode.app import AgentApp
-from litecode.server.app import create_app
+from litework.app import AgentApp
+from litework.server.app import create_app
 from tests.conftest import MockLLMAdapter, tool_call
 
 
 @pytest.fixture
 async def live_client(tmp_path):
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     app._mock_adapter = MockLLMAdapter([
         ("", [tool_call("write_file", '{"filePath":"x.txt","content":"hello"}', cid="c1")]),
         ("完成", []),
@@ -72,7 +72,7 @@ async def test_status_and_sessions(live_client):
     c, app, _ = live_client
     r = await c.get("/api/status")
     assert r.status_code == 200
-    assert r.json()["version"] == __import__("litecode").__version__  # 与包版本一致即可
+    assert r.json()["version"] == __import__("litework").__version__  # 与包版本一致即可
 
     r = await c.post("/api/sessions", json={"name": "会话A"})
     assert r.status_code == 200
@@ -109,7 +109,7 @@ async def test_sessions_list_strictly_scoped_to_workspace(live_client):
     assert other not in ids
 
     # 3. 旧版无 workspace 元数据的会话 → 不显示（点击无法切到对应项目，显示会造成语义错位）
-    from litecode.core.types import Message
+    from litework.core.types import Message
     legacy = f"session_legacy_{uuid.uuid4().hex[:8]}"
     app.session_store.save(legacy, [Message(role="user", content="旧版会话")], {})
     r = await c.get("/api/sessions", params={"workspace": ws})
@@ -166,7 +166,7 @@ def test_default_config_dir_is_stable_across_workspaces(tmp_path, monkeypatch):
     first._persist_config()
 
     second = AgentApp(workspace=str(second_workspace))
-    assert first.config_dir == second.config_dir == str(home / ".lite-code")
+    assert first.config_dir == second.config_dir == str(home / ".lite-work")
     assert second.llm_registry.providers["openai"]["api_key"] == "persisted-key"
 
 

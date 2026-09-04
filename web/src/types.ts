@@ -249,7 +249,7 @@ export interface SubAgentProgress {
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）
-export interface LiteCodeBridge {
+export interface LiteWorkBridge {
   platform: string;
   version: string;
   openProject: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
@@ -267,7 +267,7 @@ export interface LiteCodeBridge {
 
 declare global {
   interface Window {
-    liteCode?: LiteCodeBridge;
+    liteWork?: LiteWorkBridge;
   }
 }
 

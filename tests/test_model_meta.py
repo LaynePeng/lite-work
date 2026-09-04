@@ -2,8 +2,8 @@
 import json
 import os
 
-from litecode.llm.model_meta import ModelMetaService
-from litecode.llm.registry import LLMRegistry
+from litework.llm.model_meta import ModelMetaService
+from litework.llm.registry import LLMRegistry
 
 
 def test_registry_static_context_window():

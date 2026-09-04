@@ -8,7 +8,7 @@ export default function TerminalPanel({ workspace }: { workspace: string | null 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const bridge = window.liteCode;
+    const bridge = window.liteWork;
     const host = hostRef.current;
     if (!bridge || !host || !workspace) return;
 
@@ -47,7 +47,7 @@ export default function TerminalPanel({ workspace }: { workspace: string | null 
     };
   }, [workspace]);
 
-  if (!window.liteCode) return <div className="terminal-empty">终端仅在桌面应用中可用</div>;
+  if (!window.liteWork) return <div className="terminal-empty">终端仅在桌面应用中可用</div>;
   if (!workspace) return <div className="terminal-empty">打开项目后启动终端</div>;
   return <div className="terminal-wrap">{error && <div className="terminal-error">{error}</div>}<div className="terminal-host" ref={hostRef} /></div>;
 }

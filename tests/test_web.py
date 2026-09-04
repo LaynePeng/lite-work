@@ -4,9 +4,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from litecode.app import AgentApp
-from litecode.security.guard import SecurityGuard, ThreatLevel
-from litecode.tools.web import WebFetchTools
+from litework.app import AgentApp
+from litework.security.guard import SecurityGuard, ThreatLevel
+from litework.tools.web import WebFetchTools
 
 
 @pytest.fixture
@@ -280,7 +280,7 @@ def test_guard_blocks_bad_scheme_url():
 # ---------------------------------------------------------------- Cordis 插件注册
 
 def test_webfetch_registered_in_full_registry(tmp_path):
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     registry = app.build_registry()
     assert registry.has("webfetch")
     assert registry.has("webfetch_batch")
@@ -295,7 +295,7 @@ def test_webfetch_registered_in_full_registry(tmp_path):
 
 
 def test_webfetch_kept_in_plan_agent(tmp_path):
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     registry = app.create_agent_registry("plan")
     assert registry.has("webfetch")
     assert registry.has("webfetch_batch")
@@ -303,7 +303,7 @@ def test_webfetch_kept_in_plan_agent(tmp_path):
 
 
 def test_agent_pruning_removes_webfetch(tmp_path):
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     registry = app.build_registry(allowed=["read_file"])
     assert registry.has("read_file")
     assert not registry.has("webfetch")

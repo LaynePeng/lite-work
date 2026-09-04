@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lite-code"
+name = "lite-work"
 dynamic = ["version"]
-description = "Lite Code - 手写的 Code 开发 Agent 桌面工具 (基于《AI Code Agent 手把手》课程)"
+description = "lite-work - 手写内核的通用 AI Agent 桌面应用"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
@@ -37,14 +37,14 @@ package = [
 ]
 
 [project.scripts]
-lite-code = "litecode.cli:main"
+lite-work = "litework.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["litecode*"]
+include = ["litework*"]
 
-# 版本单一事实源：litecode/__init__.py 的 __version__
+# 版本单一事实源：litework/__init__.py 的 __version__
 [tool.setuptools.dynamic]
-version = {attr = "litecode.__version__"}
+version = {attr = "litework.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

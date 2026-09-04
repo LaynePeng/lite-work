@@ -13,8 +13,8 @@ node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
 
-# lite-code 运行时（含 config.json 的 API Key 配置）
-.lite-code/
+# lite-work 运行时（含 config.json 的 API Key 配置）
+.lite-work/
 
 # 办公场景运行时：Agent 产出物与用户上传素材
 .outputs/

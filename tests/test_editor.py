@@ -2,7 +2,7 @@
 import asyncio
 import os
 
-from litecode.tools.editor import BlockReplacer, DiffPatcher, EditorTools
+from litework.tools.editor import BlockReplacer, DiffPatcher, EditorTools
 
 
 def test_block_replacer_exact_match():

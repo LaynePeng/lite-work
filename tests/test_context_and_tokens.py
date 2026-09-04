@@ -1,13 +1,13 @@
 """Token 计数 / 上下文裁剪 / JSON 容错 / 截断器单元测试（对应第2/3课增强）。"""
 import os
 
-from litecode.core.context_manager import ContextManager
-from litecode.core.json_repair import safe_json_parse
-from litecode.core.token_counter import TokenCounter
-from litecode.core.truncator import truncate_tool_output
-from litecode.core.types import Message, ToolCall
-from litecode.llm.anthropic import AnthropicAdapter
-from litecode.llm.openai_compat import OpenAICompatAdapter
+from litework.core.context_manager import ContextManager
+from litework.core.json_repair import safe_json_parse
+from litework.core.token_counter import TokenCounter
+from litework.core.truncator import truncate_tool_output
+from litework.core.types import Message, ToolCall
+from litework.llm.anthropic import AnthropicAdapter
+from litework.llm.openai_compat import OpenAICompatAdapter
 
 
 def test_count_text_tokens():

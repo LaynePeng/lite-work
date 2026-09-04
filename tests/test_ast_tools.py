@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from litecode.tools.ast_tools import ASTAnalyzer, ASTTools
+from litework.tools.ast_tools import ASTAnalyzer, ASTTools
 
 
 PYTHON_SOURCE = '''class Greeter:

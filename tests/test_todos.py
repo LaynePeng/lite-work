@@ -3,8 +3,8 @@ import asyncio
 
 import pytest
 
-from litecode.core.types import Message
-from litecode.tools.todos import TodoPlugin, current_session_id
+from litework.core.types import Message
+from litework.tools.todos import TodoPlugin, current_session_id
 
 
 class _EventBus:
@@ -85,14 +85,14 @@ def test_todo_write_full_replace_and_bound_events():
 
 
 def test_plan_agent_whitelist_contains_todo_write():
-    from litecode.core.agent_profile import default_plan_agent, default_build_agent
+    from litework.core.agent_profile import default_plan_agent, default_build_agent
     assert "todo_write" in default_plan_agent().tools
     # build 无白名单（全量），todo_write 经插件注册自然可用
     assert default_build_agent().tools is None
 
 
 def test_build_registry_exposes_todo_write(tmp_path):
-    from litecode.app import AgentApp
+    from litework.app import AgentApp
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lc"))
     names = {t.name for t in app.build_registry().get_tools()}
     assert "todo_write" in names
@@ -166,8 +166,8 @@ def test_todo_persistence_endpoint_roundtrip(tmp_path):
 
     from fastapi.testclient import TestClient
 
-    from litecode.app import AgentApp
-    from litecode.server.app import create_app
+    from litework.app import AgentApp
+    from litework.server.app import create_app
 
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lc"))
     assert app.todo_plugin.storage_dir == os.path.join(str(tmp_path / ".lc"), "todo_boards")

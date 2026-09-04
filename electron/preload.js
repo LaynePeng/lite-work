@@ -3,11 +3,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 // main 进程通过 additionalArguments 注入 app.getVersion()；非 Electron 环境兜底 "dev"
 function readVersion() {
-  const arg = process.argv.find((a) => a.startsWith("--litecode-version="));
-  return arg ? arg.slice("--litecode-version=".length) : "dev";
+  const arg = process.argv.find((a) => a.startsWith("--litework-version="));
+  return arg ? arg.slice("--litework-version=".length) : "dev";
 }
 
-contextBridge.exposeInMainWorld("liteCode", {
+contextBridge.exposeInMainWorld("liteWork", {
   platform: process.platform,
   version: readVersion(),
   /**

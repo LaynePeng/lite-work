@@ -1,6 +1,6 @@
-from litecode.core.agent_loop import WRITE_TOOLS, AgentLoop, current_tool_call
-from litecode.core.commands import build_command_list, parse_skill_command
-from litecode.core.types import ToolCall
+from litework.core.agent_loop import WRITE_TOOLS, AgentLoop, current_tool_call
+from litework.core.commands import build_command_list, parse_skill_command
+from litework.core.types import ToolCall
 
 
 # ---------------------------------------------------------------- 命令解析

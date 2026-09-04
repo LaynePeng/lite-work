@@ -372,7 +372,7 @@ export default function Composer({
             }
           }}
           onBlur={() => setTimeout(() => setPaletteOpen(false), 150)}
-          placeholder={running ? "任务进行中：输入将加入待发送队列，任务完成后自动发送" : `给 lite-code 下达任务…（输入 / 唤起命令面板）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列，任务完成后自动发送" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
           rows={3}
           disabled={disabled}
         />

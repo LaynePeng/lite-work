@@ -1,4 +1,4 @@
-// Cross-platform Electron launcher (dev mode): inject LITECODE_DEV_URL pointing to the Vite dev server
+// Cross-platform Electron launcher (dev mode): inject LITEWORK_DEV_URL pointing to the Vite dev server
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -11,6 +11,6 @@ const electronPath = require("electron");
 const child = spawn(electronPath, ["."], {
   cwd: root,
   stdio: "inherit",
-  env: { ...process.env, LITECODE_DEV_URL: "http://localhost:5173" },
+  env: { ...process.env, LITEWORK_DEV_URL: "http://localhost:5173" },
 });
 child.on("exit", (code) => process.exit(code ?? 0));

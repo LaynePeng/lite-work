@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from litecode.core.events import TypedEventBus
-from litecode.core.types import Message, ToolCall, ToolDefinition
+from litework.core.events import TypedEventBus
+from litework.core.types import Message, ToolCall, ToolDefinition
 
 
 class MockLLMAdapter:

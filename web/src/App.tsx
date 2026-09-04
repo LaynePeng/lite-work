@@ -71,14 +71,14 @@ export default function App() {
   const [showPicker, setShowPicker] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"sessions" | "files" | "terminal" | "outputs">(() => {
     try {
-      const saved = localStorage.getItem("litecode.sidebarTab");
+      const saved = localStorage.getItem("litework.sidebarTab");
       if (saved === "files" || saved === "terminal" || saved === "sessions" || saved === "outputs") return saved;
     } catch { /* ignore */ }
     return "sessions";
   });
   const changeSidebarTab = useCallback((t: "sessions" | "files" | "terminal" | "outputs") => {
     setSidebarTab(t);
-    try { localStorage.setItem("litecode.sidebarTab", t); } catch { /* ignore */ }
+    try { localStorage.setItem("litework.sidebarTab", t); } catch { /* ignore */ }
   }, []);
   const [loading, setLoading] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
@@ -97,13 +97,13 @@ export default function App() {
   const sidebarResize = useResizable({
     axis: "col", initial: 280, min: 200,
     max: () => Math.min(520, Math.floor(window.innerWidth * 0.45)),
-    storageKey: "litecode.sidebarWidth.v2",
+    storageKey: "litework.sidebarWidth.v2",
   });
   const toolPanelResize = useResizable({
     axis: "col", initial: 280, min: 220,
     max: () => Math.min(600, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
-    storageKey: "litecode.toolPanelWidth",
+    storageKey: "litework.toolPanelWidth",
   });
 
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
@@ -123,7 +123,7 @@ export default function App() {
 
   // 应用菜单「关于」→ 打开设计版关于弹窗（仅桌面模式有 preload 桥）
   useEffect(() => {
-    const bridge = window.liteCode;
+    const bridge = window.liteWork;
     if (!bridge?.onShowAbout) return;
     return bridge.onShowAbout(() => setShowAbout(true));
   }, []);
@@ -218,7 +218,7 @@ export default function App() {
   // 同步 Electron 主进程的窗口 workspace——终端启动的 cwd 与「请先打开项目」判定都在主进程。
   const notifyElectronWorkspace = useCallback((ws: string) => {
     try {
-      window.liteCode?.workspaceChanged?.(ws);
+      window.liteWork?.workspaceChanged?.(ws);
     } catch {
       /* 浏览器模式无 bridge，忽略 */
     }
@@ -456,15 +456,15 @@ export default function App() {
   );
 
   const openProject = useCallback(async () => {
-    if (window.liteCode) {
+    if (window.liteWork) {
       try {
-        const result = await window.liteCode.openProject();
+        const result = await window.liteWork.openProject();
         if (!result.ok && result.error !== "cancelled") {
           patchActiveChat({ error: result.error ?? "无法切换项目" });
         }
         if (result.ok) {
           // 重载后默认落在「文件」Tab，直接看到新项目目录树
-          try { localStorage.setItem("litecode.sidebarTab", "files"); } catch { /* ignore */ }
+          try { localStorage.setItem("litework.sidebarTab", "files"); } catch { /* ignore */ }
           window.location.reload();
         }
       } catch (e) {
@@ -476,11 +476,11 @@ export default function App() {
   }, [patchActiveChat]);
 
   const openProjectNewWindow = useCallback(async () => {
-    if (!window.liteCode) {
+    if (!window.liteWork) {
       window.alert("新窗口打开项目仅支持桌面应用。");
       return;
     }
-    const result = await window.liteCode.openProjectNewWindow();
+    const result = await window.liteWork.openProjectNewWindow();
     if (!result.ok && result.error !== "cancelled") {
       patchActiveChat({ error: result.error ?? "无法打开新项目窗口" });
     }

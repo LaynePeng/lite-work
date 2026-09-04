@@ -33,7 +33,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Sync version from single source of truth
         shell: bash
-        run: node scripts/sync-version.mjs && git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json || (echo "Committed npm version files are out of sync with litecode/__init__.py"; exit 1)
+        run: node scripts/sync-version.mjs && git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json || (echo "Committed npm version files are out of sync with litework/__init__.py"; exit 1)
       - name: Verify release version
         shell: bash
         run: |
@@ -78,7 +78,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Sync version from single source of truth
         shell: bash
-        run: node scripts/sync-version.mjs && git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json || (echo "Committed npm version files are out of sync with litecode/__init__.py"; exit 1)
+        run: node scripts/sync-version.mjs && git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json || (echo "Committed npm version files are out of sync with litework/__init__.py"; exit 1)
       - name: Verify release version
         shell: bash
         run: |
@@ -134,7 +134,7 @@ jobs:
             range_label="${previous}..${tag}"
           fi
           {
-            echo "# lite-code ${tag}"
+            echo "# lite-work ${tag}"
             echo
             echo "## 版本范围"
             echo "本说明覆盖 ${range_label} 之间的全部提交和功能变化。"
@@ -159,11 +159,6 @@ jobs:
             echo "- 补充 AST 多语言测试、会话模型覆盖测试和发布流程验证。"
             echo "- Windows 构建在依赖未变化时跳过 pip 安装，PyInstaller 默认复用缓存，-Clean 用于干净发布构建。"
             echo
-            echo "## 文档与教程"
-            echo "- 第 7、16 课同步 Python/Java/Go AST 工具支持。"
-            echo "- 第 19 课统一为最终版 Web UI、会话生命周期、停止任务、多 Tab 和跨平台打包逻辑。"
-            echo "- 教程删除多次迭代过程描述，改为按最终架构说明。"
-            echo
             echo "## 安装包"
             echo "- macOS Apple Silicon：\`*.dmg\`"
             echo "- Windows x64：\`*.exe\`"
@@ -186,5 +181,5 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "lite-code $GITHUB_REF_NAME" \
+            --title "lite-work $GITHUB_REF_NAME" \
             --notes-file RELEASE_NOTES.md "${args[@]}"

@@ -7,7 +7,7 @@
 """
 from pathlib import Path
 
-from litecode.tools.review import ReviewTools
+from litework.tools.review import ReviewTools
 
 GOOD_TSX = '''import React from "react";
 

@@ -32,7 +32,7 @@ function step(label, fn) {
   console.log(`(${((Date.now() - start) / 1000).toFixed(1)}s)`);
 }
 
-// Version single source of truth: sync npm-side version fields from litecode/__version__
+// Version single source of truth: sync npm-side version fields from litework/__version__
 step("sync-version", () => execSync("node scripts/sync-version.mjs", { cwd: root, stdio: "inherit" }));
 // Re-read after sync so the DMG name follows the single source of truth
 const syncedPkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"));
@@ -50,26 +50,26 @@ step(`PyInstaller --onedir${backendCleanArg}`, () =>
 console.log("[package] Step 2/4: electron-builder --dir produces .app");
 step("electron-builder", () => execSync("npx electron-builder --mac --dir --publish never", { cwd: root, stdio: "inherit", env }));
 
-const appDir = path.join(root, "release", "mac-arm64", "lite-code.app");
-if (!fs.existsSync(path.join(appDir, "Contents", "MacOS", "lite-code"))) {
+const appDir = path.join(root, "release", "mac-arm64", "lite-work.app");
+if (!fs.existsSync(path.join(appDir, "Contents", "MacOS", "lite-work"))) {
   console.error("[package] Generated .app is incomplete. Check the electron-builder output");
   process.exit(1);
 }
 
 console.log("[package] Step 3/4: Wrap DMG with hdiutil");
 const staging = fs.mkdtempSync(path.join(os.tmpdir(), "lc-dmg-"));
-const dmgName = `lite-code-${version}-arm64.dmg`;
+const dmgName = `lite-work-${version}-arm64.dmg`;
 const dmgPath = path.join(root, "release", dmgName);
 
 try {
   fs.copyFileSync(path.join(appDir, "Contents", "Resources", "app-icon.icns"),
     path.join(staging, ".VolumeIcon.icns"));
 } catch { /* icon is optional */ }
-step("prepare", () => execSync(`cp -R "${appDir}" "${staging}/lite-code.app"`, { cwd: root, stdio: "inherit" }));
+step("prepare", () => execSync(`cp -R "${appDir}" "${staging}/lite-work.app"`, { cwd: root, stdio: "inherit" }));
 fs.symlinkSync("/Applications", path.join(staging, "Applications"), "dir");
 
 step("hdiutil create", () => execSync(
-  `hdiutil create -volname "lite-code ${version}" -srcfolder "${staging}" -ov -format UDZO "${dmgPath}"`,
+  `hdiutil create -volname "lite-work ${version}" -srcfolder "${staging}" -ov -format UDZO "${dmgPath}"`,
   { cwd: root, stdio: "inherit" }
 ));
 

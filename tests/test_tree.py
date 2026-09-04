@@ -7,13 +7,13 @@ import subprocess
 import httpx
 import pytest
 
-from litecode.server.tree import git_snapshot, list_tree
+from litework.server.tree import git_snapshot, list_tree
 
 
 @pytest.fixture(autouse=True)
 def no_git_cache(monkeypatch):
     """关闭 git 状态 TTL 缓存，保证每个断言都拿到最新状态。"""
-    monkeypatch.setattr("litecode.server.tree.GIT_CACHE_TTL", -1)
+    monkeypatch.setattr("litework.server.tree.GIT_CACHE_TTL", -1)
 
 
 def _git(repo, *args: str) -> None:
@@ -156,10 +156,10 @@ def test_missing_dir_rejected(git_repo):
 # ---------------------------------------------------------------- HTTP 端点
 
 async def test_tree_json_endpoint(tmp_path):
-    from litecode.app import AgentApp
-    from litecode.server.app import create_app
+    from litework.app import AgentApp
+    from litework.server.app import create_app
 
-    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
     (tmp_path / "src").mkdir()
 

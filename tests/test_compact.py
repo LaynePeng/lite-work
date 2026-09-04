@@ -3,8 +3,8 @@ import asyncio
 
 import pytest
 
-from litecode.app import AgentApp
-from litecode.core.types import Message
+from litework.app import AgentApp
+from litework.core.types import Message
 from tests.conftest import MockLLMAdapter
 
 
@@ -109,7 +109,7 @@ def test_compact_preserves_metadata_and_tool_pairs(tmp_path):
     adapter = RecordingAdapter("摘要")
     app = _make_app(tmp_path, adapter)
     sid = "s6"
-    from litecode.core.types import ToolCall
+    from litework.core.types import ToolCall
     msgs = _seed_messages() + [
         Message(role="user", content="q4"),
         Message(role="assistant", content=None,

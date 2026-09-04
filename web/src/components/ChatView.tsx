@@ -295,7 +295,7 @@ function buildTurns(messages: Msg[]): RenderTurn[] {
 // 各 Agent 的空态欢迎语与场景入口（GAI 通用入口：办公/调研/代码一站式）
 const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string, string][] }> = {
   build: {
-    title: "lite-code",
+    title: "lite-work",
     sub: "手写内核的 Code 开发 Agent，已就绪。",
     hints: [
       ["🔍 查看项目结构", "帮我查看这个项目的代码结构"],
@@ -305,7 +305,7 @@ const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string
     ],
   },
   office: {
-    title: "lite-code · 办公助手",
+    title: "lite-work · 办公助手",
     sub: "写文档、做表格、生成 PPT、数据分析，产出直接保存为文件。",
     hints: [
       ["📄 写周报", "帮我写一份本周周报，生成 Word 文档"],
@@ -317,7 +317,7 @@ const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string
     ],
   },
   research: {
-    title: "lite-code · 调研助手",
+    title: "lite-work · 调研助手",
     sub: "联网查证、多来源交叉验证，输出带来源标注的调研报告。",
     hints: [
       ["🔎 快速查证", "帮我查证一个问题的最新权威说法，并注明来源"],
@@ -327,7 +327,7 @@ const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string
     ],
   },
   plan: {
-    title: "lite-code · 规划模式",
+    title: "lite-work · 规划模式",
     sub: "只读分析：探查代码库、设计实现方案，不改任何文件。",
     hints: [
       ["📋 制定实现计划", "分析需求并列出实现计划的 TODO 清单"],

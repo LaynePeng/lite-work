@@ -1,9 +1,9 @@
 """成本估算定价测试：per-model 定价（models.dev）+ 缓存命中/未命中分段计价。"""
 import json
 
-from litecode.core.agent_loop import AgentLoop
-from litecode.core.kernel import Kernel
-from litecode.llm.model_meta import ModelMetaService
+from litework.core.agent_loop import AgentLoop
+from litework.core.kernel import Kernel
+from litework.llm.model_meta import ModelMetaService
 
 
 def _loop(pricing):

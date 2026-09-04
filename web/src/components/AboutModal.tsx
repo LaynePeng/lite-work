@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import AppIcon from "./AppIcon";
 
-const GITHUB_URL = "https://github.com/LaynePeng/lite-code";
-const TUTORIAL_URL = "https://laynepeng.gitbook.io/ai-code-agent-shou-ba-shou";
+const GITHUB_URL = "https://github.com/LaynePeng/lite-work";
 
 function GitHubIcon() {
   return (
@@ -21,7 +20,7 @@ export default function AboutModal({ onClose, serverVersion }: { onClose: () => 
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const desktopVersion = window.liteCode?.version;
+  const desktopVersion = window.liteWork?.version;
   // 展示版本运行时获取：Core 版本（/api/status）→ 桌面版本（app.getVersion），不再硬编码
   const shownVersion = serverVersion || desktopVersion || "?";
 
@@ -29,12 +28,12 @@ export default function AboutModal({ onClose, serverVersion }: { onClose: () => 
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal about-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>关于 lite-code</h2>
+          <h2>关于 lite-work</h2>
           <button className="modal-close" onClick={onClose} title="关闭 (Esc)">✕</button>
         </div>
         <div className="modal-body about-body">
           <div className="about-logo"><AppIcon size={72} /></div>
-          <h3 className="about-name">lite-code</h3>
+          <h3 className="about-name">lite-work</h3>
           <div className="about-version-pill">v{shownVersion}<span className="about-core">Core v{shownVersion}</span></div>
           <p className="about-desc">
             手写内核的 Code Agent 桌面应用——Python 内核 + React UI + Electron 外壳，
@@ -45,12 +44,10 @@ export default function AboutModal({ onClose, serverVersion }: { onClose: () => 
             <a href={GITHUB_URL} target="_blank" rel="noreferrer"><GitHubIcon />GitHub 仓库</a>
             <a href={`${GITHUB_URL}/releases`} target="_blank" rel="noreferrer">📦 版本发布</a>
             <a href={`${GITHUB_URL}/issues`} target="_blank" rel="noreferrer">💬 问题反馈</a>
-            <a href={TUTORIAL_URL} target="_blank" rel="noreferrer">📖 配套教程（24 课）</a>
           </div>
 
           <div className="about-actions">
             <a className="about-btn-primary" href={GITHUB_URL} target="_blank" rel="noreferrer">打开 GitHub</a>
-            <a className="about-btn-ghost" href={TUTORIAL_URL} target="_blank" rel="noreferrer">阅读教程</a>
           </div>
 
           <div className="about-meta">

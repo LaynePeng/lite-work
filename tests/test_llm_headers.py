@@ -4,12 +4,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from litecode.app import AgentApp
-from litecode.core.types import header_context
-from litecode.llm.anthropic import AnthropicAdapter
-from litecode.llm.base import clean_custom_headers, expand_header_templates, merge_headers
-from litecode.llm.openai_compat import OpenAICompatAdapter
-from litecode.llm.registry import LLMRegistry
+from litework.app import AgentApp
+from litework.core.types import header_context
+from litework.llm.anthropic import AnthropicAdapter
+from litework.llm.base import clean_custom_headers, expand_header_templates, merge_headers
+from litework.llm.openai_compat import OpenAICompatAdapter
+from litework.llm.registry import LLMRegistry
 
 
 # ---------------------------------------------------------------- 清洗
@@ -168,7 +168,7 @@ def test_registry_apply_config_round_trip():
 
 
 def test_app_update_llm_config_can_clear_headers(tmp_path):
-    app = AgentApp(config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(config_dir=str(tmp_path / ".lite-work"))
     app.llm_registry.providers["deepseek"]["api_key"] = "sk-test"
     app.llm_registry.providers["deepseek"]["custom_headers"] = {"X-Test": "old"}
 
@@ -177,7 +177,7 @@ def test_app_update_llm_config_can_clear_headers(tmp_path):
 
 
 def test_app_update_llm_config_ignores_invalid_headers(tmp_path):
-    app = AgentApp(config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(config_dir=str(tmp_path / ".lite-work"))
     app.llm_registry.providers["deepseek"]["custom_headers"] = {"X-Test": "old"}
 
     app.update_llm_config(providers={"deepseek": {"custom_headers": "invalid"}})

@@ -10,15 +10,15 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from litecode.app import AgentApp
-from litecode.server.app import create_app
-from litecode.tools.office import OfficeTools
+from litework.app import AgentApp
+from litework.server.app import create_app
+from litework.tools.office import OfficeTools
 
 
 @pytest.fixture
 def client_and_workspace(tmp_path):
     ws = str(tmp_path)
-    app = AgentApp(workspace=ws, config_dir=str(tmp_path / ".lite-code"))
+    app = AgentApp(workspace=ws, config_dir=str(tmp_path / ".lite-work"))
     fast = create_app(app, token=None)
     with TestClient(fast) as client:
         yield client, ws

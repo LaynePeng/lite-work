@@ -5,8 +5,8 @@ import zipfile
 
 import pytest
 
-from litecode.core.system_prompt import SystemPromptBuilder
-from litecode.tools.skills import (
+from litework.core.system_prompt import SystemPromptBuilder
+from litework.tools.skills import (
     SkillsTools,
     parse_frontmatter,
 )
@@ -198,7 +198,7 @@ def test_skill_extra_injected_into_system_prompt_only(tmp_path):
     _make_skill(tmp_path, "review", triggers="审查, review")
     from types import SimpleNamespace
 
-    from litecode.server.tasks import TaskManager
+    from litework.server.tasks import TaskManager
     tm = TaskManager.__new__(TaskManager)  # 不走完整依赖，仅测解析函数
     tm.app = SimpleNamespace(
         workspace=str(tmp_path),

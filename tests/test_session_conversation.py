@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from litecode.core.session_store import SessionStore
-from litecode.core.types import Message
+from litework.core.session_store import SessionStore
+from litework.core.types import Message
 
 
 def _save_session(store: SessionStore, sid: str) -> None:
