@@ -143,10 +143,15 @@ jobs:
             echo "- 多窗口本地桌面模式：每个窗口拥有独立 Python Core、任务流、审批状态和 workspace。"
             echo "- 同一项目支持多个窗口，每个窗口独立维护会话 Tab、文件 Tab 和运行时状态。"
             echo "- 会话模型支持系统默认模型与当前会话独立模型，模型选择会持久化并在后续任务中生效。"
-            echo "- 改进 Session 持久化与 workspace 隔离，空会话不进入历史记录，metadata 更新不会丢失 workspace。"
-            echo "- 普通工具调用、代码修改、错误和取消操作使用分级 activity/card 展示。"
             echo "- 改进流式响应：安全 UTF-8 解码、React 实时缓冲、SSE 终止事件和 LLM 硬超时。"
             echo "- 停止任务支持协作式 abort、异步任务取消，以及 task ID 尚未返回时的延迟停止。"
+            echo
+            echo "## 项目与办公"
+            echo "- 侧边栏「项目」页签：打开/新建项目与代码（新建代码默认 git init）、最近项目列表，先项目后对话的两级信息架构。"
+            echo "- 产出物面板：ZIP 一键打包下载（含素材）、按 scope 清空、单文件删除。"
+            echo "- Composer 支持粘贴图片与拖拽文件，上传即插入路径引用交给 Agent 处理。"
+            echo "- Office 工具链：docx_create/docx_append 迭代写作、xlsx/pptx/pdf 生成、data_analyze 文件直读（xlsx/csv/json）、chart_make 图表。"
+            echo "- diagram-to-office 技能：PlantUML/Mermaid 离线渲染成图嵌入 Word/PPT（@plantuml/core 纯 JS + resvg，无需 Java）。"
             echo
             echo "## 代码分析工具"
             echo "- get_file_outline 支持 Python、TypeScript、JavaScript、Java、Go。"
@@ -156,7 +161,7 @@ jobs:
             echo
             echo "## 安全与工程质量"
             echo "- 项目外文件读取和写入采用分级审批，读取授权不能升级为写入授权。"
-            echo "- 补充 AST 多语言测试、会话模型覆盖测试和发布流程验证。"
+            echo "- 交互区气泡类提示均有退出机制（TTL/随任务结束/手动关闭），UI 交互约定固化到 README。"
             echo "- Windows 构建在依赖未变化时跳过 pip 安装，PyInstaller 默认复用缓存，-Clean 用于干净发布构建。"
             echo
             echo "## 安装包"
