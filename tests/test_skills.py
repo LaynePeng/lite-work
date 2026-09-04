@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -308,3 +309,54 @@ def test_skill_extra_injected_into_system_prompt_only(tmp_path):
     assert extra is not None and "Run tests first." in extra
     assert names == ["review"]
     assert ask_names == []
+
+
+# ---------------------------------------------------------------- 图表引擎启动预装
+
+def test_engine_preinstall_worker_invokes_install(tmp_path, monkeypatch):
+    """启动时后台线程调用 ~/.agents 技能脚本的 --install；锁正确释放。
+
+    mock subprocess 防止真实 npm 安装；HOME 指向临时目录时脚本不存在，
+    worker 应静默跳过（不抛异常）。
+    """
+    import subprocess as _sp
+    import time as _time
+    from litework.app import AgentApp
+
+    # 场景 1：HOME 隔离 → 脚本不存在 → worker 静默返回
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    app = AgentApp(workspace=None, config_dir=str(tmp_path / ".cfg"))
+    _time.sleep(0.3)  # 等后台线程
+    # 不抛异常即通过
+
+    # 场景 2：mock subprocess，验证真实 HOME 下调用参数与锁生命周期
+    import os as _os
+    calls = []
+
+    class _FakeRun:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _FakeRun()
+
+    monkeypatch.setenv("HOME", _os.path.expanduser("~"))  # 恢复真实 HOME
+    monkeypatch.setattr(_sp, "run", fake_run)
+    app2 = AgentApp(workspace=None, config_dir=str(tmp_path / ".cfg2"))
+    for _ in range(50):
+        if calls:
+            break
+        _time.sleep(0.1)
+    _time.sleep(0.2)
+
+    assert calls, "预装 worker 未执行"
+    cmd = calls[0]
+    assert "render_diagram.py" in cmd[1], f"应调用用户级技能脚本: {cmd}"
+    assert str(Path.home() / ".agents" / "skills" / "diagram-to-office") in cmd[1]
+    assert "--install" in cmd, "应带 --install 参数"
+    # 锁已释放
+    lock = _os.path.join(app2.config_dir, AgentApp.ENGINE_PREINSTALL_LOCK)
+    assert not _os.path.exists(lock), "预装锁未清理"

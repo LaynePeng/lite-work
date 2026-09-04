@@ -133,6 +133,11 @@ class AgentApp:
         except Exception:
             logger.debug("[App] 内置技能同步失败（不影响启动）", exc_info=True)
 
+        # 图表渲染引擎预装（@plantuml/core / @resvg/resvg-js / mmdc）：
+        # 后台线程跑 ~/.agents/skills/diagram-to-office/render_diagram.py --install，
+        # 幂等（已装即跳过）、不阻塞启动；离线/失败静默（渲染走内置兜底链）
+        self._start_engine_preinstall()
+
         # 兼容旧配置：base_url/model 回填
         if base_url and not self.llm_registry.get_active_provider_settings().get("base_url"):
             self.llm_registry.providers["deepseek"]["base_url"] = base_url
@@ -344,6 +349,71 @@ class AgentApp:
         items = [it for it in items
                  if not (isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)]
         self._save_recent_projects_raw(items)
+
+    # ------------------------------------------------------------ 图表引擎预装
+
+    ENGINE_PREINSTALL_LOCK = "engine-preinstall.lock"
+    ENGINE_PREINSTALL_STALE_S = 900  # 锁超过 15 分钟视为残留（npm 卡死防护）
+
+    def _start_engine_preinstall(self) -> None:
+        """后台预装图表渲染引擎（daemon 线程，不阻塞启动）。
+
+        多窗口/多 Core 并发启动时用文件锁防 npm install 冲突；
+        离线或 npm 不可用时静默失败——渲染管线有内置兜底链
+        （qlmanage / matplotlib），不影响功能可用性。
+        """
+        import threading
+
+        threading.Thread(
+            target=self._engine_preinstall_worker, name="engine-preinstall", daemon=True
+        ).start()
+
+    def _engine_preinstall_worker(self) -> None:
+        import subprocess
+        import time as _time
+        import shutil as _shutil
+
+        script = os.path.join(os.path.expanduser("~"), ".agents", "skills",
+                              "diagram-to-office", "render_diagram.py")
+        if not os.path.isfile(script):
+            # 技能尚未同步（同步失败等）——静默跳过
+            return
+        if _shutil.which("python3") is None and _shutil.which("python") is None:
+            return
+
+        # 文件锁：并发启动防护；残留锁超时自动接管
+        lock = os.path.join(self.config_dir, self.ENGINE_PREINSTALL_LOCK)
+        now = _time.time()
+        try:
+            if os.path.isfile(lock):
+                age = now - os.path.getmtime(lock)
+                if age < self.ENGINE_PREINSTALL_STALE_S:
+                    logger.debug("[App] 引擎预装锁存在（%.0fs 前），跳过", age)
+                    return
+                logger.warning("[App] 引擎预装锁已残留 %.0fs，接管重装", age)
+            with open(lock, "w", encoding="utf-8") as f:
+                f.write(str(now))
+        except OSError:
+            return  # config_dir 不可写——放弃（不影响启动）
+
+        try:
+            python = _shutil.which("python3") or _shutil.which("python")
+            r = subprocess.run(
+                [python, script, "--install"],
+                capture_output=True, text=True, timeout=900,
+            )
+            if r.returncode == 0:
+                logger.info("[App] 图表引擎预装完成（plantuml/mermaid 离线渲染就绪）")
+            else:
+                logger.warning("[App] 图表引擎预装未完全成功（离线或网络受限，"
+                               "渲染走内置兜底）：%s", (r.stderr or r.stdout).strip()[:200])
+        except Exception as exc:
+            logger.debug("[App] 图表引擎预装异常（忽略）：%s", exc)
+        finally:
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
 
     def mcp_status(self) -> Dict[str, Any]:
         return self.mcp_manager.status()
