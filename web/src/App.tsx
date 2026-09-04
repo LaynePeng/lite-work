@@ -588,9 +588,10 @@ export default function App() {
     async (path: string) => {
       setShowPicker(false);
       try {
-        // 打开代码模式：校验是 git 仓库（非 git 仓库提示后按项目打开）
+        // 打开代码模式：校验是 git 仓库（非 git 仓库提示后按项目打开）。
+        // 注意 fsList 默认过滤隐藏目录——检查 .git 必须传 showHidden
         if (pickerMode === "code") {
-          const fs = await api.fsList(path).catch(() => null);
+          const fs = await api.fsList(path, true).catch(() => null);
           if (fs && !fs.dirs.includes(".git")) {
             if (!window.confirm(
               `「${baseName(path)}」不是 git 仓库。\n\n仍作为普通项目打开？（如需 git 仓库，请先在目录内 git init）`
