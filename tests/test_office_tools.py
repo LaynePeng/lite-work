@@ -76,6 +76,76 @@ def test_docx_append_page_break_and_errors(tmp_path):
     assert "越界" in r5 or "不存在" in r5 or "仅支持" in r5
 
 
+# ---------------------------------------------------------------- 图表代码块自动渲染（工具层兜底）
+
+def test_docx_plantuml_block_auto_render_or_keep(tmp_path):
+    """content 中的 ```plantuml 代码块：有引擎→渲染成图嵌入；无引擎→保留源码文本（不丢）。"""
+    tools = OfficeTools(str(tmp_path))
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    content = "# 架构说明\n\n```plantuml\n@startuml\nAlice -> Bob: hi\n@enduml\n```\n\n正文结束"
+    r = asyncio.run(call("docx_create", {"content": content, "filename": "带图.docx"}))
+    assert "带图.docx" in r
+
+    from docx import Document
+    doc = Document(str(tmp_path / ".outputs" / "带图.docx"))
+    # 无论渲染成功与否，源码文本或图片至少保留其一：
+    # - 渲染成功：inline_shapes >= 1
+    # - 无引擎回退：段落里保留 @startuml 源码
+    all_text = "\n".join(p.text for p in doc.paragraphs)
+    assert (len(doc.inline_shapes) >= 1) or ("@startuml" in all_text), \
+        "plantuml 代码块既没渲染成图也没保留源码——内容丢失！"
+
+    # diagrams 缓存目录只在渲染成功时存在
+    if (tmp_path / ".outputs" / "diagrams").is_dir():
+        pngs = list((tmp_path / ".outputs" / "diagrams").glob("*.png"))
+        assert pngs, "diagrams 目录存在但没有 PNG"
+
+
+def test_docx_mermaid_block_kept_when_render_fails(tmp_path, monkeypatch):
+    """渲染失败（引擎缺失/语法错）时必须回退保留源码文本——内容不丢是硬约束。"""
+    tools = OfficeTools(str(tmp_path))
+
+    # 强制渲染失败：monkeypatch _render_diagram_block 返回 None
+    monkeypatch.setattr(
+        OfficeTools, "_render_diagram_block",
+        lambda self, lang, code, seq: None,
+    )
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    content = "```mermaid\nflowchart LR\nA-->B\n```\n"
+    r = asyncio.run(call("docx_create", {"content": content, "filename": "兜底.docx"}))
+    assert "兜底.docx" in r
+
+    from docx import Document
+    doc = Document(str(tmp_path / ".outputs" / "兜底.docx"))
+    all_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "flowchart LR" in all_text, "渲染失败时源码文本被丢弃了！"
+    assert "A-->B" in all_text
+
+
+def test_docx_normal_code_block_unaffected(tmp_path):
+    """普通代码块（python 等）行为不变：仍作为等宽文本渲染。"""
+    tools = OfficeTools(str(tmp_path))
+
+    async def call():
+        return await tools.execute("docx_create", {
+            "content": "```python\nprint('hi')\n```",
+            "filename": "代码.docx",
+        })
+
+    asyncio.run(call())
+    from docx import Document
+    doc = Document(str(tmp_path / ".outputs" / "代码.docx"))
+    all_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "print('hi')" in all_text
+    assert len(doc.inline_shapes) == 0  # 普通代码块不应被渲染成图
+
+
 # ---------------------------------------------------------------- data_analyze 文件直读
 
 def test_data_analyze_xlsx_path(tmp_path):

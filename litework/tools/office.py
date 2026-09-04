@@ -484,19 +484,29 @@ class OfficeTools:
                 continue
 
             # 代码块
-            if line.strip().startswith("```"):
+            cb_match = re.match(r"^```[ \t]*([A-Za-z0-9_+-]*)[ \t]*$", line.strip())
+            if cb_match:
+                lang = (cb_match.group(1) or "").lower()
                 code_lines = []
                 i += 1
                 while i < len(lines) and not lines[i].strip().startswith("```"):
                     code_lines.append(lines[i])
                     i += 1
                 code_text = "\n".join(code_lines)
+                i += 1  # 跳过闭合 ```
+                # 图表代码块 → 自动渲染成图片嵌入（工具层兜底，保证图不丢）；
+                # 渲染失败回退源码文本
+                if lang in ("plantuml", "puml", "mermaid", "mmd") and code_text.strip():
+                    img_abs = self._render_diagram_block(lang, code_text, i)
+                    if img_abs:
+                        rel = os.path.relpath(img_abs, self.workspace).replace("\\", "/")
+                        self._add_docx_image(doc, rel, f"图表（{lang}）")
+                        continue
                 p = doc.add_paragraph()
                 run = p.add_run(code_text)
                 run.font.name = "Courier New"
                 run.font.size = Pt(9)
                 p.paragraph_format.left_indent = Inches(0.3)
-                i += 1
                 continue
 
             # 图片 ![alt](path)
@@ -591,6 +601,54 @@ class OfficeTools:
             for run in cap.runs:
                 run.italic = True
                 run.font.size = Pt(9)
+
+    def _render_diagram_block(self, lang: str, code: str, seq: int) -> Optional[str]:
+        """把 ```plantuml / ```mermaid 代码块渲染成 PNG，返回图片绝对路径。
+
+        工具层兜底：无论 Agent 是否调用 diagram-to-office 技能，文档中的
+        图表代码块都会被渲染成图片嵌入；渲染失败返回 None（调用方回退
+        保留源码文本，绝不丢弃图表内容）。
+        """
+        try:
+            import importlib.util
+            import tempfile
+            import time as _time
+
+            rd_path = None
+            # 开发态：litework/tools/office.py → 仓库 skills/
+            cand = os.path.abspath(os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills",
+                "diagram-to-office", "render_diagram.py"))
+            if os.path.isfile(cand):
+                rd_path = cand
+            else:
+                # 打包态：PyInstaller datas → _MEIPASS/skills/...
+                meipass = getattr(sys, "_MEIPASS", None)
+                if meipass:
+                    cand2 = os.path.join(meipass, "skills", "diagram-to-office", "render_diagram.py")
+                    if os.path.isfile(cand2):
+                        rd_path = cand2
+            if rd_path is None:
+                return None
+
+            spec = importlib.util.spec_from_file_location("litework_render_diagram", rd_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            chart_type = "plantuml" if lang in ("plantuml", "puml") else "mermaid"
+            out_dir = _ensure_output_dir(self.workspace, "diagrams")
+            out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
+            with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
+                if chart_type == "plantuml":
+                    mod.render_plantuml(code, out_path, 2, tmpdir, None)
+                else:
+                    mod.render_mermaid(code, out_path, 2, tmpdir)
+            if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                return out_path
+            return None
+        except Exception:
+            # 引擎缺失/语法错误/渲染失败 → 回退源码文本（内容不丢）
+            return None
 
     # ------------------------------------------------------------ xlsx
 
@@ -696,6 +754,22 @@ class OfficeTools:
             content = slide_data.get("content", "")
             bullets = slide_data.get("bullets", [])
             image = slide_data.get("image", "")
+
+            # 图表代码块兜底：content 里的 ```plantuml/```mermaid 渲染成图片，
+            # 自动作为该页 image（未显式指定时），代码块替换为占位说明（内容不丢）
+            if content:
+                for _lang in ("plantuml", "puml", "mermaid", "mmd"):
+                    _pat = re.compile(
+                        r"```[ \t]*" + _lang + r"[ \t]*\n(.*?)```", re.S)
+                    _m = _pat.search(content)
+                    if _m:
+                        _img = self._render_diagram_block(_lang, _m.group(1), len(prs.slides._sldIdLst))
+                        if _img:
+                            if not image:
+                                image = _img
+                            _rel = os.path.relpath(_img, self.workspace).replace("\\", "/")
+                            content = _pat.sub(f"📊 图表已渲染：{_rel}", content, count=1)
+                            break
 
             slide = prs.slides.add_slide(prs.slide_layouts[1])
             slide.shapes.title.text = slide_title
@@ -858,20 +932,38 @@ class OfficeTools:
                 continue
 
             # 代码块
-            if line.strip().startswith("```"):
+            cb_match = re.match(r"^```[ \t]*([A-Za-z0-9_+-]*)[ \t]*$", line.strip())
+            if cb_match:
+                lang = (cb_match.group(1) or "").lower()
                 code_lines = []
                 i += 1
                 while i < len(lines) and not lines[i].strip().startswith("```"):
                     code_lines.append(lines[i])
                     i += 1
                 code_text = "\n".join(code_lines)
+                i += 1  # 跳过闭合 ```
+                # 图表代码块 → 渲染成图片嵌入（失败回退源码文本，保证不丢）
+                if lang in ("plantuml", "puml", "mermaid", "mmd") and code_text.strip():
+                    img_abs = self._render_diagram_block(lang, code_text, i)
+                    if img_abs:
+                        try:
+                            from reportlab.platypus import Image as RLImage
+                            from reportlab.lib.units import mm as _mm
+                            from PIL import Image as _PILImage
+                            with _PILImage.open(img_abs) as im:
+                                w_px, h_px = im.size
+                            max_w = 160 * _mm  # A4 内容宽
+                            scale = min(max_w / w_px, 1.0) if w_px else 1.0
+                            story.append(RLImage(img_abs, width=w_px * scale, height=h_px * scale))
+                            continue
+                        except Exception:
+                            pass  # 图片嵌入失败 → 回退源码文本
                 code_style = ParagraphStyle(
                     "Code", parent=styles["Code"],
                     fontSize=8, leading=10,
                     leftIndent=6*mm, spaceAfter=3*mm,
                 )
                 story.append(Preformatted(code_text, code_style))
-                i += 1
                 continue
 
             # 无序列表
