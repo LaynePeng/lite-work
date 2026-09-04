@@ -27,6 +27,8 @@ export default function ProjectPicker({
   const [entry, setEntry] = useState<FsEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // 默认隐藏 . 开头的隐藏文件/目录（可切换）
+  const [showHidden, setShowHidden] = useState(false);
 
   // 新建项目状态
   const [showCreate, setShowCreate] = useState(initialCreate);
@@ -35,11 +37,11 @@ export default function ProjectPicker({
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const load = useCallback(async (path: string) => {
+  const load = useCallback(async (path: string, hidden: boolean) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.fsList(path);
+      const data = await api.fsList(path, hidden);
       setEntry(data);
     } catch (e) {
       setError((e as Error).message);
@@ -49,10 +51,15 @@ export default function ProjectPicker({
   }, []);
 
   useEffect(() => {
-    void load(current);
-  }, [current, load]);
+    void load(current, showHidden);
+  }, [current, showHidden, load]);
 
   const enter = (dir: string) => {
+    // Windows 盘符（如 "C:\"）：直接切换到该盘根目录
+    if (/^[A-Za-z]:[\\/]?$/.test(dir)) {
+      setCurrent(dir);
+      return;
+    }
     setCurrent(entry ? `${entry.path}/${dir}` : `${current}/${dir}`);
   };
 
@@ -114,6 +121,13 @@ export default function ProjectPicker({
             title="在当前目录下新建项目"
           >
             ＋ 新建项目
+          </button>
+          <button
+            className={`btn-ghost-sm ${showHidden ? "active" : ""}`}
+            onClick={() => setShowHidden((v) => !v)}
+            title={showHidden ? "当前：显示隐藏文件（. 开头）" : "当前：隐藏 . 开头的文件与目录，点击切换"}
+          >
+            {showHidden ? "👁 隐藏文件" : "🚫 隐藏文件"}
           </button>
         </div>
 

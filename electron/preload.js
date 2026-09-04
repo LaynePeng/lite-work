@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld("liteWork", {
    */
   openProject: () => ipcRenderer.invoke("open-project"),
   openProjectNewWindow: () => ipcRenderer.invoke("open-project-new-window"),
+  /**
+   * 用系统默认应用打开工作区内的文件（docx/xlsx/pdf/图片等非代码文件）。
+   * 返回 { ok: true } 或 { ok: false, error }。
+   */
+  openFile: (path) => ipcRenderer.invoke("open-file", path),
   workspaceChanged: (workspace) => ipcRenderer.send("workspace-changed", workspace),
   terminalStart: (cols, rows) => ipcRenderer.invoke("terminal-start", cols, rows),
   terminalInput: (data) => ipcRenderer.send("terminal-input", data),

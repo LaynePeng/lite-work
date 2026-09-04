@@ -77,3 +77,31 @@ def test_create_project_remembered(client_and_app):
     # 新建即进入最近列表
     items = client.get("/api/projects/recent").json()["items"]
     assert any(i["name"] == "新项目" for i in items)
+
+
+# ---------------------------------------------------------------- 目录浏览：隐藏文件过滤
+
+def test_fs_list_hidden_files_filtered_by_default(client_and_app):
+    client, app, ws = client_and_app
+    # 准备隐藏文件/目录与普通文件
+    os.makedirs(os.path.join(ws, "普通目录"))
+    os.makedirs(os.path.join(ws, ".git"))
+    with open(os.path.join(ws, "普通文件.txt"), "w") as f:
+        f.write("x")
+    with open(os.path.join(ws, ".DS_Store"), "w") as f:
+        f.write("x")
+
+    # 默认：隐藏条目被过滤
+    r = client.get("/api/fs/list", params={"path": ws})
+    assert r.status_code == 200
+    data = r.json()
+    assert "普通目录" in data["dirs"]
+    assert ".git" not in data["dirs"]
+    assert "普通文件.txt" in data["files"]
+    assert ".DS_Store" not in data["files"]
+
+    # show_hidden=true：全部显示
+    r2 = client.get("/api/fs/list", params={"path": ws, "show_hidden": "true"})
+    data2 = r2.json()
+    assert ".git" in data2["dirs"]
+    assert ".DS_Store" in data2["files"]

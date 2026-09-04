@@ -343,7 +343,36 @@ export default function App() {
     []
   );
 
+  // 代码/文本类扩展名：文件树点击 → 内置 FileViewer 查看；其余（办公/媒体/压缩包等）
+  // → 调系统默认应用打开（覆盖不了那么多文件类型，交给系统）
+  const TEXT_LIKE_EXT = new Set([
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".css", ".scss", ".less", ".html", ".htm", ".xml", ".json", ".yaml", ".yml", ".toml",
+    ".md", ".markdown", ".txt", ".log", ".sh", ".bash", ".zsh", ".sql", ".rb", ".swift",
+    ".kt", ".svelte", ".vue", ".astro", ".ini", ".cfg", ".conf", ".env", ".gitignore",
+    ".puml", ".plantuml", ".mmd", ".mermaid", ".csv", ".tsv",
+  ]);
+
   const openFileTab = useCallback(async (filePath: string) => {
+    const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+    const isTextLike = TEXT_LIKE_EXT.has(ext) || !filePath.includes(".");
+
+    // 非代码/文本文件：桌面端调系统默认应用打开
+    if (!isTextLike) {
+      const bridge = window.liteWork;
+      if (bridge?.openFile) {
+        const r = await bridge.openFile(filePath);
+        if (!r.ok) window.alert(`无法打开文件：${r.error ?? filePath}`);
+        return;
+      }
+      window.alert(
+        `「${filePath.split("/").pop()}」不是文本类文件。\n` +
+        "桌面应用中将调用系统默认程序打开；当前浏览器模式不支持，请下载后查看" +
+        `（下载入口见「产出物」面板）或到 ${api.fileDownloadUrl(filePath)} 下载。`
+      );
+      return;
+    }
+
     let content = "", diff = "", language = "";
     try {
       const r = await api.readFile(filePath);

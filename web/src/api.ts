@@ -56,9 +56,9 @@ export const api = {
   },
   workspaceTree: (path?: string) =>
     req<TreeResponse>(`/api/workspace/tree-json${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  fsList: (path?: string) =>
+  fsList: (path?: string, showHidden = false) =>
     req<{ path: string; parent: string | null; home: string; is_workspace: boolean; dirs: string[]; files: string[]; truncated: boolean }>(
-      `/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`
+      `/api/fs/list?path=${encodeURIComponent(path ?? "")}${showHidden ? "&show_hidden=true" : ""}`
     ),
   readFile: (path: string) =>
     req<FileReadResponse>(`/api/fs/read?path=${encodeURIComponent(path)}`),

@@ -264,6 +264,8 @@ export interface LiteWorkBridge {
   version: string;
   openProject: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
   openProjectNewWindow: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
+  /** 用系统默认应用打开工作区内的文件（非代码文件） */
+  openFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
   /** 渲染进程通过 HTTP 切换工作区成功后，同步 Electron 主进程的窗口 workspace（终端 cwd 依赖它） */
   workspaceChanged: (workspace: string) => void;
   terminalStart: (cols?: number, rows?: number) => Promise<{ ok: boolean; error?: string }>;

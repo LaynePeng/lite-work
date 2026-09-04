@@ -686,16 +686,43 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         return {"ok": True}
 
     @fast_app.get("/api/fs/list")
-    async def fs_list(path: str = "", request: Request = None):
-        """浏览任意目录（用于「打开项目」目录树选择）。"""
+    async def fs_list(path: str = "", show_hidden: bool = False, request: Request = None):
+        """浏览任意目录（用于「打开项目」目录树选择）。
+
+        - show_hidden=False（默认）过滤 . 开头的隐藏文件/目录
+        - Windows：path 为空或盘符根时列出所有可用盘符（目录选择需先选盘）
+        """
         if request:
             _check_auth(request)
         import os as _os
+        import string as _string
+        import sys as _sys
 
         base = _os.path.expanduser(path) if path else (app.workspace or _os.path.expanduser("~"))
         base = _os.path.abspath(base)
         if not _os.path.isdir(base):
             raise HTTPException(status_code=400, detail=f"目录不存在: {base}")
+
+        is_win = _sys.platform == "win32"
+
+        def list_drives():
+            drives = []
+            for letter in _string.ascii_uppercase:
+                d = f"{letter}:\\"
+                if _os.path.isdir(d):
+                    drives.append(d)
+            return drives
+
+        # Windows 盘符根（如 C:\）：parent 置空并在目录里列出全部盘符
+        at_drive_root = is_win and _os.path.splitdrive(base)[1] in ("\\", "/", "")
+        parent = None
+        if at_drive_root:
+            parent = None
+        else:
+            parent = _os.path.dirname(base) or None
+            # POSIX 根目录 / 的 parent 为 None
+            if base == _os.path.sep:
+                parent = None
 
         dirs, files = [], []
         try:
@@ -705,6 +732,8 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
 
         for name in entries:
             full = _os.path.join(base, name)
+            if not show_hidden and (name.startswith(".") or name == "Thumbs.db" or name == "desktop.ini"):
+                continue
             try:
                 if _os.path.isdir(full):
                     dirs.append(name)
@@ -712,6 +741,13 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
                     files.append(name)
             except OSError:
                 continue
+
+        # Windows 盘符根：把其他盘符也列为可进入的"目录"
+        if at_drive_root:
+            cur_drive = _os.path.splitdrive(base)[0].upper()
+            for d in list_drives():
+                if d[0] != cur_drive[0]:
+                    dirs.insert(0, d)
 
         def key(n: str):
             return n.lower()
@@ -721,7 +757,7 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         cap = 500
         return {
             "path": base,
-            "parent": _os.path.dirname(base) if base != _os.path.sep else None,
+            "parent": parent,
             "home": _os.path.expanduser("~"),
             "is_workspace": base == app.workspace,
             "dirs": dirs[:cap],

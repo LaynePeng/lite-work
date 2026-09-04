@@ -288,6 +288,27 @@ async function handleOpenProject(event) {
 
 ipcMain.handle("open-project", handleOpenProject);
 
+// 用系统默认应用打开工作区内的文件（非代码文件：docx/xlsx/pdf/图片等）
+ipcMain.handle("open-file", async (event, relPath) => {
+  try {
+    if (typeof relPath !== "string" || !relPath) return { ok: false, error: "缺少路径" };
+    const instance = localInstances.get(event.sender.id);
+    if (!instance?.workspace) return { ok: false, error: "未打开项目" };
+    const abs = path.resolve(instance.workspace, relPath);
+    // 路径越界防护：仅允许打开工作区内文件
+    if (!abs.startsWith(path.resolve(instance.workspace) + path.sep)) {
+      return { ok: false, error: "路径越界：仅支持打开工作区内的文件" };
+    }
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      return { ok: false, error: `文件不存在: ${relPath}` };
+    }
+    const errMsg = await shell.openPath(abs);
+    return errMsg ? { ok: false, error: errMsg } : { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 async function createLocalWindow(workspace = null) {
   const loadingUrl = `file://${path.join(__dirname, "loading.html")}`;
   const window = createWindow(loadingUrl);
