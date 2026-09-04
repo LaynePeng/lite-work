@@ -3006,6 +3006,66 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-2);
 }
 
+/* 小号幽灵按钮（侧边栏头部/路径栏） */
+.btn-ghost-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-block;
+  line-height: 1.6;
+}
+.btn-ghost-sm:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+.btn-danger-sm:hover {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+}
+
+/* 新建项目表单（目录选择器路径栏下方） */
+.picker-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.picker-create-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+.picker-create-git {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.picker-create-git input[type="checkbox"] {
+  cursor: pointer;
+}
+
+/* 产出物单文件删除按钮 */
+.output-download.output-delete {
+  color: var(--text-3);
+}
+.output-download.output-delete:hover {
+  color: var(--danger, #e5484d);
+}
+
 /* ─────────────────────────────────── 右侧工具面板 */
 .tool-panel {
   width: var(--tool-w, 280px);

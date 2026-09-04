@@ -71,6 +71,13 @@ class WorkspaceUpdateRequest(BaseModel):
     path: str
 
 
+class ProjectCreateRequest(BaseModel):
+    """新建项目：parent 下创建 name 目录，git=True 时初始化 git 仓库。"""
+    parent: str
+    name: str
+    git: bool = True
+
+
 class SessionModelRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -589,6 +596,53 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         app.workspace = path
         return {"ok": True, "workspace": app.workspace}
 
+    @fast_app.post("/api/projects/create")
+    async def create_project(payload: ProjectCreateRequest, request: Request):
+        """新建项目：在 parent 下创建 name 目录；git=True（默认）时初始化 git 仓库。
+
+        用于「新建项目 / 新建代码」入口：新项目默认是 git 仓库，侧边栏文件树
+        即可直接展示分支与状态（git tree）。
+        """
+        _check_auth(request)
+        import os as _os
+        import re as _re
+        import subprocess as _sp
+
+        name = (payload.name or "").strip()
+        if not name or not _re.fullmatch(r"[\w.\-\u4e00-\u9fff]+", name):
+            raise HTTPException(status_code=400, detail="项目名仅支持字母/数字/中文/._- 且不含空格")
+        if name.startswith("."):
+            raise HTTPException(status_code=400, detail="项目名不能以 . 开头")
+
+        parent = _os.path.abspath(_os.path.expanduser(payload.parent))
+        if not _os.path.isdir(parent):
+            raise HTTPException(status_code=400, detail=f"父目录不存在: {parent}")
+
+        target = _os.path.join(parent, name)
+        if _os.path.exists(target):
+            raise HTTPException(status_code=409, detail=f"目录已存在: {target}")
+
+        _os.makedirs(target, exist_ok=False)
+
+        git_initialized = False
+        if payload.git:
+            try:
+                proc = _sp.run(
+                    ["git", "init", "-b", "main"],
+                    cwd=target, capture_output=True, text=True, timeout=30,
+                )
+                # 旧版 git 不支持 -b，退回普通 init
+                if proc.returncode != 0:
+                    proc = _sp.run(
+                        ["git", "init"],
+                        cwd=target, capture_output=True, text=True, timeout=30,
+                    )
+                git_initialized = proc.returncode == 0 and _os.path.isdir(_os.path.join(target, ".git"))
+            except (OSError, _sp.TimeoutExpired):
+                git_initialized = False
+
+        return {"ok": True, "path": target, "name": name, "git_initialized": git_initialized}
+
     @fast_app.get("/api/fs/list")
     async def fs_list(path: str = "", request: Request = None):
         """浏览任意目录（用于「打开项目」目录树选择）。"""
@@ -819,6 +873,109 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         # 新产出的排前面
         items.sort(key=lambda x: x["mtime"], reverse=True)
         return {"items": items}
+
+    @fast_app.get("/api/outputs/zip")
+    async def download_outputs_zip(include_uploads: bool = False, request: Request = None):
+        """把 .outputs/（可选含 .uploads/）打包为 zip 一键下载。"""
+        if request:
+            _check_auth(request)
+        import io as _io
+        import os as _os
+        import zipfile as _zipfile
+
+        workspace = _require_workspace()
+        sources = [".outputs"] + ([".uploads"] if include_uploads else [])
+        # 只收顶层常规文件（与 /api/outputs 列表口径一致）
+        collected = []
+        total = 0
+        limit = 512 * 1024 * 1024  # 512MB 安全上限
+        for rel_dir in sources:
+            base = _os.path.join(workspace, rel_dir)
+            if not _os.path.isdir(base):
+                continue
+            for name in sorted(_os.listdir(base)):
+                full = _os.path.join(base, name)
+                if not _os.path.isfile(full):
+                    continue
+                size = _os.path.getsize(full)
+                if total + size > limit:
+                    raise HTTPException(status_code=413, detail="产出物总大小超过 512MB 上限，请先清理部分文件")
+                collected.append((rel_dir, name, full))
+                total += size
+
+        if not collected:
+            raise HTTPException(status_code=404, detail="没有可下载的产出物")
+
+        buf = _io.BytesIO()
+        with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+            for rel_dir, name, full in collected:
+                # 归档名带 outputs/ 前缀，避免与 uploads 混淆
+                zf.write(full, f"{rel_dir.strip('.')}/{name}")
+        buf.seek(0)
+        from datetime import datetime as _dt
+
+        stamp = _dt.now().strftime("%Y%m%d_%H%M")
+        filename = f"lite-work-outputs-{stamp}.zip"
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Access-Control-Expose-Headers": "Content-Disposition",
+            },
+        )
+
+    @fast_app.delete("/api/outputs")
+    async def clear_outputs(scope: str = "outputs", request: Request = None):
+        """清空产出目录：scope = outputs（默认）/ uploads / all。
+
+        只删除 .outputs/.uploads 下的顶层文件，不影响代码与其他数据。
+        """
+        if request:
+            _check_auth(request)
+        import os as _os
+
+        if scope not in ("outputs", "uploads", "all"):
+            raise HTTPException(status_code=400, detail="scope 仅支持 outputs / uploads / all")
+        workspace = _require_workspace()
+        dirs = [".outputs", ".uploads"] if scope == "all" else [f".{scope}"]
+        deleted = 0
+        for rel_dir in dirs:
+            base = _os.path.join(workspace, rel_dir)
+            if not _os.path.isdir(base):
+                continue
+            for name in _os.listdir(base):
+                full = _os.path.join(base, name)
+                if not _os.path.isfile(full):
+                    continue
+                try:
+                    _os.remove(full)
+                    deleted += 1
+                except OSError:
+                    continue
+        return {"ok": True, "scope": scope, "deleted": deleted}
+
+    @fast_app.delete("/api/files")
+    async def delete_file(path: str, request: Request = None):
+        """删除单个产出物/素材文件（仅限 .outputs/.uploads 内，防误删代码）。"""
+        if request:
+            _check_auth(request)
+        import os as _os
+
+        workspace = _require_workspace()
+        rel = (path or "").strip().lstrip("/\\").replace("\\", "/")
+        if not rel.split("/")[0] in (".outputs", ".uploads"):
+            raise HTTPException(status_code=403, detail="仅支持删除 .outputs/.uploads 内的文件")
+        target = _os.path.abspath(_os.path.join(workspace, rel))
+        if not (target.startswith(workspace + _os.sep) and rel.split("/")[0] in (".outputs", ".uploads")):
+            raise HTTPException(status_code=403, detail="路径越界")
+        if not _os.path.isfile(target):
+            raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+        try:
+            _os.remove(target)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
+        return {"ok": True, "path": rel}
 
     @fast_app.get("/api/files/raw")
     async def serve_file_raw(path: str, request: Request = None):

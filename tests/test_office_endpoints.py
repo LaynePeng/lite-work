@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 import pytest
 from fastapi.testclient import TestClient
@@ -173,3 +174,119 @@ def test_upload_same_name_conflict_renamed(client_and_workspace):
         assert r.status_code == 200
     names = os.listdir(os.path.join(ws, ".uploads"))
     assert len(names) == 2
+
+
+# ---------------------------------------------------------------- 产出物 ZIP / 清理
+
+def test_outputs_zip_download(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    # 上传一个素材，验证 include_uploads 参数
+    client.post("/api/upload", files={"file": ("素材.csv", "a,b\n1,2\n", "text/csv")})
+
+    r = client.get("/api/outputs/zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    import io
+    import zipfile
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    names = zf.namelist()
+    # 仅 .outputs（5 个产出物），不含 uploads
+    assert any(n.startswith("outputs/") for n in names)
+    assert not any(n.startswith("uploads/") for n in names)
+    assert len([n for n in names if n.startswith("outputs/")]) == 5
+
+    # include_uploads=True 时包含素材
+    r2 = client.get("/api/outputs/zip", params={"include_uploads": "true"})
+    assert r2.status_code == 200
+    zf2 = zipfile.ZipFile(io.BytesIO(r2.content))
+    assert any(n.startswith("uploads/素材.csv") for n in zf2.namelist())
+
+
+def test_outputs_zip_empty_404(client_and_workspace):
+    client, _ = client_and_workspace
+    r = client.get("/api/outputs/zip")
+    assert r.status_code == 404
+
+
+def test_clear_outputs(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    client.post("/api/upload", files={"file": ("素材.csv", "x\n", "text/csv")})
+
+    # 默认 scope=outputs：只清 .outputs
+    r = client.delete("/api/outputs")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 5
+    assert os.listdir(os.path.join(ws, ".outputs")) == []
+    assert os.path.isfile(os.path.join(ws, ".uploads", "素材.csv"))
+
+    # scope=all：连同 uploads 一起清
+    r2 = client.delete("/api/outputs", params={"scope": "all"})
+    assert r2.status_code == 200
+    assert r2.json()["deleted"] == 1
+    assert os.listdir(os.path.join(ws, ".uploads")) == []
+
+    # 非法 scope
+    r3 = client.delete("/api/outputs", params={"scope": "hack"})
+    assert r3.status_code == 400
+
+
+def test_delete_single_output_file(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+
+    r = client.delete("/api/files", params={"path": ".outputs/图表.png"})
+    assert r.status_code == 200
+    assert not os.path.exists(os.path.join(ws, ".outputs", "图表.png"))
+
+    # 删除 .outputs 外的文件被拒绝（防误删代码）
+    r2 = client.delete("/api/files", params={"path": "litework/app.py"})
+    assert r2.status_code == 403
+    r3 = client.delete("/api/files", params={"path": "../../etc/passwd"})
+    assert r3.status_code in (403, 404)
+
+    # 不存在的文件
+    r4 = client.delete("/api/files", params={"path": ".outputs/nope.png"})
+    assert r4.status_code == 404
+
+
+# ---------------------------------------------------------------- 新建项目
+
+def test_create_project_with_git(client_and_workspace):
+    client, ws = client_and_workspace
+    r = client.post("/api/projects/create", json={
+        "parent": ws, "name": "新项目", "git": True,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    target = os.path.join(ws, "新项目")
+    assert os.path.isdir(target)
+    if shutil.which("git"):
+        assert data["git_initialized"] is True
+        assert os.path.isdir(os.path.join(target, ".git"))
+
+
+def test_create_project_without_git(client_and_workspace):
+    client, ws = client_and_workspace
+    r = client.post("/api/projects/create", json={
+        "parent": ws, "name": "裸目录", "git": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["git_initialized"] is False
+    assert not os.path.exists(os.path.join(ws, "裸目录", ".git"))
+
+
+def test_create_project_duplicate_and_invalid(client_and_workspace):
+    client, ws = client_and_workspace
+    os.makedirs(os.path.join(ws, "已存在"))
+    # 目录已存在
+    r = client.post("/api/projects/create", json={"parent": ws, "name": "已存在"})
+    assert r.status_code == 409
+    # 非法名称
+    r2 = client.post("/api/projects/create", json={"parent": ws, "name": "带 空格"})
+    assert r2.status_code == 400
+    # 父目录不存在
+    r3 = client.post("/api/projects/create", json={"parent": "/no/such/dir", "name": "x"})
+    assert r3.status_code == 400

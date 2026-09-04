@@ -220,6 +220,26 @@ function OutputPreview({ revision }: { revision: number }) {
           🗂️ 产出物与素材
         </span>
         <div className="files-header-actions">
+          <a
+            className="btn-ghost-sm"
+            href={api.outputsZipUrl(true)}
+            title="打包下载全部产出物与素材（ZIP）"
+          >
+            ⬇ ZIP
+          </a>
+          <button
+            className="btn-ghost-sm btn-danger-sm"
+            onClick={() => {
+              if (items.length === 0) return;
+              if (!window.confirm(`确认清空全部产出物与素材（${items.length} 个文件）？此操作不可恢复`)) return;
+              void api.clearOutputs("all")
+                .then(() => void refresh())
+                .catch((err) => window.alert(`清空失败：${err instanceof Error ? err.message : err}`));
+            }}
+            title="清空 .outputs 与 .uploads（不影响代码）"
+          >
+            🧹 清空
+          </button>
           <button
             className={`btn-refresh-tree ${loading ? "spinning" : ""}`}
             onClick={() => void refresh()}
@@ -258,6 +278,19 @@ function OutputPreview({ revision }: { revision: number }) {
               >
                 ⬇
               </a>
+              <button
+                className="output-download output-delete"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!window.confirm(`删除「${it.name}」？`)) return;
+                  void api.deleteFile(it.path)
+                    .then(() => void refresh())
+                    .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
+                }}
+                title="删除"
+              >
+                ✕
+              </button>
             </div>
           ))}
         </div>

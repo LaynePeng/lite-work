@@ -25,6 +25,13 @@ export default function ProjectPicker({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 新建项目状态
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newGit, setNewGit] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const load = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
@@ -57,6 +64,28 @@ export default function ProjectPicker({
     setCurrent(path);
   };
 
+  const submitCreate = async () => {
+    const name = newName.trim();
+    if (!name) {
+      setCreateError("请输入项目名");
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const parent = entry?.path ?? current;
+      const r = await api.createProject(parent, name, newGit);
+      // 创建成功：进入新项目目录并收起表单
+      setShowCreate(false);
+      setNewName("");
+      setCurrent(r.path);
+    } catch (e) {
+      setCreateError((e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal project-picker" onClick={(e) => e.stopPropagation()}>
@@ -76,7 +105,36 @@ export default function ProjectPicker({
               </span>
             ))}
           </div>
+          <button
+            className="btn-ghost-sm"
+            onClick={() => { setShowCreate((v) => !v); setCreateError(null); }}
+            title="在当前目录下新建项目"
+          >
+            ＋ 新建项目
+          </button>
         </div>
+
+        {showCreate && (
+          <div className="picker-create">
+            <input
+              className="form-input picker-create-name"
+              placeholder={`项目名（在 ${entry?.path ?? current} 下创建）`}
+              value={newName}
+              autoFocus
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void submitCreate(); }}
+              disabled={creating}
+            />
+            <label className="picker-create-git" title="新项目默认初始化为 git 仓库，侧边栏可直接展示分支与文件状态">
+              <input type="checkbox" checked={newGit} onChange={(e) => setNewGit(e.target.checked)} />
+              初始化 git（推荐）
+            </label>
+            <button className="btn-primary" onClick={() => void submitCreate()} disabled={creating}>
+              {creating ? "创建中…" : "创建"}
+            </button>
+          </div>
+        )}
+        {createError && <div className="picker-error">⚠ {createError}</div>}
 
         {error && <div className="picker-error">⚠ {error}</div>}
 

@@ -164,4 +164,19 @@ export const api = {
     req<{ items: OutputItem[] }>("/api/outputs"),
   filePreview: (path: string) =>
     req<FilePreviewResponse>(`/api/files/preview?path=${encodeURIComponent(path)}`),
+  outputsZipUrl: (includeUploads = false) =>
+    `/api/outputs/zip${includeUploads ? "?include_uploads=true" : ""}`,
+  clearOutputs: (scope: "outputs" | "uploads" | "all" = "outputs") =>
+    req<{ ok: boolean; scope: string; deleted: number }>(`/api/outputs?scope=${scope}`, {
+      method: "DELETE",
+    }),
+  deleteFile: (path: string) =>
+    req<{ ok: boolean; path: string }>(`/api/files?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }),
+  createProject: (parent: string, name: string, git = true) =>
+    req<{ ok: boolean; path: string; name: string; git_initialized: boolean }>(
+      "/api/projects/create",
+      { method: "POST", body: JSON.stringify({ parent, name, git }) }
+    ),
 };
