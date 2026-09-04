@@ -111,14 +111,15 @@ class OfficeTools:
                 name="docx_create",
                 description=(
                     "根据 Markdown 内容生成 Word (.docx) 文档，支持标题、段落、"
-                    "列表、表格、粗体/斜体。返回文件路径。"
+                    "列表、表格、粗体/斜体、图片嵌入（Markdown 图片语法 "
+                    "![图注](图片路径)）。返回文件路径。"
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "content": {
                             "type": "string",
-                            "description": "Markdown 格式的文档正文",
+                            "description": "Markdown 格式的文档正文，支持图片嵌入语法 ![图注](图片路径)",
                         },
                         "filename": {
                             "type": "string",
@@ -159,7 +160,8 @@ class OfficeTools:
                 name="pptx_create",
                 description=(
                     "根据结构化内容生成 PowerPoint (.pptx) 演示文稿，支持标题幻灯片"
-                    "和正文幻灯片。返回文件路径。"
+                    "和正文幻灯片；每页 slide 支持 image 字段（图片路径）嵌入图片。"
+                    "返回文件路径。"
                 ),
                 parameters={
                     "type": "object",
@@ -167,7 +169,8 @@ class OfficeTools:
                         "slides": {
                             "type": "string",
                             "description": "JSON 数组，每项为 {title: 幻灯片标题, "
-                            "content: Markdown 正文, bullets: [要点列表]（可选）}",
+                            "content: Markdown 正文, bullets: [要点列表]（可选）, "
+                            "image: 图片路径（可选，嵌入到该页）}",
                         },
                         "filename": {
                             "type": "string",
@@ -415,6 +418,15 @@ class OfficeTools:
                 i += 1
                 continue
 
+            # 图片 ![alt](path)
+            img_match = re.match(r"^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$", line)
+            if img_match:
+                alt = img_match.group(1).strip()
+                img_path = img_match.group(2).strip().strip("\"'")
+                self._add_docx_image(doc, img_path, alt)
+                i += 1
+                continue
+
             # 普通段落（支持内联格式）
             p = doc.add_paragraph()
             self._add_styled_run(p, line)
@@ -450,6 +462,54 @@ class OfficeTools:
                         run.italic = True
                     else:
                         paragraph.add_run(sp)
+
+    def _add_docx_image(self, doc, img_path: str, alt: str = "") -> None:
+        """嵌入图片到 docx（居中，自动缩放适配页宽，可带图注）。"""
+        resolved = img_path
+        if img_path.startswith("file://"):
+            resolved = img_path[len("file://"):]
+        if not os.path.isabs(resolved):
+            resolved = os.path.join(self.workspace, resolved)
+
+        if not os.path.isfile(resolved):
+            p = doc.add_paragraph(f"[图片未找到: {img_path}]")
+            if p.runs:
+                p.runs[0].font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+            return
+
+        # 计算合适宽度：默认页宽 6.5in，留边距取 6.0in；若图片原始更小则原尺寸
+        width_inches = 6.0
+        try:
+            from PIL import Image as _PILImage
+            with _PILImage.open(resolved) as im:
+                w_px, h_px = im.size
+            # 96 DPI 近似换算英寸
+            w_in = w_px / 96.0
+            h_in = h_px / 96.0
+            if w_in <= 6.0:
+                width_inches = max(1.0, w_in)
+            else:
+                # 按宽度缩放，同时保证高度不超过页面可用高度（约 8.5in）
+                scale = min(6.0 / w_in, 8.5 / h_in)
+                width_inches = w_in * scale
+        except Exception:
+            pass  # 无法读取尺寸时使用默认宽度 6.0in
+
+        try:
+            doc.add_picture(resolved, width=Inches(width_inches))
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        except Exception as exc:
+            p = doc.add_paragraph(f"[图片嵌入失败: {exc}]")
+            if p.runs:
+                p.runs[0].font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+            return
+
+        if alt:
+            cap = doc.add_paragraph(alt)
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in cap.runs:
+                run.italic = True
+                run.font.size = Pt(9)
 
     # ------------------------------------------------------------ xlsx
 
@@ -554,15 +614,73 @@ class OfficeTools:
             slide_title = slide_data.get("title", "")
             content = slide_data.get("content", "")
             bullets = slide_data.get("bullets", [])
+            image = slide_data.get("image", "")
 
             slide = prs.slides.add_slide(prs.slide_layouts[1])
             slide.shapes.title.text = slide_title
 
+            # 图片嵌入：居中放置在标题下方，宽度/高度自动缩放适配
+            pic_emu_w = 0
+            pic_emu_h = 0
+            if image:
+                img_path = image
+                if img_path.startswith("file://"):
+                    img_path = img_path[len("file://"):]
+                if not os.path.isabs(img_path):
+                    img_path = os.path.join(self.workspace, img_path)
+
+                if not os.path.isfile(img_path):
+                    body = slide.placeholders[1]
+                    body.text_frame.text = f"[图片未找到: {image}]"
+                else:
+                    try:
+                        from PIL import Image as _PILImage
+                        with _PILImage.open(img_path) as im:
+                            w_px, h_px = im.size
+                    except Exception:
+                        w_px, h_px = 0, 0
+
+                    slide_w_in = prs.slide_width / 914400  # EMU → 英寸
+                    # 图片最大占宽 90%，最大高 4.0in（给正文留底部空间）
+                    max_w_in = slide_w_in * 0.9
+                    max_h_in = 4.0
+                    if w_px and h_px:
+                        w_in = w_px / 96.0
+                        h_in = h_px / 96.0
+                        scale = min(max_w_in / w_in, max_h_in / h_in, 1.0)
+                        w_in = max(1.0, w_in * scale)
+                        h_in = max(1.0, h_in * scale)
+                    else:
+                        w_in, h_in = max_w_in, max_h_in
+
+                    pic_emu_w = int(w_in * 914400)
+                    pic_emu_h = int(h_in * 914400)
+                    left = (prs.slide_width - pic_emu_w) // 2
+                    top = _PptxInches(1.25)
+                    try:
+                        slide.shapes.add_picture(
+                            img_path, left=left, top=top,
+                            width=pic_emu_w, height=pic_emu_h,
+                        )
+                    except Exception as exc:
+                        body = slide.placeholders[1]
+                        body.text_frame.text = f"[图片嵌入失败: {exc}]"
+                        pic_emu_w = pic_emu_h = 0
+
             if bullets:
-                # 使用占位符中的文本框
-                body = slide.placeholders[1]
-                text_frame = body.text_frame
-                text_frame.clear()
+                # 使用占位符中的文本框；有图片时把正文挪到图片下方
+                if pic_emu_w:
+                    tb_left = _PptxInches(0.5)
+                    tb_top = _PptxInches(1.25) + pic_emu_h + _PptxInches(0.15)
+                    tb_width = prs.slide_width - _PptxInches(1.0)
+                    tb_height = max(_PptxInches(0.5), prs.slide_height - tb_top - _PptxInches(0.3))
+                    tb = slide.shapes.add_textbox(tb_left, tb_top, tb_width, tb_height)
+                    text_frame = tb.text_frame
+                    text_frame.word_wrap = True
+                else:
+                    body = slide.placeholders[1]
+                    text_frame = body.text_frame
+                    text_frame.clear()
                 for i, bullet in enumerate(bullets):
                     if i == 0:
                         text_frame.paragraphs[0].text = str(bullet)
@@ -570,9 +688,18 @@ class OfficeTools:
                         p = text_frame.add_paragraph()
                         p.text = str(bullet)
             elif content:
-                body = slide.placeholders[1]
-                text_frame = body.text_frame
-                text_frame.clear()
+                if pic_emu_w:
+                    tb_left = _PptxInches(0.5)
+                    tb_top = _PptxInches(1.25) + pic_emu_h + _PptxInches(0.15)
+                    tb_width = prs.slide_width - _PptxInches(1.0)
+                    tb_height = max(_PptxInches(0.5), prs.slide_height - tb_top - _PptxInches(0.3))
+                    tb = slide.shapes.add_textbox(tb_left, tb_top, tb_width, tb_height)
+                    text_frame = tb.text_frame
+                    text_frame.word_wrap = True
+                else:
+                    body = slide.placeholders[1]
+                    text_frame = body.text_frame
+                    text_frame.clear()
                 text_frame.paragraphs[0].text = content[:500]
 
         out_dir = _ensure_output_dir(self.workspace)
