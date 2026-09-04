@@ -284,12 +284,12 @@ def test_webfetch_registered_in_full_registry(tmp_path):
     registry = app.build_registry()
     assert registry.has("webfetch")
     assert registry.has("webfetch_batch")
-    # 20 基础工具 + todo_write + ask_user（Agent 提问）+ 6 办公工具（docx/xlsx/pptx/pdf/data_analyze/chart_make）
-    assert len(registry.get_tools()) == 28
+    # 20 基础工具 + todo_write + ask_user（Agent 提问）+ 7 办公工具（docx/docx_append/xlsx/pptx/pdf/data_analyze/chart_make）
+    assert len(registry.get_tools()) == 29
     assert registry.has("todo_write")
     assert registry.has("ask_user")
     # 办公工具（GAI 通用入口）已注册
-    for name in ("docx_create", "xlsx_create", "pptx_create", "pdf_create",
+    for name in ("docx_create", "docx_append", "xlsx_create", "pptx_create", "pdf_create",
                  "data_analyze", "chart_make"):
         assert registry.has(name), f"缺少办公工具 {name}"
 

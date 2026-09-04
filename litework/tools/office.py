@@ -134,6 +134,32 @@ class OfficeTools:
                 },
             ),
             ToolDefinition(
+                name="docx_append",
+                description=(
+                    "向已有的 Word (.docx) 文档追加内容（Markdown 格式，支持标题/段落/"
+                    "列表/表格/图片），保留原有内容与样式。用于迭代式写作：在生成的"
+                    "文档上补充章节、追加内容。返回文件路径。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "已有 docx 文件路径（相对工作区，如 .outputs/方案.docx）",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "要追加的 Markdown 内容（支持图片语法 ![图注](路径)）",
+                        },
+                        "page_break": {
+                            "type": "boolean",
+                            "description": "追加前是否先插入分页符（默认 false）",
+                        },
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            ToolDefinition(
                 name="xlsx_create",
                 description=(
                     "根据结构化数据生成 Excel (.xlsx) 表格，支持多 sheet。"
@@ -212,19 +238,28 @@ class OfficeTools:
             ToolDefinition(
                 name="data_analyze",
                 description=(
-                    "对 CSV/JSON 数据进行统计分析，返回分析结果文字。"
+                    "对 CSV/JSON 数据或数据文件进行统计分析，返回分析结果文字。"
                     "支持数据概览、统计描述、分组聚合、排序等。"
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "数据文件路径（相对工作区），支持 .xlsx/.xls/.csv/.json；"
+                                           "用户上传的文件在 .uploads/ 下。与 data 二选一，path 优先",
+                        },
                         "data": {
                             "type": "string",
-                            "description": "CSV 格式文本（第一行为表头）或 JSON 数组字符串",
+                            "description": "CSV 格式文本（第一行为表头）或 JSON 数组字符串。与 path 二选一",
                         },
                         "instructions": {
                             "type": "string",
                             "description": "分析指令，如 '统计各分组平均值'、'按日期排序'、'描述性统计'",
+                        },
+                        "sheet": {
+                            "type": "string",
+                            "description": "（xlsx 可选）要读取的 sheet 名，默认第一个 sheet",
                         },
                         "output_format": {
                             "type": "string",
@@ -232,7 +267,7 @@ class OfficeTools:
                             "description": "输出格式：text（默认，返回文字分析）、json（返回 JSON 串）、xlsx（生成 Excel 文件）",
                         },
                     },
-                    "required": ["data", "instructions"],
+                    "required": ["instructions"],
                 },
             ),
             ToolDefinition(
@@ -282,6 +317,8 @@ class OfficeTools:
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
         if name == "docx_create":
             return self._docx_create(args)
+        if name == "docx_append":
+            return self._docx_append(args)
         if name == "xlsx_create":
             return self._xlsx_create(args)
         if name == "pptx_create":
@@ -322,6 +359,50 @@ class OfficeTools:
         doc.save(filepath)
 
         return f"[Office OK]: 已生成 Word 文档 → {filepath}"
+
+    def _docx_append(self, args: Dict[str, Any]) -> str:
+        """向已有 docx 追加内容（迭代式写作）：打开→可选分页→追加 Markdown→保存。"""
+        if not _HAS_DOCX:
+            return _missing_dep_msg("python-docx", "docx_append")
+
+        rel_path = str(args.get("path", "") or "").strip()
+        content = args.get("content", "")
+        page_break = bool(args.get("page_break", False))
+
+        if not rel_path:
+            return "[Office Error]: 缺少 path 参数（要追加的 docx 路径）"
+        resolved = os.path.abspath(
+            rel_path if os.path.isabs(rel_path) else os.path.join(self.workspace, rel_path)
+        )
+        if not (resolved == self.workspace or resolved.startswith(self.workspace + os.sep)):
+            return "[Office Error]: 路径越界：仅支持工作区内的文件"
+        if not resolved.lower().endswith(".docx"):
+            return "[Office Error]: 仅支持 .docx 文件"
+        if not os.path.isfile(resolved):
+            return f"[Office Error]: 文件不存在: {rel_path}（先用 docx_create 生成）"
+        if not content.strip():
+            return "[Office Error]: 追加内容为空"
+
+        try:
+            doc = _DocxDoc(resolved)
+        except Exception as exc:
+            return f"[Office Error]: 打开文档失败: {exc}"
+
+        # 可选分页符：新章节从新页开始
+        if page_break:
+            from docx.enum.text import WD_BREAK
+            p = doc.add_paragraph()
+            p.add_run().add_break(WD_BREAK.PAGE)
+
+        # 复用 Markdown 渲染（支持标题/段落/列表/表格/图片语法）
+        self._md_to_docx(doc, content)
+
+        try:
+            doc.save(resolved)
+        except Exception as exc:
+            return f"[Office Error]: 保存文档失败: {exc}"
+
+        return f"[Office OK]: 已追加内容 → {resolved}"
 
     def _md_to_docx(self, doc, md_text: str) -> None:
         """将 Markdown 文本渲染到 python-docx Document 对象。"""
@@ -831,25 +912,54 @@ class OfficeTools:
 
         df: Any = None
 
+        # 优先：文件路径直读（.xlsx/.xls/.csv/.json，含用户上传的 .uploads/ 文件）
+        file_path = str(args.get("path", "") or "").strip()
+        if file_path:
+            resolved = os.path.abspath(
+                file_path if os.path.isabs(file_path) else os.path.join(self.workspace, file_path)
+            )
+            if not (resolved == self.workspace or resolved.startswith(self.workspace + os.sep)):
+                return "[Office Error]: 路径越界：仅支持读取工作区内的文件"
+            if not os.path.isfile(resolved):
+                return f"[Office Error]: 文件不存在: {file_path}"
+            ext = os.path.splitext(resolved)[1].lower()
+            sheet = args.get("sheet") or 0
+            try:
+                if ext in (".xlsx", ".xls"):
+                    if not _HAS_OPENPYXL and ext == ".xlsx":
+                        return _missing_dep_msg("openpyxl", "data_analyze（xlsx）")
+                    df = _pd.read_excel(resolved, sheet_name=sheet)
+                elif ext == ".csv":
+                    df = _pd.read_csv(resolved)
+                elif ext == ".json":
+                    df = _pd.read_json(resolved)
+                else:
+                    return f"[Office Error]: 不支持的文件类型 {ext}（支持 .xlsx/.xls/.csv/.json）"
+            except Exception as exc:
+                return f"[Office Error]: 读取文件失败: {exc}"
+
+        data_str = args.get("data", "")
+
         # 尝试解析为 JSON
-        try:
-            data_json = json.loads(data_str)
-            if isinstance(data_json, list):
-                df = _pd.DataFrame(data_json)
-            elif isinstance(data_json, dict):
-                df = _pd.DataFrame([data_json])
-        except (json.JSONDecodeError, ValueError):
-            pass
+        if df is None and data_str:
+            try:
+                data_json = json.loads(data_str)
+                if isinstance(data_json, list):
+                    df = _pd.DataFrame(data_json)
+                elif isinstance(data_json, dict):
+                    df = _pd.DataFrame([data_json])
+            except (json.JSONDecodeError, ValueError):
+                pass
 
         # 尝试解析为 CSV
-        if df is None:
+        if df is None and data_str:
             try:
                 df = _pd.read_csv(io.StringIO(data_str))
             except Exception:
                 pass
 
         if df is None:
-            return "[Office Error]: 无法解析数据。请提供 CSV 格式（第一行表头）或 JSON 数组。"
+            return "[Office Error]: 无法解析数据。请提供 path（文件路径）或 data（CSV 文本/JSON 数组）。"
 
         result_lines: List[str] = []
         result_lines.append(f"📊 数据分析结果")

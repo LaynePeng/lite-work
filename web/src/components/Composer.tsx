@@ -39,8 +39,23 @@ export default function Composer({
   const [selIdx, setSelIdx] = useState(0);
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // 上传反馈提示（"上传中… / N 个文件已上传"）：操作反馈类，几秒后自动消失
+  const [uploadToast, setUploadToast] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toastTimer = useRef<number | null>(null);
+
+  const showToast = (msg: string) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setUploadToast(msg);
+    toastTimer.current = window.setTimeout(() => setUploadToast(null), 2500);
+  };
+
+  // 组件卸载时清理提示定时器
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+  }, []);
 
   // Agent 图标与中文名（GAI 通用入口：办公/调研/代码一站式）
   const AGENT_META: Record<string, { icon: string; label: string }> = {
@@ -51,24 +66,68 @@ export default function Composer({
   };
   const agentMeta = (id: string) => AGENT_META[id] ?? { icon: "🤖", label: id };
 
-  // 上传文件：成功后把工作区相对路径以引用形式插入输入框，随消息发给 Agent
-  const handleFilesPicked = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  // 上传文件（📎 按钮 / 粘贴图片 / 拖拽文件共用）：
+  // 成功后把工作区相对路径以引用形式插入输入框，随消息发给 Agent
+  const uploadFiles = async (files: File[]) => {
+    if (disabled || files.length === 0) return;
     setUploading(true);
+    showToast("上传中…");
+    let ok = 0;
     try {
-      for (const file of Array.from(files)) {
+      for (const file of files) {
+        const isImage = file.type.startsWith("image/");
         try {
           const resp = await api.uploadFile(file);
-          setText((t) => (t ? `${t}\n` : "") + `📎 已上传文件：${resp.path}（请读取并处理该文件）`);
+          setText((t) => (t ? `${t}\n` : "") + `${isImage ? "🖼" : "📎"} 已上传${isImage ? "图片" : "文件"}：${resp.path}（请读取并处理该${isImage ? "图片" : "文件"}）`);
+          ok++;
         } catch (err) {
+          // 失败不静默：行内错误写进输入框，用户可见可删
           setText((t) => (t ? `${t}\n` : "") + `⚠ 文件上传失败：${file.name}（${err instanceof Error ? err.message : String(err)}）`);
         }
       }
+      showToast(ok > 0 ? `已上传 ${ok} 个文件` : "上传失败，详情见输入框");
       inputRef.current?.focus();
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  // 📎 按钮选文件
+  const handleFilesPicked = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    void uploadFiles(Array.from(files));
+  };
+
+  // 粘贴图片：仅当剪贴板里确有图片文件时才接管，纯文本粘贴完全走默认行为
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (disabled) return;
+    const images = Array.from(e.clipboardData?.items ?? [])
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (images.length === 0) return;
+    e.preventDefault();
+    void uploadFiles(images);
+  };
+
+  // 拖拽文件：dataTransfer 里有文件才接管（阻止默认跳转），拖文本不受影响
+  const handleDragOver = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    if (disabled) return;
+    if (Array.from(e.dataTransfer.types).includes("Files")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setDragOver(true);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    setDragOver(false);
+    if (disabled) return;
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void uploadFiles(files);
   };
 
   // 推理强度中文标签
@@ -302,7 +361,7 @@ export default function Composer({
           )}
         </div>
       )}
-      <div className="composer">
+      <div className={`composer ${dragOver ? "drag-over" : ""}`}>
         {panelVisible && candidates.length > 0 && (
           <div className="command-palette" role="listbox">
             {candidates.slice(0, 8).map((c, i) => (
@@ -372,6 +431,10 @@ export default function Composer({
             }
           }}
           onBlur={() => setTimeout(() => setPaletteOpen(false), 150)}
+          onPaste={handlePaste}
+          onDragOver={handleDragOver}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
           placeholder={running ? "任务进行中：输入将加入待发送队列，任务完成后自动发送" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
           rows={3}
           disabled={disabled}
@@ -409,6 +472,8 @@ export default function Composer({
         )}
       </div>
       <div className="composer-hint">
+        {uploadToast && <span className="upload-toast">{uploadToast}</span>}
+        {uploadToast ? " · " : ""}
         {running ? "任务进行中：➤ 追加到待发送队列（任务完成后自动发送），■ 停止任务" : "工具执行受安全策略保护，中危操作会请求你确认"}
       </div>
     </div>

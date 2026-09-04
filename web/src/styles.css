@@ -2024,6 +2024,17 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   margin-top: 8px;
 }
 
+/* 拖拽文件悬停高亮 + 上传反馈提示（操作反馈类：随上传完成/2.5s 消失） */
+.composer.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.upload-toast {
+  color: var(--accent);
+  font-weight: 500;
+}
+
 /* ============================== 空状态 ============================== */
 
 .empty-state {

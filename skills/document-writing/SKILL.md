@@ -24,6 +24,9 @@ triggers: 写文档,写方案,写通知,写制度,起草,写报告,文档排版
    - Word 交付 → docx_create；
    - 定稿/不可编辑场景 → pdf_create；
    - 文件名含文档类型与主题，如 `项目实施方案_v1.docx`。
+   - **迭代修改**：在已有文档上补充内容 → docx_append（path 指向
+     .outputs/ 下的 docx，content 为要追加的 Markdown，可 page_break
+     分页开新章）；推倒重写才重新 docx_create。
 
 5. 回复：文件路径 + 内容摘要 + 需要用户补充确认的点。
 

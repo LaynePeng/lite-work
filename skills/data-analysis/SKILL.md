@@ -12,7 +12,9 @@ triggers: 数据分析,分析数据,统计,做报表,analyze data
 
 1. **获取数据**：
    - 用户粘贴的数据（CSV/JSON）→ 直接使用；
-   - 工作区中的数据文件 → 用 read_file 读取（大数据只读前几百行先探查结构）；
+   - 工作区中的数据文件 → **data_analyze 支持 path 直读**
+     （.xlsx/.xls/.csv/.json，含用户上传的 .uploads/ 文件；xlsx 可用
+     sheet 参数指定 sheet），无需先 read_file；
    - 没有数据 → 用 ask_user 请用户提供文件或粘贴数据。
 
 2. **探查结构**：用 data_analyze（instructions 含"描述统计"）确认行列数、
