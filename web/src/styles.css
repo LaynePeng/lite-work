@@ -3239,12 +3239,19 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   cursor: pointer;
 }
 
-/* 产出物单文件删除按钮 */
-.output-download.output-delete {
+/* 产出物单文件操作按钮（删除/定位）：hover 才浮现，减少视觉噪音 */
+.output-download.output-delete,
+.output-download.output-locate {
   color: var(--text-3);
+  opacity: 0.6;
 }
 .output-download.output-delete:hover {
   color: var(--danger, #e5484d);
+  opacity: 1;
+}
+.output-download.output-locate:hover {
+  color: var(--accent);
+  opacity: 1;
 }
 
 /* ─────────────────────────────────── 右侧工具面板 */

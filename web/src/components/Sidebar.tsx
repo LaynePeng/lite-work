@@ -220,6 +220,22 @@ function OutputPreview({ revision }: { revision: number }) {
           🗂️ 产出物与素材
         </span>
         <div className="files-header-actions">
+          <button
+            className="btn-ghost-sm"
+            title="在系统文件管理器中打开产出物目录（.outputs）"
+            onClick={() => {
+              const bridge = window.liteWork;
+              if (bridge?.openFile) {
+                void bridge.openFile(".outputs").then((r) => {
+                  if (!r.ok) window.alert(`无法打开目录：${r.error ?? ""}`);
+                });
+              } else {
+                window.alert("在文件管理器中打开目录仅支持桌面应用。");
+              }
+            }}
+          >
+            📂 目录
+          </button>
           <a
             className="btn-ghost-sm"
             href={api.outputsZipUrl(true)}
@@ -278,6 +294,23 @@ function OutputPreview({ revision }: { revision: number }) {
               >
                 ⬇
               </a>
+              <button
+                className="output-download output-locate"
+                title="在系统文件管理器中定位该文件"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const bridge = window.liteWork;
+                  if (bridge?.showInFolder) {
+                    void bridge.showInFolder(it.path).then((r) => {
+                      if (!r.ok) window.alert(`无法定位文件：${r.error ?? ""}`);
+                    });
+                  } else {
+                    window.alert("在文件管理器中定位文件仅支持桌面应用。");
+                  }
+                }}
+              >
+                📍
+              </button>
               <button
                 className="output-download output-delete"
                 onClick={(e) => {

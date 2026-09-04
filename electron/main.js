@@ -288,22 +288,44 @@ async function handleOpenProject(event) {
 
 ipcMain.handle("open-project", handleOpenProject);
 
-// 用系统默认应用打开工作区内的文件（非代码文件：docx/xlsx/pdf/图片等）
+// 用系统默认应用打开工作区内的文件/目录（文件→默认应用；目录→系统文件管理器）
 ipcMain.handle("open-file", async (event, relPath) => {
   try {
     if (typeof relPath !== "string" || !relPath) return { ok: false, error: "缺少路径" };
     const instance = localInstances.get(event.sender.id);
     if (!instance?.workspace) return { ok: false, error: "未打开项目" };
     const abs = path.resolve(instance.workspace, relPath);
-    // 路径越界防护：仅允许打开工作区内文件
-    if (!abs.startsWith(path.resolve(instance.workspace) + path.sep)) {
-      return { ok: false, error: "路径越界：仅支持打开工作区内的文件" };
+    // 路径越界防护：仅允许打开工作区内路径（含工作区目录本身）
+    const wsAbs = path.resolve(instance.workspace);
+    if (abs !== wsAbs && !abs.startsWith(wsAbs + path.sep)) {
+      return { ok: false, error: "路径越界：仅支持打开工作区内的路径" };
+    }
+    if (!fs.existsSync(abs)) {
+      return { ok: false, error: `路径不存在: ${relPath}` };
+    }
+    const errMsg = await shell.openPath(abs);
+    return errMsg ? { ok: false, error: errMsg } : { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// 在系统文件管理器中定位（高亮显示）工作区内的文件
+ipcMain.handle("show-in-folder", async (event, relPath) => {
+  try {
+    if (typeof relPath !== "string" || !relPath) return { ok: false, error: "缺少路径" };
+    const instance = localInstances.get(event.sender.id);
+    if (!instance?.workspace) return { ok: false, error: "未打开项目" };
+    const abs = path.resolve(instance.workspace, relPath);
+    const wsAbs = path.resolve(instance.workspace);
+    if (!abs.startsWith(wsAbs + path.sep)) {
+      return { ok: false, error: "路径越界：仅支持定位工作区内的文件" };
     }
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
       return { ok: false, error: `文件不存在: ${relPath}` };
     }
-    const errMsg = await shell.openPath(abs);
-    return errMsg ? { ok: false, error: errMsg } : { ok: true };
+    shell.showItemInFolder(abs);
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }

@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 返回 { ok: true } 或 { ok: false, error }。
    */
   openFile: (path) => ipcRenderer.invoke("open-file", path),
+  /**
+   * 在系统文件管理器中定位（高亮显示）工作区内的文件。
+   * 返回 { ok: true } 或 { ok: false, error }。
+   */
+  showInFolder: (path) => ipcRenderer.invoke("show-in-folder", path),
   workspaceChanged: (workspace) => ipcRenderer.send("workspace-changed", workspace),
   terminalStart: (cols, rows) => ipcRenderer.invoke("terminal-start", cols, rows),
   terminalInput: (data) => ipcRenderer.send("terminal-input", data),
