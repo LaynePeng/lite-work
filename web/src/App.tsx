@@ -1147,8 +1147,10 @@ export default function App() {
       }
       const base = getChat(sid);
       if (base.running) {
-        // 任务运行中：追加到待发送队列，任务完成后自动发送
+        // 任务运行中：追加到待发送队列，任务完成后自动发送。
+        // 消息同时插入对话流（用户能看到已发出），自动发送时不再重复插入
         patchChat(sid, {
+          messages: [...(base.messages ?? []), { role: "user", content: prompt, queued: true }],
           pendingQueue: [...(base.pendingQueue ?? []), prompt],
           error: null,
         });
@@ -1225,7 +1227,6 @@ export default function App() {
   taskLauncherRef.current = (targetSid, prompt, effort) => {
     const reasoning = effort ?? getChat(targetSid)?.reasoningEffort ?? "";
     patchChat(targetSid, {
-      messages: [...(getChat(targetSid).messages ?? []), { role: "user", content: prompt }],
       running: true,
       streaming: { items: [] },
       error: null,
