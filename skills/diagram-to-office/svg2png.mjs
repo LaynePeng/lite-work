@@ -74,7 +74,8 @@ async function main() {
   }
 
   const svg = readFileSync(input, 'utf8');
-  const options = { fitTo: { mode: 'zoom', value: scale } };
+  // 默认白色背景：避免深色模式下透明背景导致图片看不清
+  const options = { fitTo: { mode: 'zoom', value: scale }, background: '#ffffff' };
   if (width > 0) options.fitTo = { mode: 'width', value: width };
   try {
     const resvg = new Resvg(svg, options);
