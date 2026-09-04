@@ -166,6 +166,40 @@ export default function App() {
     [activeSessionId, patchChat]
   );
 
+  // ------------------------------------------------------------ 子 Agent 完成记录自动消失
+
+  // 完成记录是临时通知：显示 TTL 后自动移除，避免聊天底部无限累积
+  const SUBAGENT_RECORD_TTL_MS = 20_000;
+  const subagentTimersRef = useRef<Map<string, number>>(new Map());
+
+  /** 为一批归档记录安排到期移除（按 subagentId/task 匹配）。 */
+  const scheduleSubagentRecordExpiry = useCallback(
+    (sid: string, records: SubAgentProgress[]) => {
+      if (records.length === 0) return;
+      const ids = new Set(records.map((r) => r.subagentId || r.task));
+      const timerKey = `${sid}:${[...ids].join(",")}`;
+      const t = window.setTimeout(() => {
+        subagentTimersRef.current.delete(timerKey);
+        const cur = chatStatesRef.current[sid];
+        if (!cur?.subAgentRecords?.length) return;
+        patchChat(sid, {
+          subAgentRecords: cur.subAgentRecords.filter((r) => !ids.has(r.subagentId || r.task)),
+        });
+      }, SUBAGENT_RECORD_TTL_MS);
+      subagentTimersRef.current.set(timerKey, t);
+    },
+    [patchChat]
+  );
+
+  // 卸载时清理未触发的定时器，避免泄漏
+  useEffect(() => {
+    const timers = subagentTimersRef.current;
+    return () => {
+      timers.forEach((t) => window.clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
+
   // ------------------------------------------------------------ 会话列表
 
   const refreshSessions = useCallback(async (ws?: string) => {
@@ -371,6 +405,8 @@ export default function App() {
             summary: r.summary ?? "",
             tokens: r.tokens ?? 0,
           }));
+          // 恢复的完成记录同样按 TTL 自动消失（临时通知语义）
+          scheduleSubagentRecordExpiry(sid, initial.subAgentRecords);
         }
         patchChat(sid, { ...EMPTY_CHAT, ...initial });
         try {
@@ -736,6 +772,8 @@ export default function App() {
             subAgentRecords: [...(getChat(sid).subAgentRecords ?? []), ...finished],
             skillLoaded: undefined,
           });
+          // 完成记录为临时通知：TTL 后自动消失
+          scheduleSubagentRecordExpiry(sid, finished);
           cancelStreamFlush(sid);
           streamingRefs.current.delete(sid);
           closeStream(sid);
