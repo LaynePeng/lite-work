@@ -99,6 +99,37 @@ def parse_frontmatter(text: str) -> Dict[str, Any]:
     return meta
 
 
+def _builtin_skills_dir() -> Optional[Path]:
+    """定位随产品分发的内置技能目录（skills/）。
+
+    项目是动态创建/切换的，内置技能不能只依赖 workspace 下的 skills/：
+    - 打包态：PyInstaller --add-data 落点（不同版本 _MEIPASS 可能是
+      _internal/ 或可执行文件目录，全部候选穷举）
+    - 开发态：仓库根 skills/（litework 包的上一级）
+    """
+    try:
+        import sys as _sys
+        candidates: List[Path] = []
+        meipass = getattr(_sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "skills")
+            candidates.append(Path(meipass) / "_internal" / "skills")
+        if getattr(_sys, "frozen", False):
+            exe_dir = Path(_sys.executable).resolve().parent
+            candidates.append(exe_dir / "skills")
+            candidates.append(exe_dir / "_internal" / "skills")
+        # 开发态：litework/tools/skills.py → litework 包 → 仓库根/skills
+        candidates.append(Path(__file__).resolve().parent.parent.parent / "skills")
+        for cand in candidates:
+            if cand.is_dir() and any(
+                (d / "SKILL.md").is_file() for d in cand.iterdir() if d.is_dir()
+            ):
+                return cand
+    except Exception:
+        pass
+    return None
+
+
 class SkillsTools:
     def __init__(self, workspace: Optional[str]) -> None:
         self.workspace = Path(workspace).resolve() if workspace else None
@@ -112,6 +143,13 @@ class SkillsTools:
         for suffix, writable in USER_ROOT_SUFFIXES:
             self.roots.append({
                 "path": home / suffix, "scope": "user", "writable": writable,
+            })
+        # 产品内置技能根（随包分发，任何 workspace 都可见；只读）。
+        # 优先级最低：workspace / user 同名技能覆盖内置版。
+        builtin = _builtin_skills_dir()
+        if builtin:
+            self.roots.append({
+                "path": builtin, "scope": "builtin", "writable": False,
             })
 
     # ------------------------------------------------------------ 发现

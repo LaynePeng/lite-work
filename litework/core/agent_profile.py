@@ -226,6 +226,11 @@ OFFICE_PROMPT = """你是一个通用办公助手（Office Agent），帮助用�
    用户提供的数字、名称、日期必须原样保留，不得改写。
 5. 需要外部资料时用 webfetch / webfetch_batch 查证，并在文档中注明来源。
 6. 复杂任务先用 todo_write 列出步骤清单，逐步执行并更新进度。
+7. 图表嵌入：文档中的 PlantUML / Mermaid 图（时序图、架构图、流程图等）
+   用 load_skill 加载 diagram-to-office 技能，按其流程用 execute_command
+   运行渲染脚本转成图片，再嵌入 docx/pptx
+   （Word 用 ![](图片路径) 语法，PPT 用 slide 的 image 字段）；
+   UML 类图表一律用 PlantUML 而非 Mermaid 写。
 
 你可以读写工作区内的文件，但没有 git 与代码编辑能力；如任务涉及写代码，
 提示用户切换到 build Agent。"""
@@ -241,6 +246,8 @@ def default_office_agent() -> AgentProfile:
             # 办公产出
             "docx_create", "xlsx_create", "pptx_create", "pdf_create",
             "data_analyze", "chart_make",
+            # 图表渲染脚本（diagram-to-office 技能：plantuml/mermaid 转图片）
+            "execute_command",
             # 文件读写与浏览
             "read_file", "write_file", "list_dir", "file_tree",
             # 资料获取

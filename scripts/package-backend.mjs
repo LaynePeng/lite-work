@@ -46,6 +46,7 @@ const specArgs = [
   "--specpath", path.join(root, "release", "_spec"),
   "--paths", root,
   "--add-data", `${webDist}${sep}web${path.sep}dist`,
+  "--add-data", `${path.join(root, "skills")}${sep}skills`,
   "--collect-all", "fastapi",
   "--collect-all", "uvicorn",
   "--collect-all", "starlette",

@@ -34,6 +34,52 @@ def test_skill_index_and_load(tmp_path):
     assert "Run tests first." in result
 
 
+def test_builtin_skills_visible_in_any_workspace(tmp_path):
+    """产品内置技能随包分发：任意 workspace（含用户新建的空项目）都能发现。
+
+    项目是动态创建/切换的，内置技能不能只在 lite-work 仓库下可见。
+    """
+    from litework.tools.skills import _builtin_skills_dir
+
+    builtin = _builtin_skills_dir()
+    # 开发态必然存在仓库 skills/；打包态存在 _internal/skills/
+    assert builtin is not None, "内置技能目录未找到（开发态=仓库 skills/，打包态=_internal/skills/）"
+
+    # 任意空 workspace（模拟用户新建的项目目录）也能发现内置技能
+    empty_ws = tmp_path / "用户的新项目"
+    empty_ws.mkdir()
+    tools = SkillsTools(str(empty_ws))
+    names = {s["name"] for s in tools.list_skills()}
+    assert "diagram-to-office" in names
+    assert "weekly-report" in names
+    # scope 标记为 builtin
+    scopes = {s["name"]: s["scope"] for s in tools.list_skills()}
+    assert scopes["diagram-to-office"] == "builtin"
+
+    # load_skill 可加载内置技能
+    result = asyncio.run(tools.execute("load_skill", {"skillName": "diagram-to-office"}))
+    assert "图表转 Office" in result
+
+
+def test_workspace_skill_overrides_builtin(tmp_path, monkeypatch):
+    """优先级：workspace > user > builtin（同名技能用户可覆盖内置版）。"""
+    from litework.tools import skills as skills_mod
+
+    builtin = skills_mod._builtin_skills_dir()
+    assert builtin is not None
+
+    # workspace 下放同名技能 diagram-to-office
+    ws_skill = tmp_path / ".agents" / "skills" / "diagram-to-office" / "SKILL.md"
+    ws_skill.parent.mkdir(parents=True)
+    ws_skill.write_text("---\nname: diagram-to-office\ndescription: 工作区定制版\n---\n定制内容", encoding="utf-8")
+
+    tools = SkillsTools(str(tmp_path))
+    matched = [s for s in tools.list_skills() if s["name"] == "diagram-to-office"]
+    assert len(matched) == 1
+    assert matched[0]["scope"] == "workspace"
+    assert matched[0]["description"] == "工作区定制版"
+
+
 def test_project_instructions_support_claude_uppercase(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("Use the repository style.", encoding="utf-8")
     prompt = SystemPromptBuilder.build(str(tmp_path), [])
@@ -66,24 +112,31 @@ def test_list_skills_with_scope_and_writable(tmp_path, monkeypatch):
     _make_skill(tmp_path, "review")
     tools = SkillsTools(str(tmp_path))
     skills = tools.list_skills()
-    assert len(skills) == 1
-    s = skills[0]
-    assert s["name"] == "review"
+    # 内置技能（builtin scope）在任何环境都可见，不能断言总数
+    by_name = {s["name"]: s for s in skills}
+    assert "review" in by_name
+    s = by_name["review"]
     assert s["scope"] == "workspace"
     assert s["writable"] is True
     assert s["description"] == "Review workflow"
+    # 内置技能只读
+    assert by_name["weekly-report"]["scope"] == "builtin"
+    assert by_name["weekly-report"]["writable"] is False
 
 
 def test_workspace_none_user_scope_only(tmp_path, monkeypatch):
-    """桌面版未开项目：workspace=None 时仅用户级技能可见。"""
-    monkeypatch.setenv("USERPROFILE" , str(tmp_path))  # Windows 家目录
+    """桌面版未开项目：workspace=None 时用户级与内置技能可见。"""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows 家目录
     monkeypatch.setenv("HOME", str(tmp_path))
     _make_skill(tmp_path, "user-skill", description="User level")
     tools = SkillsTools(None)
     assert tools.workspace is None
     skills = tools.list_skills()
-    assert [s["name"] for s in skills] == ["user-skill"]
-    assert skills[0]["scope"] == "user"
+    by_name = {s["name"]: s for s in skills}
+    assert "user-skill" in by_name
+    assert by_name["user-skill"]["scope"] == "user"
+    # 未开项目也能看到产品内置技能
+    assert by_name["diagram-to-office"]["scope"] == "builtin"
 
 
 def test_read_skill_and_match_triggers(tmp_path):
