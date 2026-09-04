@@ -233,7 +233,9 @@ class AgentApp:
         if not os.path.isdir(abs_path):
             raise ValueError(f"目录不存在: {abs_path}")
         items = self.list_recent_projects()
-        items = [it for it in items if os.path.abspath(it["path"]) != abs_path]
+        # Windows 大小写不敏感：normcase 归一后去重
+        key = os.path.normcase(abs_path)
+        items = [it for it in items if os.path.normcase(os.path.abspath(it["path"])) != key]
         items.insert(0, {
             "path": abs_path,
             "name": os.path.basename(abs_path) or abs_path,
@@ -257,8 +259,9 @@ class AgentApp:
         except (OSError, ValueError):
             return
         abs_path = os.path.abspath(os.path.expanduser(path))
+        key = os.path.normcase(abs_path)
         items = [it for it in items
-                 if not (isinstance(it, dict) and os.path.abspath(it.get("path") or "") == abs_path)]
+                 if not (isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)]
         try:
             with open(self.recent_projects_path, "w", encoding="utf-8") as f:
                 json.dump(items, f, ensure_ascii=False, indent=2)

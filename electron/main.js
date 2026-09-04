@@ -295,9 +295,12 @@ ipcMain.handle("open-file", async (event, relPath) => {
     const instance = localInstances.get(event.sender.id);
     if (!instance?.workspace) return { ok: false, error: "未打开项目" };
     const abs = path.resolve(instance.workspace, relPath);
-    // 路径越界防护：仅允许打开工作区内路径（含工作区目录本身）
+    // 路径越界防护：仅允许打开工作区内路径（含工作区目录本身）。
+    // Windows 文件系统大小写不敏感：统一小写后比较
     const wsAbs = path.resolve(instance.workspace);
-    if (abs !== wsAbs && !abs.startsWith(wsAbs + path.sep)) {
+    const lowerAbs = abs.toLowerCase();
+    const lowerWs = wsAbs.toLowerCase() + path.sep;
+    if (lowerAbs !== wsAbs.toLowerCase() && !lowerAbs.startsWith(lowerWs)) {
       return { ok: false, error: "路径越界：仅支持打开工作区内的路径" };
     }
     if (!fs.existsSync(abs)) {
@@ -318,7 +321,8 @@ ipcMain.handle("show-in-folder", async (event, relPath) => {
     if (!instance?.workspace) return { ok: false, error: "未打开项目" };
     const abs = path.resolve(instance.workspace, relPath);
     const wsAbs = path.resolve(instance.workspace);
-    if (!abs.startsWith(wsAbs + path.sep)) {
+    // Windows 大小写不敏感：统一小写比较
+    if (!abs.toLowerCase().startsWith(wsAbs.toLowerCase() + path.sep)) {
       return { ok: false, error: "路径越界：仅支持定位工作区内的文件" };
     }
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {

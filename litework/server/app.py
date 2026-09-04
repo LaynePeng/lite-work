@@ -320,7 +320,9 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             # 如果会话关联的项目目录已不存在，则不显示该会话
             if not os.path.isdir(s_ws):
                 continue
-            if workspace and os.path.abspath(s_ws) != os.path.abspath(workspace):
+            # Windows 文件系统大小写不敏感：normcase 归一后比较
+            # （C:\Users\proj 与 c:\users\PROJ 是同一项目）
+            if workspace and os.path.normcase(os.path.abspath(s_ws)) != os.path.normcase(os.path.abspath(workspace)):
                 continue
             messages = s.get("messages", [])
             if not any(m.get("role") == "user" for m in messages):

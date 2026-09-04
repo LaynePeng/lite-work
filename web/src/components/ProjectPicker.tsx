@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { isDriveRoot, pathSegments } from "../lib/path";
 
 interface FsEntry {
   path: string;
@@ -56,7 +57,7 @@ export default function ProjectPicker({
 
   const enter = (dir: string) => {
     // Windows 盘符（如 "C:\"）：直接切换到该盘根目录
-    if (/^[A-Za-z]:[\\/]?$/.test(dir)) {
+    if (isDriveRoot(dir)) {
       setCurrent(dir);
       return;
     }
@@ -68,10 +69,15 @@ export default function ProjectPicker({
     if (entry?.parent) setCurrent(entry.parent);
   };
 
-  const breadcrumb = (current || "").split("/").filter(Boolean);
+  const breadcrumb = pathSegments(current || "");
   const jumpTo = (idx: number) => {
-    const path = "/" + breadcrumb.slice(0, idx + 1).join("/");
-    setCurrent(path);
+    const segs = breadcrumb.slice(0, idx + 1);
+    // Windows 盘符路径（首段是 C: 形式）：拼成 C:\a\b；POSIX：/a/b
+    if (/^[A-Za-z]:$/.test(segs[0] ?? "")) {
+      setCurrent(segs.join("\\") + "\\");
+    } else {
+      setCurrent("/" + segs.join("/"));
+    }
   };
 
   const submitCreate = async () => {

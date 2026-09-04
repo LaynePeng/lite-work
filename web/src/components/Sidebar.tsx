@@ -4,6 +4,7 @@ import { api } from "../api";
 import AppIcon from "./AppIcon";
 import TerminalPanel from "./TerminalPanel";
 import type { OutputItem, RecentProject, SessionInfo, TreeEntry } from "../types";
+import { baseName } from "../lib/path";
 
 export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
 
@@ -333,7 +334,7 @@ function OutputPreview({ revision }: { revision: number }) {
         <div className="preview-overlay" onClick={closePreview}>
           <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
             <div className="preview-modal-header">
-              <span className="preview-title">{fileIcon(previewPath)} {previewPath.split("/").pop()}</span>
+              <span className="preview-title">{fileIcon(previewPath)} {baseName(previewPath)}</span>
               <div className="preview-actions">
                 <a className="output-download" href={api.fileDownloadUrl(previewPath)} title="下载文件">⬇ 下载</a>
                 <button className="preview-close" onClick={closePreview}>✕</button>
@@ -448,9 +449,9 @@ export default function Sidebar({
   onOpenAbout: () => void;
   onFileOpen?: (path: string) => void;
 }) {
-  // 当前项目显示名：路径末段；未打开项目时由 App 层保证不进入 sessions 视图
+  // 当前项目显示名：路径末段（兼容 / 与 \）；未打开项目时由 App 层保证不进入 sessions 视图
   const projectName = workspace && workspace !== "未打开项目"
-    ? workspace.split("/").filter(Boolean).pop() ?? workspace
+    ? baseName(workspace) || workspace
     : "";
 
   return (

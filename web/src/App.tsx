@@ -11,6 +11,7 @@ import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
 import type { AgentInfo, AppConfig, ContextStats, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, Stats, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import { baseName } from "./lib/path";
 
 interface PendingApproval {
   id: string;
@@ -366,7 +367,7 @@ export default function App() {
         return;
       }
       window.alert(
-        `「${filePath.split("/").pop()}」不是文本类文件。\n` +
+        `「${baseName(filePath)}」不是文本类文件。\n` +
         "桌面应用中将调用系统默认程序打开；当前浏览器模式不支持，请下载后查看" +
         `（下载入口见「产出物」面板）或到 ${api.fileDownloadUrl(filePath)} 下载。`
       );
@@ -391,7 +392,7 @@ export default function App() {
         );
       }
       const tab: TabItem = {
-        id: nextTabId(), kind: "file", title: filePath.split("/").pop() ?? filePath,
+        id: nextTabId(), kind: "file", title: baseName(filePath) || filePath,
         filePath, fileContent: content, fileDiff: diff, fileLanguage: language,
       };
       setActiveTabId(tab.id);
@@ -600,7 +601,7 @@ export default function App() {
           const fs = await api.fsList(path).catch(() => null);
           if (fs && !fs.dirs.includes(".git")) {
             if (!window.confirm(
-              `「${path.split("/").pop()}」不是 git 仓库。\n\n仍作为普通项目打开？（如需 git 仓库，请先在目录内 git init）`
+              `「${baseName(path)}」不是 git 仓库。\n\n仍作为普通项目打开？（如需 git 仓库，请先在目录内 git init）`
             )) {
               return;
             }
