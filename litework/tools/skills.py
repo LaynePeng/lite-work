@@ -179,7 +179,11 @@ def sync_builtin_skills_to_user() -> int:
             _shutil.copytree(
                 skill_dir, target,
                 dirs_exist_ok=True,
-                ignore=_shutil.ignore_patterns("__pycache__", BUILTIN_SKILL_MARKER),
+                # node_modules（引擎，可达数百 MB）不拷贝：留在安装包内置
+                # 位置直接用（LITEWORK_SKILLS_SOURCE 指路），避免双倍占盘
+                # 与启动阻塞
+                ignore=_shutil.ignore_patterns(
+                    "__pycache__", BUILTIN_SKILL_MARKER, "node_modules"),
             )
             marker.write_text(__version__, encoding="utf-8")
             installed += 1

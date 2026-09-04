@@ -29,6 +29,13 @@ function findCoreDir() {
     if (parent === dir) break;
     dir = parent;
   }
+  // 2b) 安装包内置位置（~/.agents 同步不带 node_modules，由
+  //     LITEWORK_SKILLS_SOURCE 指向 _internal/skills）
+  if (process.env.LITEWORK_SKILLS_SOURCE) {
+    const cand = path.join(process.env.LITEWORK_SKILLS_SOURCE,
+      'diagram-to-office', 'node_modules', '@plantuml', 'core');
+    if (existsSync(cand)) return cand;
+  }
   // 3) 全局 npm root
   try {
     const root = execSync('npm root -g', { encoding: 'utf8' }).trim();

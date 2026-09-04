@@ -31,6 +31,12 @@ function findResvgDir() {
     if (parent === dir) break;
     dir = parent;
   }
+  // 安装包内置位置（LITEWORK_SKILLS_SOURCE 指向 _internal/skills）
+  if (process.env.LITEWORK_SKILLS_SOURCE) {
+    const cand = path.join(process.env.LITEWORK_SKILLS_SOURCE,
+      'diagram-to-office', 'node_modules', '@resvg', 'resvg-js');
+    if (existsSync(cand)) return cand;
+  }
   try {
     const root = execSync('npm root -g', { encoding: 'utf8' }).trim();
     const cand = path.join(root, '@resvg', 'resvg-js');

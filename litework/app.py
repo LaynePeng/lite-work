@@ -124,9 +124,14 @@ class AgentApp:
         self.recent_projects_path = os.path.join(self.config_dir, "recent_projects.json")
 
         # 内置技能安装到用户级 ~/.agents/skills/（幂等；Agent 依赖稳定路径
-        # 跑技能脚本，仓库/_internal 内置位置换机器/升级后会漂移）
+        # 跑技能脚本，仓库/_internal 内置位置换机器/升级后会漂移）。
+        # 引擎 node_modules 不拷贝（数百 MB），通过 LITEWORK_SKILLS_SOURCE
+        # 指向安装包内置位置，渲染脚本子进程自动继承。
         try:
-            from .tools.skills import sync_builtin_skills_to_user
+            from .tools.skills import _builtin_skills_dir, sync_builtin_skills_to_user
+            builtin_dir = _builtin_skills_dir()
+            if builtin_dir is not None:
+                os.environ.setdefault("LITEWORK_SKILLS_SOURCE", str(builtin_dir))
             n = sync_builtin_skills_to_user()
             if n:
                 logger.info("[App] 已安装/升级 %d 个内置技能到 ~/.agents/skills/", n)

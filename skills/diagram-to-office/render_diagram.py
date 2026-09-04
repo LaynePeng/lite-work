@@ -251,12 +251,21 @@ _SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 def _local_node_modules() -> str:
     """技能目录自带的 node_modules（安装包内置引擎，离线即用）。
 
-    打包时 build 脚本会在 skills/diagram-to-office/ 下 npm install，
-    随 --add-data 进 _internal/skills/，同步到 ~/.agents/skills/ 后
-    路径同样成立——引擎查找优先级：本地 node_modules > 全局 npm。
+    查找顺序：
+    1. 技能自身目录的 node_modules（dev 态 / 手动装过）
+    2. LITEWORK_SKILLS_SOURCE/diagram-to-office/node_modules——安装包
+       内置位置（App 启动时设置，子进程自动继承；~/.agents 同步时
+       node_modules 不拷贝，数百 MB 引擎留在安装包内直接用）
     """
     nm = os.path.join(_SKILL_DIR, "node_modules")
-    return nm if os.path.isdir(nm) else ""
+    if os.path.isdir(nm):
+        return nm
+    src = os.environ.get("LITEWORK_SKILLS_SOURCE", "")
+    if src:
+        nm2 = os.path.join(src, "diagram-to-office", "node_modules")
+        if os.path.isdir(nm2):
+            return nm2
+    return ""
 
 
 def _local_pkg_dir(pkg: str) -> str:
