@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { api } from "../api";
 import AppIcon from "./AppIcon";
 import TerminalPanel from "./TerminalPanel";
-import type { OutputItem, SessionInfo, TreeEntry } from "../types";
+import type { OutputItem, RecentProject, SessionInfo, TreeEntry } from "../types";
 
 export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
 
@@ -370,12 +370,20 @@ export default function Sidebar({
   treeRevision,
   outputRevision,
   version,
+  recentProjects,
+  projectsView,
+  projectKind,
   onTabChange,
   onSelectSession,
   onOpenSessionWithProject,
   onNewSession,
   onDeleteSession,
   onOpenProject,
+  onOpenCode,
+  onNewProject,
+  onOpenRecent,
+  onRemoveRecent,
+  onBackToProjects,
   onOpenProjectNewWindow,
   onOpenSettings,
   onOpenAbout,
@@ -388,17 +396,30 @@ export default function Sidebar({
   treeRevision: number;
   outputRevision: number;
   version: string;
+  recentProjects: RecentProject[];
+  projectsView: "list" | "sessions";
+  projectKind: "code" | "project";
   onTabChange: (tab: SidebarTab) => void;
   onSelectSession: (id: string) => void;
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
   onOpenProject: () => void;
+  onOpenCode: () => void;
+  onNewProject?: (git: boolean) => void;
+  onOpenRecent: (path: string) => void;
+  onRemoveRecent: (path: string) => void;
+  onBackToProjects: () => void;
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onFileOpen?: (path: string) => void;
 }) {
+  // 当前项目显示名：路径末段；未打开项目时由 App 层保证不进入 sessions 视图
+  const projectName = workspace && workspace !== "未打开项目"
+    ? workspace.split("/").filter(Boolean).pop() ?? workspace
+    : "";
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -408,7 +429,7 @@ export default function Sidebar({
 
       <div className="sidebar-tabs">
         <button className={tab === "sessions" ? "active" : ""} onClick={() => onTabChange("sessions")}>
-          会话
+          项目
         </button>
         <button className={tab === "files" ? "active" : ""} onClick={() => onTabChange("files")}>
           文件
@@ -424,19 +445,93 @@ export default function Sidebar({
       {/* 终端 Tab 时 body 隐藏，让 .sidebar-terminal 独占 tabs 与 footer 之间的空间 */}
       <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""}`}>
         {tab === "sessions" && (
-          <div className="sessions-list">            <button className="btn-new-session" onClick={onNewSession}>
-              ＋ 新建会话
-            </button>
-            <button className="btn-open-session" onClick={onOpenProject} title="选择其他项目目录，切换工作区">
-              📂 打开项目…
-            </button>
-            {onOpenProjectNewWindow && (
-              <button className="btn-open-session" onClick={onOpenProjectNewWindow} title="在新窗口打开另一个项目">
-                ▣ 新窗口打开项目…
+          projectsView === "list" ? (
+            <div className="projects-list">
+              <div className="projects-entries">
+                <button className="btn-project-entry" onClick={onOpenProject} title="打开任意目录作为项目（文档/办公/任意工作目录）">
+                  <span className="entry-icon">📂</span>
+                  <span className="entry-text">
+                    <span className="entry-title">打开项目</span>
+                    <span className="entry-desc">任意工作目录</span>
+                  </span>
+                </button>
+                <button className="btn-project-entry" onClick={onOpenCode} title="打开代码仓库（git 仓库，用代码 Agent 开发）">
+                  <span className="entry-icon">💻</span>
+                  <span className="entry-text">
+                    <span className="entry-title">打开代码</span>
+                    <span className="entry-desc">git 代码仓库</span>
+                  </span>
+                </button>
+                <button className="btn-project-entry" onClick={() => onNewProject?.(false)} title="新建项目目录（不初始化 git）">
+                  <span className="entry-icon">📁</span>
+                  <span className="entry-text">
+                    <span className="entry-title">新建项目</span>
+                    <span className="entry-desc">通用项目目录</span>
+                  </span>
+                </button>
+                <button className="btn-project-entry" onClick={() => onNewProject?.(true)} title="新建代码仓库（自动 git init）">
+                  <span className="entry-icon">✚</span>
+                  <span className="entry-text">
+                    <span className="entry-title">新建代码</span>
+                    <span className="entry-desc">默认 git 仓库</span>
+                  </span>
+                </button>
+              </div>
+              {onOpenProjectNewWindow && (
+                <button className="btn-open-session" onClick={onOpenProjectNewWindow} title="在新窗口打开另一个项目">
+                  ▣ 新窗口打开项目…
+                </button>
+              )}
+              <div className="projects-recent-title">最近打开</div>
+              {recentProjects.length === 0 && (
+                <div className="sidebar-empty">
+                  还没有打开过项目
+                  <div className="sidebar-empty-sub">从上方入口打开或新建你的第一个项目</div>
+                </div>
+              )}
+              {recentProjects.map((p) => (
+                <div
+                  key={p.path}
+                  className={`recent-project-item ${p.path === workspace ? "active" : ""}`}
+                  title={p.path}
+                  onClick={() => onOpenRecent(p.path)}
+                >
+                  <span className="recent-project-icon">{p.kind === "code" ? "💻" : "📁"}</span>
+                  <span className="recent-project-name">{p.name}</span>
+                  <span className={`recent-project-kind ${p.kind}`}>{p.kind === "code" ? "代码" : "项目"}</span>
+                  <button
+                    className="recent-project-remove"
+                    title="从列表移除"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveRecent(p.path);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="sessions-list">
+              {/* 二级视图：项目内会话历史（打开项目后进入） */}
+              <div className="project-context">
+                <button
+                  className="btn-back-projects"
+                  onClick={onBackToProjects}
+                  title="返回项目列表"
+                >
+                  ← 项目列表
+                </button>
+                <div className="project-context-name" title={workspace}>
+                  {projectKind === "code" ? "💻" : "📁"} {projectName}
+                </div>
+              </div>
+              <button className="btn-new-session" onClick={onNewSession}>
+                ＋ 新建会话
               </button>
-            )}
-            {sessions.length === 0 && <div className="sidebar-empty">还没有会话</div>}
-            {sessions.map((s) => (
+              {sessions.length === 0 && <div className="sidebar-empty">还没有会话</div>}
+              {sessions.map((s) => (
                 <div
                   key={s.session_id}
                   className={`session-item ${s.session_id === activeSessionId ? "active" : ""}`}
@@ -458,7 +553,8 @@ export default function Sidebar({
                   </div>
                 </div>
               ))}
-          </div>
+            </div>
+          )
         )}
 
         {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} />}

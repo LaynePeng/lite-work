@@ -120,6 +120,9 @@ class AgentApp:
         # 会话存储
         self.session_store = SessionStore(os.path.join(self.config_dir, "sessions"))
 
+        # 最近打开的项目（侧边栏「项目」页签：打开/新建后记录，最多保留 20 个）
+        self.recent_projects_path = os.path.join(self.config_dir, "recent_projects.json")
+
         # 兼容旧配置：base_url/model 回填
         if base_url and not self.llm_registry.get_active_provider_settings().get("base_url"):
             self.llm_registry.providers["deepseek"]["base_url"] = base_url
@@ -190,6 +193,77 @@ class AgentApp:
         self.config["security"] = rules
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
+
+    # ------------------------------------------------------------ 最近项目
+
+    RECENT_PROJECTS_MAX = 20
+
+    def list_recent_projects(self) -> List[Dict[str, Any]]:
+        """最近打开的项目列表（新→旧）。目录已删除的项自动剔除。"""
+        try:
+            with open(self.recent_projects_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+        except (OSError, ValueError):
+            return []
+        if not isinstance(items, list):
+            return []
+        alive = []
+        seen: set = set()
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            path = it.get("path") or ""
+            if not path or not os.path.isdir(path) or path in seen:
+                continue
+            seen.add(path)
+            alive.append({
+                "path": path,
+                "name": it.get("name") or os.path.basename(path),
+                # kind: code=代码仓库 / project=通用项目
+                "kind": it.get("kind") if it.get("kind") in ("code", "project") else "project",
+                "is_git": bool(it.get("is_git", os.path.isdir(os.path.join(path, ".git")))),
+                "opened_at": it.get("opened_at") or "",
+            })
+        return alive[: self.RECENT_PROJECTS_MAX]
+
+    def remember_project(self, path: str, kind: str = "project") -> Dict[str, Any]:
+        """记录一次项目打开（去重置顶，超限淘汰最旧）。kind: code/project。"""
+        import datetime as _dt
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        if not os.path.isdir(abs_path):
+            raise ValueError(f"目录不存在: {abs_path}")
+        items = self.list_recent_projects()
+        items = [it for it in items if os.path.abspath(it["path"]) != abs_path]
+        items.insert(0, {
+            "path": abs_path,
+            "name": os.path.basename(abs_path) or abs_path,
+            "kind": kind if kind in ("code", "project") else "project",
+            "is_git": os.path.isdir(os.path.join(abs_path, ".git")),
+            "opened_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        })
+        items = items[: self.RECENT_PROJECTS_MAX]
+        try:
+            with open(self.recent_projects_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+        return items[0]
+
+    def forget_project(self, path: str) -> None:
+        """从最近列表移除一个项目（不删磁盘文件）。"""
+        try:
+            with open(self.recent_projects_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+        except (OSError, ValueError):
+            return
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        items = [it for it in items
+                 if not (isinstance(it, dict) and os.path.abspath(it.get("path") or "") == abs_path)]
+        try:
+            with open(self.recent_projects_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
 
     def mcp_status(self) -> Dict[str, Any]:
         return self.mcp_manager.status()

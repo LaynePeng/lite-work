@@ -349,6 +349,176 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: none;
 }
 
+/* ============================== 项目页签（列表视图 + 项目内会话视图） */
+
+.projects-list {
+  padding: 10px 10px 0;
+}
+
+/* 四个入口（打开项目/代码、新建项目/代码）：2×2 网格 */
+.projects-entries {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.btn-project-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.btn-project-entry:hover {
+  border-color: var(--accent);
+  background: var(--bg-3);
+  transform: translateY(-1px);
+}
+
+.entry-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.entry-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.entry-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.entry-desc {
+  font-size: 10.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-recent-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin: 6px 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.recent-project-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.recent-project-item:hover {
+  background: var(--bg-2);
+}
+
+.recent-project-item.active {
+  background: var(--bg-3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.recent-project-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.recent-project-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+.recent-project-kind.code {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.recent-project-remove {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.recent-project-item:hover .recent-project-remove {
+  opacity: 1;
+}
+
+.recent-project-remove:hover {
+  color: var(--danger, #e5484d);
+}
+
+/* 项目内会话视图：返回栏 + 当前项目名 */
+.project-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: var(--bg-2);
+  border-radius: 8px;
+}
+
+.btn-back-projects {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--accent);
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.btn-back-projects:hover {
+  background: var(--bg-3);
+}
+
+.project-context-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .btn-new-session {
   width: 100%;
   padding: 8px 12px;

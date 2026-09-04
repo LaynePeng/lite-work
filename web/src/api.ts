@@ -179,4 +179,14 @@ export const api = {
       "/api/projects/create",
       { method: "POST", body: JSON.stringify({ parent, name, git }) }
     ),
+  recentProjects: () =>
+    req<{ items: import("./types").RecentProject[] }>("/api/projects/recent"),
+  openProject: (path: string) =>
+    req<{ ok: boolean; workspace: string; kind: "code" | "project" }>("/api/projects/recent", {
+      method: "POST", body: JSON.stringify({ path }),
+    }),
+  removeRecentProject: (path: string) =>
+    req<{ ok: boolean }>(`/api/projects/recent?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }),
 };

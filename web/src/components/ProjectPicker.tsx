@@ -13,10 +13,13 @@ interface FsEntry {
 
 export default function ProjectPicker({
   initialPath,
+  initialCreate = false,
   onClose,
   onSelect,
 }: {
   initialPath: string;
+  /** true 时打开即展开「新建项目」表单（新建代码/新建项目入口） */
+  initialCreate?: boolean;
   onClose: () => void;
   onSelect: (path: string) => void;
 }) {
@@ -26,7 +29,7 @@ export default function ProjectPicker({
   const [loading, setLoading] = useState(false);
 
   // 新建项目状态
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(initialCreate);
   const [newName, setNewName] = useState("");
   const [newGit, setNewGit] = useState(true);
   const [creating, setCreating] = useState(false);

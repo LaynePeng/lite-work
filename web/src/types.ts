@@ -41,6 +41,16 @@ export interface SessionInfo {
   metadata: Record<string, unknown>;
 }
 
+/** 最近打开的项目（侧边栏「项目」页签） */
+export interface RecentProject {
+  path: string;
+  name: string;
+  /** code=代码仓库 / project=通用项目 */
+  kind: "code" | "project";
+  is_git: boolean;
+  opened_at: string;
+}
+
 export interface ToolDef {
   name: string;
   description: string;

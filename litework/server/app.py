@@ -594,6 +594,12 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         if tasks.active_count() > 0:
             raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
         app.workspace = path
+        # 切换工作区即记录到最近项目（含目录选择器/子 Agent 场景）
+        try:
+            kind = "code" if _os.path.isdir(_os.path.join(path, ".git")) else "project"
+            app.remember_project(path, kind=kind)
+        except Exception:
+            pass
         return {"ok": True, "workspace": app.workspace}
 
     @fast_app.post("/api/projects/create")
@@ -641,7 +647,43 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             except (OSError, _sp.TimeoutExpired):
                 git_initialized = False
 
+        # 新建即记住（代码仓库优先按 git 判定 kind）
+        try:
+            app.remember_project(target, kind="code" if git_initialized else "project")
+        except Exception:
+            pass
         return {"ok": True, "path": target, "name": name, "git_initialized": git_initialized}
+
+    @fast_app.get("/api/projects/recent")
+    async def list_recent_projects(request: Request = None):
+        """最近打开的项目（侧边栏「项目」页签）。"""
+        if request:
+            _check_auth(request)
+        return {"items": app.list_recent_projects()}
+
+    @fast_app.post("/api/projects/recent")
+    async def open_recent_project(payload: WorkspaceUpdateRequest, request: Request):
+        """打开（切换到）一个最近项目：切换工作区并置顶记录。"""
+        _check_auth(request)
+        import os as _os
+
+        path = _os.path.abspath(_os.path.expanduser(payload.path))
+        if not _os.path.isdir(path):
+            raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
+        if tasks.active_count() > 0:
+            raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
+        # kind 由前端按入口传入（打开代码=code / 打开项目=project），缺省按 git 判定
+        kind = "code" if _os.path.isdir(_os.path.join(path, ".git")) else "project"
+        app.remember_project(path, kind=kind)
+        app.workspace = path
+        return {"ok": True, "workspace": path, "kind": kind}
+
+    @fast_app.delete("/api/projects/recent")
+    async def remove_recent_project(path: str, request: Request):
+        """从最近列表移除一个项目（不删除磁盘文件）。"""
+        _check_auth(request)
+        app.forget_project(path)
+        return {"ok": True}
 
     @fast_app.get("/api/fs/list")
     async def fs_list(path: str = "", request: Request = None):

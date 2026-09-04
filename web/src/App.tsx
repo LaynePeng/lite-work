@@ -69,6 +69,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  // 「项目」页签状态：最近项目列表 + 二级视图（list=项目列表 / sessions=项目内会话）
+  const [recentProjects, setRecentProjects] = useState<import("./types").RecentProject[]>([]);
+  const [projectsView, setProjectsView] = useState<"list" | "sessions">("list");
+  // 目录选择器的打开模式：project=打开项目 / code=打开代码（校验 git）/
+  // new-project / new-code（新建并展开表单）
+  const [pickerMode, setPickerMode] = useState<"project" | "code" | "new-project" | "new-code">("project");
   const [sidebarTab, setSidebarTab] = useState<"sessions" | "files" | "terminal" | "outputs">(() => {
     try {
       const saved = localStorage.getItem("litework.sidebarTab");
@@ -536,15 +542,49 @@ export default function App() {
     void openProject();
   }, [newChatTab, openProject, status?.workspace]);
 
+  // ------------------------------------------------------------ 项目页签：最近项目
+
+  const refreshRecentProjects = useCallback(async () => {
+    try {
+      const r = await api.recentProjects();
+      setRecentProjects(r.items);
+    } catch {
+      /* 最近列表加载失败不阻断主流程 */
+    }
+  }, []);
+
+  // 启动时加载一次最近项目；已有工作区（桌面端记住上次项目）直接进项目内视图
+  useEffect(() => {
+    if (loading) return;
+    void refreshRecentProjects();
+    if (status?.workspace) setProjectsView("sessions");
+    // 仅在初次完成加载时执行一次（用 loading 的下降沿）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   const selectProject = useCallback(
     async (path: string) => {
       setShowPicker(false);
       try {
+        // 打开代码模式：校验是 git 仓库（非 git 仓库提示后按项目打开）
+        if (pickerMode === "code") {
+          const fs = await api.fsList(path).catch(() => null);
+          if (fs && !fs.dirs.includes(".git")) {
+            if (!window.confirm(
+              `「${path.split("/").pop()}」不是 git 仓库。\n\n仍作为普通项目打开？（如需 git 仓库，请先在目录内 git init）`
+            )) {
+              return;
+            }
+          }
+        }
         const res = await api.setWorkspace(path);
         if (res.ok) {
           setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
           notifyElectronWorkspace(res.workspace);
-          changeSidebarTab("files");
+          // 打开项目 → 「项目」页签进入项目内会话视图（先有项目，再有会话）
+          changeSidebarTab("sessions");
+          setProjectsView("sessions");
+          void refreshRecentProjects();
           setSuccess(`已切换到项目: ${res.workspace}`);
           pushLog(`📂 已切换到项目: ${res.workspace}`);
           setTimeout(() => setSuccess(null), 4000);
@@ -560,8 +600,59 @@ export default function App() {
         setErrorPublic((e as Error).message);
       }
     },
-    [pushLog, refreshSessions, closeStream, newChatTab, patchActiveChat, changeSidebarTab, notifyElectronWorkspace]
+    [pushLog, refreshSessions, closeStream, newChatTab, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects, pickerMode]
   );
+
+  // ------------------------------------------------------------ 项目页签：最近项目
+
+  const openCode = useCallback(() => {
+    setPickerMode("code");
+    setShowPicker(true);
+  }, []);
+
+  const openProjectEntry = useCallback(() => {
+    setPickerMode("project");
+    void openProject();
+  }, [openProject]);
+
+  const newProjectEntry = useCallback((git: boolean) => {
+    setPickerMode(git ? "new-code" : "new-project");
+    setShowPicker(true);
+  }, []);
+
+  const openRecentProject = useCallback(async (path: string) => {
+    // 当前有任务运行时后端会 409；直接走 setWorkspace 相同的错误提示
+    try {
+      const res = await api.openProject(path);
+      if (res.ok) {
+        setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
+        notifyElectronWorkspace(res.workspace);
+        changeSidebarTab("sessions");
+        setProjectsView("sessions");
+        void refreshRecentProjects();
+        setSuccess(`已打开: ${res.workspace}`);
+        setTimeout(() => setSuccess(null), 4000);
+        closeStream();
+        setChatStates({});
+        chatStatesRef.current = {};
+        newChatTab();
+        await refreshSessions(res.workspace);
+      }
+    } catch (e) {
+      setErrorPublic((e as Error).message);
+    }
+  }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, refreshRecentProjects, refreshSessions]);
+
+  const removeRecentProject = useCallback(async (path: string) => {
+    try {
+      await api.removeRecentProject(path);
+      setRecentProjects((prev) => prev.filter((p) => p.path !== path));
+    } catch {
+      /* 忽略 */
+    }
+  }, []);
+
+  const backToProjects = useCallback(() => setProjectsView("list"), []);
 
   // 首次启动：打开一个占位会话 tab
   useEffect(() => {
@@ -1231,12 +1322,22 @@ export default function App() {
         treeRevision={treeRevision}
         outputRevision={outputRevision}
         version={status?.version ?? "?"}
+        recentProjects={recentProjects}
+        projectsView={projectsView}
+        projectKind={
+          (recentProjects.find((p) => p.path === status?.workspace)?.kind) ?? "project"
+        }
         onTabChange={changeSidebarTab}
         onSelectSession={(id) => void selectSession(id)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onDeleteSession={(id) => void deleteSession(id)}
-        onOpenProject={() => void openProject()}
+        onOpenProject={openProjectEntry}
+        onOpenCode={openCode}
+        onNewProject={newProjectEntry}
+        onOpenRecent={(path) => void openRecentProject(path)}
+        onRemoveRecent={(path) => void removeRecentProject(path)}
+        onBackToProjects={backToProjects}
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
@@ -1377,6 +1478,7 @@ export default function App() {
       {showPicker && (
         <ProjectPicker
           initialPath={status?.workspace ?? ""}
+          initialCreate={pickerMode === "new-code" || pickerMode === "new-project"}
           onClose={() => setShowPicker(false)}
           onSelect={(p) => void selectProject(p)}
         />
