@@ -191,12 +191,38 @@ export default function App() {
     [patchChat]
   );
 
-  // 卸载时清理未触发的定时器，避免泄漏
+  // ------------------------------------------------------------ 技能注入气泡自动消失
+
+  // 「已注入技能」气泡同属临时通知：显示 TTL 后自动消失，
+  // 不再等任务结束（长任务全程挂着；异常中断还会残留）
+  const SKILL_HINT_TTL_MS = 20_000;
+  const skillHintTimersRef = useRef<Map<string, number>>(new Map());
+
+  /** 技能注入气泡按会话计时，到期清除；重复注入时重置定时器。 */
+  const scheduleSkillHintExpiry = useCallback(
+    (sid: string) => {
+      const prev = skillHintTimersRef.current.get(sid);
+      if (prev) window.clearTimeout(prev);
+      const t = window.setTimeout(() => {
+        skillHintTimersRef.current.delete(sid);
+        const cur = chatStatesRef.current[sid];
+        if (!cur?.skillLoaded) return;
+        patchChat(sid, { skillLoaded: undefined });
+      }, SKILL_HINT_TTL_MS);
+      skillHintTimersRef.current.set(sid, t);
+    },
+    [patchChat]
+  );
+
+  // 卸载清理：合并清两个定时器表
   useEffect(() => {
-    const timers = subagentTimersRef.current;
+    const subTimers = subagentTimersRef.current;
+    const skillTimers = skillHintTimersRef.current;
     return () => {
-      timers.forEach((t) => window.clearTimeout(t));
-      timers.clear();
+      subTimers.forEach((t) => window.clearTimeout(t));
+      subTimers.clear();
+      skillTimers.forEach((t) => window.clearTimeout(t));
+      skillTimers.clear();
     };
   }, []);
 
@@ -933,6 +959,8 @@ export default function App() {
           if (names.length > 0) {
             const cur = getChat(sid);
             patchChat(sid, { skillLoaded: names });
+            // 气泡为临时通知：TTL 后自动消失
+            scheduleSkillHintExpiry(sid);
           }
           break;
         }
@@ -940,7 +968,7 @@ export default function App() {
           break;
       }
     },
-    [getChat, patchChat, pushLog, scheduleStreamFlush, cancelStreamFlush, closeStream, refreshSessions]
+    [getChat, patchChat, pushLog, scheduleSkillHintExpiry, scheduleSubagentRecordExpiry, scheduleStreamFlush, cancelStreamFlush, closeStream, refreshSessions]
   );
 
   // ------------------------------------------------------------ 发送
