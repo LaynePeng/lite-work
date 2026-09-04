@@ -974,13 +974,21 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-family: var(--font-mono);
 }
 
-/* 待发送队列（类似 Codex 设计） */
+/* 待发送队列（固定在输入框上方，不随对话滚动） */
 .pending-queue {
-  margin: 0 max(24px, calc((100% - 820px) / 2)) 16px;
+  flex-shrink: 0;
+  margin: 0 max(24px, calc((100% - 820px) / 2)) 8px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
+  box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.12);
+  z-index: 5;
+}
+
+.pending-queue-list {
+  max-height: 176px;
+  overflow-y: auto;
 }
 
 .pending-queue-header {

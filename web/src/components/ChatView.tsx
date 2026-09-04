@@ -433,23 +433,25 @@ export default function ChatView({
       <div className="pending-queue-header">
         <span className="pending-queue-title">待发送队列（{pendingQueue.length}）</span>
       </div>
-      {pendingQueue.map((item, idx) => (
-        <div
-          key={idx}
-          className={`pending-queue-item ${dragOverIdx === idx ? "drag-over" : ""} ${dragIdx === idx ? "dragging" : ""}`}
-          draggable
-          onDragStart={handleDragStart(idx)}
-          onDragOver={handleDragOver(idx)}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop(idx)}
-          onDragEnd={handleDragEnd}
-        >
-          <span className="pending-queue-drag">⠿</span>
-          <span className="pending-queue-text">{item}</span>
-          <button className="pending-queue-send" onClick={() => onSendPending?.(idx)} title="立即发送">➤</button>
-          <button className="pending-queue-remove" onClick={() => onRemovePending?.(idx)} title="移除">✕</button>
-        </div>
-      ))}
+      <div className="pending-queue-list">
+        {pendingQueue.map((item, idx) => (
+          <div
+            key={idx}
+            className={`pending-queue-item ${dragOverIdx === idx ? "drag-over" : ""} ${dragIdx === idx ? "dragging" : ""}`}
+            draggable
+            onDragStart={handleDragStart(idx)}
+            onDragOver={handleDragOver(idx)}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop(idx)}
+            onDragEnd={handleDragEnd}
+          >
+            <span className="pending-queue-drag">⠿</span>
+            <span className="pending-queue-text">{item}</span>
+            <button className="pending-queue-send" onClick={() => onSendPending?.(idx)} title="立即发送">➤</button>
+            <button className="pending-queue-remove" onClick={() => onRemovePending?.(idx)} title="移除">✕</button>
+          </div>
+        ))}
+      </div>
     </div>
   ) : null;
 
@@ -484,7 +486,6 @@ export default function ChatView({
         ) : (
           <>
             <div className="session-badge">{sessionTitle}</div>
-            {pendingQueueEl}
             {turns.map((t) => (
               <div key={t.key}>
                 {t.user && <MessageBubble message={t.user} />}
@@ -525,6 +526,8 @@ export default function ChatView({
         )}
         <div ref={bottomRef} />
       </div>
+
+      {pendingQueueEl}
 
       {pendingApprovals.map((pa) => (
         <div className="approval-overlay" key={pa.id}>
