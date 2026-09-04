@@ -2,10 +2,24 @@
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="0.55" stop-color="#6c7bff"/>
       <stop offset="1" stop-color="#8b5cf6"/>
     </linearGradient>
   </defs>
-  <rect width="32" height="32" rx="8" fill="url(#g)"/>
-  <path d="M8 10h8a6 6 0 0 1 0 12H8z" fill="none" stroke="#fff" stroke-width="2.4"/>
-  <path d="M20 8h4v16h-4z" fill="#fff"/>
+  <rect width="32" height="32" rx="7" fill="url(#g)"/>
+  <!-- 闪电（lite） -->
+  <path d="M19.8 3.5 L11.5 14 L14.6 14 L11.2 22.5 L22 13 L18.8 13 L22.5 3.5 Z" fill="#fff"/>
+  <!-- 齿轮（work） -->
+  <g transform="translate(16 25)">
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(45)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(90)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(135)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(180)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(225)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(270)"/>
+    <rect x="-1.1" y="-7" width="2.2" height="5" rx="0.9" fill="#fff" transform="rotate(315)"/>
+    <circle r="4.2" fill="#fff"/>
+    <circle r="1.7" fill="url(#g)"/>
+  </g>
 </svg>
