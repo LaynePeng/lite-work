@@ -10,14 +10,8 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, AppConfig, ContextStats, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, Stats, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
-
-interface PendingApproval {
-  id: string;
-  action: string;
-  reason: string;
-}
 
 interface StreamingState {
   items: WorkItem[];
@@ -64,7 +58,6 @@ export default function App() {
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [status, setStatus] = useState<ServerStatus | null>(null);
-  const [config, setConfig] = useState<AppConfig | null>(null);
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
   const [providerMeta, setProviderMeta] = useState<LLMProviderMeta[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -227,13 +220,12 @@ export default function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [st, cfg, ag, llm, providers, mcp, tools] = await Promise.all([
-        api.status(), api.config(), api.agents(), api.llmConfig(), api.llmProviders(), api.mcpStatus(),
+      const [st, ag, llm, providers, mcp, tools] = await Promise.all([
+        api.status(), api.agents(), api.llmConfig(), api.llmProviders(), api.mcpStatus(),
         // 工具列表按当前 Agent 裁剪；workspace 未就绪时报 409，静默降级为空列表
         api.tools(currentAgent).catch(() => [] as { name: string; description: string }[]),
       ]);
       setStatus(st);
-      setConfig(cfg);
       setAgents(ag);
       setLlmConfig(llm);
       setProviderMeta(providers);
@@ -1070,7 +1062,6 @@ export default function App() {
         case "skill:loaded": {
           const names = ev.data.names ?? [];
           if (names.length > 0) {
-            const cur = getChat(sid);
             patchChat(sid, { skillLoaded: names });
           }
           break;

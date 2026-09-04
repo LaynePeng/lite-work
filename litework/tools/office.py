@@ -8,7 +8,6 @@ docx/xlsx/pptx/pdf 等办公文件，以及进行数据分析和生成图表。
 """
 from __future__ import annotations
 
-import csv
 import io
 import json
 import logging
@@ -406,8 +405,6 @@ class OfficeTools:
 
     def _md_to_docx(self, doc, md_text: str) -> None:
         """将 Markdown 文本渲染到 python-docx Document 对象。"""
-        from docx.oxml.ns import qn
-
         lines = md_text.split("\n")
         i = 0
         in_table = False
@@ -878,10 +875,9 @@ class OfficeTools:
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             from reportlab.lib.units import mm
             from reportlab.platypus import (
-                Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+                Paragraph, SimpleDocTemplate, Spacer,
                 ListFlowable, ListItem, Preformatted,
             )
-            from reportlab.lib import colors
             from reportlab.lib.enums import TA_CENTER
         except ImportError:
             return (

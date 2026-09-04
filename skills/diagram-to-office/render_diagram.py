@@ -513,27 +513,8 @@ def _has_cairosvg() -> bool:
         return False
 
 
-PLANTUML_JAR_URL = (
-    "https://github.com/plantuml/plantuml/releases/download/"
-    "v1.2024.8/plantuml-1.2024.8.jar"
-)
-
-
-def _download(url: str, dest: str, timeout: int = 300) -> bool:
-    """用标准库下载文件（不依赖 curl/wget），成功返回 True。"""
-    import urllib.request
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "lite-work-diagram"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as f:
-            shutil.copyfileobj(resp, f)
-        return os.path.isfile(dest) and os.path.getsize(dest) > 0
-    except Exception as exc:
-        log(f"  下载失败: {exc}")
-        return False
-
-
 def cmd_install() -> int:
-    """联网预装缺失引擎（下载 plantuml.jar + 全局安装 mmdc），之后完全离线可用。
+    """联网预装缺失引擎（npm 装 @plantuml/core + @resvg/resvg-js + mmdc），之后完全离线可用。
 
     需要网络；无网络时应跳过此命令（脚本仍可离线用内置兜底渲染）。
     """

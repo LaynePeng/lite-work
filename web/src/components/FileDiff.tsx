@@ -1,5 +1,4 @@
 // 文件修改 diff 展示（opencode 风格）：文件路径 + 增删行数徽标 + 行级 patch 着色
-import type { ReactNode } from "react";
 import UnifiedDiff, { isUnifiedDiff } from "./UnifiedDiff";
 
 // 判定结果是否为文件修改回执（含 diff 正文）

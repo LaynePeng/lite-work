@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, List
 
-from .types import Context, Middleware, NextFn
+from .types import Context, Middleware
 
 Callback = Callable[[Any, Any, Callable], Any]
 

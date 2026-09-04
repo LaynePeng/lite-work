@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { TabItem } from "../types";
 import UnifiedDiff, { parseUnifiedDiff } from "./UnifiedDiff";
 

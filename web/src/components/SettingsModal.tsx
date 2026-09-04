@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { LLMConfig, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, SkillInfo } from "../types";
+import type { LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, SkillInfo } from "../types";
 
 export default function SettingsModal({
   onClose,
@@ -10,7 +10,6 @@ export default function SettingsModal({
   onSaved: () => void;
 }) {
   const [providers, setProviders] = useState<LLMProviderMeta[]>([]);
-  const [config, setConfig] = useState<LLMConfig | null>(null);
   const [activeProvider, setActiveProvider] = useState("");
   const [editing, setEditing] = useState<Record<string, Partial<LLMProviderSettings>>>({});
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -120,7 +119,6 @@ export default function SettingsModal({
   useEffect(() => {
     Promise.all([api.llmProviders(), api.llmConfig(), api.mcpStatus()]).then(([p, c, m]) => {
       setProviders(p);
-      setConfig(c);
       setActiveProvider(c.active);
       // 初始化编辑状态
       const edit: Record<string, Partial<LLMProviderSettings>> = {};
@@ -319,8 +317,7 @@ export default function SettingsModal({
           providersPayload[pid].custom_headers = parseHeaders(headersText[pid]);
         }
       }
-      const newConfig = await api.updateLLMConfig(activeProvider, providersPayload);
-      setConfig(newConfig);
+      await api.updateLLMConfig(activeProvider, providersPayload);
       setTestResult({ ok: true, message: "配置已保存" });
       onSaved();
     } catch (err) {

@@ -9,12 +9,6 @@ import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
 
 // ---------------------------------------------------------------- 渲染助手
 
-const toolArgsOf = (m: Msg): { name: string; args: string }[] =>
-  (m.tool_calls ?? []).map((tc) => ({
-    name: tc.function.name,
-    args: tc.function.arguments,
-  }));
-
 function ToolIcon({ name }: { name: string }) {
   const emoji = name.startsWith("git")
     ? "𑁍"
