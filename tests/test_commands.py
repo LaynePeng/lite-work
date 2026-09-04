@@ -17,7 +17,7 @@ def test_parse_skill_command():
 def test_build_command_list_with_skills():
     cmds = build_command_list([{"name": "review", "description": "审查流程"}])
     names = [c["name"] for c in cmds]
-    assert names == ["skill", "compact", "help", "review"]
+    assert names == ["skill", "compact", "help", "history", "review"]
     review = cmds[-1]
     assert review["kind"] == "skill"
     assert review["description"] == "审查流程"

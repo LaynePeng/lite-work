@@ -3866,6 +3866,94 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   white-space: nowrap;
 }
 
+/* /history 历史输入面板（同命令面板的浮层风格） */
+.history-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.history-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.history-list {
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-item:hover {
+  background: rgba(79, 140, 255, 0.1);
+}
+
+.history-item-time {
+  flex-shrink: 0;
+  min-width: 22px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
 .command-palette-hint {
   color: var(--text-2);
   font-size: 12px;

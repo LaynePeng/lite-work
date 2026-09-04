@@ -27,6 +27,12 @@ BUILTIN_COMMANDS: List[Dict[str, str]] = [
         "argsHint": "",
         "kind": "builtin",
     },
+    {
+        "name": "history",
+        "description": "查看历史输入记录，点击回填输入框（前端本地处理，不消耗 LLM）",
+        "argsHint": "",
+        "kind": "builtin",
+    },
 ]
 
 

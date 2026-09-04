@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AgentInfo, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
 
@@ -65,6 +65,81 @@ export default function Composer({
     research: { icon: "🔎", label: "调研" },
   };
   const agentMeta = (id: string) => AGENT_META[id] ?? { icon: "🤖", label: id };
+
+  // ------------------------------------------------------------ 输入历史
+
+  // 发送过的输入历史（localStorage 持久化，最近 100 条）：
+  // 输入框为空时按 ↑/↓ 翻阅；/history 命令查看列表
+  const HISTORY_KEY = "litework.inputHistory";
+  const HISTORY_MAX = 100;
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyIdx, setHistoryIdx] = useState(-1); // -1 = 不在翻阅态
+  const historyRef = useRef<string[]>([]);
+
+  const loadHistory = useCallback((): string[] => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const pushHistory = useCallback((input: string) => {
+    const t = input.trim();
+    if (!t) return;
+    const list = loadHistory();
+    // 与最近一条相同不重复记录
+    if (list[0] === t) return;
+    list.unshift(t);
+    if (list.length > HISTORY_MAX) list.length = HISTORY_MAX;
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    } catch { /* 存储满等情况忽略 */ }
+    historyRef.current = list;
+  }, [loadHistory]);
+
+  // 挂载时预热缓存（/history 面板与翻阅共用）
+  useEffect(() => {
+    historyRef.current = loadHistory();
+  }, [loadHistory]);
+
+  /** 输入框为空时按 ↑：翻上一条；↓：往回翻；到底恢复空。 */
+  const navigateHistory = (dir: "up" | "down"): boolean => {
+    const list = historyRef.current;
+    if (list.length === 0) return false;
+    let idx = historyIdx;
+    if (dir === "up") {
+      idx = idx < 0 ? 0 : Math.min(idx + 1, list.length - 1);
+    } else {
+      if (idx < 0) return false; // 不在翻阅态，↓ 无操作
+      idx = idx - 1;
+      if (idx < 0) {
+        // 翻到底（最新之前）→ 恢复空输入，退出翻阅态
+        setHistoryIdx(-1);
+        setText("");
+        return true;
+      }
+    }
+    setHistoryIdx(idx);
+    setText(list[idx]);
+    return true;
+  };
+
+  /** 退出历史翻阅态（用户手动编辑时）。 */
+  const exitHistoryMode = () => {
+    if (historyIdx >= 0) setHistoryIdx(-1);
+  };
+
+  /** /history 面板：点击回填输入框。 */
+  const pickHistory = (item: string) => {
+    setText(item);
+    setShowHistory(false);
+    setHistoryIdx(-1);
+    inputRef.current?.focus();
+  };
 
   // 上传文件（📎 按钮 / 粘贴图片 / 拖拽文件共用）：
   // 成功后把工作区相对路径以引用形式插入输入框，随消息发给 Agent
@@ -240,6 +315,15 @@ export default function Composer({
     // 任务运行中也允许提交：作为补充指令排队，下一回合注入对话
     if (!t || disabled) return;
     setPaletteOpen(false);
+    // /history：本地命令（不消耗 LLM），弹出历史输入列表
+    if (t === "/history" || t === "/history ") {
+      historyRef.current = loadHistory();
+      setShowHistory(true);
+      setText("");
+      return;
+    }
+    pushHistory(t);
+    setHistoryIdx(-1);
     onSend(t);
     setText("");
   };
@@ -378,6 +462,32 @@ export default function Composer({
             ))}
           </div>
         )}
+        {/* /history：历史输入面板（本地命令，不消耗 LLM） */}
+        {showHistory && (
+          <div className="history-panel" role="listbox">
+            <div className="history-header">
+              <span className="history-title">🕘 历史输入（{historyRef.current.length}）</span>
+              <span className="history-hint">点击回填 · Esc 关闭</span>
+            </div>
+            {historyRef.current.length === 0 ? (
+              <div className="history-empty">还没有历史输入</div>
+            ) : (
+              <div className="history-list">
+                {historyRef.current.slice(0, 30).map((item, i) => (
+                  <button
+                    key={`${i}-${item.slice(0, 20)}`}
+                    className="history-item"
+                    title={item}
+                    onClick={() => pickHistory(item)}
+                  >
+                    <span className="history-item-time">{historyRef.current.length - i}</span>
+                    <span className="history-item-text">{item.length > 80 ? item.slice(0, 80) + "…" : item}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           autoFocus
           ref={inputRef}
@@ -385,6 +495,8 @@ export default function Composer({
           onChange={(e) => {
             const v = e.target.value;
             setText(v);
+            // 用户手动编辑 → 退出历史翻阅态（下次 ↑ 从最新开始）
+            exitHistoryMode();
             // 仅首字符输入 "/" 时触发面板（消息中间的斜杠不触发）
             if (v.startsWith("/") && !paletteOpen) setPaletteOpen(true);
             if (!v.startsWith("/")) setPaletteOpen(false);
@@ -423,6 +535,27 @@ export default function Composer({
                 e.preventDefault();
                 setPaletteOpen(false);
                 return;
+              }
+            }
+            // /history 面板：Esc 关闭
+            if (e.key === "Escape" && showHistory) {
+              e.preventDefault();
+              setShowHistory(false);
+              return;
+            }
+            // 输入历史翻阅：命令面板未打开时，空输入 ↑ 翻上一条、↓ 往回
+            if (!panelVisible && !showHistory && !e.ctrlKey && !e.metaKey && !e.altKey) {
+              if (e.key === "ArrowUp" && !text) {
+                if (navigateHistory("up")) {
+                  e.preventDefault();
+                  return;
+                }
+              }
+              if (e.key === "ArrowDown") {
+                if (navigateHistory("down")) {
+                  e.preventDefault();
+                  return;
+                }
               }
             }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
