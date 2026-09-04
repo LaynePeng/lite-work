@@ -193,7 +193,40 @@ def _find_plantuml_jar() -> str | None:
     return None
 
 
+_ensure_npm_global_bin_done = False
+
+
+def _ensure_npm_global_bin_path() -> None:
+    """把 npm 全局 bin 目录（如 ~/.npm-global/bin）补进 PATH（幂等）。
+
+    用户 npm prefix 通常配置在 ~/.zshrc 等交互 shell 配置里；
+    lite-work 后端由 Electron 直接 spawn（非交互 shell，不读 rc 文件），
+    导致全局安装的 mmdc 等工具「装了但找不到」。此函数在引擎探测/
+    调用前把 `npm prefix -g` 的 bin 目录并入 PATH。
+    """
+    global _ensure_npm_global_bin_done
+    if _ensure_npm_global_bin_done:
+        return
+    _ensure_npm_global_bin_done = True
+    try:
+        r = subprocess.run(
+            ["npm", "prefix", "-g"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return
+        prefix = r.stdout.strip()
+        if not prefix:
+            return
+        gbin = os.path.join(prefix, "bin")
+        if os.path.isdir(gbin) and gbin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = gbin + os.pathsep + os.environ.get("PATH", "")
+    except Exception:
+        pass
+
+
 def _which(name: str) -> bool:
+    _ensure_npm_global_bin_path()
     return shutil.which(name) is not None
 
 
@@ -580,6 +613,7 @@ def cmd_install() -> int:
     print("\n[3/3] Mermaid")
     if _which("mmdc"):
         print("  ✓ 已安装 mmdc（@mermaid-js/mermaid-cli），跳过")
+        _install_mmdc_chrome()
     else:
         if not _which("node"):
             print("  ✗ 未检测到 node，Mermaid 需要 Node.js >= 18")
@@ -596,6 +630,8 @@ def cmd_install() -> int:
                 )
                 if r.returncode == 0 and _which("mmdc"):
                     print("  ✓ mmdc 安装完成")
+                    # mmdc 依赖 Chrome（puppeteer）——chromium 未就绪时补装
+                    _install_mmdc_chrome()
                 else:
                     print("  ✗ mmdc 安装失败: " + (r.stderr or r.stdout).strip()[:400])
                     ok = False
@@ -605,6 +641,57 @@ def cmd_install() -> int:
 
     print("\n完成。运行 `render_diagram.py --check` 确认各项为 ✓。")
     return 0 if ok else 1
+
+
+def _install_mmdc_chrome() -> None:
+    """确保 mmdc 的 Chrome（puppeteer 管理的 chromium）就绪。
+
+    mermaid-cli 依赖本机 Chrome；npm install 时 puppeteer 可能没拉到
+    chromium（镜像/网络原因），此处显式补装并做一次真渲染验证。
+    """
+    import tempfile as _tf
+
+    if not _which("npx"):
+        return
+    try:
+        # 验证：真渲染一张最小图，能出图说明 Chrome 就绪
+        with _tf.TemporaryDirectory() as td:
+            src = os.path.join(td, "v.mmd")
+            out = os.path.join(td, "v.png")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write("flowchart LR\nA-->B\n")
+            r = subprocess.run(
+                ["mmdc", "-i", src, "-o", out],
+                capture_output=True, text=True, timeout=120,
+            )
+            if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+                print("  ✓ mmdc Chrome 运行时已就绪（真渲染验证通过）")
+                return
+        # 渲染失败 → 补装 chromium
+        print("  · mmdc 缺 Chrome 运行时，安装 chromium（npx puppeteer）…")
+        r2 = subprocess.run(
+            ["npx", "--yes", "puppeteer", "browsers", "install", "chrome"],
+            capture_output=True, text=True, timeout=1200,
+        )
+        if r2.returncode == 0:
+            # 复验
+            with _tf.TemporaryDirectory() as td:
+                src = os.path.join(td, "v.mmd")
+                out = os.path.join(td, "v.png")
+                with open(src, "w", encoding="utf-8") as f:
+                    f.write("flowchart LR\nA-->B\n")
+                r3 = subprocess.run(
+                    ["mmdc", "-i", src, "-o", out],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if r3.returncode == 0 and os.path.isfile(out):
+                    print("  ✓ chromium 安装完成，mmdc 验证通过")
+                else:
+                    print("  ⚠ chromium 已装但 mmdc 验证未过：" + (r3.stderr or r3.stdout).strip()[:200])
+        else:
+            print("  ⚠ chromium 安装失败: " + (r2.stderr or r2.stdout).strip()[:200])
+    except Exception as exc:
+        print(f"  ⚠ Chrome 就绪检查异常（跳过）: {exc}")
 
 
 def _fallback_render(source: str, chart_type: str, out_path: str, scale: int) -> str:
