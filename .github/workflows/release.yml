@@ -51,7 +51,7 @@ jobs:
         run: npm ci && npm --prefix web ci
       - name: Build macOS package
         shell: bash
-        run: npm run package -- --clean
+        run: bash ./scripts/build-macos.sh --clean
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
