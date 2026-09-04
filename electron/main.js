@@ -52,6 +52,23 @@ let coreMode = "local"; // "local" | "remote" | "dev"
 const localInstances = new Map(); // webContents.id -> { window, child, url, workspace }
 const terminals = new Map(); // webContents.id -> pty process
 
+// node-pty 的 spawn-helper 二进制可能丢失执行权限（npm ci / macOS
+// quarantine 导致），启动时自动修复——否则 pty.spawn 报
+// posix_spawnp failed，终端黑屏无输出
+function fixPtySpawnHelperPermissions() {
+  try {
+    const ptyDir = path.dirname(require.resolve("node-pty/package.json"));
+    const nativeDir = path.join(ptyDir, "prebuilds");
+    if (!fs.existsSync(nativeDir)) return;
+    for (const arch of fs.readdirSync(nativeDir)) {
+      const helper = path.join(nativeDir, arch, "spawn-helper");
+      if (fs.existsSync(helper)) {
+        try { fs.chmodSync(helper, 0o755); } catch (_) { /* ignore */ }
+      }
+    }
+  } catch (_) { /* ignore */ }
+}
+
 function loadClientConfig() {
   try {
     if (fs.existsSync(CLIENT_CONFIG)) {
@@ -473,6 +490,7 @@ function setupMenu() {
 
 app.whenReady().then(async () => {
   setupMenu();
+  fixPtySpawnHelperPermissions();
 
   // 开发模式：直接加载 Vite dev server
   if (process.env.LITEWORK_DEV_URL) {

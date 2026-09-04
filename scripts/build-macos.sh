@@ -80,6 +80,22 @@ fi
 step "打包（node scripts/package.mjs ${CLEAN}）"
 node scripts/package.mjs $CLEAN
 
+# node-pty spawn-helper 需要可执行权限（asar 打包可能丢失）；
+# 主进程也会运行时修复，此处构建时双保险
+APP_DIR="release/mac-arm64/lite-work.app"
+PTY_HELPER=$(find "${APP_DIR}/Contents/Resources/app.asar.unpacked/node_modules/node-pty" -name "spawn-helper" 2>/dev/null)
+if [ -n "$PTY_HELPER" ]; then
+  chmod +x "$PTY_HELPER"
+  ok "spawn-helper 权限已修复: $PTY_HELPER"
+else
+  # asar 内的 prebuilds 路径
+  PTY_HELPER=$(find "${APP_DIR}/Contents/Resources" -name "spawn-helper" 2>/dev/null | head -1)
+  if [ -n "$PTY_HELPER" ]; then
+    chmod +x "$PTY_HELPER"
+    ok "spawn-helper 权限已修复: $PTY_HELPER"
+  fi
+fi
+
 # ------------------------------------------------------------ 结果
 DMG=$(ls -t release/lite-work-*.dmg 2>/dev/null | head -1)
 if [ -z "$DMG" ]; then
