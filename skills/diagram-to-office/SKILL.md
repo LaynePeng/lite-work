@@ -24,7 +24,64 @@ triggers: plantuml,PlantUML,mermaid,Mermaid,uml,UML,图表转图片,图转word,�
 2. 仓库中的 `.puml` / `.plantuml` / `.mmd` 文件（直接读取文件内容）；
 3. 已有 Markdown 文档中的 ` ```plantuml ` / ` ```mermaid ` 代码块。
 
-## 二、渲染成图片
+## 二、UML 选型：优先 PlantUML（而非 Mermaid）
+
+**生成 UML 类图表（时序图、类图、组件图、部署图、用例图、状态图等）时，
+一律用 PlantUML，不要用 Mermaid。** 原因：
+
+1. **渲染可靠性**：PlantUML 有纯 JS 离线引擎（`@plantuml/core`），不依赖
+   Chrome/puppeteer；Mermaid 的 mmdc 依赖本机 Chrome，环境缺浏览器时易失败；
+2. **语法表达力**：PlantUML 对 UML 语义（参与者激活、note、分包、嵌套）
+   支持更完整，Office 文档场景下出图更稳定；
+3. **离线一致**：PlantUML 链路（`@plantuml/core` + `@resvg/resvg-js`）
+   全程纯 JS 离线，与本项目"离线优先"策略一致。
+
+Mermaid 仅在用户**明确指定**或源码已是 mermaid 语法时使用（如
+`flowchart`、`gantt`、`mindmap` 等 Mermaid 特有类型）。
+
+## 三、PlantUML 安全写法（避免规则，生成时必须遵守）
+
+实测发现某些写法有一定概率触发解析/渲染错误，生成 PlantUML 源码时
+**必须遵守以下规则**：
+
+1. **只用标准元素类型**
+   - 组件图/部署图用：`rectangle`、`component`、`actor`、`database`、
+     `node`、`package`、`usecase`；
+   - ❌ 不要用 `system`（ArchiMate 专用）、`folder`/`file` 慎用。
+
+2. **`()` 语法的使用边界**
+   - `()` 只能用于声明 `interface` / `usecase`；
+   - `package` / `rectangle` 块内一律用 `component "name"`，**禁止把
+     `()` 嵌在块内**；
+   - 块内表达元素用 `rectangle "name" as alias` 即可，不需要 `()`。
+
+3. **箭头必须成对有目标**
+   - 正确：`A --> B : label`；
+   - ❌ `A --> : label`（目标缺失 → 解析器在后续行报错，错误位置不直观）。
+
+4. **note 用最稳妥形式**
+   - 单行：`note "text"`；
+   - 多行附元素：在块**外**写 `note right of Alias ... end note`；
+   - ❌ 不要在 `{}` 块内嵌套 `note right`（与布局引擎冲突）；
+   - 最保守：不依赖 note，用 `title` / `legend` / 文档正文表格承载描述。
+
+5. **慎用自定义 layout 指令**
+   - `!pragma layout smetana` 等与 note/box 混用易崩 → 默认布局足够，
+     非必要不写。
+
+6. **单图控制信息量**
+   - 元素 > 15 个或多层次并发 → 拆图；
+   - 表达层次结构用 `rectangle` 嵌套（配合 `componentStyle`），别用
+     `box` + 消息混排画架构图；
+   - **序列图（时序）与结构图（层次）是两种图，分开画**。
+
+7. **写完必校验（由渲染脚本自动执行）**
+   - 每张图检查 `@startuml`/`@enduml` 配对、`{}`/`()`/`[]` 括号平衡
+     （渲染前脚本会预检，配对错误直接报错、括号不平衡告警）；
+   - 渲染确认以本地出图为准（脚本成功生成非空图片 = 校验通过），
+     不要只靠文本自测。
+
+## 四、渲染成图片
 
 优先使用技能自带脚本（**默认离线优先，绝不联网拉取**）：
 
@@ -94,7 +151,7 @@ python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（�
   安装引擎后效果更佳，但**离线时也保证有图片可嵌入**；
 - 中文渲染需本机有中文字体（macOS 自带 PingFang，无需额外配置）。
 
-## 三、嵌入 Office 文档
+## 五、嵌入 Office 文档
 
 渲染得到的 PNG/SVG 图片路径，按目标格式嵌入：
 
@@ -136,7 +193,7 @@ d.save("新文档.docx")
 PY
 ```
 
-## 四、交付与验证
+## 六、交付与验证
 
 1. 生成图片后，用 read_file / list_dir 确认图片文件存在且大小 > 0；
 2. 嵌入后交付文件路径，并告知用户：

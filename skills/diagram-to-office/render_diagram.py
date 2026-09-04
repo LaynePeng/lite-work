@@ -86,6 +86,94 @@ def extract_source(raw: str, chart_type: str) -> str:
     return raw
 
 
+def lint_plantuml(source: str) -> list:
+    """PlantUML 渲染前预校验（写完必校验规则的自动化）。
+
+    返回 (errors, warnings)：
+    - errors：@startuml/@enduml 配对错误 → 阻断渲染（这类错误引擎常报在
+      不直观的后续行，提前拦截）；
+    - warnings：括号不平衡、疑似箭头缺目标、() 嵌套在 {} 块内、块内出现
+      () 声明、非标准元素（system/folder/file）等 → 告警不阻断
+      （标签文本中合法括号会误报，故仅提示）。
+    """
+    errors: list = []
+    warnings: list = []
+
+    text = source.strip()
+
+    # ---- 1) @startuml / @enduml 配对（硬错误）----
+    n_start = len(re.findall(r"^\s*@startuml", text, re.M))
+    n_end = len(re.findall(r"^\s*@enduml", text, re.M))
+    if n_start != n_end:
+        errors.append(
+            f"@startuml/@enduml 不配对：找到 {n_start} 个 @startuml、{n_end} 个 @enduml"
+        )
+    elif n_start == 0:
+        warnings.append("未找到 @startuml/@enduml 包裹（PlantUML 通常需要成对包裹）")
+
+    # ---- 2) 括号平衡（警告：标签中的括号会误报，仅提示）----
+    for opener, closer in (("{", "}"), ("(", ")"), ("[", "]")):
+        # 去掉引号内的内容再计数，减少字符串字面量误报
+        stripped = re.sub(r'"[^"\n]*"', '""', text)
+        stripped = re.sub(r"'[^'\n]*'", "''", stripped)
+        if stripped.count(opener) != stripped.count(closer):
+            warnings.append(
+                f"括号不平衡：{opener}{closer} 计数 {stripped.count(opener)}:{stripped.count(closer)}"
+                "（若在标签文本中属正常，请确认块结构）"
+            )
+
+    lines = text.splitlines()
+    # ---- 3) 疑似箭头缺目标：A --> : label（警告）----
+    for i, ln in enumerate(lines, 1):
+        if re.search(r"-->\s*:", ln) or re.search(r"->\s*:", ln):
+            warnings.append(
+                f"第 {i} 行疑似箭头缺少目标：`{ln.strip()[:60]}`"
+                "（应为 `A --> B : label`）"
+            )
+
+    # ---- 4) () 嵌套在 {} 块内 / package/rectangle 块内出现 () 声明（警告）----
+    in_block_depth = 0
+    for i, ln in enumerate(lines, 1):
+        stripped_ln = re.sub(r'"[^"]*"', '""', ln)
+        if in_block_depth > 0 and re.match(r"^\s*\(\w", stripped_ln):
+            warnings.append(
+                f"第 {i} 行：() 声明出现在 {{}} 块内（package/rectangle 块内"
+                "应用 component \"name\"，禁止 () 嵌块）"
+            )
+        in_block_depth += stripped_ln.count("{") - stripped_ln.count("}")
+
+    # ---- 5) 非标准元素（警告）----
+    for i, ln in enumerate(lines, 1):
+        if re.match(r"^\s*system\b", ln, re.I):
+            warnings.append(f"第 {i} 行：`system` 是 ArchiMate 专用元素，标准 UML 用 rectangle/component")
+        if re.match(r"^\s*(folder|file)\b", ln, re.I):
+            warnings.append(f"第 {i} 行：`{ln.strip().split()[0]}` 慎用，组件/部署图建议用 package/node")
+
+    return errors, warnings
+
+
+# 渲染失败时的常见错误速查（供 Agent 快速定位问题）
+PLANTUML_ERROR_HINTS = """\
+常见 PlantUML 错误速查（详见技能「PlantUML 安全写法」章节）：
+  · 箭头必须成对有目标：A --> B : label（❌ A --> : label）
+  · () 只能声明 interface/usecase；package/rectangle 块内禁止嵌 ()
+    （块内用 component "name" as alias）
+  · 组件/部署图只用标准元素：rectangle/component/actor/database/node/package/usecase
+    （❌ system 是 ArchiMate 专用；folder/file 慎用）
+  · note 用 note "text" 单行或块外 note right of Alias ... end note；
+    不要在 {} 块内嵌套 note right
+  · 非必要不写 !pragma layout smetana（与 note/box 混用易崩）
+  · 元素 > 15 个 → 拆图；时序图与结构图分开画"""
+
+
+class DiagramSyntaxError(RuntimeError):
+    """源码语法错误（引擎已执行但渲染失败）——不应走内置兜底，需修源码。
+
+    与「引擎缺失」的 RuntimeError 区分：语法错误时兜底渲染只会输出源码
+    文本图，掩盖真实问题，故直接报错让调用方（Agent）修正源码。
+    """
+
+
 def _run(cmd: list, cwd: str, timeout: int = 180) -> subprocess.CompletedProcess:
     """执行命令，返回 CompletedProcess；失败时附带 stderr 诊断。"""
     try:
@@ -275,6 +363,10 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
     def check_out() -> bool:
         return os.path.isfile(out_full) and os.path.getsize(out_full) > 0
 
+    # 记录「引擎已执行但渲染失败」的错误：全部引擎失败且至少一个执行过
+    # → 大概率是源码语法错误（抛 DiagramSyntaxError，不走兜底）
+    engine_errors: list = []
+
     # 1) plantuml CLI（本地，离线可用）
     if _which("plantuml"):
         cmd = ["plantuml", fmt, "-charset", "UTF-8", *extra, in_file]
@@ -283,6 +375,7 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
         if r.returncode == 0 and check_out():
             shutil.copyfile(out_full, out_path)
             return "plantuml CLI"
+        engine_errors.append("plantuml CLI: " + (r.stderr or r.stdout).strip()[:400])
         log("  plantuml CLI 失败: " + (r.stderr or r.stdout).strip()[:500])
 
     # 2) @plantuml/core 纯 JS 引擎（node，无需 Java，离线可用）
@@ -305,6 +398,7 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
                     f"SVG 文件已保存: {out_path}.svg"
                 )
             return "@plantuml/core（纯 JS，离线）"
+        engine_errors.append("@plantuml/core: " + (r.stderr or r.stdout).strip()[:400])
         log("  @plantuml/core 失败: " + (r.stderr or r.stdout).strip()[:500])
 
     # 3) java -jar plantuml.jar（本地，离线可用）
@@ -316,6 +410,8 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
         if r.returncode == 0 and check_out():
             shutil.copyfile(out_full, out_path)
             return f"java -jar {os.path.basename(jar)}"
+        engine_errors.append(f"java -jar: " + (r.stderr or r.stdout).strip()[:400])
+        log("  java -jar 失败: " + (r.stderr or r.stdout).strip()[:500])
 
     # 4) docker plantuml/plantuml（仅镜像已缓存；allow_network 才允许拉取）
     if _which("docker") and (allow_network or _docker_image_cached("plantuml/plantuml")):
@@ -330,7 +426,15 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
         if r.returncode == 0 and check_out():
             shutil.copyfile(out_full, out_path)
             return "docker plantuml/plantuml"
+        engine_errors.append("docker: " + (r.stderr or r.stdout).strip()[:400])
         log("  docker plantuml 失败: " + (r.stderr or r.stdout).strip()[:500])
+
+    # 引擎执行过但全部失败 → 大概率源码语法错误（不走兜底，让调用方修源码）
+    if engine_errors:
+        raise DiagramSyntaxError(
+            "PlantUML 引擎已执行但渲染失败（大概率源码语法错误）：\n  "
+            + "\n  ".join(engine_errors)
+        )
 
     hints = [
         "未找到可用的 PlantUML 渲染引擎（离线优先，未联网拉取）。请安装其一：",
@@ -649,6 +753,17 @@ def main(argv: list | None = None) -> int:
         log("[error] 输入中未找到图表源码（空的 @startuml/```mermaid 块？）")
         return 1
 
+    # 渲染前预校验（写完必校验）：配对错误阻断，其余告警
+    if chart_type == "plantuml":
+        lint_errors, lint_warnings = lint_plantuml(source)
+        for w in lint_warnings:
+            log(f"[lint] ⚠ {w}")
+        if lint_errors:
+            for e in lint_errors:
+                log(f"[lint] ✗ {e}")
+            log("[error] PlantUML 源码预校验未通过，请修正后重试")
+            return 1
+
     # 输出目录
     out_path = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -666,6 +781,12 @@ def main(argv: list | None = None) -> int:
                     source, out_path, args.scale, tmpdir,
                     allow_network=args.allow_network,
                 )
+    except DiagramSyntaxError as exc:
+        # 源码语法错误：不走兜底（兜底只会输出源码文本图，掩盖真实问题）
+        log(f"[error] 图表源码渲染失败（语法错误，请修正源码后重试）：\n{exc}")
+        if chart_type == "plantuml":
+            log("\n" + PLANTUML_ERROR_HINTS)
+        return 1
     except RuntimeError as exc:
         if args.no_fallback:
             log(f"[error] 渲染失败：\n{exc}")
