@@ -26,47 +26,62 @@ triggers: plantuml,PlantUML,mermaid,Mermaid,uml,UML,图表转图片,图转word,�
 
 ## 二、渲染成图片
 
-优先使用技能自带脚本：
+优先使用技能自带脚本（**默认离线优先，绝不联网拉取**）：
 
 ```bash
 python3 skills/diagram-to-office/render_diagram.py <input> -o <output.png> [--type plantuml|mermaid|auto]
+python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（离线可用性）
 ```
 
 - `<input>`：PlantUML/Mermaid 源码文本文件（含 `@startuml...@enduml` 或 ` ```mermaid ` 代码块），
   或已存在的 `.puml` / `.mmd` 文件；
 - `-o`：输出图片路径，推荐放在工作区 `.outputs/` 下（如 `.outputs/架构图.png`）；
 - `--type`：指定类型；缺省 `auto` 自动识别（按内容含 `@startuml` 或文件名后缀判断）；
-- `--scale`：放大倍数（默认 2，用于高 DPI 清晰嵌入；SVG 输出时忽略）。
+- `--scale`：放大倍数（默认 2，用于高 DPI 清晰嵌入；SVG 输出时忽略）；
+- `--check`：环境诊断，列出本地可用引擎与离线能力；
+- `--allow-network`：显式允许联网（仅在线环境需要；默认关闭）；
+- `--no-fallback`：禁用内置兜底渲染（无引擎时直接报错）。
 
-脚本会自动选择渲染引擎（按可用性依次尝试）：
+### 离线保证（重要）
 
-| 引擎 | 适用 | 检查命令 |
-|---|---|---|
-| `plantuml` CLI | PlantUML | `which plantuml` |
-| `java -jar plantuml.jar` | PlantUML | 本地存在 plantuml.jar |
-| Docker `plantuml/plantuml` | PlantUML | `which docker` |
-| `mmdc`（@mermaid-js/mermaid-cli） | Mermaid | `which mmdc` |
-| `npx @mermaid-js/mermaid-cli` | Mermaid | `which npx` |
-| Docker `minlag/mermaid-cli` | Mermaid | `which docker` |
+| 场景 | 行为 |
+|---|---|
+| 有本地引擎 | 用 `plantuml` CLI / `java -jar plantuml.jar` / `mmdc` 渲染，全离线 |
+| 无本地引擎 | **自动改用内置 matplotlib 兜底渲染**（零外部依赖，离线必出图）：flowchart / 时序图渲染简化版，其余类型输出源码文本图 |
+| docker / npx | 仅当本地已缓存镜像/包时使用（自动检查），**默认不联网拉取** |
+| 在线环境 | 加 `--allow-network` 才允许 npx 安装包 / docker 拉镜像 |
 
-**离线兜底（任何引擎都不可用时）**：直接返回诊断信息，提示用户安装，例如：
+引擎选择顺序（离线优先，按可用性依次尝试）：
 
-```bash
-# PlantUML（需 Java，已检测到 /usr/bin/java）
-brew install plantuml            # macOS
-sudo apt install plantuml        # Debian/Ubuntu
-# 或下载 jar：https://github.com/plantuml/plantuml/releases
+| 引擎 | 适用 | 离线 | 检查命令 |
+|---|---|---|---|
+| `plantuml` CLI | PlantUML | ✅ | `which plantuml` |
+| `java -jar plantuml.jar` | PlantUML | ✅ | 本地存在 plantuml.jar |
+| Docker `plantuml/plantuml` | PlantUML | 仅镜像已缓存 | `docker image inspect` |
+| `mmdc`（@mermaid-js/mermaid-cli） | Mermaid | ✅（全局安装） | `which mmdc` |
+| `npx @mermaid-js/mermaid-cli` | Mermaid | 仅包已缓存 | `npx --no-install` |
+| Docker `minlag/mermaid-cli` | Mermaid | 仅镜像已缓存 | `docker image inspect` |
+| 内置 matplotlib 兜底 | 两者 | ✅（项目已依赖） | `--check` 查看 |
 
-# Mermaid（需 Node.js ≥ 18）
-npm install -g @mermaid-js/mermaid-cli
-# 若 puppeteer 下载 Chrome 失败，设置环境变量后重试：
-# PUPPETEER_SKIP_DOWNLOAD=true 后需系统已装 Chrome，或用 npx puppeteer browsers install chrome
-```
+**离线部署建议**（一次性准备，之后完全离线）：
+1. **一键预装**（推荐，需要联网一次）：
+   ```bash
+   python3 skills/diagram-to-office/render_diagram.py --install
+   ```
+   脚本会自动下载 `plantuml.jar` 到 `~/plantuml.jar` 并全局安装 mmdc；
+2. 手动方式：
+   - PlantUML：`brew install plantuml`（macOS）或下载 `plantuml.jar` 放到
+     项目目录/`~/plantuml.jar`，脚本会自动发现；
+   - Mermaid：`npm install -g @mermaid-js/mermaid-cli`，并确保本机有 Chrome
+     （`npx puppeteer browsers install chrome`）；
+3. 准备完成后运行 `render_diagram.py --check` 确认各项为 ✓；
+4. 之后完全离线使用：`render_diagram.py` 直接走本地引擎渲染，不联网。
 
 **特殊注意**：
 - Mermaid 渲染依赖本机 Chrome（puppeteer）。若 `mmdc` 因缺浏览器失败，
   可尝试 `npx puppeteer browsers install chrome` 后重试；
-- PlantUML 流程图若含 Unicode/中文，脚本已自动加 `!pragma layout smetana` 不必手动处理；
+- 内置兜底渲染仅覆盖 flowchart / 时序图简化版，其余类型为源码文本图；
+  安装引擎后效果更佳，但**离线时也保证有图片可嵌入**；
 - 中文渲染需本机有中文字体（macOS 自带 PingFang，无需额外配置）。
 
 ## 三、嵌入 Office 文档
