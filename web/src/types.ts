@@ -378,6 +378,8 @@ export interface ChatSessionState {
   pendingQuestions?: { id: string; question: string; options: string[] }[];
   /** 当前会话的推理强度（""=关闭 / "low" / "medium" / "high" / "max"） */
   reasoningEffort?: string;
+  /** 待发送队列：任务运行中追加的消息，任务完成后逐一发送（类似 Codex） */
+  pendingQueue: string[];
 }
 
 // ---------------------------------------------------------------- Skills 管理与命令

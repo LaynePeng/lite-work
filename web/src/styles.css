@@ -932,28 +932,6 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-color: var(--accent);
 }
 
-.btn-save-settings {
-  width: 100%;
-  padding: 8px 12px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: #fff;
-  background: var(--grad);
-  border-radius: 9px;
-  font-weight: 600;
-  transition: filter 0.15s, transform 0.1s;
-}
-
-.btn-save-settings:hover:not(:disabled) {
-  filter: brightness(1.12);
-  transform: translateY(-1px);
-}
-
-.btn-save-settings:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 .settings-msg {
   margin-top: 8px;
   padding: 7px 10px;
@@ -994,6 +972,93 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   margin-bottom: 22px;
   font-family: var(--font-mono);
+}
+
+/* 待发送队列（类似 Codex 设计） */
+.pending-queue {
+  margin: 0 max(24px, calc((100% - 820px) / 2)) 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pending-queue-header {
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-3);
+}
+
+.pending-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: grab;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.pending-queue-item:last-child {
+  border-bottom: none;
+}
+
+.pending-queue-item:hover {
+  background: var(--bg-3);
+}
+
+.pending-queue-item.dragging {
+  opacity: 0.5;
+}
+
+.pending-queue-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--accent);
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.pending-queue-drag {
+  color: var(--text-2);
+  font-size: 14px;
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.pending-queue-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-0);
+}
+
+.pending-queue-send {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--accent);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.pending-queue-send:hover {
+  background: rgba(79, 140, 255, 0.15);
+}
+
+.pending-queue-remove {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.pending-queue-remove:hover {
+  color: var(--red);
+  background: rgba(248, 81, 73, 0.1);
 }
 
 .msg-row {
@@ -2086,7 +2151,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 
 .modal {
-  width: 560px;
+  width: 750px;
   max-width: 92vw;
   max-height: 86vh;
   display: flex;
@@ -2506,17 +2571,27 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .form-actions {
   display: flex;
   gap: 12px;
+  justify-content: center;
   margin-top: 18px;
+}
+
+.form-actions .btn-save-settings {
+  width: auto;
+  min-width: 160px;
+  margin-top: 0;
 }
 
 .btn-test {
   padding: 9px 18px;
+  display: inline-flex;
+  align-items: center;
   border-radius: 9px;
   font-size: 13px;
   font-weight: 600;
   background: var(--bg-2);
   border: 1px solid var(--border);
   color: var(--text-0);
+  white-space: nowrap;
   transition: all 0.15s;
 }
 
@@ -2532,11 +2607,16 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .btn-save-settings {
   padding: 9px 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 9px;
   font-size: 13px;
   font-weight: 600;
   background: var(--grad);
   color: #fff;
+  border: 1px solid transparent;
+  white-space: nowrap;
   transition: all 0.15s;
 }
 

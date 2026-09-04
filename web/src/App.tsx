@@ -53,6 +53,7 @@ const EMPTY_CHAT: ChatSessionState = {
   stalled: false,
   todos: [],
   pendingQuestions: [],
+  pendingQueue: [],
 };
 
 export default function App() {
@@ -114,6 +115,8 @@ export default function App() {
   const chatStatesRef = useRef<Record<string, ChatSessionState>>({});
   const tabsRef = useRef<TabItem[]>([]);
   const sessionsRequestRef = useRef(0);
+  // 任务启动器 ref：供 handleSSEEvent 在 task:done 时自动发送下一条（避免循环依赖）
+  const taskLauncherRef = useRef<(sid: string, prompt: string, effort?: string) => void>(() => {});
 
   useEffect(() => { chatStatesRef.current = chatStates; }, [chatStates]);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
@@ -744,6 +747,14 @@ export default function App() {
             if (snap) patchChat(sid, { messages: snap.messages ?? [] });
           })();
           void refreshSessions();
+          // 自动发送待发送队列中的下一条
+          const q = getChat(sid);
+          if (q.pendingQueue?.length > 0) {
+            const next = q.pendingQueue[0];
+            patchChat(sid, { pendingQueue: q.pendingQueue.slice(1) });
+            pushLog(`📋 自动发送队列下一条（剩余 ${q.pendingQueue.length - 1} 条）`);
+            taskLauncherRef.current(sid, next, q.reasoningEffort);
+          }
           break;
         }
         case "task:error": {
@@ -968,11 +979,13 @@ export default function App() {
       }
       const base = getChat(sid);
       if (base.running) {
-        // 任务运行中：本次输入作为补充指令排队，不新建任务/SSE 连接
+        // 任务运行中：追加到待发送队列，任务完成后自动发送
         patchChat(sid, {
-          messages: [...(base.messages ?? []), { role: "user", content: prompt, queued: true }],
+          pendingQueue: [...(base.pendingQueue ?? []), prompt],
           error: null,
         });
+        pushLog(`📋 已加入待发送队列（共 ${(base.pendingQueue?.length ?? 0) + 1} 条）`);
+        return;
       } else {
         patchChat(sid, {
           messages: [...(base.messages ?? []), { role: "user", content: prompt }],
@@ -1039,6 +1052,40 @@ export default function App() {
     },
     [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact]
   );
+
+  // 更新 taskLauncherRef：供 handleSSEEvent 在 task:done 时自动发送下一条
+  taskLauncherRef.current = (targetSid, prompt, effort) => {
+    const reasoning = effort ?? getChat(targetSid)?.reasoningEffort ?? "";
+    patchChat(targetSid, {
+      messages: [...(getChat(targetSid).messages ?? []), { role: "user", content: prompt }],
+      running: true,
+      streaming: { items: [] },
+      error: null,
+    });
+    cancelStreamFlush(targetSid);
+    streamingRefs.current.set(targetSid, { items: [] });
+    void (async () => {
+      try {
+        const resp = await api.chat(targetSid, prompt, currentAgent, reasoning);
+        const { task_id } = resp;
+        taskIdsRef.current.set(targetSid, task_id);
+        const es = new EventSource(`/api/tasks/${task_id}/events`);
+        eventSourcesRef.current.set(targetSid, es);
+        es.onopen = () => {
+          lastEventTimesRef.current.set(targetSid, Date.now());
+          pushLog(`🔗 已连接任务 ${task_id}`);
+        };
+        es.onmessage = (e) => {
+          if (e.data === "[DONE]") { es.close(); eventSourcesRef.current.delete(targetSid); return; }
+          try { handleSSEEvent(targetSid, JSON.parse(e.data)); } catch { /* ignore */ }
+        };
+        es.onerror = () => pushLog("⚠ SSE 连接中断，等待重连…");
+      } catch (e) {
+        patchChat(targetSid, { error: (e as Error).message, running: false, streaming: null });
+        pushLog(`✗ 自动发送失败: ${(e as Error).message}`);
+      }
+    })();
+  };
 
   const stop = useCallback(async () => {
     const sid = activeSessionId;
@@ -1179,10 +1226,30 @@ export default function App() {
               pendingApprovals={currentChat.pendingApprovals}
               subAgentRecords={currentChat.subAgentRecords}
               skillLoaded={currentChat.skillLoaded}
+              pendingQueue={currentChat.pendingQueue ?? []}
               onSend={(p) => void send(p)}
               onStop={stop}
               onApprove={(id, a) => void approve(id, a)}
               currentAgent={currentAgent}
+              onRemovePending={(idx) => {
+                const q = getChat(activeSessionId!);
+                patchChat(activeSessionId!, { pendingQueue: q.pendingQueue.filter((_, i) => i !== idx) });
+              }}
+              onReorderPending={(from, to) => {
+                const q = getChat(activeSessionId!);
+                const next = [...q.pendingQueue];
+                const [moved] = next.splice(from, 1);
+                next.splice(to, 0, moved);
+                patchChat(activeSessionId!, { pendingQueue: next });
+              }}
+              onSendPending={(idx) => {
+                const q = getChat(activeSessionId!);
+                const item = q.pendingQueue[idx];
+                if (!currentChat.running) {
+                  patchChat(activeSessionId!, { pendingQueue: q.pendingQueue.filter((_, i) => i !== idx) });
+                  void send(item);
+                }
+              }}
             />
             <QuestionBar
               pendingQuestions={currentChat.pendingQuestions ?? []}

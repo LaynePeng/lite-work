@@ -372,13 +372,13 @@ export default function Composer({
             }
           }}
           onBlur={() => setTimeout(() => setPaletteOpen(false), 150)}
-          placeholder={running ? "任务进行中：输入将作为补充指令排队，■ 可停止" : `给 lite-code 下达任务…（输入 / 唤起命令面板）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列，任务完成后自动发送" : `给 lite-code 下达任务…（输入 / 唤起命令面板）`}
           rows={3}
           disabled={disabled}
         />
         {running ? (
           <>
-            <button className="btn-send" onClick={submit} disabled={disabled || !text.trim()} title="作为补充指令加入队列">
+            <button className="btn-send" onClick={submit} disabled={disabled || !text.trim()} title="加入待发送队列">
               ➤
             </button>
             <button className="btn-send btn-stop" onClick={onStop} title="停止任务">
@@ -409,7 +409,7 @@ export default function Composer({
         )}
       </div>
       <div className="composer-hint">
-        {running ? "任务进行中：➤ 追加补充指令（排队注入），■ 停止任务" : "工具执行受安全策略保护，中危操作会请求你确认"}
+        {running ? "任务进行中：➤ 追加到待发送队列（任务完成后自动发送），■ 停止任务" : "工具执行受安全策略保护，中危操作会请求你确认"}
       </div>
     </div>
   );

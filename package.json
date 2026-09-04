@@ -1,6 +1,6 @@
 {
   "name": "lite-code",
-  "version": "0.14.2",
+  "version": "1.0.0",
   "description": "lite-code：手写内核的 Code 开发 Agent 桌面工具（Electron + Python Core + Web UI）",
   "main": "electron/main.js",
   "author": "lite-code",
