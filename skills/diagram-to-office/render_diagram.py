@@ -137,6 +137,124 @@ def _npx_pkg_cached(pkg: str) -> bool:
         return False
 
 
+def _plantuml_core_available() -> bool:
+    """检查 @plantuml/core（纯 JS PlantUML 引擎）是否可用：node + 全局/本地包。
+
+    不需要 Java，离线可用。安装：npm install -g @plantuml/core
+    """
+    if not _which("node"):
+        return False
+    # 0) 环境变量显式指定（与 plantuml_js_render.mjs 一致）
+    env_dir = os.environ.get("PLANTUML_CORE_DIR")
+    if env_dir and os.path.isfile(os.path.join(env_dir, "plantuml.js")):
+        return True
+    # 全局 npm root 下是否有 @plantuml/core
+    try:
+        root = subprocess.run(
+            ["npm", "root", "-g"], capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        if root and os.path.isfile(os.path.join(root, "@plantuml", "core", "plantuml.js")):
+            return True
+    except Exception:
+        pass
+    # 本地 node_modules（脚本同目录或上级）
+    here = os.path.dirname(os.path.abspath(__file__))
+    d = here
+    while True:
+        if os.path.isfile(os.path.join(d, "node_modules", "@plantuml", "core", "plantuml.js")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return False
+
+
+def _svg_to_png(svg_path: str, png_path: str, scale: int = 2) -> str | None:
+    """把 SVG 转为 PNG，返回使用的转换器名；全部不可用返回 None。
+
+    依次尝试：resvg（Node，跨平台）→ cairosvg（Python）→ rsvg-convert →
+    inkscape → magick/convert → qlmanage（macOS 自带）。
+    """
+    # 1) @resvg/resvg-js（Node，跨平台 native，npm 装一次离线可用）
+    if _which("node") and _resvg_available():
+        r = _run(["node", _SVG2PNG_JS, svg_path, png_path, "--scale", str(scale)],
+                 os.path.dirname(svg_path), timeout=120)
+        if r.returncode == 0 and os.path.isfile(png_path) and os.path.getsize(png_path) > 0:
+            return "resvg"
+    # 2) cairosvg（Python 库，pip install cairosvg，离线可用）
+    try:
+        import cairosvg  # type: ignore
+        cairosvg.svg2png(url=svg_path, write_to=png_path,
+                         scale=max(1, int(scale)))
+        if os.path.isfile(png_path) and os.path.getsize(png_path) > 0:
+            return "cairosvg"
+    except Exception:
+        pass
+    # 3) rsvg-convert（librsvg）
+    if _which("rsvg-convert"):
+        r = _run(["rsvg-convert", "-o", png_path, svg_path], os.path.dirname(svg_path), timeout=120)
+        if r.returncode == 0 and os.path.isfile(png_path) and os.path.getsize(png_path) > 0:
+            return "rsvg-convert"
+    # 4) inkscape
+    if _which("inkscape"):
+        r = _run(["inkscape", svg_path, "--export-type=png",
+                  f"--export-filename={png_path}"],
+                 os.path.dirname(svg_path), timeout=120)
+        if r.returncode == 0 and os.path.isfile(png_path) and os.path.getsize(png_path) > 0:
+            return "inkscape"
+    # 5) ImageMagick
+    conv = "magick" if _which("magick") else ("convert" if _which("convert") else None)
+    if conv:
+        r = _run([conv, "-density", "150", svg_path, png_path],
+                 os.path.dirname(svg_path), timeout=120)
+        if r.returncode == 0 and os.path.isfile(png_path) and os.path.getsize(png_path) > 0:
+            return conv
+    # 6) qlmanage（macOS 自带，零安装）
+    if _which("qlmanage") and sys.platform == "darwin":
+        out_dir = os.path.dirname(os.path.abspath(png_path))
+        r = _run(["qlmanage", "-t", "-s", str(96 * max(1, scale)), "-o", out_dir, svg_path],
+                 os.path.dirname(svg_path), timeout=120)
+        thumb = os.path.join(out_dir, os.path.splitext(os.path.basename(svg_path))[0] + ".svg.png")
+        if r.returncode == 0 and os.path.isfile(thumb):
+            shutil.copyfile(thumb, png_path)
+            return "qlmanage"
+    return None
+
+
+def _resvg_available() -> bool:
+    """检查 @resvg/resvg-js 是否可用（node + 全局/本地包）。"""
+    if not _which("node"):
+        return False
+    if os.environ.get("RESVG_DIR"):
+        return os.path.isfile(os.path.join(os.environ["RESVG_DIR"], "index.js"))
+    try:
+        root = subprocess.run(
+            ["npm", "root", "-g"], capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        if root and os.path.isfile(os.path.join(root, "@resvg", "resvg-js", "index.js")):
+            return True
+    except Exception:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    d = here
+    while True:
+        if os.path.isfile(os.path.join(d, "node_modules", "@resvg", "resvg-js", "index.js")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return False
+
+
+_SVG2PNG_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "svg2png.mjs")
+
+
+_PLANTUML_JS_RENDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "plantuml_js_render.mjs")
+
+
 def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
                     plantuml_jar: str | None, allow_network: bool = False) -> str:
     """渲染 PlantUML 源码，返回渲染引擎说明。离线优先，仅本地引擎。"""
@@ -167,7 +285,29 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
             return "plantuml CLI"
         log("  plantuml CLI 失败: " + (r.stderr or r.stdout).strip()[:500])
 
-    # 2) java -jar plantuml.jar（本地，离线可用）
+    # 2) @plantuml/core 纯 JS 引擎（node，无需 Java，离线可用）
+    if _which("node") and _plantuml_core_available():
+        log("[render] 使用 @plantuml/core（纯 JS）")
+        svg_tmp = os.path.join(tmpdir, "diagram.svg")
+        r = _run(["node", _PLANTUML_JS_RENDER, in_file, svg_tmp], tmpdir, timeout=300)
+        if r.returncode == 0 and os.path.isfile(svg_tmp) and os.path.getsize(svg_tmp) > 0:
+            if out_path.lower().endswith(".svg"):
+                shutil.copyfile(svg_tmp, out_path)
+            else:
+                conv = _svg_to_png(svg_tmp, out_path, scale)
+                if conv:
+                    return f"@plantuml/core + {conv}（纯 JS，离线）"
+                log("  SVG 已生成但缺 PNG 转换器（建议 pip install cairosvg）")
+                shutil.copyfile(svg_tmp, out_path + ".svg")
+                raise RuntimeError(
+                    "@plantuml/core 已生成 SVG，但缺少 SVG→PNG 转换器。\n"
+                    "请安装其一：pip install cairosvg / brew install librsvg / inkscape / imagemagick\n"
+                    f"SVG 文件已保存: {out_path}.svg"
+                )
+            return "@plantuml/core（纯 JS，离线）"
+        log("  @plantuml/core 失败: " + (r.stderr or r.stdout).strip()[:500])
+
+    # 3) java -jar plantuml.jar（本地，离线可用）
     jar = plantuml_jar or _find_plantuml_jar()
     if jar and _which("java"):
         log(f"[render] 使用 java -jar {jar}")
@@ -177,7 +317,7 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
             shutil.copyfile(out_full, out_path)
             return f"java -jar {os.path.basename(jar)}"
 
-    # 3) docker plantuml/plantuml（仅镜像已缓存；allow_network 才允许拉取）
+    # 4) docker plantuml/plantuml（仅镜像已缓存；allow_network 才允许拉取）
     if _which("docker") and (allow_network or _docker_image_cached("plantuml/plantuml")):
         log("[render] 使用 docker plantuml/plantuml")
         cmd = [
@@ -194,15 +334,18 @@ def render_plantuml(source: str, out_path: str, scale: int, tmpdir: str,
 
     hints = [
         "未找到可用的 PlantUML 渲染引擎（离线优先，未联网拉取）。请安装其一：",
+        "  npm install -g @plantuml/core     （推荐，纯 JS 离线，无需 Java）",
         "  macOS:  brew install plantuml",
         "  Debian/Ubuntu:  sudo apt install plantuml",
         "  或下载 jar 后用 --plantuml-jar 指定: https://github.com/plantuml/plantuml/releases",
         "  （在线时可用 --allow-network 允许 docker 自动拉取镜像）",
     ]
-    if _which("java") and _find_plantuml_jar() is None:
+    if _plantuml_core_available() and not _which("java"):
+        hints.append("（已检测到 @plantuml/core，但缺 SVG→PNG 转换器：pip install cairosvg）")
+    elif _which("java") and _find_plantuml_jar() is None:
         hints.append("（检测到 java，安装 plantuml.jar 后即可使用）")
-    if _which("java") is None:
-        hints.append("（未检测到 java，PlantUML 需要 Java 运行时）")
+    if _which("java") is None and not _plantuml_core_available():
+        hints.append("（未检测到 java，推荐用 @plantuml/core 纯 JS 方案）")
     raise RuntimeError("\n".join(hints))
 
 
@@ -218,6 +361,7 @@ def cmd_check() -> int:
         f"  matplotlib    : {_yn(_has_matplotlib())}（内置兜底渲染依赖）",
         "",
         "  -- PlantUML --",
+        f"  @plantuml/core: {_yn(_plantuml_core_available())}（纯 JS，推荐）",
         f"  plantuml CLI  : {_yn(_which('plantuml'))}",
         f"  java          : {_yn(_which('java'))}",
         f"  plantuml.jar  : {os.path.basename(_find_plantuml_jar()) if _find_plantuml_jar() else '✗ 未找到'}",
@@ -229,11 +373,19 @@ def cmd_check() -> int:
         f"  npx 包缓存    : {'✓ 已缓存' if _npx_pkg_cached('@mermaid-js/mermaid-cli') else '✗ 未缓存'}",
         f"  docker 镜像   : {'✓ 已缓存' if _docker_image_cached('minlag/mermaid-cli') else '✗ 未缓存'}",
         "",
-        "离线策略：优先本地引擎（plantuml CLI / java+jar / mmdc）；",
+        "  -- SVG→PNG 转换器（@plantuml/core 输出 SVG 后转 PNG 用） --",
+        f"  @resvg/resvg-js: {_yn(_resvg_available())}（npm install -g @resvg/resvg-js）",
+        f"  cairosvg      : {_yn(_has_cairosvg())}（pip install cairosvg）",
+        f"  rsvg-convert  : {_yn(_which('rsvg-convert'))}（brew install librsvg）",
+        f"  inkscape      : {_yn(_which('inkscape'))}",
+        f"  magick/convert: {_yn(_which('magick') or _which('convert'))}（ImageMagick）",
+        f"  qlmanage      : {_yn(_which('qlmanage'))}（macOS 自带）",
+        "",
+        "离线策略：优先本地引擎（@plantuml/core / plantuml CLI / mmdc）；",
         "无任何引擎时自动使用内置 matplotlib 兜底渲染，保证离线必出图。",
         "",
         "提示：联网时运行 `render_diagram.py --install` 可一次预装缺失引擎",
-        "（下载 plantuml.jar 到 ~/plantuml.jar + 全局安装 mmdc），装后完全离线可用。",
+        "（npm 安装 @plantuml/core + @resvg/resvg-js + mmdc），装后完全离线可用。",
     ]
     for ln in lines:
         print(ln)
@@ -245,6 +397,15 @@ def _has_matplotlib() -> bool:
         import matplotlib  # noqa: F401
         return True
     except ImportError:
+        return False
+
+
+def _has_cairosvg() -> bool:
+    try:
+        import cairosvg  # noqa: F401
+        return True
+    except Exception:
+        # cairosvg 依赖系统 libcairo，缺失时 import 抛 OSError/ImportError
         return False
 
 
@@ -275,25 +436,63 @@ def cmd_install() -> int:
     print("lite-work diagram 引擎预装（需要网络，装一次后离线可用）")
     ok = True
 
-    # ---- PlantUML ----
-    print("\n[1/2] PlantUML")
+    # ---- PlantUML（纯 JS 引擎 @plantuml/core，无需 Java）----
+    print("\n[1/3] PlantUML 引擎")
     if _which("plantuml"):
         print("  ✓ 已安装 plantuml CLI，跳过")
+    elif _plantuml_core_available():
+        print("  ✓ @plantuml/core 已可用，跳过")
     else:
-        jar = _find_plantuml_jar()
-        if jar:
-            print(f"  ✓ 已找到 plantuml.jar: {jar}")
+        if not _which("node"):
+            print("  ✗ 未检测到 node，无法安装 @plantuml/core（需要 Node.js）")
+            print("    备选：brew install plantuml 或下载 plantuml.jar 放到 ~/plantuml.jar")
+            ok = False
+        elif not _which("npm"):
+            print("  ✗ 未检测到 npm，无法全局安装 @plantuml/core")
+            ok = False
         else:
-            dest = os.path.expanduser("~/plantuml.jar")
-            print(f"  · 下载 plantuml.jar → {dest} ...")
-            if _download(PLANTUML_JAR_URL, dest):
-                print(f"  ✓ 下载完成（{os.path.getsize(dest)} bytes），脚本会自动发现")
-            else:
-                print("  ✗ plantuml.jar 下载失败，可手动下载放到 ~/plantuml.jar")
+            print("  · npm install -g @plantuml/core（纯 JS PlantUML 引擎，无需 Java）...")
+            try:
+                r = subprocess.run(
+                    ["npm", "install", "-g", "@plantuml/core"],
+                    capture_output=True, text=True, timeout=900,
+                )
+                if r.returncode == 0 and _plantuml_core_available():
+                    print("  ✓ @plantuml/core 安装完成")
+                else:
+                    print("  ✗ @plantuml/core 安装失败: " + (r.stderr or r.stdout).strip()[:400])
+                    ok = False
+            except subprocess.TimeoutExpired:
+                print("  ✗ @plantuml/core 安装超时（>900s）")
+                ok = False
+
+    # ---- SVG→PNG 转换器（resvg 优先，供 @plantuml/core 输出 PNG 用）----
+    print("\n[2/3] SVG→PNG 转换器")
+    if _resvg_available():
+        print("  ✓ @resvg/resvg-js 已可用，跳过")
+    else:
+        if not _which("npm"):
+            print("  ✗ 未检测到 npm，无法安装 @resvg/resvg-js")
+            ok = False
+        else:
+            print("  · npm install -g @resvg/resvg-js（跨平台 SVG→PNG）...")
+            try:
+                r = subprocess.run(
+                    ["npm", "install", "-g", "@resvg/resvg-js"],
+                    capture_output=True, text=True, timeout=600,
+                )
+                if r.returncode == 0 and _resvg_available():
+                    print("  ✓ @resvg/resvg-js 安装完成")
+                else:
+                    print("  ✗ @resvg/resvg-js 安装失败: " + (r.stderr or r.stdout).strip()[:400])
+                    print("    备选：pip install cairosvg / brew install librsvg / inkscape / imagemagick")
+                    ok = False
+            except subprocess.TimeoutExpired:
+                print("  ✗ @resvg/resvg-js 安装超时（>600s）")
                 ok = False
 
     # ---- Mermaid ----
-    print("\n[2/2] Mermaid")
+    print("\n[3/3] Mermaid")
     if _which("mmdc"):
         print("  ✓ 已安装 mmdc（@mermaid-js/mermaid-cli），跳过")
     else:

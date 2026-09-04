@@ -203,6 +203,8 @@ def test_render_offline_check_env(tmp_path):
     assert "mermaid" in r.stdout.lower()
     # 提示 --install 预装（满足"npx 依赖可预先安装"的诉求）
     assert "--install" in r.stdout
+    # 纯 JS 引擎 @plantuml/core 应出现在诊断中
+    assert "@plantuml/core" in r.stdout
 
 
 def test_render_install_flag_supported(tmp_path):
@@ -216,6 +218,48 @@ def test_render_install_flag_supported(tmp_path):
     assert r.returncode == 0
     assert "--install" in r.stdout
     assert "--check" in r.stdout
+
+
+def test_render_plantuml_core_detect():
+    """@plantuml/core 纯 JS 引擎检测函数应可调用且返回 bool（不联网）。"""
+    mod = _load_render_module()
+    assert isinstance(mod._plantuml_core_available(), bool)
+    assert isinstance(mod._has_cairosvg(), bool)
+    assert isinstance(mod._resvg_available(), bool)
+
+
+def test_plantuml_js_render_script_syntax(tmp_path):
+    """plantuml_js_render.mjs 应通过 node 语法检查（不执行渲染）。"""
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    js_script = ROOT / "skills" / "diagram-to-office" / "plantuml_js_render.mjs"
+    if not js_script.is_file():
+        pytest.skip("plantuml_js_render.mjs 不存在")
+    r = subprocess.run(
+        ["node", "--check", str(js_script)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_svg2png_script_syntax(tmp_path):
+    """svg2png.mjs 应通过 node 语法检查（不执行转换）。"""
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    js_script = ROOT / "skills" / "diagram-to-office" / "svg2png.mjs"
+    if not js_script.is_file():
+        pytest.skip("svg2png.mjs 不存在")
+    r = subprocess.run(
+        ["node", "--check", str(js_script)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0, r.stderr
 
 
 def test_render_offline_fallback_flowchart(tmp_path):

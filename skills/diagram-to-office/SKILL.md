@@ -46,7 +46,7 @@ python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（�
 
 | 场景 | 行为 |
 |---|---|
-| 有本地引擎 | 用 `plantuml` CLI / `java -jar plantuml.jar` / `mmdc` 渲染，全离线 |
+| 有本地引擎 | 用 `@plantuml/core`（纯 JS）/ `plantuml` CLI / `java -jar plantuml.jar` / `mmdc` 渲染，全离线 |
 | 无本地引擎 | **自动改用内置 matplotlib 兜底渲染**（零外部依赖，离线必出图）：flowchart / 时序图渲染简化版，其余类型输出源码文本图 |
 | docker / npx | 仅当本地已缓存镜像/包时使用（自动检查），**默认不联网拉取** |
 | 在线环境 | 加 `--allow-network` 才允许 npx 安装包 / docker 拉镜像 |
@@ -55,6 +55,7 @@ python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（�
 
 | 引擎 | 适用 | 离线 | 检查命令 |
 |---|---|---|---|
+| `@plantuml/core`（纯 JS，推荐） | PlantUML | ✅（无需 Java） | `npm root -g` 下存在 |
 | `plantuml` CLI | PlantUML | ✅ | `which plantuml` |
 | `java -jar plantuml.jar` | PlantUML | ✅ | 本地存在 plantuml.jar |
 | Docker `plantuml/plantuml` | PlantUML | 仅镜像已缓存 | `docker image inspect` |
@@ -63,15 +64,24 @@ python3 skills/diagram-to-office/render_diagram.py --check   # 环境诊断（�
 | Docker `minlag/mermaid-cli` | Mermaid | 仅镜像已缓存 | `docker image inspect` |
 | 内置 matplotlib 兜底 | 两者 | ✅（项目已依赖） | `--check` 查看 |
 
+> PlantUML 渲染采用 `@plantuml/core`（TeaVM 编译的纯 JS 引擎，方案来自
+> [markdown-viewer](https://github.com/LaynePeng/markdown-viewer)）：先渲染为
+> SVG，再用 `@resvg/resvg-js`（Node 跨平台）转 PNG，**全程无需 Java、无需系统库**。
+
 **离线部署建议**（一次性准备，之后完全离线）：
 1. **一键预装**（推荐，需要联网一次）：
    ```bash
    python3 skills/diagram-to-office/render_diagram.py --install
    ```
-   脚本会自动下载 `plantuml.jar` 到 `~/plantuml.jar` 并全局安装 mmdc；
+   脚本会自动执行：
+   - `npm install -g @plantuml/core`（PlantUML 纯 JS 引擎，无需 Java）
+   - `npm install -g @resvg/resvg-js`（SVG→PNG，跨平台）
+   - `npm install -g @mermaid-js/mermaid-cli`（mmdc，Mermaid）
 2. 手动方式：
-   - PlantUML：`brew install plantuml`（macOS）或下载 `plantuml.jar` 放到
-     项目目录/`~/plantuml.jar`，脚本会自动发现；
+   - PlantUML：`npm install -g @plantuml/core`（推荐，无需 Java）或
+     `brew install plantuml`，或下载 `plantuml.jar` 放到 `~/plantuml.jar`；
+   - SVG→PNG：`npm install -g @resvg/resvg-js`（推荐）或
+     `pip install cairosvg` / `brew install librsvg` / ImageMagick；
    - Mermaid：`npm install -g @mermaid-js/mermaid-cli`，并确保本机有 Chrome
      （`npx puppeteer browsers install chrome`）；
 3. 准备完成后运行 `render_diagram.py --check` 确认各项为 ✓；
