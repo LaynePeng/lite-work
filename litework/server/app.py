@@ -687,6 +687,16 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         app.forget_project(path)
         return {"ok": True}
 
+    @fast_app.post("/api/projects/pin")
+    async def toggle_project_pin(payload: WorkspaceUpdateRequest, request: Request):
+        """置顶/取消置顶一个最近项目。返回翻转后的 pinned 状态。"""
+        _check_auth(request)
+        try:
+            pinned = app.toggle_project_pin(payload.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return {"ok": True, "path": payload.path, "pinned": pinned}
+
     @fast_app.get("/api/fs/list")
     async def fs_list(path: str = "", show_hidden: bool = False, request: Request = None):
         """浏览任意目录（用于「打开项目」目录树选择）。

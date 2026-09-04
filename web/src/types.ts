@@ -48,6 +48,8 @@ export interface RecentProject {
   /** code=代码仓库 / project=通用项目 */
   kind: "code" | "project";
   is_git: boolean;
+  /** 已置顶（显示在最近列表最前，不受打开时间排序影响） */
+  pinned: boolean;
   opened_at: string;
 }
 

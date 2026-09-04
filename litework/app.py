@@ -198,75 +198,142 @@ class AgentApp:
 
     RECENT_PROJECTS_MAX = 20
 
-    def list_recent_projects(self) -> List[Dict[str, Any]]:
-        """最近打开的项目列表（新→旧）。目录已删除的项自动剔除。"""
+    def _load_recent_projects_raw(self) -> List[Dict[str, Any]]:
+        """读原始最近项目记录（不做过滤/排序）。"""
         try:
             with open(self.recent_projects_path, "r", encoding="utf-8") as f:
                 items = json.load(f)
         except (OSError, ValueError):
             return []
-        if not isinstance(items, list):
-            return []
+        return items if isinstance(items, list) else []
+
+    def _save_recent_projects_raw(self, items: List[Dict[str, Any]]) -> None:
+        try:
+            with open(self.recent_projects_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def list_recent_projects(self) -> List[Dict[str, Any]]:
+        """最近打开的项目列表。目录已删除的项自动剔除。
+
+        排序：pinned 置顶（组内按 pin 时间原顺序），其余按打开时间新→旧。
+        """
+        items = self._load_recent_projects_raw()
         alive = []
         seen: set = set()
         for it in items:
             if not isinstance(it, dict):
                 continue
             path = it.get("path") or ""
-            if not path or not os.path.isdir(path) or path in seen:
+            if not path or not os.path.isdir(path):
                 continue
-            seen.add(path)
+            # Windows 大小写不敏感：normcase 归一后去重
+            key = os.path.normcase(path)
+            if key in seen:
+                continue
+            seen.add(key)
             alive.append({
                 "path": path,
                 "name": it.get("name") or os.path.basename(path),
                 # kind: code=代码仓库 / project=通用项目
                 "kind": it.get("kind") if it.get("kind") in ("code", "project") else "project",
                 "is_git": bool(it.get("is_git", os.path.isdir(os.path.join(path, ".git")))),
+                "pinned": bool(it.get("pinned", False)),
                 "opened_at": it.get("opened_at") or "",
             })
+        # pinned 前置（稳定排序保持组内原顺序），其余新→旧由插入顺序保证
+        alive.sort(key=lambda x: 0 if x["pinned"] else 1)
         return alive[: self.RECENT_PROJECTS_MAX]
 
     def remember_project(self, path: str, kind: str = "project") -> Dict[str, Any]:
-        """记录一次项目打开（去重置顶，超限淘汰最旧）。kind: code/project。"""
+        """记录一次项目打开（去重置顶，超限淘汰最旧）。kind: code/project。
+
+        已 pin 的项目重复打开：保持 pinned 并回到置顶组（不丢 pin 状态）。
+        """
         import datetime as _dt
         abs_path = os.path.abspath(os.path.expanduser(path))
         if not os.path.isdir(abs_path):
             raise ValueError(f"目录不存在: {abs_path}")
-        items = self.list_recent_projects()
-        # Windows 大小写不敏感：normcase 归一后去重
+        items = self._load_recent_projects_raw()
         key = os.path.normcase(abs_path)
-        items = [it for it in items if os.path.normcase(os.path.abspath(it["path"])) != key]
+        # 继承已存在记录的 pinned 状态
+        was_pinned = any(
+            isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key
+            and it.get("pinned")
+            for it in items
+        )
+        items = [it for it in items
+                 if not (isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)]
         items.insert(0, {
             "path": abs_path,
             "name": os.path.basename(abs_path) or abs_path,
             "kind": kind if kind in ("code", "project") else "project",
             "is_git": os.path.isdir(os.path.join(abs_path, ".git")),
+            "pinned": was_pinned,
             "opened_at": _dt.datetime.now().isoformat(timespec="seconds"),
         })
-        items = items[: self.RECENT_PROJECTS_MAX]
-        try:
-            with open(self.recent_projects_path, "w", encoding="utf-8") as f:
-                json.dump(items, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
-        return items[0]
+        # 淘汰时保护 pinned：超限时优先淘汰未 pin 的最旧项
+        pinned_items = [it for it in items if isinstance(it, dict) and it.get("pinned")]
+        normal = [it for it in items if not (isinstance(it, dict) and it.get("pinned"))]
+        if len(items) > self.RECENT_PROJECTS_MAX:
+            normal = normal[: max(0, self.RECENT_PROJECTS_MAX - len(pinned_items))]
+        items = self.list_recent_projects_order_hint(pinned_items + normal)
+        self._save_recent_projects_raw(items)
+        # 返回刚记住的项目（order 后不一定是首位）
+        for it in items:
+            if isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key:
+                return it
+        return items[0] if items else {}
+
+    def list_recent_projects_order_hint(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """持久化前的顺序整理：pinned 在前，其余新→旧（insert 顺序即新→旧）。"""
+        pinned = [it for it in items if isinstance(it, dict) and it.get("pinned")]
+        normal = [it for it in items if not (isinstance(it, dict) and it.get("pinned"))]
+        return pinned + normal
+
+    def toggle_project_pin(self, path: str) -> bool:
+        """翻转项目的 pinned 状态，返回翻转后的状态。pin 时提到置顶组首位。"""
+        items = self._load_recent_projects_raw()
+        key = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+        target_idx = None
+        for i, it in enumerate(items):
+            if isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key:
+                target_idx = i
+                break
+        if target_idx is None:
+            raise ValueError(f"项目不在最近列表中: {path}")
+        it = items[target_idx]
+        it["pinned"] = not bool(it.get("pinned", False))
+        pinned_now = bool(it["pinned"])
+        items.pop(target_idx)
+        # pin → 插到置顶组首位；unpin → 放到未 pin 组首位（刚操作过的靠前；
+        # opened_at 仅秒级精度，同秒内无法按时间细分）
+        if pinned_now:
+            insert_at = 0
+            for j, other in enumerate(items):
+                if not (isinstance(other, dict) and other.get("pinned")):
+                    insert_at = j
+                    break
+            else:
+                insert_at = len(items)
+            items.insert(insert_at, it)
+        else:
+            insert_at = 0
+            for j, other in enumerate(items):
+                if isinstance(other, dict) and other.get("pinned"):
+                    insert_at = j + 1
+            items.insert(insert_at, it)
+        self._save_recent_projects_raw(items)
+        return pinned_now
 
     def forget_project(self, path: str) -> None:
         """从最近列表移除一个项目（不删磁盘文件）。"""
-        try:
-            with open(self.recent_projects_path, "r", encoding="utf-8") as f:
-                items = json.load(f)
-        except (OSError, ValueError):
-            return
-        abs_path = os.path.abspath(os.path.expanduser(path))
-        key = os.path.normcase(abs_path)
+        items = self._load_recent_projects_raw()
+        key = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
         items = [it for it in items
                  if not (isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)]
-        try:
-            with open(self.recent_projects_path, "w", encoding="utf-8") as f:
-                json.dump(items, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+        self._save_recent_projects_raw(items)
 
     def mcp_status(self) -> Dict[str, Any]:
         return self.mcp_manager.status()

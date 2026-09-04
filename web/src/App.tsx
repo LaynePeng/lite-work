@@ -682,6 +682,19 @@ export default function App() {
     }
   }, []);
 
+  const togglePinProject = useCallback(async (path: string) => {
+    try {
+      const r = await api.toggleProjectPin(path);
+      // 后端重排（pinned 前置），直接刷新整表最简单且顺序正确
+      const list = await api.recentProjects();
+      setRecentProjects(list.items);
+      setSuccess(r.pinned ? "已置顶" : "已取消置顶");
+      setTimeout(() => setSuccess(null), 2000);
+    } catch {
+      /* 忽略 */
+    }
+  }, []);
+
   const backToProjects = useCallback(() => setProjectsView("list"), []);
 
   // 首次启动：打开一个占位会话 tab
@@ -1367,6 +1380,7 @@ export default function App() {
         onNewProject={newProjectEntry}
         onOpenRecent={(path) => void openRecentProject(path)}
         onRemoveRecent={(path) => void removeRecentProject(path)}
+        onTogglePin={(path) => void togglePinProject(path)}
         onBackToProjects={backToProjects}
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}

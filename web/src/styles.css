@@ -484,6 +484,42 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--danger, #e5484d);
 }
 
+/* 最近项目搜索框 + 置顶 */
+.projects-search {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+}
+
+.recent-project-item.pinned {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.recent-project-pin {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0;
+  padding: 2px 3px;
+  border-radius: 4px;
+  filter: grayscale(1);
+  transition: opacity 0.12s, filter 0.12s;
+}
+
+.recent-project-item:hover .recent-project-pin,
+.recent-project-pin.pinned {
+  opacity: 1;
+}
+
+.recent-project-pin.pinned {
+  filter: none;
+}
+
+.recent-project-pin:hover {
+  filter: none;
+  background: var(--bg-3);
+}
+
 /* 项目内会话视图：返回栏 + 当前项目名 */
 .project-context {
   display: flex;

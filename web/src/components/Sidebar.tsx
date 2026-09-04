@@ -417,6 +417,7 @@ export default function Sidebar({
   onNewProject,
   onOpenRecent,
   onRemoveRecent,
+  onTogglePin,
   onBackToProjects,
   onOpenProjectNewWindow,
   onOpenSettings,
@@ -443,6 +444,7 @@ export default function Sidebar({
   onNewProject?: (git: boolean) => void;
   onOpenRecent: (path: string) => void;
   onRemoveRecent: (path: string) => void;
+  onTogglePin: (path: string) => void;
   onBackToProjects: () => void;
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
@@ -453,6 +455,14 @@ export default function Sidebar({
   const projectName = workspace && workspace !== "未打开项目"
     ? baseName(workspace) || workspace
     : "";
+
+  // 最近项目搜索（纯前端过滤：名称/路径子串，大小写不敏感）
+  const [projectSearch, setProjectSearch] = useState("");
+  const filteredProjects = projectSearch.trim()
+    ? recentProjects.filter((p) =>
+        p.name.toLowerCase().includes(projectSearch.trim().toLowerCase()) ||
+        p.path.toLowerCase().includes(projectSearch.trim().toLowerCase()))
+    : recentProjects;
 
   return (
     <aside className="sidebar">
@@ -517,22 +527,45 @@ export default function Sidebar({
                 </button>
               )}
               <div className="projects-recent-title">最近打开</div>
+              {recentProjects.length > 3 && (
+                <input
+                  className="form-input projects-search"
+                  placeholder="搜索项目（名称/路径）…"
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                />
+              )}
               {recentProjects.length === 0 && (
                 <div className="sidebar-empty">
                   还没有打开过项目
                   <div className="sidebar-empty-sub">从上方入口打开或新建你的第一个项目</div>
                 </div>
               )}
-              {recentProjects.map((p) => (
+              {projectSearch.trim() && filteredProjects.length === 0 && (
+                <div className="sidebar-empty">没有匹配「{projectSearch.trim()}」的项目</div>
+              )}
+              {filteredProjects.map((p) => (
                 <div
                   key={p.path}
-                  className={`recent-project-item ${p.path === workspace ? "active" : ""}`}
+                  className={`recent-project-item ${p.path === workspace ? "active" : ""} ${p.pinned ? "pinned" : ""}`}
                   title={p.path}
                   onClick={() => onOpenRecent(p.path)}
                 >
-                  <span className="recent-project-icon">{p.kind === "code" ? "💻" : "📁"}</span>
+                  <span className="recent-project-icon">
+                    {p.pinned ? "📌" : p.kind === "code" ? "💻" : "📁"}
+                  </span>
                   <span className="recent-project-name">{p.name}</span>
                   <span className={`recent-project-kind ${p.kind}`}>{p.kind === "code" ? "代码" : "项目"}</span>
+                  <button
+                    className={`recent-project-pin ${p.pinned ? "pinned" : ""}`}
+                    title={p.pinned ? "取消置顶" : "置顶固定"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTogglePin(p.path);
+                    }}
+                  >
+                    📌
+                  </button>
                   <button
                     className="recent-project-remove"
                     title="从列表移除"

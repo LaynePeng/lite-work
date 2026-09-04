@@ -79,6 +79,57 @@ def test_create_project_remembered(client_and_app):
     assert any(i["name"] == "新项目" for i in items)
 
 
+# ---------------------------------------------------------------- 置顶（pin）
+
+def test_project_pin_toggle_and_order(client_and_app):
+    client, app, ws = client_and_app
+    pa = os.path.join(ws, "projA")
+    pb = os.path.join(ws, "projB")
+    os.makedirs(pa)
+    os.makedirs(pb)
+
+    # 打开 A、B（B 更近）
+    client.post("/api/projects/recent", json={"path": pa})
+    client.post("/api/projects/recent", json={"path": pb})
+
+    # pin A：A 应置顶
+    r = client.post("/api/projects/pin", json={"path": pa})
+    assert r.status_code == 200 and r.json()["pinned"] is True
+    names = [i["name"] for i in client.get("/api/projects/recent").json()["items"]]
+    assert names == ["projA", "projB"]
+
+    # 再打开 B（重复）：pinned 的 A 仍置顶
+    client.post("/api/projects/recent", json={"path": pb})
+    names = [i["name"] for i in client.get("/api/projects/recent").json()["items"]]
+    assert names == ["projA", "projB"]
+    # pinned 字段保持
+    items = client.get("/api/projects/recent").json()["items"]
+    assert items[0]["pinned"] is True and items[1]["pinned"] is False
+
+    # unpin A：A 回到未 pin 组首位（刚操作过的靠前）
+    r2 = client.post("/api/projects/pin", json={"path": pa})
+    assert r2.json()["pinned"] is False
+    names = [i["name"] for i in client.get("/api/projects/recent").json()["items"]]
+    assert names == ["projA", "projB"]
+    assert all(i["pinned"] is False for i in client.get("/api/projects/recent").json()["items"])
+
+
+def test_remember_keeps_pinned_state(client_and_app):
+    client, app, ws = client_and_app
+    pa = os.path.join(ws, "keepPin")
+    os.makedirs(pa)
+    client.post("/api/projects/recent", json={"path": pa})
+    client.post("/api/projects/pin", json={"path": pa})
+    # 重复打开不丢 pin
+    client.post("/api/projects/recent", json={"path": pa})
+    items = client.get("/api/projects/recent").json()["items"]
+    assert items[0]["pinned"] is True
+
+    # pin 不存在的项目 → 404
+    r = client.post("/api/projects/pin", json={"path": os.path.join(ws, "nope")})
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------- 目录浏览：隐藏文件过滤
 
 def test_fs_list_hidden_files_filtered_by_default(client_and_app):

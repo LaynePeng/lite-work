@@ -189,4 +189,8 @@ export const api = {
     req<{ ok: boolean }>(`/api/projects/recent?path=${encodeURIComponent(path)}`, {
       method: "DELETE",
     }),
+  toggleProjectPin: (path: string) =>
+    req<{ ok: boolean; path: string; pinned: boolean }>("/api/projects/pin", {
+      method: "POST", body: JSON.stringify({ path }),
+    }),
 };
