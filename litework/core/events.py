@@ -37,6 +37,10 @@ class TypedEventBus:
         "subagent:progress": dict,
         "subagent:completed": dict,
         "skill:loaded": dict,
+        # 交互类：ask_user 提问 / TODO 看板（TaskHandle 订阅转发到前端）
+        "question:request": dict,
+        "question:resolved": dict,
+        "todo:updated": dict,
     }
 
     def __init__(self) -> None:

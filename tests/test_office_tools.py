@@ -76,6 +76,47 @@ def test_docx_append_page_break_and_errors(tmp_path):
     assert "越界" in r5 or "不存在" in r5 or "仅支持" in r5
 
 
+# ---------------------------------------------------------------- 工具执行不阻塞事件循环（回归守护）
+
+def test_office_execute_does_not_block_event_loop(tmp_path):
+    """office 工具为同步重活（matplotlib/subprocess），必须放线程池——
+    直接同步调用会阻塞 asyncio 事件循环，曾导致 SSE/审批全部冻结
+    （用户侧表现为应用完全卡死）。此测试为该回归的守护。
+    """
+    import asyncio
+    import time
+
+    tools = OfficeTools(str(tmp_path))
+    ticks = []
+
+    async def heartbeat():
+        # 事件循环心跳：每 50ms 记录一次，工具执行期间必须持续跳动
+        for _ in range(20):
+            ticks.append(time.monotonic())
+            await asyncio.sleep(0.05)
+
+    async def run_chart():
+        return await tools.execute("chart_make", {
+            "data": '{"labels": ["A", "B"], "values": [1, 2]}',
+            "chart_type": "bar",
+            "filename": "hb.png",
+        })
+
+    async def main():
+        hb = asyncio.create_task(heartbeat())
+        await run_chart()
+        await hb
+
+    asyncio.run(main())
+
+    # 心跳间隔应基本均匀（最大间隔 < 1s 即视为未阻塞；matplotlib 出图
+    # 本身耗时无妨——它在别的线程，事件循环必须保持响应）
+    gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+    assert gaps, "心跳未运行"
+    assert max(gaps) < 1.0, f"事件循环被阻塞：心跳间隔 {max(gaps):.2f}s"
+    assert (tmp_path / ".outputs" / "hb.png").exists()
+
+
 # ---------------------------------------------------------------- 图表代码块自动渲染（工具层兜底）
 
 def test_docx_plantuml_block_auto_render_or_keep(tmp_path):

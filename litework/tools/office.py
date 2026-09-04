@@ -314,21 +314,25 @@ class OfficeTools:
     # ------------------------------------------------------------ 执行入口
 
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
-        if name == "docx_create":
-            return self._docx_create(args)
-        if name == "docx_append":
-            return self._docx_append(args)
-        if name == "xlsx_create":
-            return self._xlsx_create(args)
-        if name == "pptx_create":
-            return self._pptx_create(args)
-        if name == "pdf_create":
-            return self._pdf_create(args)
-        if name == "data_analyze":
-            return self._data_analyze(args)
-        if name == "chart_make":
-            return self._chart_make(args)
-        raise ValueError(f"Unknown Office Tool: {name}")
+        """工具执行入口：全部实现为同步重活（subprocess 渲染 / matplotlib /
+        python-docx CPU），必须放线程池执行——直接同步调用会阻塞 asyncio
+        事件循环，导致 SSE / 审批 / 其他任务全部冻结（表现为应用"卡死"）。
+        """
+        import asyncio as _asyncio
+
+        handlers = {
+            "docx_create": self._docx_create,
+            "docx_append": self._docx_append,
+            "xlsx_create": self._xlsx_create,
+            "pptx_create": self._pptx_create,
+            "pdf_create": self._pdf_create,
+            "data_analyze": self._data_analyze,
+            "chart_make": self._chart_make,
+        }
+        handler = handlers.get(name)
+        if handler is None:
+            raise ValueError(f"Unknown Office Tool: {name}")
+        return await _asyncio.to_thread(handler, args)
 
     # ------------------------------------------------------------ docx
 
@@ -635,11 +639,20 @@ class OfficeTools:
             chart_type = "plantuml" if lang in ("plantuml", "puml") else "mermaid"
             out_dir = _ensure_output_dir(self.workspace, "diagrams")
             out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
-            with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
-                if chart_type == "plantuml":
-                    mod.render_plantuml(code, out_path, 2, tmpdir, None)
-                else:
-                    mod.render_mermaid(code, out_path, 2, tmpdir)
+
+            def _do_render() -> None:
+                with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
+                    if chart_type == "plantuml":
+                        mod.render_plantuml(code, out_path, 2, tmpdir, None)
+                    else:
+                        mod.render_mermaid(code, out_path, 2, tmpdir)
+
+            # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
+            # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=1) as pool:
+                future = pool.submit(_do_render)
+                future.result(timeout=60)
             if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
                 return out_path
             return None

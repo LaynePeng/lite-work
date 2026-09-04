@@ -362,8 +362,13 @@ class AgentApp:
         离线或 npm 不可用时静默失败——渲染管线有内置兜底链
         （qlmanage / matplotlib），不影响功能可用性。
         """
+        import os as _os
         import threading
 
+        # 测试环境开关：并发创建大量 AgentApp 会拖起一堆 npm install，
+        # 测试套件设置 LITEWORK_SKIP_ENGINE_PREINSTALL=1 跳过
+        if _os.environ.get("LITEWORK_SKIP_ENGINE_PREINSTALL") == "1":
+            return
         threading.Thread(
             target=self._engine_preinstall_worker, name="engine-preinstall", daemon=True
         ).start()
@@ -381,8 +386,10 @@ class AgentApp:
         if _shutil.which("python3") is None and _shutil.which("python") is None:
             return
 
-        # 文件锁：并发启动防护；残留锁超时自动接管
-        lock = os.path.join(self.config_dir, self.ENGINE_PREINSTALL_LOCK)
+        # 文件锁：并发启动防护；残留锁超时自动接管。
+        # 全局锁放在 ~/.agents/skills/ 下（跨实例/跨 config_dir 共享，真正防并发）
+        lock = os.path.join(os.path.expanduser("~"), ".agents", "skills",
+                            self.ENGINE_PREINSTALL_LOCK)
         now = _time.time()
         try:
             if os.path.isfile(lock):
@@ -409,6 +416,16 @@ class AgentApp:
                                "渲染走内置兜底）：%s", (r.stderr or r.stdout).strip()[:200])
         except Exception as exc:
             logger.debug("[App] 图表引擎预装异常（忽略）：%s", exc)
+
+        # matplotlib 字体缓存预热：首次建缓存要数秒且会卡住首次图表渲染，
+        # 启动后台顺带建好（兜底渲染首次使用即全速）
+        try:
+            import matplotlib as _mpl
+            _mpl.use("Agg")
+            import matplotlib.font_manager as _fm
+            _fm.findfont(_fm.FontProperties(family="sans-serif"))
+        except Exception:
+            pass
         finally:
             try:
                 os.remove(lock)

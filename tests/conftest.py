@@ -1,8 +1,13 @@
 """共享测试工具：Mock LLM 适配器。"""
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+import os
 
+# 测试套件禁用引擎预装：大量 AgentApp 实例会并发拖起 npm install，
+# 拖垮测试环境（live server 超时）。预装逻辑由专项测试覆盖。
+os.environ.setdefault("LITEWORK_SKIP_ENGINE_PREINSTALL", "1")
+
+from typing import List, Optional, Tuple
 from litework.core.events import TypedEventBus
 from litework.core.types import Message, ToolCall, ToolDefinition
 
