@@ -33,6 +33,25 @@ if (!fs.existsSync(path.join(webDist, "index.html"))) {
   process.exit(1);
 }
 
+// 图表引擎随安装包分发：在技能目录下安装 node_modules（@plantuml/core /
+// @resvg/resvg-js / @mermaid-js/mermaid-cli），随 --add-data skills 一起
+// 打进 _internal/skills/——用户装完应用即离线可渲染，无需首次启动联网装。
+// PUPPETEER_SKIP_DOWNLOAD：chromium（300MB+）不打包，运行时用系统 Chrome。
+const diagramSkillDir = path.join(root, "skills", "diagram-to-office");
+const localCorePkg = path.join(diagramSkillDir, "node_modules", "@plantuml", "core");
+if (process.env.LITEWORK_SKIP_SKILL_ENGINES === "1") {
+  console.log("[package] 跳过技能引擎安装（LITEWORK_SKIP_SKILL_ENGINES=1）");
+} else if (fs.existsSync(localCorePkg)) {
+  console.log("[package] 技能引擎 node_modules 已存在，跳过安装");
+} else {
+  console.log("[package] 安装图表引擎到技能目录（随安装包分发）...");
+  execSync("npm install --no-audit --no-fund", {
+    cwd: diagramSkillDir,
+    stdio: "inherit",
+    env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "1" },
+  });
+}
+
 // Windows uses ';', macOS/Linux use ':'
 const sep = isWindows ? ";" : ":";
 

@@ -1,0 +1,11 @@
+{
+  "name": "litework-diagram-to-office",
+  "version": "0.3.0",
+  "private": true,
+  "description": "diagram-to-office 技能的渲染引擎依赖（随安装包分发，离线即用）",
+  "dependencies": {
+    "@plantuml/core": "^1.2026.7",
+    "@resvg/resvg-js": "^2.6.2",
+    "@mermaid-js/mermaid-cli": "^11.17.0"
+  }
+}

@@ -186,6 +186,19 @@ def _run(cmd: list, cwd: str, timeout: int = 180) -> subprocess.CompletedProcess
         raise RuntimeError(f"命令超时（>{timeout}s）: {' '.join(cmd)}") from exc
 
 
+def _run_env(cmd: list, cwd: str, timeout: int = 180,
+             env: dict | None = None) -> subprocess.CompletedProcess:
+    """同 _run，但支持自定义环境变量（如 PUPPETEER_EXECUTABLE_PATH）。"""
+    try:
+        return subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"未找到命令: {cmd[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"命令超时（>{timeout}s）: {' '.join(cmd)}") from exc
+
+
 def _find_plantuml_jar() -> str | None:
     for cand in PLANTUML_JAR_CANDIDATES:
         if os.path.isfile(cand):
@@ -230,6 +243,62 @@ def _which(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+# ------------------------------------------------------------ 内置引擎（随安装包分发）
+
+_SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _local_node_modules() -> str:
+    """技能目录自带的 node_modules（安装包内置引擎，离线即用）。
+
+    打包时 build 脚本会在 skills/diagram-to-office/ 下 npm install，
+    随 --add-data 进 _internal/skills/，同步到 ~/.agents/skills/ 后
+    路径同样成立——引擎查找优先级：本地 node_modules > 全局 npm。
+    """
+    nm = os.path.join(_SKILL_DIR, "node_modules")
+    return nm if os.path.isdir(nm) else ""
+
+
+def _local_pkg_dir(pkg: str) -> str:
+    """本地 node_modules 下某包的目录（存在返回路径，否则空串）。"""
+    nm = _local_node_modules()
+    if not nm:
+        return ""
+    d = os.path.join(nm, *pkg.split("/"))
+    return d if os.path.isdir(d) else ""
+
+
+def _mmdc_command() -> list | None:
+    """mmdc 可执行命令（本地 node_modules 优先，全局兜底）。
+
+    本地：node <技能目录>/node_modules/@mermaid-js/mermaid-cli/src/cli.js
+    全局：直接 mmdc（PATH 已含 npm 全局 bin 补偿）
+    """
+    if _which("node"):
+        cli = os.path.join(_local_pkg_dir("@mermaid-js/mermaid-cli"), "src", "cli.js")
+        if os.path.isfile(cli):
+            return ["node", cli]
+    if _which("mmdc"):
+        return ["mmdc"]
+    return None
+
+
+def _system_chrome_path() -> str:
+    """常见系统 Chrome 路径（mmdc 渲染用它，免下载 chromium）。"""
+    candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return ""
+
+
 def _docker_image_cached(name: str) -> bool:
     """检查本地是否已缓存 docker 镜像（不联网）。失败/无 docker 返回 False。"""
     if not _which("docker"):
@@ -259,13 +328,17 @@ def _npx_pkg_cached(pkg: str) -> bool:
 
 
 def _plantuml_core_available() -> bool:
-    """检查 @plantuml/core（纯 JS PlantUML 引擎）是否可用：node + 全局/本地包。
+    """检查 @plantuml/core（纯 JS PlantUML 引擎）是否可用：node + 本地/全局包。
 
-    不需要 Java，离线可用。安装：npm install -g @plantuml/core
+    不需要 Java，离线可用。优先级：内置 node_modules（安装包自带）>
+    环境变量 > 全局 npm。
     """
     if not _which("node"):
         return False
-    # 0) 环境变量显式指定（与 plantuml_js_render.mjs 一致）
+    # 0) 技能目录内置 node_modules（安装包分发，离线即用）
+    if _local_pkg_dir("@plantuml/core"):
+        return True
+    # 1) 环境变量显式指定（与 plantuml_js_render.mjs 一致）
     env_dir = os.environ.get("PLANTUML_CORE_DIR")
     if env_dir and os.path.isfile(os.path.join(env_dir, "plantuml.js")):
         return True
@@ -344,9 +417,12 @@ def _svg_to_png(svg_path: str, png_path: str, scale: int = 2) -> str | None:
 
 
 def _resvg_available() -> bool:
-    """检查 @resvg/resvg-js 是否可用（node + 全局/本地包）。"""
+    """检查 @resvg/resvg-js 是否可用（node + 内置/全局包）。"""
     if not _which("node"):
         return False
+    # 内置 node_modules（安装包分发，离线即用）
+    if _local_pkg_dir("@resvg/resvg-js"):
+        return True
     if os.environ.get("RESVG_DIR"):
         return os.path.isfile(os.path.join(os.environ["RESVG_DIR"], "index.js"))
     try:
@@ -719,14 +795,22 @@ def render_mermaid(source: str, out_path: str, scale: int, tmpdir: str,
     mmdc_out = out_path if os.path.isabs(out_path) else os.path.abspath(out_path)
     scale_arg = ["-s", str(scale)] if not out_path.lower().endswith(".svg") else []
 
-    # 1) mmdc CLI（本地全局安装，离线可用）
-    if _which("mmdc"):
-        log("[render] 使用 mmdc")
-        cmd = ["mmdc", "-i", in_file, "-o", mmdc_out, *scale_arg]
-        r = _run(cmd, tmpdir, timeout=300)
+    # 1) mmdc（技能目录内置 node_modules 优先，全局兜底；系统 Chrome 免下载）
+    mmdc_cmd = _mmdc_command()
+    if mmdc_cmd:
+        engine_desc = "mmdc（内置）" if mmdc_cmd[0] == "node" else "mmdc"
+        log(f"[render] 使用 {engine_desc}")
+        cmd = [*mmdc_cmd, "-i", in_file, "-o", mmdc_out, *scale_arg]
+        env = None
+        chrome = _system_chrome_path()
+        if chrome:
+            # 用系统 Chrome 跑 puppeteer——安装包不内置 chromium（300MB+ 且
+            # 升级重复），系统浏览器优先；无系统 Chrome 时走 puppeteer 缓存
+            env = {**os.environ, "PUPPETEER_EXECUTABLE_PATH": chrome}
+        r = _run_env(cmd, tmpdir, timeout=300, env=env)
         if r.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-            return "mmdc"
-        log("  mmdc 失败: " + (r.stderr or r.stdout).strip()[:500])
+            return engine_desc
+        log(f"  mmdc 失败: " + (r.stderr or r.stdout).strip()[:500])
 
     # 2) npx @mermaid-js/mermaid-cli（仅本地已缓存包；allow_network 才允许联网安装）
     if _which("npx") and (allow_network or _npx_pkg_cached("@mermaid-js/mermaid-cli")):
