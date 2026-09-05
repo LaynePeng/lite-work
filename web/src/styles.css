@@ -4444,7 +4444,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-2);
 }
 
-/* ==================== 产出物 Tab（GAI 通用入口） ==================== */
+/* ==================== 产出物 Tab（AGI 通用入口） ==================== */
 
 .outputs-panel {
   position: relative;

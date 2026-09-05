@@ -57,7 +57,7 @@ export default function Composer({
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
-  // Agent 图标与中文名（GAI 通用入口：办公/调研/代码一站式）
+  // Agent 图标与中文名（AGI 通用入口：办公/调研/代码一站式）
   const AGENT_META: Record<string, { icon: string; label: string }> = {
     build: { icon: "💻", label: "代码" },
     plan: { icon: "📋", label: "规划" },

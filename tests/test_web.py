@@ -288,7 +288,7 @@ def test_webfetch_registered_in_full_registry(tmp_path):
     assert len(registry.get_tools()) >= 36
     assert registry.has("todo_write")
     assert registry.has("ask_user")
-    # 办公产出工具（GAI 通用入口）
+    # 办公产出工具（AGI 通用入口）
     for name in ("docx_create", "docx_append", "xlsx_create", "pptx_create", "pdf_create",
                  "data_analyze", "chart_make"):
         assert registry.has(name), f"缺少办公工具 {name}"

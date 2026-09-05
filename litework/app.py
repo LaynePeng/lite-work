@@ -74,7 +74,7 @@ TOOL_NAMES = [
     "execute_command", "git_status", "git_diff", "git_log",
     "git_commit", "git_branch", "review_code", "spawn_sub_agent",
         "webfetch", "webfetch_batch", "load_skill",
-    # 办公工具（GAI 通用入口）
+    # 办公工具（AGI 通用入口）
     "docx_create", "xlsx_create", "pptx_create", "pdf_create",
     "data_analyze", "chart_make",
     # 读取已有办公文件（调研/参考）

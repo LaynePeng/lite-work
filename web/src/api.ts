@@ -163,7 +163,7 @@ export const api = {
   deletePlugin: (name: string) =>
     req<{ ok: boolean; name: string; path: string }>(`/api/plugins/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
-  // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（GAI 通用入口）
+  // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（AGI 通用入口）
 
   uploadFile: (file: File) => {
     const form = new FormData();

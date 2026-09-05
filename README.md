@@ -9,7 +9,7 @@
 ## 功能
 
 -   **36 个内置工具**：文件读写、Ripgrep 搜索、Tree-sitter AST 大纲、Search-Replace / Unified Diff 精确编辑、受限 Shell、Git 五件套、代码审查、子 Agent 编排、Web 抓取、`load_skill` 技能加载；MCP 工具按配置动态注册
--   **办公/生产力工具（GAI 通用入口）**：`docx_create`（Word）、`xlsx_create`（Excel）、`pptx_create`（PPT）、`pdf_create`（PDF）、`data_analyze`（数据统计）、`chart_make`（图表，自动适配中文字体）；产出保存到工作区 `.outputs/`，侧边栏「产出物」Tab 可预览与下载
+-   **办公/生产力工具（AGI 通用入口）**：`docx_create`（Word）、`xlsx_create`（Excel）、`pptx_create`（PPT）、`pdf_create`（PDF）、`data_analyze`（数据统计）、`chart_make`（图表，自动适配中文字体）；产出保存到工作区 `.outputs/`，侧边栏「产出物」Tab 可预览与下载
 -   **办公文件读取与 OCR**：`docx_read` / `xlsx_read` / `pptx_read` / `pdf_read` 读取已有办公文件作为参考资料；`ocr_image` / `ocr_document` / `ocr_pptx` 识别图片、扫描版 PDF、PPT 内嵌图片中的文字（rapidocr-onnxruntime 离线引擎，PPT 图片带位置信息按阅读顺序还原）
 -   **插件系统（Cordis 模式）**：`~/.lite-work/plugins/` 放入 .py 即注册新工具；支持添加/覆盖/移除内置工具、semver 版本对比、`installed.json` 记录来源、目录插件自动装依赖；内置插件可被用户版单独更新，卸载自动回退；设置 → Plugins 页可视化管理（内置清单 / 社区安装 / 用户插件）
 -   **Agent 工具配置与自定义 Agent**：build / plan / office / research 四种内置 Agent 均为显式工具白名单，设置 → Agents 页可逐个调整（含未来新增插件的工具）；支持新建自定义 Agent（描述 + 系统提示词 + 工具集）

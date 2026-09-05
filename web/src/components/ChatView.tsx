@@ -286,7 +286,7 @@ function buildTurns(messages: Msg[]): RenderTurn[] {
 
 // ---------------------------------------------------------------- 主组件
 
-// 各 Agent 的空态欢迎语与场景入口（GAI 通用入口：办公/调研/代码一站式）
+// 各 Agent 的空态欢迎语与场景入口（AGI 通用入口：办公/调研/代码一站式）
 const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string, string][] }> = {
   build: {
     title: "lite-work",

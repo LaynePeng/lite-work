@@ -140,7 +140,7 @@ function FileTree({ workspace, revision, onFileOpen }: { workspace: string; revi
   );
 }
 
-// ---------------------------------------------------------------- 产出物面板（GAI 通用入口：预览/下载 Agent 生成的办公文件）
+// ---------------------------------------------------------------- 产出物面板（AGI 通用入口：预览/下载 Agent 生成的办公文件）
 
 const OUTPUT_ICONS: Record<string, string> = {
   ".docx": "📄", ".xlsx": "📊", ".pptx": "🎞️", ".pdf": "📕",

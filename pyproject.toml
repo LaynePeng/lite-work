@@ -17,7 +17,7 @@ dependencies = [
     "tree-sitter-java>=0.23,<0.24",
     "tree-sitter-go>=0.23",
     "pathspec>=0.12",
-    # 办公/生产力场景（GAI 通用入口）：文档、表格、演示、图表、数据分析
+    # 办公/生产力场景（AGI 通用入口）：文档、表格、演示、图表、数据分析
     "python-docx>=1.1",
     "openpyxl>=3.1",
     "python-pptx>=0.6.21",

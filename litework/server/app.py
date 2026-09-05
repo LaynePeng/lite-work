@@ -941,7 +941,7 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         deletions = len([l for l in diff_text.split("\n") if l.startswith("-") and not l.startswith("---")])
         return {"path": path, "diff": diff_text, "additions": additions, "deletions": deletions}
 
-    # ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（GAI 通用入口）
+    # ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（AGI 通用入口）
 
     @fast_app.post("/api/upload")
     async def upload_file(request: Request):
