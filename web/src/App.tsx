@@ -866,18 +866,20 @@ export default function App() {
           break;
         }
         case "message:added": {
-          // 运行中注入的用户消息已进入上下文：清掉本地"已入队"标记
-          if (ev.data.message?.role === "user") {
+          // 后端注入的补充指令进入上下文：按内容精确匹配，清除本地消息的
+          // "已入队"标记（注入消息原文为 [用户补充指令] <原文>）
+          const msg = ev.data.message;
+          if (msg?.role === "user" && typeof msg.content === "string") {
+            const PREFIX = "[用户补充指令] ";
+            const raw = msg.content.startsWith(PREFIX) ? msg.content.slice(PREFIX.length) : msg.content;
             const cur = getChat(sid);
-            if (cur.messages.some((m) => m.queued)) {
+            if (cur.messages.some((m) => m.queued && m.content === raw)) {
               patchChat(sid, {
-                messages: [
-                  ...cur.messages.map((m) => (m.queued ? { ...m, queued: false } : m)),
-                  // 注入确认提示：让用户明确看到补充指令已被 Agent 接收并开始处理，
-                  // 随后 Agent 会注入 TODOs（todo_write 工具）与执行任务
-                  { role: "assistant", content: "✅ 收到新任务，正在处理…" },
-                ],
+                messages: cur.messages.map((m) =>
+                  m.queued && m.content === raw ? { ...m, queued: false } : m
+                ),
               });
+              pushLog("📥 补充指令已注入当前任务");
             }
           }
           break;
@@ -917,13 +919,29 @@ export default function App() {
             if (snap) patchChat(sid, { messages: snap.messages ?? [] });
           })();
           void refreshSessions();
+          // 竞态收口：入队成功但任务在注入前结束的补充指令（仍带 queued 标记），
+          // 前插到待发送队列由下方重发兜底，避免丢消息；同时清掉标记（即将作为
+          // 新任务重发，⏳ 已无意义）
+          const done = getChat(sid);
+          const unconsumed = (done.messages ?? [])
+            .filter((m) => m.queued && typeof m.content === "string")
+            .map((m) => m.content as string);
+          let queue = done.pendingQueue ?? [];
+          if (unconsumed.length > 0) {
+            // 去重：提交失败的消息可能同时在 messages(queued) 与 pendingQueue
+            queue = [...unconsumed, ...queue.filter((t) => !unconsumed.includes(t))];
+            patchChat(sid, {
+              pendingQueue: queue,
+              messages: done.messages.map((m) => (m.queued ? { ...m, queued: false } : m)),
+            });
+            pushLog(`📋 ${unconsumed.length} 条补充指令未注入，转入待发送队列`);
+          }
           // 自动发送待发送队列中的下一条
-          const q = getChat(sid);
-          if (q.pendingQueue?.length > 0) {
-            const next = q.pendingQueue[0];
-            patchChat(sid, { pendingQueue: q.pendingQueue.slice(1) });
-            pushLog(`📋 自动发送队列下一条（剩余 ${q.pendingQueue.length - 1} 条）`);
-            taskLauncherRef.current(sid, next, q.reasoningEffort);
+          if (queue.length > 0) {
+            const next = queue[0];
+            patchChat(sid, { pendingQueue: queue.slice(1) });
+            pushLog(`📋 自动发送队列下一条（剩余 ${queue.length - 1} 条）`);
+            taskLauncherRef.current(sid, next, done.reasoningEffort);
           }
           break;
         }
@@ -1147,27 +1165,7 @@ export default function App() {
         }
       }
       const base = getChat(sid);
-      if (base.running) {
-        // 任务运行中：追加到待发送队列，任务完成后自动发送。
-        // 消息同时插入对话流（用户能看到已发出），自动发送时不再重复插入
-        patchChat(sid, {
-          messages: [...(base.messages ?? []), { role: "user", content: prompt, queued: true }],
-          pendingQueue: [...(base.pendingQueue ?? []), prompt],
-          error: null,
-        });
-        pushLog(`📋 已加入待发送队列（共 ${(base.pendingQueue?.length ?? 0) + 1} 条）`);
-        return;
-      } else {
-        patchChat(sid, {
-          messages: [...(base.messages ?? []), { role: "user", content: prompt }],
-          error: null,
-          running: true,
-        });
-        cancelStreamFlush(sid);
-        streamingRefs.current.set(sid, { items: [] });
-        patchChat(sid, { streaming: { items: [] } });
-      }
-
+      // SSE 连接（新任务提交与排队竞态续接共用）
       const connect = (taskId: string) => {
         const es = new EventSource(`/api/tasks/${taskId}/events`);
         eventSourcesRef.current.set(sid, es);
@@ -1191,6 +1189,51 @@ export default function App() {
           pushLog("⚠ SSE 连接中断，等待重连…");
         };
       };
+
+      if (base.running) {
+        // 任务运行中：乐观上屏 + 立即提交后端排队（queue_input）——后端在
+        // 当前任务下一回合注入（工具批次内到达会中断剩余工具），而不是
+        // 本地攒批等任务结束后重发。提交失败才退回本地待发送队列兜底。
+        patchChat(sid, {
+          messages: [...(base.messages ?? []), { role: "user", content: prompt, queued: true }],
+          error: null,
+        });
+        try {
+          const resp = await api.chat(sid, prompt, currentAgent, reasoningEffort);
+          if (resp.queued) {
+            pushLog("➥ 补充指令已入队，将在当前任务下一回合生效");
+            return;
+          }
+          // 竞态：提交瞬间任务恰好结束，后端把它作为新任务启动 → 接上 SSE
+          pushLog("➥ 当前任务已结束，补充指令作为新任务启动");
+          const cur = getChat(sid);
+          patchChat(sid, {
+            messages: cur.messages.map((m) =>
+              m.queued && m.content === prompt ? { ...m, queued: false } : m
+            ),
+            running: true,
+            streaming: { items: [] },
+          });
+          cancelStreamFlush(sid);
+          streamingRefs.current.set(sid, { items: [] });
+          taskIdsRef.current.set(sid, resp.task_id);
+          connect(resp.task_id);
+        } catch {
+          // 提交失败（网络等）：退回待发送队列，任务完成后自动重发
+          patchChat(sid, { pendingQueue: [...(getChat(sid).pendingQueue ?? []), prompt] });
+          pushLog("⚠ 补充指令提交失败，已转入待发送队列（任务结束后自动发送）");
+        }
+        return;
+      } else {
+        patchChat(sid, {
+          messages: [...(base.messages ?? []), { role: "user", content: prompt }],
+          error: null,
+          running: true,
+        });
+        cancelStreamFlush(sid);
+        streamingRefs.current.set(sid, { items: [] });
+        patchChat(sid, { streaming: { items: [] } });
+      }
 
       try {
         pushLog("➤ 提交任务…");

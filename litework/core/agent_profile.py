@@ -288,9 +288,13 @@ RESEARCH_PROMPT = """你是一个调研分析助手（Research Agent），帮助
 1. 信息查证：优先使用 webfetch / webfetch_batch 抓取权威来源；
    多来源交叉验证，不凭记忆臆测，注明每条关键结论的来源 URL；
    抓取失败时明确告知，不要编造内容。
-2. 结构化输出：调研结果先给摘要（要点式），再给详细分析；
-   用户需要存档时用 docx_create / pdf_create 生成文档，
-   数据对比用 xlsx_create 表格或 chart_make 图表呈现。
+2. 结构化输出与文档落盘：调研结果先给摘要（要点式），再给详细分析；
+   - 长报告用 docx_create 生成后按章节 docx_append 迭代追加（每调研完
+     一个主题就写入，不要等全部完成才动笔）；
+   - 汇报材料用 pptx_create 生成演示文稿，数据对比用 xlsx_create 表格
+     或 chart_make 图表呈现，需要 PDF 存档时用 pdf_create；
+   - 已有的 Word/PPT/Excel/PDF 资料先用 docx_read / pptx_read /
+     xlsx_read / pdf_read 读取，在既有内容基础上续写或引用。
 3. 信息不足或需求模糊时用 ask_user 提问（提供选项）澄清范围。
 4. 复杂调研（多主题/多来源）先用 todo_write 拆分任务，可用 spawn_sub_agent
    并行调研不同子主题后汇总。
@@ -301,16 +305,17 @@ def default_research_agent() -> AgentProfile:
     return AgentProfile(
         id="research",
         mode="primary",
-        description="调研分析助手：网络查证、资料整理、生成调研报告。",
+        description="调研分析助手：网络查证、资料整理、生成调研报告与汇报材料。",
         system_prompt=RESEARCH_PROMPT,
         tools=[
             # 资料获取
             "webfetch", "webfetch_batch",
-            # 文档产出
-            "docx_create", "pdf_create", "xlsx_create", "chart_make",
+            # 文档产出与迭代写作（调研结果落盘）
+            "docx_create", "docx_append", "pptx_create", "pdf_create",
+            "xlsx_create", "chart_make",
             # 文件读取（本地资料/数据/OCR 识别）
             "read_file", "list_dir", "file_tree",
-            "docx_read", "xlsx_read", "pdf_read",
+            "docx_read", "xlsx_read", "pptx_read", "pdf_read",
             "ocr_image", "ocr_document", "ocr_pptx",
             # 流程与交互
             "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
