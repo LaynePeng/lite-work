@@ -284,14 +284,18 @@ def test_webfetch_registered_in_full_registry(tmp_path):
     registry = app.build_registry()
     assert registry.has("webfetch")
     assert registry.has("webfetch_batch")
-    # 20 基础工具 + todo_write + ask_user（Agent 提问）+ 7 办公工具（docx/docx_append/xlsx/pptx/pdf/data_analyze/chart_make）
-    assert len(registry.get_tools()) == 29
+    # 全量注册表基线（新增工具只会更多，不会更少）
+    assert len(registry.get_tools()) >= 36
     assert registry.has("todo_write")
     assert registry.has("ask_user")
-    # 办公工具（GAI 通用入口）已注册
+    # 办公产出工具（GAI 通用入口）
     for name in ("docx_create", "docx_append", "xlsx_create", "pptx_create", "pdf_create",
                  "data_analyze", "chart_make"):
         assert registry.has(name), f"缺少办公工具 {name}"
+    # 办公文件读取 + OCR
+    for name in ("docx_read", "xlsx_read", "pptx_read", "pdf_read",
+                 "ocr_image", "ocr_document", "ocr_pptx"):
+        assert registry.has(name), f"缺少读取/OCR 工具 {name}"
 
 
 def test_webfetch_kept_in_plan_agent(tmp_path):
@@ -307,3 +311,118 @@ def test_agent_pruning_removes_webfetch(tmp_path):
     registry = app.build_registry(allowed=["read_file"])
     assert registry.has("read_file")
     assert not registry.has("webfetch")
+
+
+# ---------------------------------------------------------------- 反爬：浏览器指纹 + 403 重试
+
+def test_browser_profiles_look_like_real_browsers():
+    """指纹池：UA 是真实浏览器形态 + 导航头齐全（Sec-Fetch-Site: none 等）。"""
+    from litework.tools.web import BROWSER_PROFILES
+
+    assert len(BROWSER_PROFILES) >= 4
+    uas = set()
+    for p in BROWSER_PROFILES:
+        ua = p["User-Agent"]
+        assert ua.startswith("Mozilla/5.0"), f"非浏览器 UA: {ua}"
+        assert "lite-work" not in ua.lower()
+        uas.add(ua)
+        # 导航请求头齐全（Sec-Fetch-User Safari 版豁免）
+        assert p["Sec-Fetch-Dest"] == "document"
+        assert p["Sec-Fetch-Mode"] == "navigate"
+        assert p["Sec-Fetch-Site"] == "none"
+        assert p["Accept-Language"]
+    # 至少 3 种不同浏览器指纹（Chrome/Firefox/Safari）
+    assert len(uas) >= 3
+
+
+def test_default_client_factory_rotates_fingerprints():
+    """默认工厂轮换指纹：连续创建的客户端 UA 不同。"""
+    tools = WebFetchTools()
+    uas = []
+    for _ in range(4):
+        client = tools._default_client_factory()
+        uas.append(client.headers["User-Agent"])
+    assert len(set(uas)) == 4, "连续 4 次应轮换出 4 种不同指纹"
+
+
+async def test_403_retry_then_success(monkeypatch):
+    """首次 403 → 换指纹重试成功，结果带 retry 标记。"""
+    calls = {"n": 0}
+
+    def _handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(403)
+        return httpx.Response(200, text="retry ok",
+                              headers={"content-type": "text/plain"})
+
+    tools = WebFetchTools(client_factory=lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler)))
+    monkeypatch.setattr(tools, "validate_url", lambda url: url)
+
+    r = await tools.execute("webfetch", {"url": "https://example.com/blocked"})
+    assert "[Fetch OK]" in r
+    assert "retry ok" in r
+    assert "retry=1" in r
+    assert calls["n"] == 2
+
+
+async def test_403_persistent_returns_actionable_hints(monkeypatch):
+    """持续 403（强反爬站）→ 明确提示与替代方案，而非含糊错误。"""
+    calls = {"n": 0}
+
+    def _handler(request):
+        calls["n"] += 1
+        return httpx.Response(403)
+
+    tools = WebFetchTools(client_factory=lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler)))
+    monkeypatch.setattr(tools, "validate_url", lambda url: url)
+    # 隔离 curl_cffi 层（开发环境已安装会发起真实请求）
+    async def _no_curl(url):
+        return None
+    monkeypatch.setattr(tools, "_curl_cffi_fetch", _no_curl)
+
+    r = await tools.execute("webfetch", {"url": "https://example.com/locked"})
+    assert r.startswith("[Fetch Blocked]")
+    assert "403" in r
+    assert "反爬" in r
+    # 给 Agent 的替代建议
+    assert "更换其他来源" in r or "其他来源" in r
+    assert calls["n"] == 2, "应重试一次后放弃"
+
+
+async def test_403_falls_back_to_curl_cffi(monkeypatch):
+    """指纹重试仍 403 → curl_cffi 兜底成功（curl-impersonate 标记）。"""
+    def _handler(request):
+        return httpx.Response(403)
+
+    tools = WebFetchTools(client_factory=lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler)))
+    monkeypatch.setattr(tools, "validate_url", lambda url: url)
+
+    async def _curl_ok(url):
+        return (200, "text/plain", "curl impersonated content")
+    monkeypatch.setattr(tools, "_curl_cffi_fetch", _curl_ok)
+
+    r = await tools.execute("webfetch", {"url": "https://example.com/tlsblocked"})
+    assert "[Fetch OK]" in r
+    assert "curl impersonated content" in r
+    assert "curl-impersonate" in r
+
+
+async def test_404_not_retried(monkeypatch):
+    """非 403 错误（404）不重试：一次请求即返回错误。"""
+    calls = {"n": 0}
+
+    def _handler(request):
+        calls["n"] += 1
+        return httpx.Response(404)
+
+    tools = WebFetchTools(client_factory=lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler)))
+    monkeypatch.setattr(tools, "validate_url", lambda url: url)
+
+    r = await tools.execute("webfetch", {"url": "https://example.com/missing"})
+    assert r.startswith("[Fetch Error]")
+    assert calls["n"] == 1

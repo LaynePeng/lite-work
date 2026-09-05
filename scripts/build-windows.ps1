@@ -16,6 +16,9 @@ Set-Location (Join-Path $PSScriptRoot "..")
 if (-not $env:ELECTRON_MIRROR) { $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/" }
 if (-not $env:ELECTRON_BUILDER_BINARIES_MIRROR) { $env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/" }
 
+# 无签名证书：禁用签名发现，跳过 signtool 调用（未签名发布，行为同前）
+if (-not $env:CSC_IDENTITY_AUTO_DISCOVERY) { $env:CSC_IDENTITY_AUTO_DISCOVERY = "false" }
+
 if ($Insecure) {
     Write-Host "==> Non-strict TLS validation enabled (intranet/self-signed only)"
     $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"

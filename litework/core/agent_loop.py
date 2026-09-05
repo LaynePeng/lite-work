@@ -181,14 +181,7 @@ class AgentLoop:
                     return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
 
                 # A-. 注入任务运行期间用户补充的指令（排队输入在下一回合进入对话）
-                while self.injected_inputs:
-                    text = str(self.injected_inputs.popleft()).strip()
-                    if not text:
-                        continue
-                    injected = Message(role="user", content=f"[用户补充指令] {text}")
-                    messages.append(injected)
-                    await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
-                    logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
+                await self._inject_queued(messages)
 
                 # A. 上下文裁剪（保护 system 与 assistant/tool 原子对）
                 #    有效上限 = max(预算下限, 90% × 模型窗口)，到阈值先尝试 LLM 摘要压缩
@@ -303,39 +296,56 @@ class AgentLoop:
                     return await self._finish(content or "(空回复)", messages, stats, store_snapshot)
 
                 # G. 派发执行工具（精细并行化：写类串行、只读并行；结果按原序回填）
+                #    批次执行期间到达的排队输入：中断剩余工具（占位结果保持
+                #    assistant tool_calls ↔ tool 结果的原子对），全部结果回填后
+                #    再统一注入——user 消息不能插在工具调用与结果之间。
+                INTERRUPTED = "[Interrupted]: 用户插入了新指令，本批剩余工具未执行。"
+                interrupted_by_input = False
                 if self.parallel_tool_calls == "never" or len(tool_calls) <= 1:
-                    # 全串行：逐个执行，每步可中止
+                    # 全串行：逐个执行，每步可中止；每步后窥探排队输入
                     results = []
                     for call in tool_calls:
                         if self._check_abort():
                             return await self._finish(
                                 "[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot
                             )
+                        if interrupted_by_input:
+                            results.append(INTERRUPTED)
+                            continue
                         results.append(await self._execute_tool_call(call, stats))
+                        if self.injected_inputs:
+                            interrupted_by_input = True
                 elif self.parallel_tool_calls == "always":
-                    # 全并行
-                    results = await asyncio.gather(
+                    # 全并行（无法中断，完成后注入）
+                    results = list(await asyncio.gather(
                         *[self._execute_tool_call(c, stats) for c in tool_calls]
-                    )
+                    ))
                 else:
-                    # auto 精细并行：写类工具串行 + 只读工具并行
+                    # auto 精细并行：写类工具串行（可被输入中断）+ 只读工具并行
                     write_indices = [i for i, c in enumerate(tool_calls) if c.name in WRITE_TOOLS]
                     read_indices = [i for i, c in enumerate(tool_calls) if c.name not in WRITE_TOOLS]
-                    results = [None] * len(tool_calls)
-                    # 写类工具逐个执行（保持顺序依赖）
+                    results: List[Optional[str]] = [None] * len(tool_calls)
                     for i in write_indices:
                         if self._check_abort():
                             return await self._finish(
                                 "[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot
                             )
+                        if interrupted_by_input:
+                            results[i] = INTERRUPTED
+                            continue
                         results[i] = await self._execute_tool_call(tool_calls[i], stats)
-                    # 只读工具并行执行
-                    if read_indices:
+                        if self.injected_inputs:
+                            interrupted_by_input = True
+                    if read_indices and not interrupted_by_input:
                         read_results = await asyncio.gather(
                             *[self._execute_tool_call(tool_calls[i], stats) for i in read_indices]
                         )
                         for i, r in zip(read_indices, read_results):
                             results[i] = r
+                    # 兜底：中断/跳过的未执行项填占位（防 None 进入消息链）
+                    for i in range(len(results)):
+                        if results[i] is None:
+                            results[i] = INTERRUPTED
                 if self._check_abort():
                     return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
 
@@ -348,6 +358,10 @@ class AgentLoop:
                     )
                     messages.append(tool_result)
                     await self.kernel.events.emit("message:added", {"message": tool_result.to_dict()})
+
+                # G2. 工具结果回填完成后注入排队输入（消息链合法位置），
+                #     下一轮 LLM 调用立即可见（OpenCode system-reminder 模式）
+                await self._inject_queued(messages)
 
                 # H. 每轮批量执行完成后落盘，防中途崩溃丢状态
                 if store_snapshot:
@@ -463,6 +477,25 @@ class AgentLoop:
             return "\n".join(lines) or "（当前没有发现可用技能）"
         except Exception:
             return None
+
+    async def _inject_queued(self, messages: List[Message]) -> bool:
+        """注入任务运行期间用户补充的指令，返回是否有新注入。
+
+        两个调用点：A-（回合开始）与 G2（工具结果回填完成）。批次执行
+        期间到达的输入只做非破坏性窥探（interrupted_by_input），真正的
+        注入统一发生在消息链合法位置——下一轮 LLM 调用立即可见。
+        """
+        if not self.injected_inputs:
+            return False
+        while self.injected_inputs:
+            text = str(self.injected_inputs.popleft()).strip()
+            if not text:
+                continue
+            injected = Message(role="user", content=f"[用户补充指令] {text}")
+            messages.append(injected)
+            await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
+            logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
+        return True
 
     # ------------------------------------------------------------------ 上下文压缩
 

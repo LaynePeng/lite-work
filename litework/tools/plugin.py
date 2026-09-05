@@ -23,6 +23,7 @@ from .review import ReviewTools
 from .shell import ShellTools
 from .skills import SkillsTools
 from .web import WebFetchTools
+from .ocr import OCRTools
 
 logger = logging.getLogger("litework.tools")
 
@@ -31,7 +32,16 @@ TOOL_FILTER_SERVICE = "tool_filter"
 
 
 class ToolPlugin(Plugin):
-    """工具插件基类：install 时把 get_tools() 的工具注册进内核 tools 服务。"""
+    """工具插件基类：install 时把 get_tools() 的工具注册进内核 tools 服务。
+
+    - get_tools() 返回的工具：同名即覆盖内置/其他插件已有工具（更新能力）
+    - removed_tools 声明要移除的工具名（内置或其他插件的），先删后注册
+    - version: 插件版本号，空字符串表示跟随主应用版本
+    """
+
+    version: str = ""
+    description: str = ""
+    removed_tools: List[str] = []
 
     def get_tools(self) -> List[ToolDefinition]:
         raise NotImplementedError
@@ -46,6 +56,11 @@ class ToolPlugin(Plugin):
             if kernel.has_service(TOOL_FILTER_SERVICE)
             else None
         )
+        # 先移除声明删除的工具（用户显式要求，不受 Agent 裁剪策略影响）
+        for name in self.removed_tools:
+            if registry.has(name):
+                registry.unregister(name)
+                logger.info("[ToolPlugin %s] 已移除工具: %s", self.name, name)
         for tool in self.get_tools():
             if allow is not None and not allow(tool.name):
                 logger.debug("[ToolPlugin %s] 工具 %s 被 Agent 策略裁剪", self.name, tool.name)
@@ -58,6 +73,7 @@ class ToolPlugin(Plugin):
 
 class FileSystemPlugin(ToolPlugin):
     name = "filesystem-plugin"
+    description = "文件系统：读写文件、目录浏览、文件树"
 
     def __init__(self, workspace: str) -> None:
         self._tools = FileSystemTools(workspace)
@@ -71,6 +87,7 @@ class FileSystemPlugin(ToolPlugin):
 
 class CodebasePlugin(ToolPlugin):
     name = "codebase-plugin"
+    description = "代码搜索：grep 搜索、Ripgrep 全文检索"
 
     def __init__(self, workspace: str) -> None:
         self._tools = CodebaseTools(workspace)
@@ -84,6 +101,7 @@ class CodebasePlugin(ToolPlugin):
 
 class ASTPlugin(ToolPlugin):
     name = "ast-plugin"
+    description = "AST 分析：文件大纲、符号聚焦"
 
     def __init__(self, workspace: str) -> None:
         self._tools = ASTTools(workspace)
@@ -97,6 +115,7 @@ class ASTPlugin(ToolPlugin):
 
 class EditorPlugin(ToolPlugin):
     name = "editor-plugin"
+    description = "代码编辑：Search-Replace、Unified Diff 精确编辑"
 
     def __init__(self, workspace: str) -> None:
         self._tools = EditorTools(workspace)
@@ -110,6 +129,7 @@ class EditorPlugin(ToolPlugin):
 
 class ShellPlugin(ToolPlugin):
     name = "shell-plugin"
+    description = "受限终端：执行命令"
 
     def __init__(self, workspace: str) -> None:
         self._tools = ShellTools(workspace)
@@ -123,6 +143,7 @@ class ShellPlugin(ToolPlugin):
 
 class SkillsPlugin(ToolPlugin):
     name = "skills-plugin"
+    description = "技能加载：load_skill 按名称加载技能"
 
     def __init__(self, workspace: str) -> None:
         self._tools = SkillsTools(workspace)
@@ -136,6 +157,7 @@ class SkillsPlugin(ToolPlugin):
 
 class GitPlugin(ToolPlugin):
     name = "git-plugin"
+    description = "Git 操作：status/diff/log/commit/branch"
 
     def __init__(self, workspace: str) -> None:
         self._tools = GitTools(workspace)
@@ -149,6 +171,7 @@ class GitPlugin(ToolPlugin):
 
 class ReviewPlugin(ToolPlugin):
     name = "review-plugin"
+    description = "代码审查：review_code 审查代码变更"
 
     def __init__(self, workspace: str) -> None:
         self._tools = ReviewTools(workspace)
@@ -159,9 +182,9 @@ class ReviewPlugin(ToolPlugin):
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
         return await self._tools.execute(name, args)
 
-
 class WebFetchPlugin(ToolPlugin):
     name = "webfetch-plugin"
+    description = "Web 抓取：webfetch/webfetch_batch 联网获取信息"
 
     def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600) -> None:
         self._tools = WebFetchTools(cache_dir=cache_dir, cache_ttl=cache_ttl)
@@ -173,8 +196,23 @@ class WebFetchPlugin(ToolPlugin):
         return await self._tools.execute(name, args)
 
 
+class OcrPlugin(ToolPlugin):
+    name = "ocr-plugin"
+    description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
+
+    def __init__(self, workspace: str) -> None:
+        self._tools = OCRTools(workspace)
+
+    def get_tools(self) -> List[ToolDefinition]:
+        return self._tools.get_tools()
+
+    async def execute(self, name: str, args: Dict[str, Any]) -> str:
+        return await self._tools.execute(name, args)
+
+
 class OfficePlugin(ToolPlugin):
     name = "office-plugin"
+    description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
         self._tools = OfficeTools(workspace)
@@ -188,6 +226,7 @@ class OfficePlugin(ToolPlugin):
 
 class SubAgentPlugin(ToolPlugin):
     name = "sub-agent-plugin"
+    description = "子 Agent 编排：spawn_sub_agent 派生子任务"
 
     def __init__(self, app) -> None:
         from .sub_agent import make_sub_agent_handler

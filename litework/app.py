@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from .core.agent_loop import AgentLoop
@@ -26,6 +27,7 @@ from .tools.plugin import (
     EditorPlugin,
     FileSystemPlugin,
     GitPlugin,
+    OcrPlugin,
     OfficePlugin,
     ReviewPlugin,
     ShellPlugin,
@@ -44,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "token_budget": 48000,
     "tool_timeout": 120,
     "llm_timeout": 300,
+    "subagent_timeout": 600,
     # LLM 瞬时故障（超时/网络/限流/5xx）自动重试次数
     "llm_retries": 2,
     "auto_approve": False,
@@ -74,6 +77,10 @@ TOOL_NAMES = [
     # 办公工具（GAI 通用入口）
     "docx_create", "xlsx_create", "pptx_create", "pdf_create",
     "data_analyze", "chart_make",
+    # 读取已有办公文件（调研/参考）
+    "docx_read", "xlsx_read", "pptx_read", "pdf_read",
+    # OCR 识别（图片/PDF/PPT 内嵌图片文字提取）
+    "ocr_image", "ocr_document", "ocr_pptx",
 ]
 
 
@@ -113,6 +120,7 @@ class AgentApp:
         from .tools.todos import TodoPlugin
         self.todo_plugin = TodoPlugin(
             storage_dir=os.path.join(self.config_dir, "todo_boards"))
+        self._local_plugins: Optional[List[Plugin]] = None
         self.approval_gate = ApprovalGate(
             timeout_seconds=self.config.get("approval_timeout", 600)
         )
@@ -412,7 +420,8 @@ class AgentApp:
             python = _shutil.which("python3") or _shutil.which("python")
             r = subprocess.run(
                 [python, script, "--install"],
-                capture_output=True, text=True, timeout=900,
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=900,
             )
             if r.returncode == 0:
                 logger.info("[App] 图表引擎预装完成（plantuml/mermaid 离线渲染就绪）")
@@ -586,23 +595,45 @@ class AgentApp:
 
     # ------------------------------------------------------------ 工具
 
-    def tool_plugins(self) -> List[Plugin]:
-        """Cordis 风格工具插件清单（空间解耦：工具能力全部由插件提供）。"""
+    def _builtin_plugins(self) -> List[Plugin]:
+        """内置 Cordis 插件清单（内核装配与元信息读取共用）。
+
+        workspace 可能为 None（桌面态未打开项目）：此时用家目录兜底——
+        仅构造实例读取工具定义，不会真正执行文件操作。
+        """
+        ws = self.workspace or os.path.expanduser("~")
         return [
-            FileSystemPlugin(self.workspace),
-            CodebasePlugin(self.workspace),
-            ASTPlugin(self.workspace),
-            EditorPlugin(self.workspace),
-            ShellPlugin(self.workspace),
-            GitPlugin(self.workspace),
-            ReviewPlugin(self.workspace),
+            FileSystemPlugin(ws),
+            CodebasePlugin(ws),
+            ASTPlugin(ws),
+            EditorPlugin(ws),
+            ShellPlugin(ws),
+            GitPlugin(ws),
+            ReviewPlugin(ws),
             WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
-            OfficePlugin(self.workspace),
+            OfficePlugin(ws),
+            OcrPlugin(ws),
             SubAgentPlugin(self),
-            SkillsPlugin(self.workspace),
+            SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
         ]
+
+    def tool_plugins(self) -> List[Plugin]:
+        """Cordis 风格工具插件清单（空间解耦：工具能力全部由插件提供）。
+
+        优先级：用户插件 > 内置插件。同名用户插件会跳过内置版（用户可单独
+        更新/覆盖内置插件），卸载用户版后自动回退内置版。
+        本地插件只加载一次（缓存），避免每次建内核重复 import。
+        """
+        if self._local_plugins is None:
+            from .tools.plugin_loader import load_plugins
+
+            self._local_plugins = load_plugins(self.config_dir)
+        local_names = {p.name for p in self._local_plugins}
+        plugins: List[Plugin] = [p for p in self._builtin_plugins() if p.name not in local_names]
+        plugins.extend(self._local_plugins)
+        return plugins
 
     @staticmethod
     def _tool_filter(
@@ -718,6 +749,71 @@ class AgentApp:
         from .tools.skills import SkillsTools
         return SkillsTools(self.workspace).delete_skill(name, scope)
 
+    # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
+
+    def plugins_list(self) -> List[Dict[str, Any]]:
+        from .tools.plugin_loader import list_plugins
+        return list_plugins(self.config_dir)
+
+    def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
+                           overwrite: bool = False) -> List[Dict[str, Any]]:
+        from .tools.plugin_loader import import_zip_bytes, record_installed
+
+        results = import_zip_bytes(self.config_dir, data, name, overwrite)
+        # zip 上传无更新源 URL，记录占位来源以保持列表一致（版本从插件自身读取）
+        for r in results:
+            record_installed(self.config_dir, r["name"], "", "zip-upload")
+        return results
+
+    def plugins_import(self, source: str, name: Optional[str] = None,
+                       overwrite: bool = False) -> List[Dict[str, Any]]:
+        from .tools.plugin_loader import import_source
+        return import_source(self.config_dir, source, name, overwrite)
+
+    def plugins_delete(self, name: str) -> Dict[str, Any]:
+        from .tools.plugin_loader import delete_plugin
+        return delete_plugin(self.config_dir, name)
+
+    def plugins_builtin(self) -> List[Dict[str, Any]]:
+        """列出内置插件元信息（name/description/tools/version/是否被用户版覆盖）。"""
+        from . import __version__ as _app_version
+
+        if self._local_plugins is None:
+            from .tools.plugin_loader import load_plugins
+
+            self._local_plugins = load_plugins(self.config_dir)
+        local_names = {p.name for p in self._local_plugins}
+
+        results: List[Dict[str, Any]] = []
+        for p in self._builtin_plugins():
+            tools: List[str] = []
+            try:
+                tools = [t.name for t in p.get_tools()]
+            except Exception:
+                logger.debug("[App] 读取插件 %s 工具列表失败", p.name, exc_info=True)
+            results.append({
+                "name": p.name,
+                "description": getattr(p, "description", ""),
+                "tools": sorted(set(tools)),
+                "version": getattr(p, "version", "") or _app_version,
+                "overridden": p.name in local_names,
+                "builtin": True,
+            })
+        return results
+
+    def plugins_community(self, url: str = "") -> Dict[str, Any]:
+        """拉取社区仓库 manifest.json。"""
+        from .tools.plugin_loader import fetch_community_manifest, DEFAULT_COMMUNITY_URL
+
+        return fetch_community_manifest(url or DEFAULT_COMMUNITY_URL)
+
+    def plugins_install(self, source: str, name: Optional[str] = None,
+                        overwrite: bool = False, version: Optional[str] = None) -> List[Dict[str, Any]]:
+        """安装/更新插件，记录版本与来源。"""
+        from .tools.plugin_loader import install_from_source
+
+        return install_from_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
+
     def commands_list(self) -> List[Dict[str, str]]:
         from .core.commands import build_command_list
         try:
@@ -821,6 +917,116 @@ class AgentApp:
     def agents_meta(self) -> List[Dict[str, Any]]:
         """供 UI/CLI 列出全部可选 agent。"""
         return [p.to_dict() for p in self.agent_registry.all().values()]
+
+    def agents_available_tools(self) -> Dict[str, Any]:
+        """返回全部可用工具（含内置+插件+MCP）+ 各 agent 当前的工具白名单。
+
+        供设置界面「Agent」页配置每个 agent 可用哪些工具（新增/调整）：
+        - tools: 去重后的全部工具列表 [{name, description, source}]
+        - agents: 每个 agent 的 tools 白名单（None 表示全量）
+        """
+        registry = self.build_registry()
+        tools = []
+        seen = set()
+        for t in registry.get_tools():
+            if t.name in seen:
+                continue
+            seen.add(t.name)
+            tools.append({"name": t.name, "description": t.description})
+        tools.sort(key=lambda t: t["name"])
+        return {
+            "tools": tools,
+            "agents": {aid: p.to_dict() for aid, p in self.agent_registry.all().items()},
+        }
+
+    def agent_save(self, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+        """保存（新建或更新）一个 Agent。内置 agent 仅允许更新 tools/permissions，不允许改 id。
+
+        返回保存后的 agent 描述；同步落盘到 ~/.lite-work/agents/{id}.json。
+        """
+        from .core.agent_profile import AgentProfile
+
+        agent_id = str(profile_data.get("id") or "").strip()
+        if not agent_id:
+            raise ValueError("agent id 不能为空")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", agent_id):
+            raise ValueError("agent id 仅支持字母/数字/._-")
+
+        existing = None
+        try:
+            existing = self.agent_registry.get(agent_id)
+        except KeyError:
+            pass
+        is_builtin = existing is not None and existing.id in ("build", "plan", "office", "research")
+
+        if is_builtin:
+            # 内置 agent：只允许覆盖 tools / permissions（prompt/人格跟随主程序发版）
+            tools = profile_data.get("tools")
+            permissions = profile_data.get("permissions")
+            if "tools" in profile_data:
+                existing.tools = tools if isinstance(tools, list) else None
+            if permissions is not None:
+                existing.permissions = {str(k): str(v) for k, v in permissions.items()
+                                        if v in ("allow", "deny", "ask")}
+            self.agent_registry.register(existing)
+            # 内置覆盖只落盘 tools/permissions：prompt 等字段不冻结，
+            # 应用升级后内置默认人格自动跟进
+            return self._persist_agent(existing, minimal=True)
+
+        # 自定义 agent：完整新建/更新
+        profile = AgentProfile.from_dict(profile_data)
+        profile.id = agent_id
+        if not profile.system_prompt and not profile.description:
+            raise ValueError("自定义 agent 至少需要描述或 system prompt")
+        self.agent_registry.register(profile)
+        return self._persist_agent(profile)
+
+    def _persist_agent(self, profile, minimal: bool = False) -> Dict[str, Any]:
+        """把 agent 落盘到 ~/.lite-work/agents/{id}.json。
+
+        minimal=True（内置 agent 覆盖）：只写 id/tools/permissions，加载时
+        其余字段与内置默认合并（register 内处理）。
+        """
+        agents_dir = os.path.join(self.config_dir, "agents")
+        os.makedirs(agents_dir, exist_ok=True)
+        path = os.path.join(agents_dir, f"{profile.id}.json")
+        if minimal:
+            data = {"id": profile.id, "tools": profile.tools,
+                    "permissions": profile.permissions}
+        else:
+            data = profile.to_dict()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info("[App] Agent %s 已保存: %s", profile.id, path)
+        return profile.to_dict()
+
+    def agent_delete(self, agent_id: str) -> Dict[str, Any]:
+        """删除一个 agent。
+
+        - 自定义 agent：彻底删除（注册表 + 磁盘文件）
+        - 内置 agent：删除用户覆盖文件并恢复内置默认（工具白名单等）
+        """
+        try:
+            self.agent_registry.get(agent_id)
+        except KeyError:
+            raise ValueError(f"未知 agent: {agent_id}")
+        path = os.path.join(self.config_dir, "agents", f"{agent_id}.json")
+        if agent_id in ("build", "plan", "office", "research"):
+            if os.path.isfile(path):
+                os.remove(path)
+            # 重新注册内置默认（丢弃运行期修改）
+            from .core.agent_profile import (
+                default_build_agent, default_office_agent,
+                default_plan_agent, default_research_agent,
+            )
+            defaults = {"build": default_build_agent, "plan": default_plan_agent,
+                        "office": default_office_agent, "research": default_research_agent}
+            self.agent_registry.register(defaults[agent_id]())
+            return {"ok": True, "id": agent_id, "reset": True}
+        self.agent_registry.delete(agent_id)
+        if os.path.isfile(path):
+            os.remove(path)
+        return {"ok": True, "id": agent_id}
 
     def create_agent_registry(self, agent_id: str) -> ToolRegistry:
         """按 Agent 配置裁剪工具集（参考 OpenCode：plan 只读、build 全量）。"""

@@ -6,6 +6,10 @@
 - HTML → Markdown 轻量转换（纯标准库，不依赖 bs4），超长输出截断
 - 磁盘缓存：命中 TTL 内的抓取结果直接返回，避免重复请求
 - webfetch_batch：并发批量抓取多个 URL，单页失败不影响其余页面
+- 反爬三级对抗：① 浏览器指纹池（真实 UA + 同族导航头）轮换请求；
+  ② 403 时自动换指纹重试；③ curl_cffi 以 libcurl-impersonate 模拟真实
+  Chrome TLS 握手（对抗 JA3 指纹检测）终极兜底。仍被拦截说明站点需要
+  执行 JS 质询（Cloudflare 严格模式），返回可操作提示引导换源/用浏览器
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import ipaddress
 import json
 import logging
 import os
+import random
 import re
 import socket
 import time
@@ -24,18 +29,76 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .. import __version__
 from ..core.types import ToolDefinition
 
 logger = logging.getLogger("litework.tools")
 
+# TLS 指纹级兜底（可选依赖：缺 curl_cffi 时自动跳过该层）
+try:
+    from curl_cffi.requests import AsyncSession as _CurlAsyncSession
+
+    _HAS_CURL_CFFI = True
+except ImportError:
+    _CurlAsyncSession = None  # type: ignore[assignment]
+    _HAS_CURL_CFFI = False
+
 MAX_READ_BYTES = 2 * 1024 * 1024  # 最多读取 2MB
 DEFAULT_MAX_CHARS = 12_000
 TIMEOUT = 15.0
-USER_AGENT = f"lite-work-agent/{__version__} (web research)"
 CACHE_TTL = 3600  # 缓存有效期：1 小时
 MAX_BATCH_URLS = 8  # 单次批量抓取上限
 BATCH_CONCURRENCY = 4  # 批量并发数（温和限速）
+
+# ---------------------------------------------------------------- 浏览器指纹池
+# 真实浏览器导航请求的完整头组合（UA 与 Sec-Ch-Ua 必须同族，否则反而更像机器人）。
+# 裸 UA 或自报家门的 agent 名会被 Cloudflare 等反爬直接 403。
+# 注意：不设置 Accept-Encoding——httpx 按已安装解码器自动协商，虚报 br/zstd 会解码失败。
+
+_NAV_COMMON = {
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",   # none + User=?1 = 地址栏直接导航（最无嫌疑的请求形态）
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+BROWSER_PROFILES: List[Dict[str, str]] = [
+    {  # Chrome 131 / Windows
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,image/apng,*/*;q=0.8,"
+                   "application/signed-exchange;v=b3;q=0.7"),
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        **_NAV_COMMON,
+    },
+    {  # Chrome 131 / macOS
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,image/apng,*/*;q=0.8,"
+                   "application/signed-exchange;v=b3;q=0.7"),
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        **_NAV_COMMON,
+    },
+    {  # Firefox 133 / Windows
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,*/*;q=0.8"),
+        **_NAV_COMMON,
+    },
+    {  # Safari 17.6 / macOS
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                       "(KHTML, like Gecko) Version/17.6 Safari/605.1.15"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        **{k: v for k, v in _NAV_COMMON.items() if k != "Sec-Fetch-User"},
+    },
+]
 
 _SKIP_TAGS = re.compile(
     r"<(script|style|noscript|svg|template|head)\b[^>]*>.*?</\1\s*>", re.I | re.S
@@ -73,15 +136,21 @@ class WebFetchTools:
         cache_dir: Optional[str] = None,
         cache_ttl: float = CACHE_TTL,
     ) -> None:
-        self._client_factory = client_factory or (
-            lambda: httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=TIMEOUT,
-                headers={"User-Agent": USER_AGENT},
-            )
-        )
+        self._profile_turn = random.randrange(len(BROWSER_PROFILES))
+        self._client_factory = client_factory or self._default_client_factory
         self._cache_dir = cache_dir
         self._cache_ttl = cache_ttl
+
+    def _default_client_factory(self) -> httpx.AsyncClient:
+        """轮换浏览器指纹创建客户端：批量抓取时各请求指纹不同，
+        降低单指纹被风控的概率。"""
+        profile = BROWSER_PROFILES[self._profile_turn % len(BROWSER_PROFILES)]
+        self._profile_turn += 1
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=TIMEOUT,
+            headers=dict(profile),
+        )
 
     # ------------------------------------------------------------ 工具定义
 
@@ -194,8 +263,42 @@ class WebFetchTools:
             return await self._fetch_batch(args)
         raise ValueError(f"Unknown Web Tool: {name}")
 
+    async def _curl_cffi_fetch(self, url: str) -> Optional[Tuple[int, str, str]]:
+        """TLS 指纹级兜底：curl_cffi 模拟真实 Chrome 的 TLS 握手。
+
+        httpx 的 Python TLS 栈握手特征（JA3）会被 Cloudflare 等识别——
+        请求头再像浏览器也无用；libcurl-impersonate 复刻 Chrome 的完整
+        握手指纹。仅在 2xx/3xx 成功时返回 (status, content_type, text)，
+        未安装/失败/仍被拦截一律返回 None（调用方走拦截提示）。
+        """
+        if not _HAS_CURL_CFFI:
+            return None
+        try:
+            async with _CurlAsyncSession(impersonate="chrome", timeout=TIMEOUT) as session:
+                resp = await session.get(url)
+            if not (200 <= resp.status_code < 400):
+                return None
+            raw = (resp.content or b"")[:MAX_READ_BYTES]
+            if not raw:
+                return None
+            text = raw.decode("utf-8", errors="replace")
+            content_type = resp.headers.get("content-type", "")
+            if "html" in content_type.lower():
+                text = self.html_to_markdown(text)
+            else:
+                text = _WS_RE.sub(" ", text).strip()
+            return resp.status_code, content_type, text
+        except Exception as exc:
+            logger.debug("[WebFetch] curl_cffi 兜底失败 %s: %s", url, exc)
+            return None
+
     async def _fetch_one(self, url: str, max_chars: int) -> str:
-        """抓取单个 URL（带缓存），返回格式化结果串。"""
+        """抓取单个 URL（带缓存），返回格式化结果串。
+
+        三级递进：① 指纹池请求；② 403 → 换指纹重试一次；
+        ③ 仍 403 → curl_cffi Chrome TLS 指纹兜底；再失败说明站点需要
+        执行 JS 质询，返回可操作提示让 Agent 换源或求助用户。
+        """
         try:
             target = self.validate_url(url)
             cached = self._cache_get(target)
@@ -203,8 +306,31 @@ class WebFetchTools:
                 status, content_type, text = cached
                 flag = "cache=hit"
             else:
-                async with self._client_factory() as client:
-                    resp = await client.get(target)
+                resp = None
+                retried = False
+                for attempt in range(2):
+                    async with self._client_factory() as client:
+                        resp = await client.get(target)
+                    if resp.status_code != 403:
+                        break
+                    if attempt == 0:
+                        retried = True
+                        logger.info("[WebFetch] %s 返回 403，切换浏览器指纹重试", target)
+
+                if resp.status_code == 403:
+                    curl = await self._curl_cffi_fetch(target)
+                    if curl is None:
+                        return (
+                            f"[Fetch Blocked]: {target} 拒绝访问（403，站点启用了反爬保护）。\n"
+                            f"建议：1) 更换其他来源的 URL 重试；"
+                            f"2) 改用搜索引擎缓存页（如该页的 Google/Bing 快照）；"
+                            f"3) 该站内容必需时，请用户在浏览器手动打开后另存到工作区，"
+                            f"或配置浏览器自动化 MCP Server（如 @playwright/mcp）。"
+                        )
+                    status, content_type, text = curl
+                    self._cache_set(target, status, content_type, text)
+                    flag = "cache=miss,curl-impersonate"
+                else:
                     resp.raise_for_status()
                     status = resp.status_code
                     content_type = resp.headers.get("content-type", "")
@@ -216,8 +342,8 @@ class WebFetchTools:
                         text = self.html_to_markdown(text)
                     else:
                         text = _WS_RE.sub(" ", text).strip()
-                self._cache_set(target, status, content_type, text)
-                flag = "cache=miss"
+                    self._cache_set(target, status, content_type, text)
+                    flag = "cache=miss" + (",retry=1" if retried else "")
 
             if len(text) > max_chars:
                 text = text[:max_chars] + f"\n...[输出截断，仅显示前 {max_chars} 字符]"

@@ -24,6 +24,13 @@ dependencies = [
     "reportlab>=4.0",
     "pandas>=2.0",
     "matplotlib>=3.7",
+    # 办公文件读取（调研/参考场景）
+    "pypdf>=5",
+    # OCR 识别：图片/PDF/PPT 内嵌图片文字提取
+    "rapidocr-onnxruntime>=1.4",
+    "pymupdf>=1.28",
+    # Web 抓取 TLS 指纹兜底（对抗 Cloudflare JA3 检测）
+    "curl_cffi>=0.7",
 ]
 
 [project.optional-dependencies]

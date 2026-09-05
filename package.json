@@ -1,6 +1,6 @@
 {
   "name": "lite-work",
-  "version": "0.4.0",
+  "version": "1.0.0rc0",
   "description": "lite-work：手写内核的 Code 开发 Agent 桌面工具（Electron + Python Core + Web UI）",
   "main": "electron/main.js",
   "author": "lite-work",
@@ -58,8 +58,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "scripts/app-icon.svg",
-      "sign": null
+      "icon": "scripts/app-icon.svg"
     },
     "nsis": {
       "oneClick": false,

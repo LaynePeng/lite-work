@@ -184,7 +184,22 @@ def default_build_agent() -> AgentProfile:
     return AgentProfile(
         id="build",
         mode="primary",
-        description="默认开发 Agent：拥有全部工具，负责实际的编码与执行。",
+        description="默认开发 Agent：代码开发、文件编辑、Git 操作、Shell 执行。",
+        tools=[
+            # 代码开发
+            "read_file", "write_file", "list_dir", "file_tree",
+            "search_code", "get_file_outline", "read_focused_symbol",
+            "apply_search_replace", "apply_unified_diff",
+            "execute_command",
+            # Git
+            "git_status", "git_diff", "git_log", "git_commit", "git_branch",
+            # 代码审查
+            "review_code",
+            # 联网 / 技能 / 子任务
+            "webfetch", "webfetch_batch", "load_skill", "spawn_sub_agent",
+            # 流程
+            "todo_write", "ask_user",
+        ],
         permissions={},
     )
 
@@ -248,6 +263,10 @@ def default_office_agent() -> AgentProfile:
             # 办公产出
             "docx_create", "xlsx_create", "pptx_create", "pdf_create",
             "data_analyze", "chart_make",
+            # 办公文件读取
+            "docx_read", "xlsx_read", "pptx_read", "pdf_read",
+            # OCR 识别（图片/PDF/PPT 内嵌图片文字）
+            "ocr_image", "ocr_document", "ocr_pptx",
             # 图表渲染脚本（diagram-to-office 技能：plantuml/mermaid 转图片）
             "execute_command",
             # 文件读写与浏览
@@ -289,8 +308,10 @@ def default_research_agent() -> AgentProfile:
             "webfetch", "webfetch_batch",
             # 文档产出
             "docx_create", "pdf_create", "xlsx_create", "chart_make",
-            # 文件读取（本地资料/数据）
+            # 文件读取（本地资料/数据/OCR 识别）
             "read_file", "list_dir", "file_tree",
+            "docx_read", "xlsx_read", "pdf_read",
+            "ocr_image", "ocr_document", "ocr_pptx",
             # 流程与交互
             "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
         ],
@@ -299,6 +320,10 @@ def default_research_agent() -> AgentProfile:
 
 
 # ---------------------------------------------------------------- Agent 注册表
+
+# 内置 agent id（覆盖文件只冻结 tools/permissions，人格字段跟随发版）
+BUILTIN_AGENT_IDS = ("build", "plan", "office", "research")
+
 
 class AgentRegistry:
     """管理内置 + 用户自定义的 Agent。
@@ -390,7 +415,27 @@ class AgentRegistry:
                 logger.exception("[Agent] 注册 agent 失败: %s", aid)
 
     def register(self, profile: AgentProfile) -> None:
+        """注册（新增或覆盖）一个 agent。
+
+        内置 agent 覆盖文件通常只含 tools/permissions（minimal 持久化）：
+        其余字段（system_prompt/描述/模型）为空时继承当前内置默认，
+        使人格修复与增强随主程序发版自动跟进，不被旧覆盖文件冻结。
+        """
+        existing = self._agents.get(profile.id)
+        if existing is not None and profile.id in BUILTIN_AGENT_IDS:
+            if profile.system_prompt is None:
+                profile.system_prompt = existing.system_prompt
+            if not profile.description:
+                profile.description = existing.description
+            if profile.model is None:
+                profile.model = existing.model
+            if profile.temperature is None:
+                profile.temperature = existing.temperature
         self._agents[profile.id] = profile
+
+    def delete(self, agent_id: str) -> None:
+        """删除一个自定义 agent（内置 agent 用 register(默认) 恢复，不走这里）。"""
+        self._agents.pop(agent_id, None)
 
     def save(self, profile: AgentProfile, agents_dir: str) -> str:
         """持久化一个自定义 agent 到 agents 目录（JSON 文件）。"""

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, SkillInfo } from "../types";
+import type { BuiltinPluginInfo, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
 
 export default function SettingsModal({
   onClose,
@@ -15,13 +15,19 @@ export default function SettingsModal({
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"llm" | "mcp" | "skills" | "general">("llm");
+  const [activeTab, setActiveTab] = useState<"llm" | "mcp" | "skills" | "general" | "plugins" | "agents">("llm");
   // 综合设置：孤儿会话清理
   const [cleaning, setCleaning] = useState(false);
   const [cleanResult, setCleanResult] = useState<{ ok: boolean; text: string } | null>(null);
   // 综合设置：zip 大小上限（MB）
   const [maxZipSize, setMaxZipSize] = useState<number>(20);
   const [zipSaved, setZipSaved] = useState(false);
+  // 综合设置：任务/工具/子 Agent 超时（秒）
+  const [toolTimeout, setToolTimeout] = useState<number>(120);
+  const [llmTimeout, setLlmTimeout] = useState<number>(300);
+  const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
+  const [maxSteps, setMaxSteps] = useState<number>(100);
+  const [timeoutSaved, setTimeoutSaved] = useState(false);
   // Skills triggers 匹配模式
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
@@ -36,12 +42,77 @@ export default function SettingsModal({
   const [permRules, setPermRules] = useState<Array<{ pattern: string; action: "allow" | "deny" | "ask" }>>([]);
   const [permDirty, setPermDirty] = useState(false);
 
+  // Plugins 管理
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [pluginBusy, setPluginBusy] = useState(false);
+  const [pluginMsg, setPluginMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 同名插件已存在时覆盖安装（更新）
+  const [pluginOverwrite, setPluginOverwrite] = useState(false);
+  // 内置插件元信息（只读展示 + 社区版本对比）
+  const [builtinPlugins, setBuiltinPlugins] = useState<BuiltinPluginInfo[]>([]);
+  const [community, setCommunity] = useState<CommunityManifest | null>(null);
+  const [communityBusy, setCommunityBusy] = useState(false);
+
+  // Agents 管理
+  const [agents, setAgents] = useState<import("../types").AgentInfo[]>([]);
+  const [agentAllTools, setAgentAllTools] = useState<{ name: string; description: string }[]>([]);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentMsg, setAgentMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [editingAgent, setEditingAgent] = useState<string | null>(null);
+  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean }>>({});
+  const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "" });
+
   const refreshSkills = useCallback(() => {
     api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
   }, []);
 
+  const refreshPlugins = useCallback(() => {
+    Promise.all([
+      api.plugins(),
+      api.pluginsBuiltin(),
+    ]).then(([u, b]) => {
+      setPlugins(u.plugins);
+      setBuiltinPlugins(b.plugins);
+    }).catch(() => { setPlugins([]); setBuiltinPlugins([]); });
+  }, []);
+
+  const fetchCommunity = useCallback(async (url?: string) => {
+    setCommunityBusy(true);
+    try {
+      const m = await api.pluginsCommunity(url);
+      setCommunity(m);
+    } catch (err) {
+      setPluginMsg({ ok: false, text: `拉取社区清单失败: ${(err as Error).message}` });
+    } finally {
+      setCommunityBusy(false);
+    }
+  }, []);
+
+  const refreshAgents = useCallback(async () => {
+    try {
+      const r = await api.agentsTools();
+      setAgents(Object.values(r.agents));
+      setAgentAllTools(r.tools);
+      // 初始化草稿（首次进入时）
+      setAgentDrafts((prev) => {
+        const next = { ...prev };
+        for (const a of Object.values(r.agents)) {
+          if (!next[a.id]) {
+            const t = a.tools;
+            next[a.id] = { tools: Array.isArray(t) ? t : r.tools.map((x) => x.name), useAll: !Array.isArray(t) };
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      setAgentMsg({ ok: false, text: `加载 Agents 失败: ${(err as Error).message}` });
+    }
+  }, []);
+
   useEffect(() => {
     refreshSkills();
+    refreshPlugins();
+    refreshAgents();
     // 拉取技能权限规则（config.json 的 skill_permissions）与综合设置项
     api.config().then((c) => {
       const rules = c.skill_permissions || {};
@@ -55,6 +126,10 @@ export default function SettingsModal({
       if (c.skill_trigger_mode === "substring" || c.skill_trigger_mode === "advanced") {
         setTriggerMode(c.skill_trigger_mode);
       }
+      if (typeof c.tool_timeout === "number" && c.tool_timeout > 0) setToolTimeout(c.tool_timeout);
+      if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
+      if (typeof c.subagent_timeout === "number" && c.subagent_timeout > 0) setSubagentTimeout(c.subagent_timeout);
+      if (typeof c.max_steps === "number" && c.max_steps > 0) setMaxSteps(c.max_steps);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
 
@@ -105,7 +180,98 @@ export default function SettingsModal({
     reader.readAsDataURL(file);
   };
 
-  // MCP 服务器配置（独立于 LLM 配置保存，保存即热重连）
+  // Plugins 管理（Cordis 插件：~/.lite-work/plugins/ 自动发现）
+  const pluginAction = useCallback(async (fn: () => Promise<string>) => {
+    setPluginBusy(true);
+    setPluginMsg(null);
+    try {
+      const text = await fn();
+      setPluginMsg({ ok: true, text });
+      refreshPlugins();
+    } catch (e) {
+      setPluginMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setPluginBusy(false);
+    }
+  }, [refreshPlugins]);
+
+  const handlePluginImport = (source: string, overwrite: boolean, version?: string) => {
+    void pluginAction(async () => {
+      const r = await api.importPlugin({ source, name: undefined, overwrite, version });
+      return `已导入: ${r.plugins.map((p) => p.name).join(", ")}`;
+    });
+  };
+
+  const handlePluginZip = (file: File, overwrite: boolean) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1] ?? "";
+      void pluginAction(async () => {
+        const r = await api.importPlugin({ zip_base64: base64, name: undefined, overwrite });
+        return `已导入: ${r.plugins.map((p) => p.name).join(", ")}`;
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Agents 管理
+  const saveAgent = useCallback(async (agentId: string) => {
+    setAgentBusy(true);
+    setAgentMsg(null);
+    try {
+      const draft = agentDrafts[agentId];
+      if (!draft) return;
+      await api.saveAgent({
+        id: agentId,
+        tools: draft.useAll ? null : draft.tools,
+      });
+      setAgentMsg({ ok: true, text: `Agent ${agentId} 已保存` });
+      setEditingAgent(null);
+      void refreshAgents();
+    } catch (err) {
+      setAgentMsg({ ok: false, text: `保存失败: ${(err as Error).message}` });
+    } finally {
+      setAgentBusy(false);
+    }
+  }, [agentDrafts, refreshAgents]);
+
+  const createNewAgent = useCallback(async () => {
+    const { name, description, prompt } = newAgentForm;
+    if (!name.trim()) { setAgentMsg({ ok: false, text: "请填写 Agent 名称" }); return; }
+    setAgentBusy(true);
+    setAgentMsg(null);
+    try {
+      await api.saveAgent({
+        id: name.trim().toLowerCase().replace(/\s+/g, "-"),
+        description: description.trim() || "自定义 Agent",
+        system_prompt: prompt.trim(),
+        tools: null,
+        mode: "primary",
+      });
+      setAgentMsg({ ok: true, text: `Agent ${name} 已创建` });
+      setNewAgentForm({ name: "", description: "", prompt: "" });
+      void refreshAgents();
+    } catch (err) {
+      setAgentMsg({ ok: false, text: `创建失败: ${(err as Error).message}` });
+    } finally {
+      setAgentBusy(false);
+    }
+  }, [newAgentForm, refreshAgents]);
+
+  const deleteAgent = useCallback(async (agentId: string) => {
+    if (!window.confirm(`确定删除 Agent「${agentId}」？`)) return;
+    setAgentBusy(true);
+    setAgentMsg(null);
+    try {
+      await api.deleteAgent(agentId);
+      setAgentMsg({ ok: true, text: `Agent ${agentId} 已删除` });
+      void refreshAgents();
+    } catch (err) {
+      setAgentMsg({ ok: false, text: `删除失败: ${(err as Error).message}` });
+    } finally {
+      setAgentBusy(false);
+    }
+  }, [refreshAgents]);
   const [mcpServers, setMcpServers] = useState<Record<string, MCPServerConfig>>({});
   const [mcpArgsText, setMcpArgsText] = useState<Record<string, string>>({});
   const [mcpStatus, setMcpStatus] = useState<MCPServerStatus[]>([]);
@@ -369,6 +535,23 @@ export default function SettingsModal({
     }
   }, [triggerMode, onSaved]);
 
+  const saveTimeoutConfig = useCallback(async () => {
+    setTimeoutSaved(false);
+    try {
+      await api.updateConfig({
+        tool_timeout: toolTimeout,
+        llm_timeout: llmTimeout,
+        subagent_timeout: subagentTimeout,
+        max_steps: maxSteps,
+      });
+      setTimeoutSaved(true);
+      setTimeout(() => setTimeoutSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [toolTimeout, llmTimeout, subagentTimeout, maxSteps, onSaved]);
+
   return (
       <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -396,6 +579,18 @@ export default function SettingsModal({
               onClick={() => setActiveTab("skills")}
             >
               Skills
+            </button>
+            <button
+              className={`settings-tab ${activeTab === "plugins" ? "active" : ""}`}
+              onClick={() => setActiveTab("plugins")}
+            >
+              Plugins
+            </button>
+            <button
+              className={`settings-tab ${activeTab === "agents" ? "active" : ""}`}
+              onClick={() => setActiveTab("agents")}
+            >
+              Agents
             </button>
             <button
               className={`settings-tab ${activeTab === "general" ? "active" : ""}`}
@@ -863,6 +1058,285 @@ export default function SettingsModal({
                 </button>
               </div>
             </div>
+          ) : activeTab === "plugins" ? (
+            <div className="settings-section">
+              <h3>插件（Plugins）</h3>
+              <p className="mcp-hint">
+                插件是 Cordis 风格的工具扩展。内置插件随主程序发布（v{builtinPlugins[0]?.version || "?"}），
+                用户可安装社区版覆盖更新。卸载用户版后自动回退内置版。
+              </p>
+
+              {pluginMsg && <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>{pluginMsg.text}</div>}
+
+              <div className="mcp-section-head">
+                <span>内置插件（{builtinPlugins.length} 个）</span>
+                <button className="btn-test" disabled={communityBusy}
+                  onClick={() => void fetchCommunity()}>
+                  {communityBusy ? "检查中…" : "检查社区更新"}
+                </button>
+              </div>
+              <div className="skills-list">
+                {builtinPlugins.map((bp) => {
+                  const userVer = plugins.find((p) => p.name === bp.name)?.version;
+                  return (
+                    <div className="skill-item" key={bp.name}>
+                      <div className="skill-item-main">
+                        <span className="skill-item-name">{bp.name}</span>
+                        <span className="plugin-version">v{bp.version}</span>
+                        {userVer && <span className="plugin-version user">已更新 v{userVer}</span>}
+                        <span className="skill-item-desc">{bp.description}</span>
+                        <div className="plugin-tools">
+                          {bp.tools.slice(0, 8).map((t) => <span className="plugin-tool" key={t}>{t}</span>)}
+                          {bp.tools.length > 8 && <span className="plugin-tool">+{bp.tools.length - 8}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {community && (
+                <div className="mcp-section-head" style={{ marginTop: 12 }}>
+                  <span>社区插件（{community.plugins.length} 个）</span>
+                </div>
+              )}
+              {community && community.plugins.length > 0 && (
+                <div className="skills-list">
+                  {community.plugins.map((cp) => {
+                    const isInstalled = plugins.some((p) => p.name === cp.name);
+                    const builtinVer = builtinPlugins.find((b) => b.name === cp.name)?.version;
+                    const hasUpdate = builtinVer && cp.version && cp.version !== builtinVer;
+                    // manifest.path 为插件目录（相对仓库根），空则无源可装
+                    const srcUrl = cp.path
+                      ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cp.path}`
+                      : "";
+                    return (
+                      <div className="skill-item" key={cp.name}>
+                        <div className="skill-item-main">
+                          <span className="skill-item-name">{cp.name}</span>
+                          <span className="plugin-version">v{cp.version}</span>
+                          <span className="skill-item-desc">{cp.description}</span>
+                        </div>
+                        <div className="skill-item-actions">
+                          {isInstalled
+                            ? <span className="mcp-empty-inline">已安装</span>
+                            : <button className="btn-test" disabled={pluginBusy || !srcUrl}
+                              onClick={() => void handlePluginImport(srcUrl, true, cp.version)}>安装</button>}
+                          {hasUpdate && (
+                            <button className="btn-test" disabled={pluginBusy || !srcUrl}
+                              onClick={() => void handlePluginImport(srcUrl, true, cp.version)}>更新</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {community && community.skills.length > 0 && (
+                <>
+                  <div className="mcp-section-head" style={{ marginTop: 12 }}>
+                    <span>社区技能（{community.skills.length} 个，安装到用户级 ~/.agents/skills/）</span>
+                  </div>
+                  <div className="skills-list">
+                    {community.skills.map((cs) => {
+                      const isInstalled = skills.some((s) => s.name === cs.name && s.scope === "user");
+                      const srcUrl = cs.path
+                        ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cs.path}`
+                        : "";
+                      return (
+                        <div className="skill-item" key={cs.name}>
+                          <div className="skill-item-main">
+                            <span className="skill-item-name">{cs.name}</span>
+                            <span className="plugin-version">v{cs.version}</span>
+                            <span className="skill-item-desc">{cs.description}</span>
+                          </div>
+                          <div className="skill-item-actions">
+                            {isInstalled
+                              ? <span className="mcp-empty-inline">已安装</span>
+                              : <button className="btn-test" disabled={pluginBusy || !srcUrl}
+                                onClick={() => void pluginAction(async () => {
+                                  const r = await api.importSkill({ source: srcUrl, scope: "user" });
+                                  refreshSkills();
+                                  return `已安装技能: ${r.skills.map((s) => s.name).join(", ")}`;
+                                })}>安装</button>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              <div className="mcp-section-head" style={{ marginTop: 12 }}>
+                <span>用户已安装（{plugins.length} 个）</span>
+                <label className="btn-test" style={{ cursor: "pointer" }}>
+                  📤 导入 zip
+                  <input type="file" accept=".zip" style={{ display: "none" }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handlePluginZip(f, pluginOverwrite);
+                      e.target.value = "";
+                    }} />
+                </label>
+              </div>
+
+              <div className="skills-import-row">
+                <input className="form-input" placeholder="本地目录路径或 GitHub URL（含子目录）"
+                  id="plugin-import-source" disabled={pluginBusy} />
+                <button className="btn-test" disabled={pluginBusy}
+                  onClick={() => {
+                    const el = document.getElementById("plugin-import-source") as HTMLInputElement | null;
+                    const v = el?.value.trim();
+                    if (v) void handlePluginImport(v, pluginOverwrite, undefined);
+                  }}>导入</button>
+              </div>
+
+              <label className="mcp-toggle" style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                <input type="checkbox" checked={pluginOverwrite}
+                  onChange={(e) => setPluginOverwrite(e.target.checked)} />
+                覆盖同名插件（更新）
+              </label>
+
+              <div className="skills-list">
+                {plugins.length === 0 && (
+                  <div className="mcp-empty">
+                    暂无用户插件。可从社区安装或导入 zip / GitHub 仓库。
+                  </div>
+                )}
+                {plugins.map((p) => (
+                  <div className="skill-item" key={p.name}>
+                    <div className="skill-item-main">
+                      <span className="skill-item-name">{p.name}</span>
+                      {p.version && <span className="plugin-version user">v{p.version}</span>}
+                      {p.source && <span className="skill-scope user" title={p.source}>来源</span>}
+                      <span className="skill-item-desc" title={p.description || p.path}>
+                        {p.description || (p.path || "").split(/[\\/]/).pop()}
+                      </span>
+                      <div className="plugin-tools">
+                        {p.tools.length > 0
+                          ? p.tools.map((t) => <span className="plugin-tool" key={t}>{t}</span>)
+                          : <span className="mcp-empty-inline">（未发现工具）</span>}
+                        {p.removed_tools && p.removed_tools.length > 0 && (
+                          <span className="mcp-empty-inline" style={{ marginLeft: 6 }}>
+                            移除: {p.removed_tools.join(", ")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="skill-item-actions">
+                      {p.source && p.source.startsWith("http") && (
+                        <button className="btn-test" disabled={pluginBusy} title={`从来源更新: ${p.source}`}
+                          onClick={() => void handlePluginImport(p.source || "", true, undefined)}>更新</button>
+                      )}
+                      <button className="btn-test" disabled={pluginBusy}
+                        onClick={() => void pluginAction(async () => {
+                          const r = await api.deletePlugin(p.name);
+                          return `已删除 ${r.name}，已回退内置版`;
+                        })}>删除</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : activeTab === "agents" ? (
+            <div className="settings-section">
+              <h3>Agents（工作模式）</h3>
+              <p className="mcp-hint">
+                每个 Agent 是一套独立的工作人格与工具集。内置 build/plan/office/research 可调整工具白名单；
+                可新建自定义 Agent（描述 + 系统提示词 + 工具集）。工具覆盖内置与所有已安装插件。
+              </p>
+              {agentMsg && <div className={`test-result ${agentMsg.ok ? "ok" : "error"}`}>{agentMsg.text}</div>}
+
+              <div className="mcp-section-head">
+                <span>全部 Agent（{agents.length}）</span>
+                <button className="btn-test" onClick={() => void refreshAgents()}>刷新</button>
+              </div>
+
+              <div className="skills-list">
+                {agents.map((a) => {
+                  const draft = agentDrafts[a.id] || { tools: [], useAll: true };
+                  const isBuiltin = ["build", "plan", "office", "research"].includes(a.id);
+                  const isEditing = editingAgent === a.id;
+                  return (
+                    <div className="skill-item" key={a.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+                      <div className="skill-item-main" style={{ width: "100%" }}>
+                        <span className="skill-item-name">{a.id}</span>
+                        {isBuiltin
+                          ? <span className="skill-scope user">内置</span>
+                          : <span className="skill-scope workspace">自定义</span>}
+                        <span className="skill-item-desc">{a.description || "（无描述）"}</span>
+                        <div className="skill-item-actions">
+                          <button className="btn-test" disabled={agentBusy}
+                            onClick={() => setEditingAgent(isEditing ? null : a.id)}>
+                            {isEditing ? "收起" : "编辑工具"}
+                          </button>
+                          {!isBuiltin && (
+                            <button className="btn-test" disabled={agentBusy}
+                              onClick={() => void deleteAgent(a.id)}>删除</button>
+                          )}
+                        </div>
+                      </div>
+                      {isEditing && (
+                        <div className="agent-tool-editor">
+                          <label className="mcp-toggle" style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                            <input type="checkbox" checked={draft.useAll}
+                              onChange={(e) => setAgentDrafts((p) => ({
+                                ...p, [a.id]: { ...p[a.id], useAll: e.target.checked,
+                                  tools: p[a.id]?.tools || agentAllTools.map((t) => t.name) },
+                              }))} />
+                            使用全部工具（含未来新增插件）
+                          </label>
+                          {!draft.useAll && (
+                            <div className="agent-tool-grid">
+                              {agentAllTools.map((t) => {
+                                const checked = draft.tools.includes(t.name);
+                                return (
+                                  <label key={t.name} className="agent-tool-check"
+                                    title={t.description}>
+                                    <input type="checkbox" checked={checked}
+                                      onChange={(e) => {
+                                        const next = new Set(draft.tools);
+                                        if (e.target.checked) next.add(t.name); else next.delete(t.name);
+                                        setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], tools: [...next] } }));
+                                      }} />
+                                    {t.name}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="form-actions" style={{ marginTop: 8 }}>
+                            <button className="btn-test" disabled={agentBusy}
+                              onClick={() => void saveAgent(a.id)}>保存工具</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 14 }}>
+                <span>新建自定义 Agent</span>
+              </div>
+              <div className="skills-create-row" style={{ flexWrap: "wrap" }}>
+                <input className="form-input" style={{ flex: "1 1 140px" }} placeholder="名称（英文，如 support）"
+                  value={newAgentForm.name}
+                  onChange={(e) => setNewAgentForm({ ...newAgentForm, name: e.target.value })} />
+                <input className="form-input" style={{ flex: "2 1 220px" }} placeholder="一句话描述"
+                  value={newAgentForm.description}
+                  onChange={(e) => setNewAgentForm({ ...newAgentForm, description: e.target.value })} />
+              </div>
+              <textarea className="form-input" style={{ marginTop: 6 }} rows={3}
+                placeholder="系统提示词（定义该 Agent 的人格与工作准则）"
+                value={newAgentForm.prompt}
+                onChange={(e) => setNewAgentForm({ ...newAgentForm, prompt: e.target.value })} />
+              <div className="form-actions" style={{ marginTop: 8 }}>
+                <button className="btn-test" disabled={agentBusy || !newAgentForm.name.trim()}
+                  onClick={() => void createNewAgent()}>创建 Agent</button>
+              </div>
+            </div>
           ) : activeTab === "general" ? (
             <div className="settings-section">
               <h3>综合设置</h3>
@@ -907,6 +1381,51 @@ export default function SettingsModal({
                   <button className="btn-test" onClick={saveZipSize}>
                     {zipSaved ? "已保存 ✓" : "保存"}
                   </button>
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>执行超时与步数（秒）</span>
+                <button className="btn-test" onClick={() => void saveTimeoutConfig()}>
+                  {timeoutSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                工具调用超时：单个工具最长执行时间；LLM 请求超时：单次模型调用最长等待；
+                子 Agent 超时：派生子任务整体最长执行时间；最大步数：单个任务最多工具调用轮数。
+              </p>
+              <div className="timeout-grid">
+                <div className="form-group">
+                  <label>工具调用超时（秒）</label>
+                  <input
+                    type="number" className="form-input" min={5} max={3600}
+                    value={toolTimeout}
+                    onChange={(e) => setToolTimeout(Math.max(1, parseInt(e.target.value, 10) || 120))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>LLM 请求超时（秒）</label>
+                  <input
+                    type="number" className="form-input" min={5} max={3600}
+                    value={llmTimeout}
+                    onChange={(e) => setLlmTimeout(Math.max(1, parseInt(e.target.value, 10) || 300))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>子 Agent 超时（秒）</label>
+                  <input
+                    type="number" className="form-input" min={5} max={3600}
+                    value={subagentTimeout}
+                    onChange={(e) => setSubagentTimeout(Math.max(1, parseInt(e.target.value, 10) || 600))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>最大步数</label>
+                  <input
+                    type="number" className="form-input" min={1} max={500}
+                    value={maxSteps}
+                    onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 100))}
+                  />
                 </div>
               </div>
             </div>

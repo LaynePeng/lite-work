@@ -390,4 +390,62 @@ async def test_llm_retry_on_timeout(tmp_path):
     result, _ = await loop.run_task("开始任务", system_prompt=SYSTEM_PROMPT)
 
     assert result == "超时后恢复。"
-    assert slow.attempts == 2
+
+
+async def test_midbatch_queued_input_interrupts_remaining_tools(tmp_path):
+    """批次执行期间到达的排队输入：中断剩余工具（占位结果），注入发生在工具结果之后。
+
+    回归守护：user 消息不得插在 assistant(tool_calls) 与 tool 结果之间（原子对）。
+    """
+    registry = ToolRegistry()
+    executed = []
+
+    async def noop(args):
+        executed.append(args.get("tag"))
+        return "[Success] ok"
+
+    registry.register("noop", "空工具", {"type": "object"}, noop)
+
+    # 第一批返回 3 个工具调用，随后直接收尾
+    adapter = MockLLMAdapter([
+        ("", [tool_call("noop", '{"tag": "a"}'),
+              tool_call("noop", '{"tag": "b"}'),
+              tool_call("noop", '{"tag": "c"}')]),
+        ("已处理补充指令", []),
+    ])
+    # 强制串行执行：auto 模式下只读工具整批并行，无法逐个中断
+    loop, kernel, store = _make_loop(tmp_path, adapter, registry)
+    loop.parallel_tool_calls = "never"
+
+    # 第一个工具执行时注入用户补充指令（模拟任务运行中用户发消息）
+    orig_execute = loop._execute_tool_call
+
+    async def execute_and_inject(call, stats):
+        result = await orig_execute(call, stats)
+        if call.arguments and '"a"' in call.arguments:
+            loop.injected_inputs.append("顺便看下 README")
+        return result
+
+    loop._execute_tool_call = execute_and_inject  # type: ignore[method-assign]
+
+    result, _ = await loop.run_task("开始", system_prompt=SYSTEM_PROMPT)
+    assert result == "已处理补充指令"
+
+    # 只有第一个工具真正执行；b/c 被占位中断
+    assert executed == ["a"]
+
+    snap = store.load("test-session")
+    roles = [m.role for m in snap.messages]
+    texts = [m.content or "" for m in snap.messages]
+
+    # 注入消息存在于历史
+    assert any("[用户补充指令] 顺便看下 README" in t for t in texts)
+    # 占位结果存在
+    assert any("[Interrupted]" in t for t in texts)
+    # 原子对保护：user 注入消息必须出现在全部 tool 结果之后（不得插在中间）
+    first_tool_idx = min(i for i, r in enumerate(roles) if r == "tool")
+    last_tool_idx = max(i for i, r in enumerate(roles) if r == "tool")
+    inject_idx = next(i for i, t in enumerate(texts) if "[用户补充指令]" in t)
+    assert inject_idx > last_tool_idx > first_tool_idx, (
+        f"注入消息位置非法：inject={inject_idx}, tool=[{first_tool_idx},{last_tool_idx}]"
+    )

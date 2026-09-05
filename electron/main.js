@@ -51,6 +51,9 @@ function writeLog(level, ...messages) {
 let coreMode = "local"; // "local" | "remote" | "dev"
 const localInstances = new Map(); // webContents.id -> { window, child, url, workspace }
 const terminals = new Map(); // webContents.id -> pty process
+// 全部后端子进程（含启动竞态：窗口在 spawn 完成前关闭也能回收，
+// 否则 uvicorn server 永久孤儿，锁住安装目录导致升级/卸载失败）
+const coreChildren = new Set();
 
 // node-pty 的 spawn-helper 二进制可能丢失执行权限（npm ci / macOS
 // quarantine 导致），启动时自动修复——否则 pty.spawn 报
@@ -165,14 +168,32 @@ function coreCwd() {
   return app.getAppPath();
 }
 
-function stopCore(child) {
-  if (child) {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* ignore */
+function killBackendTree(child) {
+  // 树杀后端：Windows 的 TerminateProcess / POSIX kill 都只杀直接子进程，
+  // 后端的后代（引擎预装 npm/node、诊断子进程）会孤儿并锁住安装目录。
+  // fire-and-forget：taskkill 是独立进程，主进程退出后仍会执行完成。
+  if (!child || child.killed || child.exitCode !== null) return;
+  coreChildren.delete(child);
+  try {
+    if (process.platform === "win32") {
+      if (child.pid) {
+        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"],
+          { stdio: "ignore", windowsHide: true });
+      }
+      try { child.kill(); } catch { /* ignore */ }
+    } else {
+      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      // SIGTERM 优雅退出窗口（uvicorn 排水），2s 后强杀兜底
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, 2000).unref?.();
     }
+  } catch {
+    /* ignore */
   }
+}
+
+// 兼容旧名：窗口 closed 回调沿用
+function stopCore(child) {
+  killBackendTree(child);
 }
 
 function spawnLocalCore(workspace) {
@@ -205,6 +226,10 @@ function spawnLocalCore(workspace) {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // 全局登记：窗口在就绪前关闭的竞态下，closed 回调拿不到 instance，
+    // 但 before-quit 兜底仍能回收（否则 uvicorn server 永久孤儿锁住安装目录）
+    coreChildren.add(child);
+    child.on("exit", () => coreChildren.delete(child));
 
     let resolved = false;
     const timer = setTimeout(() => {
@@ -357,6 +382,12 @@ async function createLocalWindow(workspace = null) {
   const window = createWindow(loadingUrl);
   try {
     const instance = await spawnLocalCore(workspace);
+    // 竞态防护：窗口在等待后端就绪期间被关闭（closed 已触发、instance
+    // 尚未注册）→ 立即回收刚拉起的 backend，防止 uvicorn 孤儿
+    if (window.isDestroyed()) {
+      killBackendTree(instance.child);
+      return { ok: false, error: "窗口已关闭" };
+    }
     // 后端可能恢复了上次的 workspace（如 CLI --workspace 参数）；启动时
     // 从 /api/status 拉取一次，保证终端 cwd 等主进程状态与后端一致
     let effectiveWorkspace = workspace;
@@ -520,9 +551,23 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+// 统一退出清理：正常路径走窗口 closed 回调，这里兜底所有漏网情况
+// （启动竞态孤儿、多窗口异常序、进程内崩溃后的退出）。安装器升级/卸载
+// 依赖 app.exe 完全退出 + 无孤儿子进程锁住安装目录（litework-bin/）。
+app.on("before-quit", () => {
+  for (const term of terminals.values()) {
+    try { term.kill(); } catch { /* ignore */ }
+  }
+  terminals.clear();
   for (const instance of localInstances.values()) {
-    if (instance.child) stopCore(instance.child);
+    killBackendTree(instance.child);
   }
   localInstances.clear();
-  if (process.platform !== "darwin") app.quit();
+  // 竞态孤儿兜底：仍在启动中的 backend（窗口已关、未注册 instance）
+  for (const child of [...coreChildren]) {
+    killBackendTree(child);
+  }
 });

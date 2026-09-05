@@ -43,6 +43,12 @@ body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  /* Windows 兼容：显式声明页面主体为非拖拽区。
+     无边框窗口依赖 .drag-region 的 -webkit-app-region: drag 拖拽窗口，
+     但 Chromium 在 DOM 大规模变化（如切换项目）后可能把命中测试
+     泄漏到整个窗口，导致输入框/按钮无法点击。这里显式 no-drag
+     可让拖拽区只作用于 .drag-region 自身（子元素显式 drag 覆盖继承值）。 */
+  -webkit-app-region: no-drag;
 }
 
 ::-webkit-scrollbar {
@@ -84,6 +90,8 @@ button {
 .app {
   display: flex;
   height: 100vh;
+  /* 同上：应用主体默认非拖拽，仅 .drag-region 可拖拽窗口 */
+  -webkit-app-region: no-drag;
 }
 
 .main {
@@ -4356,6 +4364,84 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ==================== Plugins（设置面板） ==================== */
+
+.plugin-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.plugin-tool {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 12%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.plugin-version {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 4px;
+}
+
+.plugin-version.user {
+  color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 12%, transparent);
+}
+
+.mcp-empty-inline {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* ==================== 综合设置：超时配置网格 ==================== */
+
+.timeout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* ==================== Agents 设置：工具编辑 ==================== */
+
+.agent-tool-editor {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg-1);
+  border-radius: 8px;
+}
+
+.agent-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.agent-tool-check {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.agent-tool-check:hover {
+  background: var(--bg-2);
 }
 
 /* ==================== 产出物 Tab（GAI 通用入口） ==================== */

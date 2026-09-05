@@ -102,12 +102,23 @@ class SkillCreateRequest(BaseModel):
     description: str
     scope: str = "workspace"
 
-
 class SkillImportRequest(BaseModel):
     source: Optional[str] = None          # 本地目录 / zip 文件路径 / GitHub URL
     zip_base64: Optional[str] = None      # 前端上传的 zip（base64）
     scope: str = "workspace"
     name: Optional[str] = None            # 覆盖技能名（单技能来源时）
+
+
+class PluginImportRequest(BaseModel):
+    source: Optional[str] = None          # 本地目录 / zip 文件路径 / GitHub URL（含子目录）
+    zip_base64: Optional[str] = None      # 前端上传的 zip（base64）
+    name: Optional[str] = None            # 覆盖插件名（单插件来源时）
+    overwrite: bool = False               # 同名插件已存在时覆盖安装（更新）
+    version: Optional[str] = None         # 来源版本（用于 installed.json 记录）
+
+
+class AgentSaveRequest(BaseModel):
+    profile: Dict[str, Any]               # AgentProfile 字段（id/description/prompt/tools/permissions）
 
 
 # ---------------------------------------------------------------- 鉴权
@@ -211,7 +222,7 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             k: app.config.get(k) for k in (
                 "max_steps", "token_budget", "tool_timeout",
                 "auto_approve", "pricing", "context_full_turns", "llm_timeout",
-                "llm_retries", "skill_permissions",
+                "llm_retries", "skill_permissions", "subagent_timeout",
             )
         }
 
@@ -508,6 +519,60 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+    # ------------------------------------------------------------ Plugins 管理
+
+    @fast_app.get("/api/plugins")
+    async def list_plugins(request: Request):
+        _check_auth(request)
+        try:
+            return {"plugins": app.plugins_list()}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.get("/api/plugins/builtin")
+    async def list_builtin_plugins(request: Request):
+        _check_auth(request)
+        try:
+            return {"plugins": app.plugins_builtin()}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.get("/api/plugins/community")
+    async def community_plugins(url: str = "", request: Request = None):
+        if request:
+            _check_auth(request)
+        try:
+            return app.plugins_community(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.post("/api/plugins/import")
+    async def import_plugin(payload: PluginImportRequest, request: Request):
+        _check_auth(request)
+        try:
+            if payload.zip_base64:
+                import base64 as _base64
+                raw = _base64.b64decode(payload.zip_base64)
+                return {"plugins": app.plugins_import_zip(raw, payload.name, payload.overwrite)}
+            if payload.source:
+                return {"plugins": app.plugins_install(
+                    payload.source, payload.name, payload.overwrite, payload.version)}
+            raise ValueError("需要 source（目录/zip/GitHub URL）或 zip_base64")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.delete("/api/plugins/{name}")
+    async def delete_plugin(name: str, request: Request):
+        _check_auth(request)
+        try:
+            return app.plugins_delete(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     @fast_app.get("/api/commands")
     async def list_commands(request: Request):
         _check_auth(request)
@@ -582,6 +647,30 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
     async def list_agents(request: Request):
         _check_auth(request)
         return app.agents_meta()
+
+    @fast_app.get("/api/agents/tools")
+    async def agents_tools(request: Request):
+        """返回全部可用工具 + 各 agent 的工具白名单（供设置页配置）。"""
+        _check_auth(request)
+        return app.agents_available_tools()
+
+    @fast_app.post("/api/agents/save")
+    async def save_agent(payload: AgentSaveRequest, request: Request):
+        _check_auth(request)
+        try:
+            return app.agent_save(payload.profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.delete("/api/agents/{agent_id}")
+    async def delete_agent(agent_id: str, request: Request):
+        _check_auth(request)
+        try:
+            return app.agent_delete(agent_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # ------------------------------------------------------------ 工作区
 

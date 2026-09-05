@@ -34,7 +34,7 @@ class SystemPromptBuilder:
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=cwd,
                 capture_output=True,
-                text=True,
+                text=True, encoding='utf-8', errors='replace',
                 timeout=3,
             )
             branch_name = branch.stdout.strip() if branch.returncode == 0 else "N/A"
@@ -42,7 +42,7 @@ class SystemPromptBuilder:
                 ["git", "status", "--short"],
                 cwd=cwd,
                 capture_output=True,
-                text=True,
+                text=True, encoding='utf-8', errors='replace',
                 timeout=3,
             )
             changed = len([l for l in status.stdout.splitlines() if l.strip()])

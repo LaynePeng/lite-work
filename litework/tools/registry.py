@@ -21,6 +21,10 @@ class ToolRegistry:
         self._tools[name] = ToolDefinition(name=name, description=description, parameters=parameters)
         self._handlers[name] = handler
 
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
+        self._handlers.pop(name, None)
+
     def get_tools(self) -> List[ToolDefinition]:
         return list(self._tools.values())
 

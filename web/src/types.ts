@@ -112,6 +112,7 @@ export interface AppConfig {
   token_budget: number;
   tool_timeout: number;
   llm_timeout?: number;
+  subagent_timeout?: number;
   auto_approve: boolean;
   context_full_turns?: number;
   pricing: { input_per_mtok: number; output_per_mtok: number };
@@ -440,4 +441,36 @@ export interface MCPServerStatus {
 
 export interface MCPStatus {
   servers: MCPServerStatus[];
+}
+
+// ---------------------------------------------------------------- Plugins 管理
+
+export interface PluginInfo {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  tools: string[];
+  /** 插件声明移除的工具（内置或其他插件的） */
+  removed_tools?: string[];
+  description: string;
+  version?: string;
+  source?: string;
+}
+
+export interface BuiltinPluginInfo {
+  name: string;
+  description: string;
+  tools: string[];
+  version: string;
+  builtin: true;
+  /** 已被用户版（~/.lite-work/plugins/ 同名插件）覆盖 */
+  overridden?: boolean;
+}
+
+export interface CommunityManifest {
+  version: string;
+  min_app_version: string;
+  /** path 为插件目录（相对仓库根），如 "plugins/office-plugin" */
+  plugins: { name: string; version: string; description: string; path: string; tools?: string[] }[];
+  skills: { name: string; version: string; description: string; path: string }[];
 }

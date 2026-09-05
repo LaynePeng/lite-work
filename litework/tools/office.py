@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 import tempfile
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +68,13 @@ try:
     _HAS_MATPLOTLIB = True
 except ImportError:
     _plt = None  # type: ignore
+
+_HAS_PYPDF: bool = False
+try:
+    import pypdf as _pypdf
+    _HAS_PYPDF = True
+except ImportError:
+    _pypdf = None  # type: ignore
 
 
 def _missing_dep_msg(pkg: str, tools: str) -> str:
@@ -309,6 +317,87 @@ class OfficeTools:
                     "required": ["data", "chart_type"],
                 },
             ),
+            # -------------------------------------------------------- 读取已有办公文件
+            ToolDefinition(
+                name="docx_read",
+                description=(
+                    "读取 Word (.docx) 文件内容，返回纯文本（段落、标题、表格）。"
+                    "用于调研已有文档、提取参考资料。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "docx 文件路径（相对工作区，如 .outputs/方案.docx 或 .uploads/素材.docx）",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolDefinition(
+                name="xlsx_read",
+                description=(
+                    "读取 Excel (.xlsx) 文件内容，返回各 sheet 的表头和数据行。"
+                    "用于浏览已有表格、查看调研数据。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "xlsx 文件路径（相对工作区）",
+                        },
+                        "sheet": {
+                            "type": "string",
+                            "description": "要读取的 sheet 名（可选，默认第一个 sheet）",
+                        },
+                        "max_rows": {
+                            "type": "number",
+                            "description": "最多读取行数（含表头，默认 100）",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolDefinition(
+                name="pptx_read",
+                description=(
+                    "读取 PowerPoint (.pptx) 演示文稿内容，返回每页幻灯片的标题和要点。"
+                    "用于查看已有演示文稿。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "pptx 文件路径（相对工作区）",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolDefinition(
+                name="pdf_read",
+                description=(
+                    "读取 PDF 文件内容，返回每页的文本。"
+                    "用于查阅调研报告、参考资料等 PDF 文档。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "pdf 文件路径（相对工作区）",
+                        },
+                        "max_pages": {
+                            "type": "number",
+                            "description": "最多读取页数（默认 50）",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            ),
         ]
 
     # ------------------------------------------------------------ 执行入口
@@ -328,6 +417,10 @@ class OfficeTools:
             "pdf_create": self._pdf_create,
             "data_analyze": self._data_analyze,
             "chart_make": self._chart_make,
+            "docx_read": self._docx_read,
+            "xlsx_read": self._xlsx_read,
+            "pptx_read": self._pptx_read,
+            "pdf_read": self._pdf_read,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -1233,3 +1326,144 @@ class OfficeTools:
         _plt.close(fig)
 
         return f"[Office OK]: 已生成图表 → {filepath}"
+
+    # ------------------------------------------------------------ 读取已有办公文件
+
+    def _docx_read(self, args: Dict[str, Any]) -> str:
+        if not _HAS_DOCX:
+            return _missing_dep_msg("python-docx", "docx_read")
+        rel_path = str(args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+        try:
+            doc = _DocxDoc(resolved)
+        except Exception as exc:
+            return f"[Office Error]: 无法打开文档: {exc}"
+        parts = []
+        for p in doc.paragraphs:
+            if p.text.strip():
+                style = (p.style.name or "").lower()
+                prefix = "#" * min(4, 1 + sum(1 for c in style if c.isdigit() and c != "0")) \
+                    if "heading" in style else ""
+                parts.append(f"{prefix} {p.text.strip()}".strip())
+        for ti, table in enumerate(doc.tables):
+            parts.append(f"\n[表格 {ti + 1}]")
+            for row in table.rows[:50]:
+                cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+                parts.append("| " + " | ".join(cells) + " |")
+        text = "\n\n".join(parts)
+        return f"[Office OK]: 已读取 {os.path.basename(resolved)} ({len(text)} 字符)\n\n{text[:20000]}"
+
+    def _xlsx_read(self, args: Dict[str, Any]) -> str:
+        if not _HAS_OPENPYXL:
+            return _missing_dep_msg("openpyxl", "xlsx_read")
+        rel_path = str(args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+        sheet_name = str(args.get("sheet") or "").strip() or None
+        max_rows = max(1, min(500, int(args.get("max_rows") or 100)))
+        try:
+            wb = _openpyxl.load_workbook(resolved, read_only=True, data_only=True)
+        except Exception as exc:
+            return f"[Office Error]: 无法打开 Excel: {exc}"
+        if sheet_name:
+            if sheet_name not in wb.sheetnames:
+                return f"[Office Error]: sheet {sheet_name!r} 不存在（可选: {', '.join(wb.sheetnames)}）"
+            sheets = [sheet_name]
+        else:
+            sheets = wb.sheetnames[:3]
+        parts = []
+        for sn in sheets:
+            ws = wb[sn]
+            rows = []
+            for row in ws.iter_rows(max_row=max_rows, max_col=50, values_only=True):
+                cells = ["" if v is None else str(v) for v in row]
+                while cells and cells[-1] == "":
+                    cells.pop()
+                rows.append(cells)
+            parts.append(f"=== Sheet: {sn} ({len(rows)} 行) ===")
+            for r in rows[:max_rows]:
+                parts.append("| " + " | ".join(r) + " |")
+        return f"[Office OK]: 已读取 {os.path.basename(resolved)}\n\n" + "\n\n".join(parts)
+
+    def _pptx_read(self, args: Dict[str, Any]) -> str:
+        if not _HAS_PPTX:
+            return _missing_dep_msg("python-pptx", "pptx_read")
+        rel_path = str(args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+        try:
+            prs = _PptxPresentation(resolved)
+        except Exception as exc:
+            return f"[Office Error]: 无法打开演示文稿: {exc}"
+        parts = []
+        for i, slide in enumerate(prs.slides, 1):
+            title, bullets = "", []
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                tf = shape.text_frame
+                is_title = shape == getattr(slide.shapes, "title", None)
+                for para in tf.paragraphs:
+                    t = "".join(run.text for run in para.runs).strip()
+                    if not t:
+                        continue
+                    if is_title and not title:
+                        title = t
+                    else:
+                        bullets.append(t)
+            parts.append(f"--- 第 {i} 页 ---")
+            if title:
+                parts.append(f"标题: {title}")
+            for b in bullets[:20]:
+                parts.append(f"  · {b}")
+        return f"[Office OK]: 已读取 {os.path.basename(resolved)} ({len(prs.slides)} 页)\n\n" + "\n".join(parts)
+
+    def _pdf_read(self, args: Dict[str, Any]) -> str:
+        if not _HAS_PYPDF:
+            return "[Office Tools] 需要安装 pypdf 才能使用 pdf_read 工具。\n请运行: pip install pypdf"
+        rel_path = str(args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+        max_pages = max(1, min(200, int(args.get("max_pages") or 50)))
+        try:
+            reader = _pypdf.PdfReader(resolved)
+        except Exception as exc:
+            return f"[Office Error]: 无法打开 PDF: {exc}"
+        total = len(reader.pages)
+        parts = [f"PDF 共 {total} 页，读取前 {min(max_pages, total)} 页"]
+        for i in range(min(max_pages, total)):
+            text = reader.pages[i].extract_text() or ""
+            text = re.sub(r"[ \t\r\f\v]+", " ", text).strip()
+            if text:
+                parts.append(f"\n--- 第 {i + 1} 页 ---\n{text[:2000]}")
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------ 路径安全辅助
+
+    def _resolve_path(self, rel_path: str) -> str:
+        """解析相对路径为绝对路径，校验越界。返回绝对路径，失败抛 ValueError。"""
+        resolved = os.path.abspath(
+            rel_path if os.path.isabs(rel_path) else os.path.join(self.workspace, rel_path)
+        )
+        if not (resolved == self.workspace or resolved.startswith(self.workspace + os.sep)):
+            raise ValueError(f"路径越界：仅支持工作区内的文件: {rel_path}")
+        if not os.path.isfile(resolved):
+            raise ValueError(f"文件不存在: {rel_path}")
+        return resolved

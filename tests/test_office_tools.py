@@ -246,3 +246,278 @@ def test_data_analyze_csv_path_and_sheet_error(tmp_path):
         "data": "名称,数量\n甲,1\n乙,2\n", "instructions": "概览",
     }))
     assert "数据分析结果" in r5
+
+
+# ---------------------------------------------------------------- 读取已有办公文件
+
+def test_docx_read_roundtrip(tmp_path):
+    tools = OfficeTools(str(tmp_path))
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    asyncio.run(call("docx_create", {
+        "content": "# 标题\n\n正文段落\n\n| 列A | 列B |\n| --- | --- |\n| 1 | 2 |",
+        "filename": "读.docx",
+    }))
+    r = asyncio.run(call("docx_read", {"path": ".outputs/读.docx"}))
+    assert "已读取" in r
+    assert "标题" in r
+    assert "正文段落" in r
+    assert "列A" in r
+
+    # 文件不存在
+    r2 = asyncio.run(call("docx_read", {"path": ".outputs/nope.docx"}))
+    assert "不存在" in r2
+    # 路径越界
+    r3 = asyncio.run(call("docx_read", {"path": "../../etc/hosts"}))
+    assert "越界" in r3 or "不存在" in r3
+
+
+def test_xlsx_read_roundtrip(tmp_path):
+    tools = OfficeTools(str(tmp_path))
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    asyncio.run(call("xlsx_create", {
+        "data": '{"sheet1": [{"城市": "北京", "销量": 100}, {"城市": "上海", "销量": 200}]}',
+        "filename": "读.xlsx",
+    }))
+    r = asyncio.run(call("xlsx_read", {"path": ".outputs/读.xlsx"}))
+    assert "已读取" in r
+    assert "北京" in r
+    assert "上海" in r
+    assert "销量" in r
+
+    # sheet 参数
+    r2 = asyncio.run(call("xlsx_read", {"path": ".outputs/读.xlsx", "sheet": "sheet1"}))
+    assert "北京" in r2
+    # 不存在的 sheet
+    r3 = asyncio.run(call("xlsx_read", {"path": ".outputs/读.xlsx", "sheet": "nope"}))
+    assert "不存在" in r3
+
+
+def test_pptx_read_roundtrip(tmp_path):
+    tools = OfficeTools(str(tmp_path))
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    asyncio.run(call("pptx_create", {
+        "slides": '[{"title": "第一页", "bullets": ["要点1", "要点2"]}]',
+        "filename": "读.pptx",
+    }))
+    r = asyncio.run(call("pptx_read", {"path": ".outputs/读.pptx"}))
+    assert "已读取" in r
+    assert "第一页" in r
+    assert "要点1" in r
+
+
+def test_pdf_read_roundtrip(tmp_path):
+    tools = OfficeTools(str(tmp_path))
+
+    async def call(name, args):
+        return await tools.execute(name, args)
+
+    # reportlab 默认字体不支持中文（会被丢弃），用 ASCII 验证提取链路
+    asyncio.run(call("pdf_create", {"content": "# PDF Title\n\nPDF body content", "filename": "read.pdf"}))
+    r = asyncio.run(call("pdf_read", {"path": ".outputs/read.pdf"}))
+    assert "PDF 共" in r
+    assert "PDF Title" in r or "PDF body" in r
+
+
+# ---------------------------------------------------------------- 本地插件加载器
+
+def test_plugin_loader_loads_cordis_plugin(tmp_path):
+    """~/.lite-work/plugins/ 下的 Cordis ToolPlugin 子类应被自动发现并实例化。"""
+    from litework.tools.plugin_loader import load_plugins
+
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "my_tools.py").write_text(
+        "from litework.tools.plugin import ToolPlugin\n"
+        "from litework.core.types import ToolDefinition\n"
+        "class HelloPlugin(ToolPlugin):\n"
+        "    name = 'hello-plugin'\n"
+        "    def get_tools(self):\n"
+        "        return [ToolDefinition(name='hello', description='say hello', parameters={'type':'object','properties':{}})]\n"
+        "    async def execute(self, name, args):\n"
+        "        return 'hello from plugin'\n",
+        encoding="utf-8",
+    )
+    plugins = load_plugins(str(tmp_path))
+    assert any(p.name == "hello-plugin" for p in plugins)
+
+
+def test_plugin_loader_ignores_bad_modules(tmp_path):
+    """加载失败的插件不应阻断其他插件。"""
+    from litework.tools.plugin_loader import load_plugins
+
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "broken.py").write_text("raise ValueError('boom')\n", encoding="utf-8")
+    (plugins_dir / "empty.py").write_text("x = 1\n", encoding="utf-8")
+    plugins = load_plugins(str(tmp_path))
+    assert plugins == []
+
+
+def test_plugin_removed_tools_unregisters(tmp_path):
+    """插件 removed_tools 声明删除的工具应从 registry 移除。"""
+    from litework.core.kernel import Kernel
+    from litework.tools.plugin import ToolPlugin
+    from litework.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register("builtin_tool", "desc", {"type": "object", "properties": {}},
+                      lambda args: "builtin")
+
+    class RemovePlugin(ToolPlugin):
+        name = "remove-plugin"
+        removed_tools = ["builtin_tool"]
+
+        def get_tools(self):
+            from litework.core.types import ToolDefinition
+            return [ToolDefinition(name="my_tool", description="mine",
+                                   parameters={"type": "object", "properties": {}})]
+
+        async def execute(self, name, args):
+            return "ok"
+
+    kernel = Kernel(session_id="test")
+    kernel.register_service("tools", registry)
+    kernel.use(RemovePlugin())
+    assert not registry.has("builtin_tool"), "removed_tools 未生效"
+    assert registry.has("my_tool")
+
+
+def test_plugin_import_overwrite(tmp_path):
+    """同名插件已存在时 overwrite=True 先删后装（更新）。"""
+    from litework.tools.plugin_loader import import_zip_bytes
+    import io
+    import zipfile
+
+    def make_zip(body: str) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("myplug/plugin.py", body)
+        return buf.getvalue()
+
+    v1 = make_zip(
+        "from litework.tools.plugin import ToolPlugin\n"
+        "class P(ToolPlugin):\n"
+        "    name='myplug'\n"
+        "    def get_tools(self):\n"
+        "        from litework.core.types import ToolDefinition\n"
+        "        return [ToolDefinition(name='t1', description='v1', parameters={'type':'object','properties':{}})]\n"
+        "    async def execute(self, name, args): return 'v1'\n"
+    )
+    v2 = make_zip(
+        "from litework.tools.plugin import ToolPlugin\n"
+        "class P(ToolPlugin):\n"
+        "    name='myplug'\n"
+        "    def get_tools(self):\n"
+        "        from litework.core.types import ToolDefinition\n"
+        "        return [ToolDefinition(name='t2', description='v2', parameters={'type':'object','properties':{}})]\n"
+        "    async def execute(self, name, args): return 'v2'\n"
+    )
+
+    r1 = import_zip_bytes(str(tmp_path), v1)
+    assert r1[0]["name"] == "myplug"
+    # 不覆盖 → 报错
+    try:
+        import_zip_bytes(str(tmp_path), v2)
+        assert False, "应拒绝覆盖"
+    except ValueError:
+        pass
+    # 覆盖 → 成功
+    r2 = import_zip_bytes(str(tmp_path), v2, overwrite=True)
+    assert r2[0]["name"] == "myplug"
+
+    # 验证已替换为新版（tools 变了）
+    from litework.tools.plugin_loader import list_plugins
+    meta = list_plugins(str(tmp_path))
+    assert any(p["name"] == "myplug" and "t2" in p["tools"] and "t1" not in p["tools"] for p in meta)
+
+
+# ---------------------------------------------------------------- semver
+
+def test_semver_parse():
+    from litework.tools.plugin_loader import semver_parse, semver_compare
+    assert semver_parse("1.2.3") == (1, 2, 3)
+    assert semver_parse("v0.5.0") == (0, 5, 0)
+    assert semver_parse("1.0.0-beta") == (1, 0, 0, "beta")
+    assert semver_parse("") is None
+    assert semver_parse("abc") is None
+    assert semver_compare("1.0.0", "1.0.0") == 0
+    assert semver_compare("1.0.0", "2.0.0") == -1
+    assert semver_compare("2.0.0", "1.0.0") == 1
+    # 预发布 < 正式版
+    assert semver_compare("1.0.0-rc.1", "1.0.0") == -1
+
+
+def test_installed_json_record(tmp_path):
+    """installed.json 读写与删除后自动清理。"""
+    from litework.tools.plugin_loader import (
+        read_installed, record_installed, unrecord_installed,
+    )
+    cfg = str(tmp_path)
+    record_installed(cfg, "my-tool", "1.0.0", "https://github.com/user/repo")
+    data = read_installed(cfg)
+    assert data["my-tool"]["version"] == "1.0.0"
+    assert data["my-tool"]["source"] == "https://github.com/user/repo"
+    unrecord_installed(cfg, "my-tool")
+    assert "my-tool" not in read_installed(cfg)
+
+
+# ---------------------------------------------------------------- 目录插件导入语义
+
+PLUGIN_PY = (
+    "from litework.tools.plugin import ToolPlugin\n"
+    "from litework.core.types import ToolDefinition\n"
+    "class P(ToolPlugin):\n"
+    "    name='myplug'\n"
+    "    def get_tools(self):\n"
+    "        return [ToolDefinition(name='t1', description='v1', parameters={'type':'object','properties':{}})]\n"
+    "    async def execute(self, name, args): return 'ok'\n"
+)
+
+
+def test_import_local_dir_that_is_plugin_dir(tmp_path):
+    """导入目录本身是插件目录（直接含 plugin.py）→ 以目录名作为插件名安装。"""
+    from litework.tools.plugin_loader import import_source, list_plugins
+
+    src = tmp_path / "myplug"
+    src.mkdir()
+    (src / "plugin.py").write_text(PLUGIN_PY, encoding="utf-8")
+    (src / "requirements.txt").write_text("# no deps\n", encoding="utf-8")
+
+    cfg = tmp_path / "cfg"
+    r = import_source(str(cfg), str(src))
+    assert [x["name"] for x in r] == ["myplug"]
+    # 目录插件：requirements.txt 等伴生文件保留
+    installed = cfg / "plugins" / "myplug"
+    assert (installed / "plugin.py").is_file()
+    assert (installed / "requirements.txt").is_file()
+    assert any(p["name"] == "myplug" for p in list_plugins(str(cfg)))
+
+
+def test_import_zip_with_plugin_py_at_root(tmp_path):
+    """zip 根直接是 plugin.py（文件夹内压缩）+ name → 归位为目录插件。"""
+    import io
+    import zipfile
+
+    from litework.tools.plugin_loader import import_zip_bytes
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("plugin.py", PLUGIN_PY)
+        zf.writestr("requirements.txt", "# no deps\n")
+
+    cfg = tmp_path / "cfg"
+    r = import_zip_bytes(str(cfg), buf.getvalue(), name="zipped-plug")
+    assert [x["name"] for x in r] == ["zipped-plug"]
+    installed = cfg / "plugins" / "zipped-plug"
+    assert (installed / "plugin.py").is_file()
+    assert (installed / "requirements.txt").is_file()
+

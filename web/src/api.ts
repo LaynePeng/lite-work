@@ -32,6 +32,11 @@ export const api = {
     req<{ ok: boolean }>("/api/config", { method: "POST", body: JSON.stringify({ updates }) }),
 
   agents: () => req<AgentInfo[]>("/api/agents"),
+  agentsTools: () => req<{ tools: { name: string; description: string }[]; agents: Record<string, import("./types").AgentInfo> }>("/api/agents/tools"),
+  saveAgent: (profile: Record<string, unknown>) =>
+    req<Record<string, unknown>>("/api/agents/save", { method: "POST", body: JSON.stringify({ profile }) }),
+  deleteAgent: (id: string) =>
+    req<{ ok: boolean }>(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   sessions: (workspace?: string) => {
     const url = workspace ? `/api/sessions?workspace=${encodeURIComponent(workspace)}` : "/api/sessions";
@@ -144,6 +149,19 @@ export const api = {
       method: "DELETE",
     }),
   commands: () => req<{ commands: import("./types").CommandInfo[] }>("/api/commands"),
+
+  // ------------------------------------------------------------ Plugins 管理
+
+  plugins: () => req<{ plugins: import("./types").PluginInfo[] }>("/api/plugins"),
+  pluginsBuiltin: () => req<{ plugins: import("./types").BuiltinPluginInfo[] }>("/api/plugins/builtin"),
+  pluginsCommunity: (url?: string) =>
+    req<import("./types").CommunityManifest>(`/api/plugins/community${url ? `?url=${encodeURIComponent(url)}` : ""}`),
+  importPlugin: (payload: { source?: string; zip_base64?: string; name?: string; overwrite?: boolean; version?: string }) =>
+    req<{ plugins: import("./types").PluginInfo[] }>("/api/plugins/import", {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  deletePlugin: (name: string) =>
+    req<{ ok: boolean; name: string; path: string }>(`/api/plugins/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（GAI 通用入口）
 

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -196,13 +197,18 @@ class SubAgentRunner:
                 "callId": call_id,
             })
 
-        summary, stats = await loop.run_task(
-            f"请完成以下子任务并输出精炼总结（不要向用户提问，直接执行）：\n{task_description}",
-            system_prompt=system,
-            tools=tools,
-            store_snapshot=False,
-        )
-
+        timeout = float(self.app.config.get("subagent_timeout", 600))
+        try:
+            summary, stats = await asyncio.wait_for(
+                loop.run_task(
+                    f"请完成以下子任务并输出精炼总结（不要向用户提问，直接执行）：\n{task_description}",
+                    system_prompt=system, tools=tools, store_snapshot=False,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            summary = f"[SubAgent Timeout]: 子任务超过 {timeout}s 被终止，已完成部分: {getattr(loop, 'last_summary', '无')}"
+            stats = {"input_tokens": 0, "output_tokens": 0, "turns": 0, "status": "TIMEOUT"}
         completed_payload = {
             "task": task_description,
             "role": role,
