@@ -1,7 +1,7 @@
 {
   "name": "lite-work-web",
   "private": true,
-  "version": "1.0.0rc0",
+  "version": "1.0.0rc1",
   "type": "module",
   "scripts": {
     "dev": "vite",

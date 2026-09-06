@@ -108,6 +108,10 @@ class SkillImportRequest(BaseModel):
     scope: str = "workspace"
     name: Optional[str] = None            # 覆盖技能名（单技能来源时）
 
+class SkillUpdateRequest(BaseModel):
+    description: str                      # 新的技能描述
+    scope: str = "workspace"
+
 
 class PluginImportRequest(BaseModel):
     source: Optional[str] = None          # 本地目录 / zip 文件路径 / GitHub URL（含子目录）
@@ -510,6 +514,14 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+
+    @fast_app.put("/api/skills/{name}")
+    async def update_skill(name: str, payload: SkillUpdateRequest, request: Request):
+        _check_auth(request)
+        try:
+            return app.skills_update(name, payload.description, payload.scope)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @fast_app.delete("/api/skills/{name}")
     async def delete_skill(name: str, request: Request, scope: str = "workspace"):

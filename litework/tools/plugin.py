@@ -131,8 +131,8 @@ class ShellPlugin(ToolPlugin):
     name = "shell-plugin"
     description = "受限终端：执行命令"
 
-    def __init__(self, workspace: str) -> None:
-        self._tools = ShellTools(workspace)
+    def __init__(self, workspace: str, timeout_seconds: float = 60.0) -> None:
+        self._tools = ShellTools(workspace, timeout_seconds=timeout_seconds)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()

@@ -413,6 +413,20 @@ export interface SkillInfo {
   permission?: "allow" | "deny" | "ask";
 }
 
+export interface SkillDepsReport {
+  pip?: { ok?: boolean; stdout?: string; stderr?: string; error?: string } | null;
+  npm?: { ok?: boolean; stdout?: string; stderr?: string; error?: string } | null;
+  env?: { ok?: boolean; action?: string; error?: string } | null;
+}
+
+export interface SkillImportResult {
+  ok: boolean;
+  name: string;
+  path: string;
+  scope: string;
+  deps?: SkillDepsReport;
+}
+
 export interface CommandInfo {
   name: string;
   description: string;

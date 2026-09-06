@@ -144,6 +144,10 @@ export const api = {
     req<{ skills: import("./types").SkillInfo[] }>("/api/skills/import", {
       method: "POST", body: JSON.stringify(payload),
     }),
+  updateSkill: (name: string, description: string, scope: string) =>
+    req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "PUT", body: JSON.stringify({ description, scope }),
+    }),
   deleteSkill: (name: string, scope: string) =>
     req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}?scope=${encodeURIComponent(scope)}`, {
       method: "DELETE",

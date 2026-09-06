@@ -430,11 +430,15 @@ class AgentLoop:
                 "tool:before_execute", {"toolName": tool_name, "args": args, "callId": call.id}
             )
             try:
+                # execute_command 支持自定义 timeout（覆盖默认 tool_timeout）
+                effective_timeout = self.tool_timeout
+                if tool_name == "execute_command" and args.get("timeout"):
+                    effective_timeout = max(float(args["timeout"]), self.tool_timeout)
                 raw = await asyncio.wait_for(
-                    self.registry.execute(tool_name, args), timeout=self.tool_timeout
+                    self.registry.execute(tool_name, args), timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
-                raw = f"[Tool Timeout]: 工具 {tool_name} 执行超过 {self.tool_timeout}s 被终止。"
+                raw = f"[Tool Timeout]: 工具 {tool_name} 执行超过 {effective_timeout}s 被终止。"
             except Exception as exc:  # 注册表内已捕获，这里兜底
                 raw = f"[Execution Exception]: {exc}"
             try:

@@ -71,7 +71,7 @@ TOOL_NAMES = [
     "read_file", "write_file", "list_dir", "file_tree",
     "search_code", "get_file_outline", "read_focused_symbol",
     "apply_search_replace", "apply_unified_diff",
-    "execute_command", "git_status", "git_diff", "git_log",
+    "execute_command", "check_command", "git_status", "git_diff", "git_log",
     "git_commit", "git_branch", "review_code", "spawn_sub_agent",
         "webfetch", "webfetch_batch", "load_skill",
     # 办公工具（AGI 通用入口）
@@ -602,12 +602,13 @@ class AgentApp:
         仅构造实例读取工具定义，不会真正执行文件操作。
         """
         ws = self.workspace or os.path.expanduser("~")
+        shell_timeout = float(self.config.get("tool_timeout", 120))
         return [
             FileSystemPlugin(ws),
             CodebasePlugin(ws),
             ASTPlugin(ws),
             EditorPlugin(ws),
-            ShellPlugin(ws),
+            ShellPlugin(ws, timeout_seconds=shell_timeout),
             GitPlugin(ws),
             ReviewPlugin(ws),
             WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
@@ -748,6 +749,10 @@ class AgentApp:
     def skills_delete(self, name: str, scope: str) -> Dict[str, Any]:
         from .tools.skills import SkillsTools
         return SkillsTools(self.workspace).delete_skill(name, scope)
+
+    def skills_update(self, name: str, description: str, scope: str) -> Dict[str, Any]:
+        from .tools.skills import SkillsTools
+        return SkillsTools(self.workspace).update_skill(name, description, scope)
 
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 

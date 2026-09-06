@@ -1191,7 +1191,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 /* 待发送队列（固定在输入框上方，不随对话滚动） */
 .pending-queue {
   flex-shrink: 0;
-  margin: 0 max(24px, calc((100% - 820px) / 2)) 8px;
+  /* 与输入框同列，但宽度约为输入框的 90%：输入框 = 100% - 2*左右 margin，
+     这里用相同 margin 再加 5% 内缩实现 90% 宽度，并保持居中 */
+  margin: 0 calc(max(24px, calc((100% - 820px) / 2)) + 5%) 8px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 10px;

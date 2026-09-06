@@ -38,6 +38,7 @@ export default function SettingsModal({
   const [skillBusy, setSkillBusy] = useState(false);
   const [skillMsg, setSkillMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [newSkill, setNewSkill] = useState({ name: "", description: "" });
+  const [editSkill, setEditSkill] = useState<{ name: string; scope: string; description: string } | null>(null);
   // 技能权限规则（glob → allow/deny/ask），保存走 /api/config
   const [permRules, setPermRules] = useState<Array<{ pattern: string; action: "allow" | "deny" | "ask" }>>([]);
   const [permDirty, setPermDirty] = useState(false);
@@ -167,7 +168,18 @@ export default function SettingsModal({
     if (!scope) return;
     void skillAction(async () => {
       const r = await api.importSkill({ source, zip_base64: zipBase64, scope, name: undefined });
-      return `已导入: ${r.skills.map((s) => s.name).join(", ")}`;
+      const names = r.skills.map((s) => s.name).join(", ");
+      const depsLines: string[] = [];
+      for (const s of r.skills as (import("../types").SkillInfo & { deps?: import("../types").SkillDepsReport })[]) {
+        if (!s.deps) continue;
+        const parts: string[] = [];
+        if (s.deps.pip) parts.push(s.deps.pip.ok ? "pip ✅" : "pip ❌");
+        if (s.deps.npm) parts.push(s.deps.npm.ok ? "npm ✅" : "npm ❌");
+        if (s.deps.env) parts.push("env ✅");
+        if (parts.length) depsLines.push(`${s.name}: ${parts.join(", ")}`);
+      }
+      const msg = depsLines.length ? `已导入 ${names}\n依赖: ${depsLines.join("；")}` : `已导入: ${names}`;
+      return msg;
     });
   };
 
@@ -990,6 +1002,27 @@ export default function SettingsModal({
                           setSkillContent({ name: s.name, content: r.content });
                           return `已加载 ${s.name}`;
                         })}>查看</button>
+                      {s.writable && (
+                        <button className="btn-test" disabled={skillBusy}
+                          onClick={() => setEditSkill(
+                            editSkill?.name === s.name ? null : { name: s.name, scope: s.scope, description: s.description }
+                          )}>
+                          {editSkill?.name === s.name ? "取消" : "编辑"}
+                        </button>
+                      )}
+                      {editSkill?.name === s.name && editSkill.scope === s.scope && (
+                        <div className="skill-edit-inline" style={{ display: "inline-flex", gap: 4, marginLeft: 4 }}>
+                          <input className="form-input" style={{ width: 200 }}
+                            value={editSkill.description}
+                            onChange={(e) => setEditSkill({ ...editSkill, description: e.target.value })} />
+                          <button className="btn-test" disabled={skillBusy || !editSkill.description.trim()}
+                            onClick={() => void skillAction(async () => {
+                              await api.updateSkill(s.name, editSkill.description.trim(), s.scope);
+                              setEditSkill(null);
+                              return `已更新 ${s.name} 的描述`;
+                            })}>保存</button>
+                        </div>
+                      )}
                       {s.writable && (
                         <button className="btn-test" disabled={skillBusy}
                           onClick={() => {

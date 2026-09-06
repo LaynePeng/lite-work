@@ -15,6 +15,8 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -63,8 +65,9 @@ def _safe_name(name: str) -> Optional[str]:
 def parse_frontmatter(text: str) -> Dict[str, Any]:
     """轻量 YAML frontmatter 解析（不引入 pyyaml）。
 
-    支持扁平 `key: value` 与一层嵌套 map（`metadata:` 下缩进键值）；
-    列表/多行字符串等复杂结构整体跳过。未知字段由调用方决定取舍。
+    支持扁平 `key: value`、一层嵌套 map（`metadata:` 下缩进键值）
+    与多行块标量（`|` 字面块 / `>` 折叠块，作为字符串值收集）。
+    未知字段由调用方决定取舍。
     """
     if not text.startswith("---"):
         return {}
@@ -73,11 +76,14 @@ def parse_frontmatter(text: str) -> Dict[str, Any]:
         return {}
     meta: Dict[str, Any] = {}
     current_key: Optional[str] = None
-    for line in lines[1:]:
+    i, n = 1, len(lines)
+    while i < n:
+        line = lines[i]
         stripped = line.strip()
         if stripped == "---":
             break
         if not stripped or stripped.startswith("#"):
+            i += 1
             continue
         if line.startswith((" ", "\t")) and current_key:
             # 嵌套 map（一层）
@@ -86,16 +92,34 @@ def parse_frontmatter(text: str) -> Dict[str, Any]:
                 nested = meta.setdefault(current_key, {})
                 if isinstance(nested, dict):
                     nested[k.strip()] = v.strip().strip("'\"")
+            i += 1
             continue
         if ":" in stripped:
             key, _, value = stripped.partition(":")
             key, value = key.strip(), value.strip()
-            if value in ("", "|", ">"):
+            if value in ("|", ">"):
+                # 块标量：收集后续缩进行作为字符串值
+                block: List[str] = []
+                j = i + 1
+                while j < n and lines[j].startswith((" ", "\t")):
+                    block.append(lines[j].strip())
+                    j += 1
+                if value == ">":
+                    # 折叠块：非空行用空格连接（近似 YAML 折叠语义）
+                    meta[key] = " ".join(block)
+                else:
+                    # 字面块：保留换行
+                    meta[key] = "\n".join(block)
+                current_key = None
+                i = j
+                continue
+            if value == "":
                 meta[key] = {}
                 current_key = key
             else:
                 meta[key] = value.strip("'\"")
                 current_key = None
+        i += 1
     return meta
 
 
@@ -376,6 +400,53 @@ class SkillsTools:
         )
         return {"ok": True, "name": name, "path": str(target / "SKILL.md"), "scope": scope}
 
+    def update_skill(self, name: str, description: str, scope: str) -> Dict[str, Any]:
+        """修改已有技能的 description（更新 SKILL.md frontmatter）。"""
+        root = self._writable_root(scope)
+        if root is None:
+            raise ValueError(f"scope {scope!r} 不可写")
+        safe = _safe_name(name)
+        if safe is None:
+            raise ValueError(f"非法技能名: {name!r}")
+        target = (root / safe).resolve()
+        if not str(target).startswith(str(root.resolve())):
+            raise ValueError(f"非法技能名: {name!r}")
+        skill_file = target / "SKILL.md"
+        if not skill_file.is_file():
+            raise ValueError(f"技能 {name!r} 不存在于 {scope} 技能目录")
+        raw = skill_file.read_text(encoding="utf-8", errors="replace")
+        # 定位 frontmatter 内的 description 字段（可能是单行或块标量多行）
+        import re as _re
+        lines = raw.splitlines(keepends=True)
+        fm_end = 0
+        in_fm = raw.startswith("---")
+        if in_fm:
+            for idx, ln in enumerate(lines):
+                if idx > 0 and ln.strip() == "---":
+                    fm_end = idx
+                    break
+        # 在 frontmatter 中找 description 起始行
+        desc_idx = -1
+        for idx, ln in enumerate(lines[: fm_end or len(lines)]):
+            if _re.match(r"^description\s*:", ln):
+                desc_idx = idx
+                break
+        if desc_idx >= 0:
+            # 若为块标量（| 或 >），连同后续缩进行一起替换
+            block_lines = 1
+            if _re.search(r":\s*[|>]\s*$", lines[desc_idx]):
+                for ln in lines[desc_idx + 1: fm_end or len(lines)]:
+                    if ln.startswith((" ", "\t")):
+                        block_lines += 1
+                    else:
+                        break
+            new_raw = "".join(lines[:desc_idx]) + f"description: {description}\n" + "".join(lines[desc_idx + block_lines:])
+        else:
+            # 没有 description 行，在 --- 后插入
+            new_raw = raw.replace("---\n", f"---\ndescription: {description}\n", 1)
+        skill_file.write_text(new_raw, encoding="utf-8")
+        return {"ok": True, "name": name, "path": str(skill_file), "scope": scope}
+
     def delete_skill(self, name: str, scope: str) -> Dict[str, Any]:
         root = self._writable_root(scope)
         if root is None:
@@ -426,6 +497,73 @@ class SkillsTools:
             pass
         return found
 
+    def _install_skill_deps(self, target: Path) -> Dict[str, Any]:
+        """安装技能依赖：Python 包（requirements.txt）、Node 包（package.json）、
+        环境文件（.env.example → .env）。
+
+        返回依赖安装报告，供前端展示。安装失败不会中断导入（仅报告）。
+        """
+        report: Dict[str, Any] = {"pip": None, "npm": None, "env": None}
+
+        # 1. Python 依赖
+        req_file = target / "requirements.txt"
+        if req_file.is_file():
+            try:
+                py = sys.executable or "python3"
+                r = subprocess.run(
+                    [py, "-m", "pip", "install", "-r", str(req_file), "--quiet"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                report["pip"] = {
+                    "ok": r.returncode == 0,
+                    "stdout": r.stdout[:2000] if r.stdout else "",
+                    "stderr": r.stderr[:2000] if r.stderr else "",
+                }
+                if r.returncode != 0:
+                    logger.warning("[Skills] pip install 失败（%s）: %s", target.name, r.stderr[:500])
+            except Exception as exc:
+                report["pip"] = {"ok": False, "error": str(exc)[:500]}
+                logger.warning("[Skills] pip install 异常（%s）: %s", target.name, exc)
+
+        # 2. Node 依赖
+        pkg_file = target / "package.json"
+        if pkg_file.is_file():
+            try:
+                npm = shutil.which("npm")
+                if not npm:
+                    report["npm"] = {"ok": False, "error": "npm 未安装"}
+                else:
+                    r = subprocess.run(
+                        [npm, "install", "--no-audit", "--no-fund", "--production"],
+                        cwd=str(target), capture_output=True, text=True, timeout=120,
+                    )
+                    report["npm"] = {
+                        "ok": r.returncode == 0,
+                        "stdout": r.stdout[:2000] if r.stdout else "",
+                        "stderr": r.stderr[:2000] if r.stderr else "",
+                    }
+                    if r.returncode != 0:
+                        logger.warning("[Skills] npm install 失败（%s）: %s", target.name, r.stderr[:500])
+            except Exception as exc:
+                report["npm"] = {"ok": False, "error": str(exc)[:500]}
+                logger.warning("[Skills] npm install 异常（%s）: %s", target.name, exc)
+
+        # 3. 环境文件
+        env_example = target / ".env.example"
+        env_file = target / ".env"
+        if env_example.is_file() and not env_file.is_file():
+            try:
+                shutil.copy2(env_example, env_file)
+                report["env"] = {"ok": True, "action": "已从 .env.example 创建 .env，请检查配置"}
+            except Exception as exc:
+                report["env"] = {"ok": False, "error": str(exc)[:500]}
+        elif env_example.is_file() and env_file.is_file():
+            report["env"] = {"ok": True, "action": ".env 已存在，跳过"}
+        elif env_example.is_file():
+            report["env"] = {"ok": True, "action": "无 .env.example，跳过"}
+
+        return report
+
     def _copy_skill_dir(self, src: Path, scope: str, name: Optional[str]) -> Dict[str, Any]:
         meta = parse_frontmatter((src / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
         self._validate_meta(meta, src.name)
@@ -436,7 +574,12 @@ class SkillsTools:
         if target.exists():
             raise ValueError(f"技能 {skill_name!r} 已存在，请先删除或改名")
         shutil.copytree(src, target, ignore=shutil.ignore_patterns("__pycache__", ".git"))
-        return {"ok": True, "name": skill_name, "path": str(target / "SKILL.md"), "scope": scope}
+        # 复制后安装依赖
+        deps = self._install_skill_deps(target)
+        result: Dict[str, Any] = {"ok": True, "name": skill_name, "path": str(target / "SKILL.md"), "scope": scope}
+        if any(v is not None for v in deps.values()):
+            result["deps"] = deps
+        return result
 
     def _import_from_dir(self, src: Path, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
         candidates = self._find_skill_dirs(src)
@@ -488,8 +631,11 @@ class SkillsTools:
     # ------------------------------------------------------------ GitHub 导入
 
     def _import_from_github(self, url: str, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
-        import httpx
+        """从 GitHub 导入技能。
 
+        优先使用 git clone（稳健、支持大仓库、保留子模块），
+        git 不可用时回退为 zipball 流式下载。
+        """
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
@@ -504,27 +650,89 @@ class SkillsTools:
         subpath = ""
         if len(parts) >= 5 and parts[2] == "tree":
             subpath = "/".join(parts[4:])
+        # 可选分支/标签：https://github.com/{owner}/{repo}#{branch|tag}
+        branch = ""
+        if parsed.fragment:
+            branch = parsed.fragment.strip().strip("/")
+
+        # 优先使用 git clone（稳健、支持大仓库）
+        git = shutil.which("git")
+        if git:
+            return self._import_from_github_git(git, url, owner, repo, branch, subpath, scope, name)
+
+        # 回退：zipball 流式下载
+        import httpx
 
         headers = {"User-Agent": "lite-work-agent", "Accept": "application/vnd.github+json"}
         api = f"https://api.github.com/repos/{owner}/{repo}"
-        with httpx.Client(timeout=60, follow_redirects=True, headers=headers) as client:
-            branch = ""
-            if subpath:
+        with httpx.Client(timeout=120, follow_redirects=True, headers=headers) as client:
+            if branch:
+                ref_resp = client.get(f"{api}/git/ref/heads/{branch}")
+                if ref_resp.status_code != 200:
+                    tag_resp = client.get(f"{api}/git/ref/tags/{branch}")
+                    if tag_resp.status_code != 200:
+                        raise ValueError(f"分支或标签不存在: {branch}")
+            elif subpath:
                 meta = client.get(api).json()
                 branch = meta.get("default_branch") or "main"
-            # zipball 直接返回默认分支；子路径时需具体分支
             zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
-            resp = client.get(zip_url)
-            if resp.status_code == 404:
-                raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
-            resp.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            results = self._import_zip_buffer(zf, scope, name)
+            with client.stream("GET", zip_url) as resp:
+                if resp.status_code == 404:
+                    raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
+                resp.raise_for_status()
+                tmp_zip = Path(tempfile.mkdtemp(prefix="litework-gh-")) / "repo.zip"
+                with open(tmp_zip, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=1024 * 256):
+                        f.write(chunk)
+        try:
+            with zipfile.ZipFile(tmp_zip) as zf:
+                results = self._import_zip_buffer(zf, scope, name)
+        finally:
+            shutil.rmtree(tmp_zip.parent, ignore_errors=True)
         if subpath:
             results = [r for r in results if r["path"].replace("\\", "/").find(f"/{subpath}/") >= 0]
             if not results:
                 raise ValueError(f"仓库 {subpath} 子路径下未找到技能")
         return results
+
+    def _import_from_github_git(
+        self, git: str, url: str, owner: str, repo: str,
+        branch: str, subpath: str, scope: str, name: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """使用 git clone 从 GitHub 导入技能（支持大仓库、子模块）。"""
+        # 构造 clone URL（不含片段）
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        clone_url = f"https://github.com/{owner}/{repo}.git"
+        clone_args = [git, "clone", "--depth", "1"]
+        if branch:
+            clone_args.extend(["--branch", branch])
+        clone_args.append(clone_url)
+
+        tmp = Path(tempfile.mkdtemp(prefix="litework-git-"))
+        target_dir = tmp / "repo"
+        try:
+            r = subprocess.run(
+                clone_args + [str(target_dir)],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode != 0:
+                raise ValueError(f"git clone 失败: {r.stderr[:500]}")
+
+            # 处理子路径
+            skill_root = target_dir
+            if subpath:
+                skill_root = target_dir / subpath
+                if not skill_root.is_dir():
+                    raise ValueError(f"子路径 {subpath} 不存在")
+
+            candidates = self._find_skill_dirs(skill_root)
+            if not candidates:
+                raise ValueError(f"导入来源中未找到含 SKILL.md 的技能目录")
+            return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None) for c in candidates]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     # ------------------------------------------------------------ Agent 工具接口（保持兼容）
 

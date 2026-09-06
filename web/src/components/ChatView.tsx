@@ -357,14 +357,10 @@ export default function ChatView({
   pendingApprovals,
   subAgentRecords,
   skillLoaded,
-  pendingQueue,
   onSend,
   onStop,
   onApprove,
   currentAgent,
-  onRemovePending,
-  onReorderPending,
-  onSendPending,
 }: {
   sessionId: string;
   sessionTitle: string;
@@ -375,79 +371,16 @@ export default function ChatView({
   pendingApprovals: { id: string; action: string; reason: string }[];
   subAgentRecords: SubAgentProgress[];
   skillLoaded?: string[];
-  pendingQueue: string[];
   onSend: (prompt: string) => void;
   onStop: () => void;
   onApprove: (approvalId: string, approved: boolean) => void;
   currentAgent: string;
-  onRemovePending?: (index: number) => void;
-  onReorderPending?: (from: number, to: number) => void;
-  onSendPending?: (index: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
 
-  // 拖拽排序状态
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-
-  const handleDragStart = useCallback((idx: number) => (e: React.DragEvent) => {
-    setDragIdx(idx);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", String(idx));
-  }, []);
-
-  const handleDragOver = useCallback((idx: number) => (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverIdx(idx);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setDragOverIdx(null);
-  }, []);
-
-  const handleDrop = useCallback((idx: number) => (e: React.DragEvent) => {
-    e.preventDefault();
-    if (dragIdx !== null && dragIdx !== idx) {
-      onReorderPending?.(dragIdx, idx);
-    }
-    setDragIdx(null);
-    setDragOverIdx(null);
-  }, [dragIdx, onReorderPending]);
-
-  const handleDragEnd = useCallback(() => {
-    setDragIdx(null);
-    setDragOverIdx(null);
-  }, []);
-
-  const pendingQueueEl = pendingQueue.length > 0 ? (
-    <div className="pending-queue">
-      <div className="pending-queue-header">
-        <span className="pending-queue-title">待发送队列（{pendingQueue.length}）</span>
-      </div>
-      <div className="pending-queue-list">
-        {pendingQueue.map((item, idx) => (
-          <div
-            key={idx}
-            className={`pending-queue-item ${dragOverIdx === idx ? "drag-over" : ""} ${dragIdx === idx ? "dragging" : ""}`}
-            draggable
-            onDragStart={handleDragStart(idx)}
-            onDragOver={handleDragOver(idx)}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop(idx)}
-            onDragEnd={handleDragEnd}
-          >
-            <span className="pending-queue-drag">⠿</span>
-            <span className="pending-queue-text">{item}</span>
-            <button className="pending-queue-send" onClick={() => onSendPending?.(idx)} title="立即发送">➤</button>
-            <button className="pending-queue-remove" onClick={() => onRemovePending?.(idx)} title="移除">✕</button>
-          </div>
-        ))}
-      </div>
-    </div>
-  ) : null;
+  
 
   const turns = useMemo(() => buildTurns(messages), [messages]);
   // 提问条状态已移至独立的 QuestionBar 组件
@@ -520,8 +453,6 @@ export default function ChatView({
         )}
         <div ref={bottomRef} />
       </div>
-
-      {pendingQueueEl}
 
       {pendingApprovals.map((pa) => (
         <div className="approval-overlay" key={pa.id}>

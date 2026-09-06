@@ -568,7 +568,7 @@ export default function Composer({
           onDragOver={handleDragOver}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
-          placeholder={running ? "任务进行中：输入将加入待发送队列，任务完成后自动发送" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
           rows={3}
           disabled={disabled}
         />
@@ -607,7 +607,7 @@ export default function Composer({
       <div className="composer-hint">
         {uploadToast && <span className="upload-toast">{uploadToast}</span>}
         {uploadToast ? " · " : ""}
-        {running ? "任务进行中：➤ 追加到待发送队列（任务完成后自动发送），■ 停止任务" : "工具执行受安全策略保护，中危操作会请求你确认"}
+        {running ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送" : "工具执行受安全策略保护，中危操作会请求你确认"}
       </div>
     </div>
   );
