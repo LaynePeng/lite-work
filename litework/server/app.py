@@ -1371,6 +1371,16 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="任务不存在")
         return {"ok": True}
 
+    @fast_app.get("/api/tasks/background")
+    async def list_background_tasks(request: Request):
+        _check_auth(request)
+        return {"tasks": app.background_tasks()}
+
+    @fast_app.post("/api/tasks/background/{task_id}/kill")
+    async def kill_background_task(task_id: str, request: Request):
+        _check_auth(request)
+        return {"ok": app.kill_background_task(task_id)}
+
     # ------------------------------------------------------------ 审批
 
     @fast_app.post("/api/approve")

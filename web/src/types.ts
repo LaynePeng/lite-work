@@ -399,6 +399,16 @@ export interface ChatSessionState {
   pendingQueue: string[];
 }
 
+// ---------------------------------------------------------------- 后台命令
+
+export interface BackgroundTaskInfo {
+  task_id: string;
+  command: string;
+  running: boolean;
+  elapsed: number;
+  exit_code: number | null;
+}
+
 // ---------------------------------------------------------------- Skills 管理与命令
 
 export interface SkillInfo {

@@ -11,7 +11,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, BackgroundTaskInfo, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 
 interface StreamingState {
@@ -93,6 +93,10 @@ export default function App() {
   const [draftReasoning, setDraftReasoning] = useState<Record<string, string>>({});
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
   const [registeredTools, setRegisteredTools] = useState<{ name: string; description: string }[]>([]);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([]);
+  // 面板折叠状态：默认展开（false=展开）
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
   const sidebarResize = useResizable({
@@ -101,11 +105,20 @@ export default function App() {
     storageKey: "litework.sidebarWidth.v2",
   });
   const toolPanelResize = useResizable({
-    axis: "col", initial: 280, min: 220,
-    max: () => Math.min(600, Math.floor(window.innerWidth * 0.45)),
+    // 右侧工具面板默认约为窗口宽度的 23%
+    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.23), min: 260,
+    max: () => Math.min(720, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
-    storageKey: "litework.toolPanelWidth",
+    storageKey: "litework.toolPanelWidth.v2",
   });
+
+  // 后台命令轮询：每 2s 拉取右侧工具面板「后台」tab 数据
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api.backgroundTasks().then((r) => setBackgroundTasks(r.tasks)).catch(() => {});
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
 
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
   const taskIdsRef = useRef<Map<string, string>>(new Map());
@@ -1417,12 +1430,18 @@ export default function App() {
       className="app"
       style={
         {
-          "--sidebar-w": `${sidebarResize.size}px`,
-          "--tool-w": `${toolPanelResize.size}px`,
+          "--sidebar-w": sidebarCollapsed ? "0px" : `${sidebarResize.size}px`,
+          "--tool-w": toolPanelCollapsed ? "0px" : `${toolPanelResize.size}px`,
         } as React.CSSProperties
       }
     >
       <div className="drag-region" />
+      {sidebarCollapsed && (
+        <button className="panel-restore-bar left" onClick={() => setSidebarCollapsed(false)} title="展开侧边栏">
+          <span className="restore-icon">▶</span>
+        </button>
+      )}
+      {!sidebarCollapsed && (
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -1436,6 +1455,8 @@ export default function App() {
         projectKind={
           (recentProjects.find((p) => p.path === status?.workspace)?.kind) ?? "project"
         }
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
         onTabChange={changeSidebarTab}
         onSelectSession={(id) => void selectSession(id)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
@@ -1453,12 +1474,15 @@ export default function App() {
         onOpenAbout={() => setShowAbout(true)}
         onFileOpen={(p) => void openFileTab(p)}
       />
+      )}
+      {!sidebarCollapsed && (
       <div
         className="resizer col"
         title="拖拽调整侧边栏宽度（双击重置）"
         onPointerDown={sidebarResize.startDrag}
         onDoubleClick={sidebarResize.reset}
       />
+      )}
       <main className="main">
         <TabBar
           tabs={tabs}
@@ -1569,7 +1593,12 @@ export default function App() {
           </div>
         )}
       </main>
-      {activeTab?.kind === "chat" && (
+      {activeTab?.kind === "chat" && toolPanelCollapsed && (
+        <button className="panel-restore-bar right" onClick={() => setToolPanelCollapsed(false)} title="展开工具面板">
+          <span className="restore-icon">◀</span>
+        </button>
+      )}
+      {activeTab?.kind === "chat" && !toolPanelCollapsed && (
         <>
           <div
             className="resizer col"
@@ -1577,7 +1606,18 @@ export default function App() {
             onPointerDown={toolPanelResize.startDrag}
             onDoubleClick={toolPanelResize.reset}
           />
-          <ToolPanel contextStats={currentChat.contextStats} mcpServers={mcpServers} tools={registeredTools} todos={currentChat.todos} />
+          <ToolPanel
+            contextStats={currentChat.contextStats}
+            mcpServers={mcpServers}
+            tools={registeredTools}
+            todos={currentChat.todos}
+            backgroundTasks={backgroundTasks}
+            collapsed={toolPanelCollapsed}
+            onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}
+            onKillBackground={(id) => void api.killBackgroundTask(id).then(() => {
+              setBackgroundTasks((prev) => prev.filter((t) => t.task_id !== id));
+            }).catch(() => {})}
+          />
         </>
       )}
       {showSettings && (

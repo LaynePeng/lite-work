@@ -121,6 +121,7 @@ class AgentApp:
         self.todo_plugin = TodoPlugin(
             storage_dir=os.path.join(self.config_dir, "todo_boards"))
         self._local_plugins: Optional[List[Plugin]] = None
+        self._shell_plugin: Optional[ShellPlugin] = None
         self.approval_gate = ApprovalGate(
             timeout_seconds=self.config.get("approval_timeout", 600)
         )
@@ -603,12 +604,14 @@ class AgentApp:
         """
         ws = self.workspace or os.path.expanduser("~")
         shell_timeout = float(self.config.get("tool_timeout", 120))
+        if self._shell_plugin is None:
+            self._shell_plugin = ShellPlugin(ws, timeout_seconds=shell_timeout)
         return [
             FileSystemPlugin(ws),
             CodebasePlugin(ws),
             ASTPlugin(ws),
             EditorPlugin(ws),
-            ShellPlugin(ws, timeout_seconds=shell_timeout),
+            self._shell_plugin,
             GitPlugin(ws),
             ReviewPlugin(ws),
             WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
@@ -753,6 +756,20 @@ class AgentApp:
     def skills_update(self, name: str, description: str, scope: str) -> Dict[str, Any]:
         from .tools.skills import SkillsTools
         return SkillsTools(self.workspace).update_skill(name, description, scope)
+
+    # ------------------------------------------------------------ 后台命令（Web/API 薄封装）
+
+    def background_tasks(self) -> List[Dict[str, Any]]:
+        """列出所有后台命令（execute_command background=true 启动的）。"""
+        if self._shell_plugin is None:
+            return []
+        return self._shell_plugin._tools.list_background()
+
+    def kill_background_task(self, task_id: str) -> bool:
+        """杀掉指定后台命令。"""
+        if self._shell_plugin is None:
+            return False
+        return self._shell_plugin._tools.kill_background(task_id)
 
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 

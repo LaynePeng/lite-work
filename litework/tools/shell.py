@@ -259,3 +259,24 @@ class ShellTools:
             if not out.strip() and not err.strip():
                 parts.append("[No output yet]")
         return "\n".join(parts)
+
+    def list_background(self) -> List[Dict[str, Any]]:
+        """列出所有后台任务（供右侧工具面板「后台」tab 展示）。"""
+        return [{
+            "task_id": tid,
+            "command": t.command[:300],
+            "running": not t.done,
+            "elapsed": round(t.elapsed, 1),
+            "exit_code": t.exit_code,
+        } for tid, t in self._background.items()]
+
+    def kill_background(self, task_id: str) -> bool:
+        """杀掉指定后台任务（供面板「杀掉」按钮）。返回是否成功发起终止。"""
+        task = self._background.get(task_id)
+        if task is None or task.done or task.proc is None:
+            return False
+        try:
+            task.proc.kill()
+            return True
+        except ProcessLookupError:
+            return False

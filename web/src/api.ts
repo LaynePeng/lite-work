@@ -90,6 +90,10 @@ export const api = {
   },
   stopTask: (taskId: string) =>
     req<{ ok: boolean }>(`/api/tasks/${taskId}/stop`, { method: "POST" }),
+  backgroundTasks: () =>
+    req<{ tasks: import("./types").BackgroundTaskInfo[] }>("/api/tasks/background"),
+  killBackgroundTask: (taskId: string) =>
+    req<{ ok: boolean }>(`/api/tasks/background/${encodeURIComponent(taskId)}/kill`, { method: "POST" }),
   approve: (approvalId: string, approved: boolean) =>
     req<{ ok: boolean }>("/api/approve", {
       method: "POST", body: JSON.stringify({ approval_id: approvalId, approved }),

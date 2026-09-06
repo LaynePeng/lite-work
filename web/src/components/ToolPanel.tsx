@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ContextStats, ContextTaskStats, MCPServerStatus, TodoItem } from "../types";
+import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, TodoItem } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
 
@@ -157,11 +157,49 @@ function TodosPanel({ todos }: { todos: TodoItem[] }) {
   );
 }
 
+// ---------------------------------------------------------------- 后台命令面板
+
+function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKill: (taskId: string) => void }) {
+  if (!tasks || tasks.length === 0) {
+    return <div className="tool-panel-empty">暂无后台命令（Agent 异步执行时显示）</div>;
+  }
+  return (
+    <div className="bg-panel">
+      <div className="tools-panel-count">运行中 {tasks.filter((t) => t.running).length} / 共 {tasks.length}</div>
+      <ul className="bg-list">
+        {tasks.map((t) => (
+          <li key={t.task_id} className={`bg-item ${t.running ? "running" : "done"}`}>
+            <span className="bg-item-text" title={t.command}>{t.command}</span>
+            <span className="bg-item-meta">
+              {t.running ? `⏱ ${t.elapsed}s` : `✅ ${t.exit_code} (${t.elapsed}s)`}
+            </span>
+            {t.running && (
+              <button className="bg-item-kill" onClick={() => onKill(t.task_id)} title="杀掉">■</button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- 主组件
 
-export default function ToolPanel({ contextStats, mcpServers, tools, todos }: { contextStats: ContextStats | null; mcpServers: MCPServerStatus[]; tools: { name: string; description: string }[]; todos: TodoItem[] }) {
-  const [panelTab, setPanelTab] = useState<"context" | "todos" | "mcp" | "tools">("context");
+export default function ToolPanel({
+  contextStats, mcpServers, tools, todos, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+}: {
+  contextStats: ContextStats | null;
+  mcpServers: MCPServerStatus[];
+  tools: { name: string; description: string }[];
+  todos: TodoItem[];
+  backgroundTasks?: BackgroundTaskInfo[];
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  onKillBackground?: (taskId: string) => void;
+}) {
+  const [panelTab, setPanelTab] = useState<"context" | "todos" | "mcp" | "background" | "tools">("context");
   const todoDone = todos.filter((t) => t.status === "completed").length;
+  const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
 
   return (
     <aside className="tool-panel">
@@ -186,10 +224,19 @@ export default function ToolPanel({ contextStats, mcpServers, tools, todos }: { 
           MCP
         </button>
         <button
+          className={`panel-tab ${panelTab === "background" ? "active" : ""}`}
+          onClick={() => setPanelTab("background")}
+        >
+          后台{runningCount > 0 ? ` (${runningCount})` : ""}
+        </button>
+        <button
           className={`panel-tab ${panelTab === "tools" ? "active" : ""}`}
           onClick={() => setPanelTab("tools")}
         >
           工具
+        </button>
+        <button className="panel-collapse-btn" onClick={onToggleCollapsed} title={collapsed ? "展开面板" : "收起面板"}>
+          {collapsed ? "◀" : "▶"}
         </button>
       </div>
       <div className="tool-panel-body tool-panel-context">
@@ -199,7 +246,9 @@ export default function ToolPanel({ contextStats, mcpServers, tools, todos }: { 
             ? <TodosPanel todos={todos} />
             : panelTab === "mcp"
               ? <McpPanel servers={mcpServers} />
-              : <ToolsPanel tools={tools} />}
+              : panelTab === "background"
+                ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
+                : <ToolsPanel tools={tools} />}
       </div>
     </aside>
   );

@@ -217,9 +217,6 @@ function OutputPreview({ revision }: { revision: number }) {
   return (
     <div className="files-panel outputs-panel">
       <div className="files-header">
-        <span className="files-workspace" title="Agent 产出物与上传素材">
-          🗂️ 产出物与素材
-        </span>
         <div className="files-header-actions">
           <button
             className="btn-ghost-sm"
@@ -407,6 +404,8 @@ export default function Sidebar({
   recentProjects,
   projectsView,
   projectKind,
+  collapsed,
+  onToggleCollapsed,
   onTabChange,
   onSelectSession,
   onOpenSessionWithProject,
@@ -434,6 +433,8 @@ export default function Sidebar({
   recentProjects: RecentProject[];
   projectsView: "list" | "sessions";
   projectKind: "code" | "project";
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   onTabChange: (tab: SidebarTab) => void;
   onSelectSession: (id: string) => void;
   onOpenSessionWithProject: (id: string) => void;
@@ -469,6 +470,9 @@ export default function Sidebar({
       <div className="sidebar-brand">
         <span className="brand-logo"><AppIcon size={30} /></span>
         <span className="brand-name">lite-work</span>
+        <button className="sidebar-collapse-btn" onClick={onToggleCollapsed} title={collapsed ? "展开侧边栏" : "收起侧边栏"}>
+          {collapsed ? "▶" : "◀"}
+        </button>
       </div>
 
       <div className="sidebar-tabs">
