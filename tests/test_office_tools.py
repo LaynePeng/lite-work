@@ -521,3 +521,63 @@ def test_import_zip_with_plugin_py_at_root(tmp_path):
     assert (installed / "plugin.py").is_file()
     assert (installed / "requirements.txt").is_file()
 
+
+def test_plugin_wheels_extraction(tmp_path, monkeypatch):
+    """插件自带 wheels/*.whl → 解压到 libs/ 并可被插件 import（打包态唯一依赖机制）。"""
+    import io
+    import sys as _sys
+    import zipfile
+
+    from litework.tools.plugin_loader import import_source, list_plugins
+
+    # 造一个假 wheel：zip 根目录含 my_whl_pkg/__init__.py（whl 标准结构）
+    whl_buf = io.BytesIO()
+    with zipfile.ZipFile(whl_buf, "w") as zf:
+        zf.writestr("my_whl_pkg/__init__.py", "VALUE = 'from-wheel'\n")
+    whl_bytes = whl_buf.getvalue()
+
+    src = tmp_path / "wheeled-plug"
+    src.mkdir()
+    wheels = src / "wheels"
+    wheels.mkdir()
+    (wheels / "my_whl_pkg-1.0.0-py3-none-any.whl").write_bytes(whl_bytes)
+    # 插件代码 import wheel 里的包并暴露其值（验证 libs/ 已入 sys.path）
+    (src / "plugin.py").write_text(
+        "from litework.tools.plugin import ToolPlugin\n"
+        "from litework.core.types import ToolDefinition\n"
+        "from my_whl_pkg import VALUE\n"
+        "class WheeledPlugin(ToolPlugin):\n"
+        "    name='wheeled-plug'\n"
+        "    def get_tools(self):\n"
+        "        return [ToolDefinition(name='whl_tool', description=VALUE,\n"
+        "                               parameters={'type':'object','properties':{}})]\n"
+        "    async def execute(self, name, args): return VALUE\n",
+        encoding="utf-8",
+    )
+
+    cfg = tmp_path / "cfg"
+    import_source(str(cfg), str(src))
+
+    installed = cfg / "plugins" / "wheeled-plug"
+    assert (installed / "libs" / "my_whl_pkg" / "__init__.py").is_file(), "wheel 未解压到 libs/"
+    assert (installed / "libs" / ".wheels-stamp").is_file(), "缺少解压 stamp"
+
+    # 元信息读取会真实执行插件模块 → import my_whl_pkg 成功即证明 libs 生效
+    meta = list_plugins(str(cfg))
+    p = next(x for x in meta if x["name"] == "wheeled-plug")
+    assert "whl_tool" in p["tools"]
+
+    # 幂等：二次加载不重复解压（stamp 命中）
+    from litework.tools.plugin_loader import _extract_wheels
+    import time as _time
+    before = (installed / "libs" / ".wheels-stamp").stat().st_mtime_ns
+    _time.sleep(0.01)
+    _extract_wheels(str(installed / "wheels"), str(installed / "libs"))
+    assert (installed / "libs" / ".wheels-stamp").stat().st_mtime_ns == before, "stamp 未命中，重复解压"
+
+    # 清理 sys.path（测试隔离）
+    libs = str(installed / "libs")
+    if libs in _sys.path:
+        _sys.path.remove(libs)
+    _sys.modules.pop("my_whl_pkg", None)
+

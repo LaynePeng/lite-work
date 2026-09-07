@@ -187,9 +187,34 @@ def _discover_plugin_modules(plugin_dir: str) -> List[Dict[str, Any]]:
 
 
 def _install_plugin_deps(plugin_dir: str) -> None:
-    """安装目录插件内的 requirements.txt（幂等，失败静默）。"""
+    """安装目录插件依赖（幂等）。
+
+    两套机制，按运行形态自动选择：
+    - wheels/*.whl（推荐，全形态可用）：解压到插件 libs/ 子目录并加入
+      sys.path。打包态（PyInstaller frozen）的 site-packages 已固化，
+      pip 装到任何位置 frozen 进程都无法 import——自带 wheels 是唯一
+      可离线分发的方式（whl 即 zip，包结构在根目录，直接解压即用）。
+      以 stamp 文件记录已解压的 wheel 清单，未变化不重复解压。
+    - requirements.txt（仅开发态）：sys.executable -m pip 安装到 venv。
+      打包态 sys.executable 是 backend.exe（无 pip），跳过并告警。
+    """
+    # 1. wheels 解压（幂等：stamp 记录 wheel 文件名清单，变化才重新解压）
+    wheels_dir = os.path.join(plugin_dir, "wheels")
+    if os.path.isdir(wheels_dir):
+        try:
+            _extract_wheels(wheels_dir, os.path.join(plugin_dir, "libs"))
+        except Exception as exc:
+            logger.warning("[PluginLoader] 插件 wheels 解压失败（%s）: %s", plugin_dir, exc)
+
+    # 2. requirements.txt：仅开发态（打包态无 pip 且装了也 import 不到）
     req_file = os.path.join(plugin_dir, "requirements.txt")
     if not os.path.isfile(req_file):
+        return
+    if getattr(sys, "frozen", False):
+        logger.warning(
+            "[PluginLoader] 打包版不支持 requirements.txt 安装（%s）："
+            "请让插件自带 wheels/*.whl（pip download <pkg> -d wheels/）", plugin_dir,
+        )
         return
     try:
         import subprocess
@@ -197,10 +222,58 @@ def _install_plugin_deps(plugin_dir: str) -> None:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
             capture_output=True, text=True, encoding='utf-8', errors='replace',
-            timeout=120,
+            timeout=600,
         )
     except Exception as exc:
         logger.warning("[PluginLoader] 插件依赖安装失败（%s）: %s", req_file, exc)
+
+
+def _extract_wheels(wheels_dir: str, libs_dir: str) -> None:
+    """把 wheels_dir 下全部 .whl 解压到 libs_dir（whl 即 zip，包在根目录）。
+
+    stamp 机制：libs_dir/.wheels-stamp 记录已解压的 wheel 文件名集合，
+    与当前目录一致时跳过（避免每次加载重复 IO）；wheel 更新后自动重解压。
+    """
+    wheel_files = sorted(
+        f for f in os.listdir(wheels_dir) if f.lower().endswith(".whl")
+    )
+    if not wheel_files:
+        return
+    import zipfile as _zipfile
+
+    stamp_path = os.path.join(libs_dir, ".wheels-stamp")
+    try:
+        with open(stamp_path, "r", encoding="utf-8") as f:
+            if f.read().splitlines() == wheel_files:
+                return  # 已解压且无变化
+    except OSError:
+        pass
+
+    os.makedirs(libs_dir, exist_ok=True)
+    for wf in wheel_files:
+        # zip-slip 防护：条目必须解压在 libs_dir 内
+        with _zipfile.ZipFile(os.path.join(wheels_dir, wf)) as zf:
+            libs_abs = os.path.abspath(libs_dir)
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                dest = os.path.abspath(os.path.join(libs_dir, info.filename))
+                if not dest.startswith(libs_abs + os.sep):
+                    raise ValueError(f"wheel 条目路径越界: {info.filename}")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(info) as fsrc, open(dest, "wb") as fdst:
+                    import shutil as _shutil
+                    _shutil.copyfileobj(fsrc, fdst)
+    with open(stamp_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(wheel_files))
+    logger.info("[PluginLoader] 已解压 %d 个 wheel → %s", len(wheel_files), libs_dir)
+
+
+def _plugin_libs_dir(spec_path: str) -> Optional[str]:
+    """插件模块的 libs 目录（存在才返回）。目录插件：模块所在目录/libs。"""
+    plugin_dir = os.path.dirname(os.path.abspath(spec_path))
+    libs = os.path.join(plugin_dir, "libs")
+    return libs if os.path.isdir(libs) else None
 
 
 def _load_module(spec_path: str, module_name: str) -> Optional[object]:
@@ -210,8 +283,11 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
         if spec is None or spec.loader is None:
             return None
         mod = importlib.util.module_from_spec(spec)
-        # 把插件目录加入 sys.path，让插件内相对导入可用
         plugin_dir = os.path.dirname(os.path.abspath(spec_path))
+        # sys.path 顺序：libs（wheels 解压出的依赖，优先）→ 插件目录（相对导入）
+        libs = _plugin_libs_dir(spec_path)
+        if libs and libs not in sys.path:
+            sys.path.insert(0, libs)
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
         spec.loader.exec_module(mod)
@@ -307,6 +383,10 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for desc in _discover_plugin_modules(root):
         name = desc["name"]
+        # 目录插件先解依赖（wheels 解压幂等；与 load_plugins 同路径，
+        # 保证元信息读取时插件模块能正常 import 其依赖）
+        if desc["is_dir"]:
+            _install_plugin_deps(desc["path"])
         tools: List[str] = []
         removed: List[str] = []
         description = ""
@@ -383,6 +463,9 @@ def _copy_plugin_entry(cand: Path, target: str, target_name: str) -> Dict[str, A
         _shutil.copy2(cand, dest)
         return {"ok": True, "name": target_name, "path": dest}
     _shutil.copytree(cand, target, ignore=_shutil.ignore_patterns("__pycache__", ".git"))
+    # 安装即解依赖：wheels 解压到 libs/（stamp 幂等），插件装完即自包含；
+    # requirements.txt 在打包态跳过（load 时会再兜底调用一次，双保险）
+    _install_plugin_deps(target)
     return {"ok": True, "name": target_name, "path": target}
 
 

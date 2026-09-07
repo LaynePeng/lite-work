@@ -159,7 +159,7 @@ class MyPlugin(ToolPlugin):
         return "工具结果"
 ```
 
-要点：实现自包含（不要只包装主程序内部代码）；同名工具自动覆盖；第三方依赖写 `requirements.txt`（安装时自动 pip）。完整模板见 [lite-work-plugins/plugins/example-greeting](https://github.com/laynepeng/lite-work-plugins/tree/main/plugins/example-greeting)。
+要点：实现自包含（不要只包装主程序内部代码）；同名工具自动覆盖。第三方依赖用 **wheels 分发**：插件目录放 `wheels/*.whl`（`pip download <pkg> -d wheels/`），安装时自动解压到 `libs/` 并加入 `sys.path`——打包版 frozen 进程无法用 pip，wheels 是唯一可离线分发的依赖机制（`requirements.txt` 仅开发态可用）。完整模板见 [lite-work-plugins/plugins/example-greeting](https://github.com/laynepeng/lite-work-plugins/tree/main/plugins/example-greeting)。
 
 ### 编写技能
 

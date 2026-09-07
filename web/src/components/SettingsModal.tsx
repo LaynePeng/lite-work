@@ -320,17 +320,20 @@ export default function SettingsModal({
         if (!r.ok) {
           setPluginMsg({ ok: true, text: `${text}；Core 未重启（${r.error}），改动将在下个任务生效` });
           refreshPlugins();
+          void refreshAgents();
         }
         return;
       }
       setPluginMsg({ ok: true, text });
       refreshPlugins();
+      // 插件工具增删会改变 Agents 页的可分配工具清单，同步刷新
+      void refreshAgents();
     } catch (e) {
       setPluginMsg({ ok: false, text: (e as Error).message });
     } finally {
       setPluginBusy(false);
     }
-  }, [refreshPlugins]);
+  }, [refreshPlugins, refreshAgents]);
 
   const handlePluginImport = (source: string, overwrite: boolean, version?: string) => {
     void pluginAction(async () => {

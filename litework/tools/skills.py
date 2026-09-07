@@ -510,13 +510,25 @@ class SkillsTools:
         report: Dict[str, Any] = {"pip": None, "npm": None, "env": None}
 
         # 1. Python 依赖
+        # 打包态 sys.executable 是 PyInstaller backend.exe（无 pip）；
+        # 技能脚本本就用系统 Python 子进程执行，依赖也装到系统 Python
         req_file = target / "requirements.txt"
         if req_file.is_file():
             try:
-                py = sys.executable or "python3"
+                py = "python3"
+                if getattr(sys, "frozen", False):
+                    py = shutil.which("python3") or shutil.which("python") or ""
+                    if not py:
+                        report["pip"] = {
+                            "ok": False,
+                            "error": "未找到系统 Python（打包版技能依赖需系统 Python + pip）",
+                        }
+                        return report
+                else:
+                    py = sys.executable or "python3"
                 r = subprocess.run(
                     [py, "-m", "pip", "install", "-r", str(req_file), "--quiet"],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True, text=True, timeout=600,
                 )
                 report["pip"] = {
                     "ok": r.returncode == 0,
