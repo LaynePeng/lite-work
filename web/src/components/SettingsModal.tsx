@@ -1,6 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { BuiltinPluginInfo, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
+
+// 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
+// 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
+// "1.0.0rc0" 视作 1.0.0 的预发布版（1.0.0 > 1.0.0rc0 > 1.0.0-beta）
+function verCompare(a: string, b: string): number {
+  const parse = (v: string): [number, number, number, string] | null => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(.+)?$/.exec((v || "").trim());
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3]), m[4] || ""] : null;
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa || !pb) return (a || "").localeCompare(b || "");
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return (pa[i] as number) - (pb[i] as number);
+  }
+  if (pa[3] === pb[3]) return 0;
+  if (!pa[3]) return 1;
+  if (!pb[3]) return -1;
+  return pa[3] < pb[3] ? -1 : 1;
+}
 
 export default function SettingsModal({
   onClose,
@@ -88,6 +108,98 @@ export default function SettingsModal({
       setCommunityBusy(false);
     }
   }, []);
+
+  // 社区发现过滤：只显示「比当前生效版本新的更新」和「尚未安装的新插件」；
+  // 已是最新（或本地版更新）的隐藏，避免与已安装区重复
+  const communityUpdates = useMemo(() => {
+    const updates: { cp: CommunityManifest["plugins"][number]; currentVer: string; isLocal: boolean }[] = [];
+    const fresh: CommunityManifest["plugins"][number][] = [];
+    if (community) {
+      for (const cp of community.plugins) {
+        const local = plugins.find((p) => p.name === cp.name);
+        const builtin = builtinPlugins.find((b) => b.name === cp.name);
+        const currentVer = local?.version || builtin?.version || "";
+        if (!currentVer) {
+          fresh.push(cp);
+        } else if (verCompare(cp.version, currentVer) > 0) {
+          updates.push({ cp, currentVer, isLocal: !!local });
+        }
+      }
+    }
+    return { updates, fresh };
+  }, [community, plugins, builtinPlugins]);
+
+  // 社区插件安装源 URL（manifest.path → GitHub 子目录）；无源返回 ""
+  const communitySrc = useCallback((name: string) => {
+    const cp = community?.plugins.find((p) => p.name === name);
+    return cp?.path ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cp.path}` : "";
+  }, [community]);
+
+  // 社区技能过滤：只显示「未安装」和「已安装但社区有更新版」的
+  // （更新检测依赖 SKILL.md frontmatter 的 version 字段，社区技能补上后自动生效）
+  const communitySkillsView = useMemo(() => {
+    const updates: { cs: CommunityManifest["skills"][number]; currentVer: string }[] = [];
+    const fresh: CommunityManifest["skills"][number][] = [];
+    if (community) {
+      for (const cs of community.skills) {
+        const installed = skills.find((s) => s.name === cs.name);
+        if (!installed) {
+          fresh.push(cs);
+        } else if (cs.version && installed.version && verCompare(cs.version, installed.version) > 0) {
+          updates.push({ cs, currentVer: installed.version });
+        }
+      }
+    }
+    return { updates, fresh };
+  }, [community, skills]);
+
+  // 已安装插件统一视图：内置 + 本地用户版合并。
+  // 本地版（~/.lite-work/plugins/）同名覆盖内置版 → 生效版本 = 本地版本；
+  // 没有本地版的显示内置版（随主程序发布）。updateTo = 社区可更新到的版本。
+  const installedView = useMemo(() => {
+    const userByName = new Map(plugins.map((p) => [p.name, p]));
+    const updateByName = new Map(communityUpdates.updates.map((u) => [u.cp.name, u.cp.version]));
+    const items: Array<{
+      name: string;
+      description: string;
+      tools: string[];
+      removedTools?: string[];
+      effectiveVer: string;
+      builtinVer?: string;
+      source?: string;
+      isLocal: boolean;
+      updateTo?: string;
+    }> = builtinPlugins.map((bp) => {
+      const u = userByName.get(bp.name);
+      return {
+        name: bp.name,
+        description: u?.description || bp.description,
+        tools: u ? u.tools : bp.tools,
+        removedTools: u?.removed_tools,
+        effectiveVer: u?.version || bp.version,
+        builtinVer: bp.version,
+        source: u?.source,
+        isLocal: !!u,
+        updateTo: updateByName.get(bp.name),
+      };
+    });
+    // 纯本地插件（无内置对应）
+    for (const p of plugins) {
+      if (!builtinPlugins.some((b) => b.name === p.name)) {
+        items.push({
+          name: p.name,
+          description: p.description,
+          tools: p.tools,
+          removedTools: p.removed_tools,
+          effectiveVer: p.version || "—",
+          source: p.source,
+          isLocal: true,
+          updateTo: updateByName.get(p.name),
+        });
+      }
+    }
+    return items;
+  }, [plugins, builtinPlugins, communityUpdates]);
 
   const refreshAgents = useCallback(async () => {
     try {
@@ -198,6 +310,19 @@ export default function SettingsModal({
     setPluginMsg(null);
     try {
       const text = await fn();
+      // Electron 本地模式：插件变更后自动重启 Core（全新进程状态，页面随之刷新）。
+      // 任务运行中 / 非 Electron 环境则跳过重启——缓存失效机制保证
+      // 下一个任务同样能加载新插件（litework/app.py _invalidate_plugin_cache）。
+      const restart = window.liteWork?.restartCore;
+      if (restart) {
+        setPluginMsg({ ok: true, text: `${text}；正在重启 Core…` });
+        const r = await restart();
+        if (!r.ok) {
+          setPluginMsg({ ok: true, text: `${text}；Core 未重启（${r.error}），改动将在下个任务生效` });
+          refreshPlugins();
+        }
+        return;
+      }
       setPluginMsg({ ok: true, text });
       refreshPlugins();
     } catch (e) {
@@ -1095,127 +1220,15 @@ export default function SettingsModal({
             <div className="settings-section">
               <h3>插件（Plugins）</h3>
               <p className="mcp-hint">
-                插件是 Cordis 风格的工具扩展。内置插件随主程序发布（v{builtinPlugins[0]?.version || "?"}），
-                用户可安装社区版覆盖更新。卸载用户版后自动回退内置版。
+                工具以插件形式提供：<b>内置</b>随主程序发布；社区安装 / 手动导入的为<b>本地</b>版本，
+                同名时覆盖内置版（删除本地版后自动回退）。
               </p>
 
               {pluginMsg && <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>{pluginMsg.text}</div>}
 
-              <div className="mcp-section-head">
-                <span>内置插件（{builtinPlugins.length} 个）</span>
-                <button className="btn-test" disabled={communityBusy}
-                  onClick={() => void fetchCommunity()}>
-                  {communityBusy ? "检查中…" : "检查社区更新"}
-                </button>
-              </div>
-              <div className="skills-list">
-                {builtinPlugins.map((bp) => {
-                  const userVer = plugins.find((p) => p.name === bp.name)?.version;
-                  return (
-                    <div className="skill-item" key={bp.name}>
-                      <div className="skill-item-main">
-                        <span className="skill-item-name">{bp.name}</span>
-                        <span className="plugin-version">v{bp.version}</span>
-                        {userVer && <span className="plugin-version user">已更新 v{userVer}</span>}
-                        <span className="skill-item-desc">{bp.description}</span>
-                        <div className="plugin-tools">
-                          {bp.tools.slice(0, 8).map((t) => <span className="plugin-tool" key={t}>{t}</span>)}
-                          {bp.tools.length > 8 && <span className="plugin-tool">+{bp.tools.length - 8}</span>}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {community && (
-                <div className="mcp-section-head" style={{ marginTop: 12 }}>
-                  <span>社区插件（{community.plugins.length} 个）</span>
-                </div>
-              )}
-              {community && community.plugins.length > 0 && (
-                <div className="skills-list">
-                  {community.plugins.map((cp) => {
-                    const isInstalled = plugins.some((p) => p.name === cp.name);
-                    const builtinVer = builtinPlugins.find((b) => b.name === cp.name)?.version;
-                    const hasUpdate = builtinVer && cp.version && cp.version !== builtinVer;
-                    // manifest.path 为插件目录（相对仓库根），空则无源可装
-                    const srcUrl = cp.path
-                      ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cp.path}`
-                      : "";
-                    return (
-                      <div className="skill-item" key={cp.name}>
-                        <div className="skill-item-main">
-                          <span className="skill-item-name">{cp.name}</span>
-                          <span className="plugin-version">v{cp.version}</span>
-                          <span className="skill-item-desc">{cp.description}</span>
-                        </div>
-                        <div className="skill-item-actions">
-                          {isInstalled
-                            ? <span className="mcp-empty-inline">已安装</span>
-                            : <button className="btn-test" disabled={pluginBusy || !srcUrl}
-                              onClick={() => void handlePluginImport(srcUrl, true, cp.version)}>安装</button>}
-                          {hasUpdate && (
-                            <button className="btn-test" disabled={pluginBusy || !srcUrl}
-                              onClick={() => void handlePluginImport(srcUrl, true, cp.version)}>更新</button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {community && community.skills.length > 0 && (
-                <>
-                  <div className="mcp-section-head" style={{ marginTop: 12 }}>
-                    <span>社区技能（{community.skills.length} 个，安装到用户级 ~/.agents/skills/）</span>
-                  </div>
-                  <div className="skills-list">
-                    {community.skills.map((cs) => {
-                      const isInstalled = skills.some((s) => s.name === cs.name && s.scope === "user");
-                      const srcUrl = cs.path
-                        ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cs.path}`
-                        : "";
-                      return (
-                        <div className="skill-item" key={cs.name}>
-                          <div className="skill-item-main">
-                            <span className="skill-item-name">{cs.name}</span>
-                            <span className="plugin-version">v{cs.version}</span>
-                            <span className="skill-item-desc">{cs.description}</span>
-                          </div>
-                          <div className="skill-item-actions">
-                            {isInstalled
-                              ? <span className="mcp-empty-inline">已安装</span>
-                              : <button className="btn-test" disabled={pluginBusy || !srcUrl}
-                                onClick={() => void pluginAction(async () => {
-                                  const r = await api.importSkill({ source: srcUrl, scope: "user" });
-                                  refreshSkills();
-                                  return `已安装技能: ${r.skills.map((s) => s.name).join(", ")}`;
-                                })}>安装</button>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-
-              <div className="mcp-section-head" style={{ marginTop: 12 }}>
-                <span>用户已安装（{plugins.length} 个）</span>
-                <label className="btn-test" style={{ cursor: "pointer" }}>
-                  📤 导入 zip
-                  <input type="file" accept=".zip" style={{ display: "none" }}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handlePluginZip(f, pluginOverwrite);
-                      e.target.value = "";
-                    }} />
-                </label>
-              </div>
-
-              <div className="skills-import-row">
-                <input className="form-input" placeholder="本地目录路径或 GitHub URL（含子目录）"
+              {/* -------- 工具栏：手动导入 + 社区更新检查 -------- */}
+              <div className="plugin-toolbar">
+                <input className="form-input" placeholder="GitHub URL / 本地目录 / .zip 路径"
                   id="plugin-import-source" disabled={pluginBusy} />
                 <button className="btn-test" disabled={pluginBusy}
                   onClick={() => {
@@ -1223,54 +1236,223 @@ export default function SettingsModal({
                     const v = el?.value.trim();
                     if (v) void handlePluginImport(v, pluginOverwrite, undefined);
                   }}>导入</button>
+                <label className="btn-test" style={{ cursor: "pointer" }}>
+                  📤 zip
+                  <input type="file" accept=".zip" style={{ display: "none" }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handlePluginZip(f, pluginOverwrite);
+                      e.target.value = "";
+                    }} />
+                </label>
+                <label className="plugin-toolbar-toggle" title="导入同名插件时覆盖已安装的本地版">
+                  <input type="checkbox" checked={pluginOverwrite}
+                    onChange={(e) => setPluginOverwrite(e.target.checked)} />
+                  覆盖已存在
+                </label>
+                <button className="btn-test" disabled={communityBusy} style={{ marginLeft: "auto" }}
+                  onClick={() => void fetchCommunity()}>
+                  {communityBusy ? "检查中…" : "⟳ 检查社区更新"}
+                </button>
               </div>
 
-              <label className="mcp-toggle" style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                <input type="checkbox" checked={pluginOverwrite}
-                  onChange={(e) => setPluginOverwrite(e.target.checked)} />
-                覆盖同名插件（更新）
-              </label>
-
-              <div className="skills-list">
-                {plugins.length === 0 && (
-                  <div className="mcp-empty">
-                    暂无用户插件。可从社区安装或导入 zip / GitHub 仓库。
-                  </div>
+              {/* -------- 已安装：内置 + 本地合并，显示当前生效版本 -------- */}
+              <div className="mcp-section-head">
+                <span>已安装（{installedView.length} 个）</span>
+                {community && !communityBusy && (
+                  <span className="plugin-status">
+                    {communityUpdates.updates.length > 0
+                      ? `${communityUpdates.updates.length} 个可更新`
+                      : "✔ 全部最新"}
+                  </span>
                 )}
-                {plugins.map((p) => (
-                  <div className="skill-item" key={p.name}>
-                    <div className="skill-item-main">
-                      <span className="skill-item-name">{p.name}</span>
-                      {p.version && <span className="plugin-version user">v{p.version}</span>}
-                      {p.source && <span className="skill-scope user" title={p.source}>来源</span>}
-                      <span className="skill-item-desc" title={p.description || p.path}>
-                        {p.description || (p.path || "").split(/[\\/]/).pop()}
-                      </span>
-                      <div className="plugin-tools">
-                        {p.tools.length > 0
-                          ? p.tools.map((t) => <span className="plugin-tool" key={t}>{t}</span>)
-                          : <span className="mcp-empty-inline">（未发现工具）</span>}
-                        {p.removed_tools && p.removed_tools.length > 0 && (
-                          <span className="mcp-empty-inline" style={{ marginLeft: 6 }}>
-                            移除: {p.removed_tools.join(", ")}
+              </div>
+              <div className="skills-list">
+                {installedView.length === 0 && (
+                  <div className="mcp-empty">尚未发现插件（异常状态，请重启应用）</div>
+                )}
+                {installedView.map((item) => (
+                  <div className="skill-item plugin-item" key={item.name}>
+                    <div className="plugin-item-body">
+                      <div className="plugin-title-row">
+                        <span className="skill-item-name">{item.name}</span>
+                        <span className={`plugin-tag ${item.isLocal ? "local" : "builtin"}`}>
+                          {item.isLocal ? "本地" : "内置"}
+                        </span>
+                        <span className="plugin-version">v{item.effectiveVer}</span>
+                        {item.isLocal && item.builtinVer && (
+                          <span className="plugin-tag builtin" title="删除本地版后回退到此版本">
+                            内置 v{item.builtinVer}
                           </span>
+                        )}
+                        {item.updateTo && (
+                          <span className="plugin-upd-hint" title="社区有新版本">→ v{item.updateTo} 可更新</span>
+                        )}
+                      </div>
+                      <span className="plugin-desc-row" title={item.description}>{item.description}</span>
+                      <div className="plugin-tools">
+                        {item.tools.length > 0
+                          ? <>{item.tools.slice(0, 8).map((t) => <span className="plugin-tool" key={t}>{t}</span>)}
+                              {item.tools.length > 8 && <span className="plugin-tool">+{item.tools.length - 8}</span>}</>
+                          : <span className="mcp-empty-inline">（未发现工具）</span>}
+                        {item.removedTools && item.removedTools.length > 0 && (
+                          <span className="mcp-empty-inline">移除: {item.removedTools.join(", ")}</span>
                         )}
                       </div>
                     </div>
                     <div className="skill-item-actions">
-                      {p.source && p.source.startsWith("http") && (
-                        <button className="btn-test" disabled={pluginBusy} title={`从来源更新: ${p.source}`}
-                          onClick={() => void handlePluginImport(p.source || "", true, undefined)}>更新</button>
+                      {item.updateTo && (
+                        <button className="btn-update" disabled={pluginBusy || communityBusy}
+                          title={`更新到社区版 v${item.updateTo}`}
+                          onClick={() => void handlePluginImport(communitySrc(item.name), true, item.updateTo)}>
+                          更新
+                        </button>
                       )}
-                      <button className="btn-test" disabled={pluginBusy}
-                        onClick={() => void pluginAction(async () => {
-                          const r = await api.deletePlugin(p.name);
-                          return `已删除 ${r.name}，已回退内置版`;
-                        })}>删除</button>
+                      {item.isLocal && (
+                        <button className="btn-test" disabled={pluginBusy}
+                          title={item.builtinVer ? "删除本地版，回退内置版" : "彻底删除该插件"}
+                          onClick={() => void pluginAction(async () => {
+                            const r = await api.deletePlugin(item.name);
+                            return item.builtinVer
+                              ? `已删除本地版 ${r.name}，回退内置版 v${item.builtinVer}`
+                              : `已彻底删除 ${r.name}`;
+                          })}>删除</button>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
+
+              {/* -------- 社区发现：只显示可更新 + 未安装的新插件 -------- */}
+              {community && (
+                <>
+                  <div className="mcp-section-head" style={{ marginTop: 12 }}>
+                    <span>
+                      社区发现（可更新 {communityUpdates.updates.length} · 新插件 {communityUpdates.fresh.length}）
+                    </span>
+                  </div>
+                  {communityUpdates.updates.length + communityUpdates.fresh.length === 0 ? (
+                    <div className="mcp-empty-inline" style={{ padding: "6px 2px" }}>
+                      ✔ 已安装插件均为最新版本
+                    </div>
+                  ) : (
+                    <div className="skills-list">
+                      {communityUpdates.updates.map(({ cp, currentVer, isLocal }) => (
+                        <div className="skill-item plugin-item" key={cp.name}>
+                          <div className="plugin-item-body">
+                            <div className="plugin-title-row">
+                              <span className="skill-item-name">{cp.name}</span>
+                              <span className={`plugin-tag ${isLocal ? "local" : "builtin"}`}>
+                                {isLocal ? "本地" : "内置"}
+                              </span>
+                              <span className="plugin-ver-diff">
+                                v{currentVer} → <b>v{cp.version}</b>
+                              </span>
+                            </div>
+                            <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                          </div>
+                          <div className="skill-item-actions">
+                            <button className="btn-update" disabled={pluginBusy || !communitySrc(cp.name)}
+                              onClick={() => void handlePluginImport(communitySrc(cp.name), true, cp.version)}>
+                              更新
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {communityUpdates.fresh.map((cp) => (
+                        <div className="skill-item plugin-item" key={cp.name}>
+                          <div className="plugin-item-body">
+                            <div className="plugin-title-row">
+                              <span className="skill-item-name">{cp.name}</span>
+                              <span className="plugin-tag new">未安装</span>
+                              <span className="plugin-version">v{cp.version}</span>
+                            </div>
+                            <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                          </div>
+                          <div className="skill-item-actions">
+                            <button className="btn-test" disabled={pluginBusy || !communitySrc(cp.name)}
+                              onClick={() => void handlePluginImport(communitySrc(cp.name), true, cp.version)}>
+                              安装
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* -------- 社区技能：只显示可更新 + 未安装（安装到用户级 ~/.agents/skills/） -------- */}
+              {community && community.skills.length > 0 && (
+                <>
+                  <div className="mcp-section-head" style={{ marginTop: 12 }}>
+                    <span>
+                      社区技能（可更新 {communitySkillsView.updates.length} · 未安装 {communitySkillsView.fresh.length}，装到 ~/.agents/skills/）
+                    </span>
+                  </div>
+                  {communitySkillsView.updates.length + communitySkillsView.fresh.length === 0 ? (
+                    <div className="mcp-empty-inline" style={{ padding: "6px 2px" }}>
+                      ✔ 已安装的社区技能均为最新
+                    </div>
+                  ) : (
+                    <div className="skills-list">
+                      {communitySkillsView.updates.map(({ cs, currentVer }) => {
+                        const srcUrl = cs.path
+                          ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cs.path}`
+                          : "";
+                        return (
+                          <div className="skill-item plugin-item" key={cs.name}>
+                            <div className="plugin-item-body">
+                              <div className="plugin-title-row">
+                                <span className="skill-item-name">{cs.name}</span>
+                                <span className="plugin-tag local">本地</span>
+                                <span className="plugin-ver-diff">
+                                  v{currentVer} → <b>v{cs.version}</b>
+                                </span>
+                              </div>
+                              <span className="plugin-desc-row" title={cs.description}>{cs.description}</span>
+                            </div>
+                            <div className="skill-item-actions">
+                              <button className="btn-update" disabled={pluginBusy || !srcUrl}
+                                title="覆盖更新（保留本地 .env 配置）"
+                                onClick={() => void pluginAction(async () => {
+                                  const r = await api.importSkill({ source: srcUrl, scope: "user", overwrite: true });
+                                  refreshSkills();
+                                  return `已更新技能: ${r.skills.map((s) => s.name).join(", ")}`;
+                                })}>更新</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {communitySkillsView.fresh.map((cs) => {
+                        const srcUrl = cs.path
+                          ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cs.path}`
+                          : "";
+                        return (
+                          <div className="skill-item plugin-item" key={cs.name}>
+                            <div className="plugin-item-body">
+                              <div className="plugin-title-row">
+                                <span className="skill-item-name">{cs.name}</span>
+                                <span className="plugin-tag new">未安装</span>
+                                <span className="plugin-version">v{cs.version}</span>
+                              </div>
+                              <span className="plugin-desc-row" title={cs.description}>{cs.description}</span>
+                            </div>
+                            <div className="skill-item-actions">
+                              <button className="btn-test" disabled={pluginBusy || !srcUrl}
+                                onClick={() => void pluginAction(async () => {
+                                  const r = await api.importSkill({ source: srcUrl, scope: "user" });
+                                  refreshSkills();
+                                  return `已安装技能: ${r.skills.map((s) => s.name).join(", ")}`;
+                                })}>安装</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           ) : activeTab === "agents" ? (
             <div className="settings-section">

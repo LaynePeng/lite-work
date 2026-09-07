@@ -203,16 +203,49 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 /* ============================== 右侧面板 Tab ============================== */
 
-.panel-tabs {
+/* 外层：滚动 tab 条 + 固定收起按钮（收起按钮不随队列滚动） */
+.panel-tabs-wrap {
   display: flex;
+  align-items: stretch;
   flex-shrink: 0;
   /* 顶部 38px 是无边框窗口拖拽区，Tab 下移避开 */
-  padding: 40px 10px 0;
+  padding-top: 40px;
+}
+
+/* Tab 条横向滑动容器：面板拖窄后 tab 队列整体可拖动/滚动 */
+.panel-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  padding: 0 2px 0 10px;
   gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;           /* Firefox */
+  touch-action: pan-x;
+  user-select: none;
+}
+
+/* Chrome/Safari 隐藏滚动条（拖拽/滚轮滑动替代） */
+.panel-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* 拖拽滑动中：禁掉子元素 hover/点击反馈与文字光标 */
+.panel-tabs.dragging {
+  cursor: grabbing;
+}
+.panel-tabs.dragging .panel-tab,
+.panel-tabs.dragging .panel-collapse-btn {
+  pointer-events: none;
+}
+
+.panel-tabs:not(.dragging) {
+  cursor: grab;
 }
 
 .panel-tab {
-  flex: 1;
+  flex: none;                      /* 按内容宽度，不再均分 → 溢出才可滑动 */
   padding: 7px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -221,6 +254,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   background: transparent;
   border-bottom: 2px solid transparent;
+  white-space: nowrap;
   transition: color 0.12s ease, border-color 0.12s ease;
 }
 
@@ -3314,14 +3348,14 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   overflow: hidden;
 }
 
-/* 面板折叠按钮 */
+/* 面板折叠按钮（wrap 内固定，不参与横向滚动） */
 .panel-collapse-btn {
-  margin-left: auto;
-  padding: 2px 6px;
+  padding: 2px 10px;
   font-size: 11px;
   color: var(--text-2);
   border-radius: 4px;
   flex-shrink: 0;
+  align-self: center;
 }
 .panel-collapse-btn:hover {
   background: rgba(79, 140, 255, 0.15);
@@ -4520,6 +4554,131 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .mcp-empty-inline {
   font-size: 11px;
   color: var(--text-2);
+}
+
+/* -------- 插件页重构：工具栏 / 条目两行结构 / 版本标签 -------- */
+
+.plugin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+
+.plugin-toolbar .form-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.plugin-toolbar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plugin-status {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.plugin-status:has(b) {
+  color: var(--green);
+}
+
+/* 条目主体：两行结构（标题行 + 描述行），工具 chips 在第三行 */
+.plugin-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.plugin-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-desc-row {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 来源标签：内置 / 本地 / 未安装 */
+.plugin-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex: none;
+  line-height: 1.5;
+}
+
+.plugin-tag.local {
+  background: color-mix(in srgb, var(--accent-2, #8b5cf6) 15%, transparent);
+  color: var(--accent-2, #8b5cf6);
+}
+
+.plugin-tag.builtin {
+  background: var(--bg-2);
+  color: var(--text-2);
+}
+
+.plugin-tag.new {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+/* 可更新提示 / 版本对比箭头 */
+.plugin-upd-hint {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--green);
+}
+
+.plugin-ver-diff {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+}
+
+.plugin-ver-diff b {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* 更新动作按钮：accent 高亮，与普通 btn-test 区分 */
+.btn-update {
+  padding: 5px 14px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.15s;
+  color: #fff;
+  background: var(--accent, #4f8cff);
+  border: 1px solid transparent;
+}
+
+.btn-update:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn-update:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ==================== 综合设置：超时配置网格 ==================== */

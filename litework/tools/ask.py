@@ -55,6 +55,7 @@ class QuestionPlugin(ToolPlugin):
     """ask_user 工具插件：注册工具定义（实际 handler 由 create_kernel 注入真实 events）。"""
 
     name = "question-plugin"
+    version = "1.0.0"
 
     def __init__(self, question_gate) -> None:
         self._gate = question_gate

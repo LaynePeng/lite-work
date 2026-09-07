@@ -267,6 +267,8 @@ export interface LiteWorkBridge {
   version: string;
   openProject: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
   openProjectNewWindow: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
+  /** 重启当前窗口的本地 Core（插件变更后换取全新进程状态）；成功后页面整页刷新 */
+  restartCore: () => Promise<{ ok: boolean; url?: string; error?: string }>;
   /** 用系统默认应用打开工作区内的文件（非代码文件） */
   openFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
   /** 在系统文件管理器中定位（高亮显示）工作区内的文件 */
@@ -419,6 +421,8 @@ export interface SkillInfo {
   scope: "workspace" | "user";
   writable: boolean;
   triggers: string;
+  /** SKILL.md frontmatter 可选版本号（社区技能更新对比用，缺失为空） */
+  version?: string;
   /** 权限动作：allow（默认）/ deny（对 Agent 隐藏）/ ask（使用前需确认） */
   permission?: "allow" | "deny" | "ask";
 }

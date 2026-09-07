@@ -144,7 +144,7 @@ export const api = {
     req<{ ok: boolean; name: string; path: string }>("/api/skills/create", {
       method: "POST", body: JSON.stringify({ name, description, scope }),
     }),
-  importSkill: (payload: { source?: string; zip_base64?: string; scope: string; name?: string }) =>
+  importSkill: (payload: { source?: string; zip_base64?: string; scope: string; name?: string; overwrite?: boolean }) =>
     req<{ skills: import("./types").SkillInfo[] }>("/api/skills/import", {
       method: "POST", body: JSON.stringify(payload),
     }),

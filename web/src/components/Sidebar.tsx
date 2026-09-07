@@ -10,7 +10,7 @@ export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
 
 // ---------------------------------------------------------------- 目录树
 
-function FileTree({ workspace, revision, onFileOpen }: { workspace: string; revision: number; onFileOpen?: (path: string) => void }) {
+function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: string; revision: number; onFileOpen?: (path: string) => void; onDirOpen?: (path: string) => void }) {
   const [dirs, setDirs] = useState<Map<string, TreeEntry[]>>(new Map());
   const [open, setOpen] = useState<Set<string>>(new Set([""]));
   const [branch, setBranch] = useState<string | null>(null);
@@ -81,8 +81,14 @@ function FileTree({ workspace, revision, onFileOpen }: { workspace: string; revi
           <div
             className={`tree-row dir ${open.has(n.path) ? "open" : ""}`}
             style={{ paddingLeft: depth * 14 + 8 }}
-            title={n.path}
+            title={`${n.path}（双击在系统文件管理器中打开）`}
             onClick={() => void toggleDir(n.path)}
+            onDoubleClick={() => {
+              // 双击目录：系统文件管理器打开；双击产生的两次单击会把
+              // 展开状态抵消（展开→折叠），这里恢复展开
+              if (!open.has(n.path)) void toggleDir(n.path);
+              onDirOpen?.(n.path);
+            }}
           >
             <span className="tree-caret">{open.has(n.path) ? "▾" : "▸"}</span>
             <span className="tree-icon">📁</span>
@@ -111,7 +117,11 @@ function FileTree({ workspace, revision, onFileOpen }: { workspace: string; revi
   return (
     <div className="files-panel">
       <div className="files-header">
-        <span className="files-workspace" title={workspace}>
+        <span
+          className="files-workspace"
+          title={`${workspace}（双击在系统文件管理器中打开）`}
+          onDoubleClick={() => onDirOpen?.("")}
+        >
           📁 {workspace}
         </span>
         <div className="files-header-actions">
@@ -422,6 +432,7 @@ export default function Sidebar({
   onOpenSettings,
   onOpenAbout,
   onFileOpen,
+  onDirOpen,
 }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
@@ -451,6 +462,7 @@ export default function Sidebar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onFileOpen?: (path: string) => void;
+  onDirOpen?: (path: string) => void;
 }) {
   // 当前项目显示名：路径末段（兼容 / 与 \）；未打开项目时由 App 层保证不进入 sessions 视图
   const projectName = workspace && workspace !== "未打开项目"
@@ -628,7 +640,7 @@ export default function Sidebar({
           )
         )}
 
-        {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} />}
+        {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} />}
 
         {tab === "outputs" && <OutputPreview revision={outputRevision} />}
       </div>

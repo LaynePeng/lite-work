@@ -107,6 +107,7 @@ class SkillImportRequest(BaseModel):
     zip_base64: Optional[str] = None      # 前端上传的 zip（base64）
     scope: str = "workspace"
     name: Optional[str] = None            # 覆盖技能名（单技能来源时）
+    overwrite: bool = False               # 同名技能覆盖更新（保留本地 .env）
 
 class SkillUpdateRequest(BaseModel):
     description: str                      # 新的技能描述
@@ -506,9 +507,9 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
                     max_mb = max_bytes // (1024 * 1024)
                     raise ValueError(f"zip 文件过大（{raw_size / 1024 / 1024:.1f}MB），上限为 {max_mb}MB")
                 data = base64.b64decode(payload.zip_base64)
-                return {"skills": app.skills_import_zip(data, payload.scope, payload.name)}
+                return {"skills": app.skills_import_zip(data, payload.scope, payload.name, payload.overwrite)}
             if payload.source:
-                return {"skills": app.skills_import(payload.source, payload.scope, payload.name)}
+                return {"skills": app.skills_import(payload.source, payload.scope, payload.name, payload.overwrite)}
             raise ValueError("需要 source（目录/zip/GitHub URL）或 zip_base64")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

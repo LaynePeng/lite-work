@@ -360,6 +360,20 @@ export default function App() {
     ".puml", ".plantuml", ".mmd", ".mermaid", ".csv", ".tsv",
   ]);
 
+  // 双击目录/工作区根：在系统文件管理器中打开（Electron shell.openPath 对目录即打开 Finder/资源管理器）
+  const openDirInSystem = useCallback(async (dirPath: string) => {
+    const bridge = window.liteWork;
+    if (bridge?.openFile) {
+      const r = await bridge.openFile(dirPath);
+      if (!r.ok) window.alert(`无法打开目录：${r.error ?? (dirPath || "工作区根目录")}`);
+      return;
+    }
+    const ws = status?.workspace;
+    window.alert(
+      `浏览器模式无法打开本地目录。完整路径：${ws ? `${ws}${dirPath ? "/" + dirPath : ""}` : dirPath}`
+    );
+  }, [status?.workspace]);
+
   const openFileTab = useCallback(async (filePath: string) => {
     const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
     const isTextLike = TEXT_LIKE_EXT.has(ext) || !filePath.includes(".");
@@ -1473,6 +1487,7 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
         onFileOpen={(p) => void openFileTab(p)}
+        onDirOpen={(p) => void openDirInSystem(p)}
       />
       )}
       {!sidebarCollapsed && (

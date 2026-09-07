@@ -410,7 +410,9 @@ async function createLocalWindow(workspace = null) {
     localInstances.set(winId, record);
     window.once("closed", () => {
       stopTerminal(winId);
-      stopCore(instance.child);
+      // 引用 record（可变）而非 instance：restart-core 原地更新 record.child，
+      // 否则重启后关窗只会回收已死的旧进程、泄漏新 Core
+      stopCore(record.child);
       localInstances.delete(winId);
     });
     if (!window.isDestroyed()) window.loadURL(instance.url);
@@ -426,6 +428,56 @@ ipcMain.handle("open-project-new-window", async (event) => {
   const workspace = await chooseWorkspace(BrowserWindow.fromWebContents(event.sender));
   return workspace ? createLocalWindow(workspace) : { ok: false, error: "cancelled" };
 });
+
+// ------------------------------------------------------------ Core 重启
+
+// 重启指定窗口的本地 Core（插件安装/删除后由渲染进程触发，换取全新进程状态）。
+// 会话/配置在 ~/.lite-work 磁盘持久化，重启不丢历史；运行中的任务会被
+// 中断，因此 active_tasks > 0 时拒绝重启，由渲染进程提示用户稍后再试。
+async function restartLocalCore(winId) {
+  if (coreMode !== "local") {
+    return { ok: false, error: "仅本地 Core 模式支持重启（开发/远程模式请手动重启）" };
+  }
+  const record = localInstances.get(winId);
+  if (!record?.url) return { ok: false, error: "当前窗口没有运行中的本地 Core" };
+
+  // 权威状态以 Core 为准（渲染进程可能已通过 HTTP 热切换 workspace）
+  let workspace = record.workspace;
+  let activeTasks = 0;
+  try {
+    const resp = await fetch(new URL("/api/status", record.url).href);
+    if (resp.ok) {
+      const s = await resp.json();
+      activeTasks = Number(s.active_tasks) || 0;
+      if (typeof s.workspace === "string" && s.workspace) workspace = s.workspace;
+    }
+  } catch (err) {
+    writeLog("warn", "重启前拉取 Core 状态失败（继续用已知 workspace）:", err.message);
+  }
+  if (activeTasks > 0) {
+    return { ok: false, error: `有 ${activeTasks} 个任务运行中，请等待结束或停止后再重启` };
+  }
+
+  stopTerminal(winId);
+  killBackendTree(record.child);
+  try {
+    const instance = await spawnLocalCore(workspace);
+    // 原地更新 record：closed 回调与 before-quit 兜底读取的都是 record.child
+    record.child = instance.child;
+    record.url = instance.url;
+    record.workspace = workspace;
+    if (record.window && !record.window.isDestroyed()) {
+      record.window.loadURL(instance.url);
+    }
+    writeLog("log", `Core 已重启 → ${instance.url}`);
+    return { ok: true, url: instance.url };
+  } catch (err) {
+    writeLog("error", "Core 重启失败:", err.message);
+    return { ok: false, error: `Core 重启失败: ${err.message}` };
+  }
+}
+
+ipcMain.handle("restart-core", (event) => restartLocalCore(event.sender.id));
 
 function stopTerminal(id) {
   const term = terminals.get(id);

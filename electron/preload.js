@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld("liteWork", {
   openProject: () => ipcRenderer.invoke("open-project"),
   openProjectNewWindow: () => ipcRenderer.invoke("open-project-new-window"),
   /**
+   * 重启当前窗口的本地 Core（插件变更后换取全新进程状态）。
+   * 成功后页面整页刷新；有任务运行中时返回 { ok: false, error }。
+   */
+  restartCore: () => ipcRenderer.invoke("restart-core"),
+  /**
    * 用系统默认应用打开工作区内的文件（docx/xlsx/pdf/图片等非代码文件）。
    * 返回 { ok: true } 或 { ok: false, error }。
    */

@@ -73,6 +73,7 @@ class ToolPlugin(Plugin):
 
 class FileSystemPlugin(ToolPlugin):
     name = "filesystem-plugin"
+    version = "1.0.0"
     description = "文件系统：读写文件、目录浏览、文件树"
 
     def __init__(self, workspace: str) -> None:
@@ -87,6 +88,7 @@ class FileSystemPlugin(ToolPlugin):
 
 class CodebasePlugin(ToolPlugin):
     name = "codebase-plugin"
+    version = "1.0.0"
     description = "代码搜索：grep 搜索、Ripgrep 全文检索"
 
     def __init__(self, workspace: str) -> None:
@@ -101,6 +103,7 @@ class CodebasePlugin(ToolPlugin):
 
 class ASTPlugin(ToolPlugin):
     name = "ast-plugin"
+    version = "1.0.0"
     description = "AST 分析：文件大纲、符号聚焦"
 
     def __init__(self, workspace: str) -> None:
@@ -115,6 +118,7 @@ class ASTPlugin(ToolPlugin):
 
 class EditorPlugin(ToolPlugin):
     name = "editor-plugin"
+    version = "1.0.0"
     description = "代码编辑：Search-Replace、Unified Diff 精确编辑"
 
     def __init__(self, workspace: str) -> None:
@@ -129,6 +133,7 @@ class EditorPlugin(ToolPlugin):
 
 class ShellPlugin(ToolPlugin):
     name = "shell-plugin"
+    version = "1.0.0"
     description = "受限终端：执行命令"
 
     def __init__(self, workspace: str, timeout_seconds: float = 60.0) -> None:
@@ -143,6 +148,7 @@ class ShellPlugin(ToolPlugin):
 
 class SkillsPlugin(ToolPlugin):
     name = "skills-plugin"
+    version = "1.0.0"
     description = "技能加载：load_skill 按名称加载技能"
 
     def __init__(self, workspace: str) -> None:
@@ -157,6 +163,7 @@ class SkillsPlugin(ToolPlugin):
 
 class GitPlugin(ToolPlugin):
     name = "git-plugin"
+    version = "1.0.0"
     description = "Git 操作：status/diff/log/commit/branch"
 
     def __init__(self, workspace: str) -> None:
@@ -171,6 +178,7 @@ class GitPlugin(ToolPlugin):
 
 class ReviewPlugin(ToolPlugin):
     name = "review-plugin"
+    version = "1.0.0"
     description = "代码审查：review_code 审查代码变更"
 
     def __init__(self, workspace: str) -> None:
@@ -184,6 +192,7 @@ class ReviewPlugin(ToolPlugin):
 
 class WebFetchPlugin(ToolPlugin):
     name = "webfetch-plugin"
+    version = "1.0.0"
     description = "Web 抓取：webfetch/webfetch_batch 联网获取信息"
 
     def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600) -> None:
@@ -198,6 +207,7 @@ class WebFetchPlugin(ToolPlugin):
 
 class OcrPlugin(ToolPlugin):
     name = "ocr-plugin"
+    version = "1.0.0"
     description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
 
     def __init__(self, workspace: str) -> None:
@@ -212,6 +222,9 @@ class OcrPlugin(ToolPlugin):
 
 class OfficePlugin(ToolPlugin):
     name = "office-plugin"
+    # 独立功能版本（与社区仓库对齐比较，不借用应用版本号——否则应用升版会
+    # 与社区版本撞车，隐藏「检查社区更新」的更新入口）
+    version = "1.0.5"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
@@ -226,6 +239,7 @@ class OfficePlugin(ToolPlugin):
 
 class SubAgentPlugin(ToolPlugin):
     name = "sub-agent-plugin"
+    version = "1.0.0"
     description = "子 Agent 编排：spawn_sub_agent 派生子任务"
 
     def __init__(self, app) -> None:

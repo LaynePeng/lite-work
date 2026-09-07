@@ -44,6 +44,7 @@ class TodoPlugin(ToolPlugin):
     """todo_write 工具：任务级 TODO 看板（校验 + 存储 + 事件推送 + 持久化）。"""
 
     name = "todo-plugin"
+    version = "1.0.0"
 
     def __init__(self, storage_dir: Optional[str] = None) -> None:
         self._items: Dict[str, List[Dict[str, Any]]] = {}

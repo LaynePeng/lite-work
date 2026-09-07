@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, TodoItem } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
@@ -185,6 +185,60 @@ function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKil
 
 // ---------------------------------------------------------------- 主组件
 
+type PanelTabId = "context" | "todos" | "mcp" | "background" | "tools";
+
+// tab 条横向滑动：面板拖窄后 tab 队列整体滑动（不是拖动单个 tab）。
+// pointer 按住横向拖动 → scrollLeft 跟随位移；位移 < 5px 视为点击不拦截，
+// 同时支持触摸板/滚轮横向滚动与键盘左右键。
+function useTabStripDrag() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ startX: number; startScroll: number; moved: boolean; pointerId: number | null }>({
+    startX: 0, startScroll: 0, moved: false, pointerId: null,
+  });
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // 仅主键；面板宽度足够无溢出时不启动（避免无谓拦截）
+    const el = ref.current;
+    if (e.button !== 0 || !el || el.scrollWidth <= el.clientWidth + 1) return;
+    drag.current = { startX: e.clientX, startScroll: el.scrollLeft, moved: false, pointerId: e.pointerId };
+    el.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    const d = drag.current;
+    if (!el || d.pointerId !== e.pointerId) return;
+    const dx = e.clientX - d.startX;
+    if (!d.moved && Math.abs(dx) < 5) return;
+    if (!d.moved) {
+      d.moved = true;
+      el.classList.add("dragging");
+    }
+    el.scrollLeft = d.startScroll - dx;
+  };
+
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    const d = drag.current;
+    if (!el || d.pointerId !== e.pointerId) return;
+    d.pointerId = null;
+    el.classList.remove("dragging");
+  };
+
+  // 拖动结束后浏览器仍会向按下元素派发 click（pointer capture 不抑制 click），
+  // tab 的 onClick 用此判定吞掉：拖完松手 ≠ 点击
+  const wasDragged = () => {
+    const d = drag.current;
+    if (d.moved) {
+      d.moved = false;
+      return true;
+    }
+    return false;
+  };
+
+  return { ref, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, wasDragged };
+}
+
 export default function ToolPanel({
   contextStats, mcpServers, tools, todos, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
 }: {
@@ -197,44 +251,42 @@ export default function ToolPanel({
   onToggleCollapsed?: () => void;
   onKillBackground?: (taskId: string) => void;
 }) {
-  const [panelTab, setPanelTab] = useState<"context" | "todos" | "mcp" | "background" | "tools">("context");
+  const [panelTab, setPanelTab] = useState<PanelTabId>("context");
+  const strip = useTabStripDrag();
   const todoDone = todos.filter((t) => t.status === "completed").length;
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
 
+  const TABS: { id: PanelTabId; label: string; title?: string }[] = [
+    { id: "context", label: "上下文" },
+    { id: "todos", label: todos.length ? `TODOs ${todoDone}/${todos.length}` : "TODOs",
+      title: todos.length ? `进度 ${todoDone}/${todos.length}` : "Agent 规划多步骤任务时生成 TODO 清单" },
+    { id: "mcp", label: "MCP" },
+    { id: "background", label: runningCount > 0 ? `后台 (${runningCount})` : "后台" },
+    { id: "tools", label: "工具" },
+  ];
+
   return (
     <aside className="tool-panel">
-      <div className="panel-tabs">
-        <button
-          className={`panel-tab ${panelTab === "context" ? "active" : ""}`}
-          onClick={() => setPanelTab("context")}
+      <div className="panel-tabs-wrap">
+        <div
+          className="panel-tabs"
+          ref={strip.ref}
+          onPointerDown={strip.onPointerDown}
+          onPointerMove={strip.onPointerMove}
+          onPointerUp={strip.onPointerUp}
+          onPointerCancel={strip.onPointerCancel}
         >
-          上下文
-        </button>
-        <button
-          className={`panel-tab ${panelTab === "todos" ? "active" : ""}`}
-          onClick={() => setPanelTab("todos")}
-          title={todos.length ? `进度 ${todoDone}/${todos.length}` : "Agent 规划多步骤任务时生成 TODO 清单"}
-        >
-          {todos.length ? `TODOs ${todoDone}/${todos.length}` : "TODOs"}
-        </button>
-        <button
-          className={`panel-tab ${panelTab === "mcp" ? "active" : ""}`}
-          onClick={() => setPanelTab("mcp")}
-        >
-          MCP
-        </button>
-        <button
-          className={`panel-tab ${panelTab === "background" ? "active" : ""}`}
-          onClick={() => setPanelTab("background")}
-        >
-          后台{runningCount > 0 ? ` (${runningCount})` : ""}
-        </button>
-        <button
-          className={`panel-tab ${panelTab === "tools" ? "active" : ""}`}
-          onClick={() => setPanelTab("tools")}
-        >
-          工具
-        </button>
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className={`panel-tab ${panelTab === t.id ? "active" : ""}`}
+              title={t.title}
+              onClick={() => { if (!strip.wasDragged()) setPanelTab(t.id); }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <button className="panel-collapse-btn" onClick={onToggleCollapsed} title={collapsed ? "展开面板" : "收起面板"}>
           {collapsed ? "◀" : "▶"}
         </button>

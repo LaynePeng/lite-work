@@ -285,6 +285,8 @@ class SkillsTools:
                     "scope": root["scope"],
                     "writable": bool(root["writable"]),
                     "triggers": str(meta.get("triggers") or ""),
+                    # frontmatter 可选 version：社区技能更新对比用（缺失为空串）
+                    "version": str(meta.get("version") or ""),
                 })
         return out
 
@@ -462,21 +464,23 @@ class SkillsTools:
         shutil.rmtree(target)
         return {"ok": True, "name": name}
 
-    def import_skill(self, source: str, scope: str = "workspace", name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def import_skill(self, source: str, scope: str = "workspace", name: Optional[str] = None,
+                      overwrite: bool = False) -> List[Dict[str, Any]]:
         """导入技能：source 为本地目录 / zip 文件路径 / GitHub URL。
 
+        overwrite=True 时同名技能覆盖更新（保留本地 .env）。
         返回导入的技能列表（一个 zip/仓库可能包含多个技能）。
         """
         source = (source or "").strip()
         if source.startswith(("http://", "https://")):
-            return self._import_from_github(source, scope, name)
+            return self._import_from_github(source, scope, name, overwrite)
         p = Path(source).expanduser()
         if not p.exists():
             raise ValueError(f"路径不存在: {source}")
         if p.is_dir():
-            return self._import_from_dir(p, scope, name)
+            return self._import_from_dir(p, scope, name, overwrite)
         if p.suffix.lower() == ".zip":
-            return self._import_from_zip_file(p, scope, name)
+            return self._import_from_zip_file(p, scope, name, overwrite)
         raise ValueError(f"不支持的导入来源: {source}（支持目录 / .zip / GitHub URL）")
 
     # ------------------------------------------------------------ 目录导入
@@ -564,16 +568,26 @@ class SkillsTools:
 
         return report
 
-    def _copy_skill_dir(self, src: Path, scope: str, name: Optional[str]) -> Dict[str, Any]:
+    def _copy_skill_dir(self, src: Path, scope: str, name: Optional[str],
+                        overwrite: bool = False) -> Dict[str, Any]:
         meta = parse_frontmatter((src / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
         self._validate_meta(meta, src.name)
         skill_name = _safe_name(name or str(meta.get("name") or src.name))
         if skill_name is None:
             raise ValueError(f"非法技能名（来自 {src.name}）")
         target = self._resolve_target(skill_name, scope)
+        env_backup: Optional[bytes] = None
         if target.exists():
-            raise ValueError(f"技能 {skill_name!r} 已存在，请先删除或改名")
+            if not overwrite:
+                raise ValueError(f"技能 {skill_name!r} 已存在，请先删除或改名（或使用覆盖更新）")
+            # 覆盖更新：保留本地 .env（用户密钥等配置），其余以新版为准
+            env_file = target / ".env"
+            if env_file.is_file():
+                env_backup = env_file.read_bytes()
+            shutil.rmtree(target)
         shutil.copytree(src, target, ignore=shutil.ignore_patterns("__pycache__", ".git"))
+        if env_backup is not None:
+            (target / ".env").write_bytes(env_backup)
         # 复制后安装依赖
         deps = self._install_skill_deps(target)
         result: Dict[str, Any] = {"ok": True, "name": skill_name, "path": str(target / "SKILL.md"), "scope": scope}
@@ -581,15 +595,18 @@ class SkillsTools:
             result["deps"] = deps
         return result
 
-    def _import_from_dir(self, src: Path, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
+    def _import_from_dir(self, src: Path, scope: str, name: Optional[str],
+                          overwrite: bool = False) -> List[Dict[str, Any]]:
         candidates = self._find_skill_dirs(src)
         if not candidates:
             raise ValueError(f"{src} 下未找到含 SKILL.md 的技能目录")
-        return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None) for c in candidates]
+        return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None, overwrite)
+                for c in candidates]
 
     # ------------------------------------------------------------ zip 导入
 
-    def _import_zip_buffer(self, zf: zipfile.ZipFile, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
+    def _import_zip_buffer(self, zf: zipfile.ZipFile, scope: str, name: Optional[str],
+                           overwrite: bool = False) -> List[Dict[str, Any]]:
         names = zf.namelist()
         if len(names) > ZIP_MAX_ENTRIES:
             raise ValueError(f"zip 条目过多（>{ZIP_MAX_ENTRIES}），疑似恶意文件")
@@ -611,26 +628,30 @@ class SkillsTools:
             candidates = self._find_skill_dirs(tmp)
             if not candidates:
                 raise ValueError("zip 内未找到含 SKILL.md 的技能目录")
-            return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None) for c in candidates]
+            return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None, overwrite)
+                    for c in candidates]
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def _import_from_zip_file(self, p: Path, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
+    def _import_from_zip_file(self, p: Path, scope: str, name: Optional[str],
+                              overwrite: bool = False) -> List[Dict[str, Any]]:
         if p.stat().st_size > ZIP_MAX_BYTES:
             raise ValueError(f"zip 超过大小限制（>{ZIP_MAX_BYTES // (1024 * 1024)}MB）")
         with zipfile.ZipFile(p) as zf:
-            return self._import_zip_buffer(zf, scope, name)
+            return self._import_zip_buffer(zf, scope, name, overwrite)
 
-    def import_zip_bytes(self, data: bytes, scope: str = "workspace", name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def import_zip_bytes(self, data: bytes, scope: str = "workspace", name: Optional[str] = None,
+                         overwrite: bool = False) -> List[Dict[str, Any]]:
         """前端 base64 上传的 zip 直接导入。"""
         if len(data) > ZIP_MAX_BYTES:
             raise ValueError(f"zip 超过大小限制（>{ZIP_MAX_BYTES // (1024 * 1024)}MB）")
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            return self._import_zip_buffer(zf, scope, name)
+            return self._import_zip_buffer(zf, scope, name, overwrite)
 
     # ------------------------------------------------------------ GitHub 导入
 
-    def _import_from_github(self, url: str, scope: str, name: Optional[str]) -> List[Dict[str, Any]]:
+    def _import_from_github(self, url: str, scope: str, name: Optional[str],
+                            overwrite: bool = False) -> List[Dict[str, Any]]:
         """从 GitHub 导入技能。
 
         优先使用 git clone（稳健、支持大仓库、保留子模块），
@@ -658,7 +679,7 @@ class SkillsTools:
         # 优先使用 git clone（稳健、支持大仓库）
         git = shutil.which("git")
         if git:
-            return self._import_from_github_git(git, url, owner, repo, branch, subpath, scope, name)
+            return self._import_from_github_git(git, url, owner, repo, branch, subpath, scope, name, overwrite)
 
         # 回退：zipball 流式下载
         import httpx
@@ -686,7 +707,7 @@ class SkillsTools:
                         f.write(chunk)
         try:
             with zipfile.ZipFile(tmp_zip) as zf:
-                results = self._import_zip_buffer(zf, scope, name)
+                results = self._import_zip_buffer(zf, scope, name, overwrite)
         finally:
             shutil.rmtree(tmp_zip.parent, ignore_errors=True)
         if subpath:
@@ -698,6 +719,7 @@ class SkillsTools:
     def _import_from_github_git(
         self, git: str, url: str, owner: str, repo: str,
         branch: str, subpath: str, scope: str, name: Optional[str],
+        overwrite: bool = False,
     ) -> List[Dict[str, Any]]:
         """使用 git clone 从 GitHub 导入技能（支持大仓库、子模块）。"""
         # 构造 clone URL（不含片段）
@@ -730,7 +752,8 @@ class SkillsTools:
             candidates = self._find_skill_dirs(skill_root)
             if not candidates:
                 raise ValueError(f"导入来源中未找到含 SKILL.md 的技能目录")
-            return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None) for c in candidates]
+            return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None, overwrite)
+                    for c in candidates]
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

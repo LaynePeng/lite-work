@@ -673,6 +673,10 @@ class AgentApp:
         registry = ToolRegistry()
         kernel.register_service(TOOLS_SERVICE, registry)
         kernel.register_service(TOOL_FILTER_SERVICE, self._tool_filter(allowed, exclude, permissions))
+        # app 服务必须先于插件 install 注册：社区插件（无参构造）依赖
+        # install(kernel) 时从 app 服务捕获 workspace，晚注册会拿到 None
+        # → OfficeTools(None) 兜底到家目录（.outputs 落到 ~/.outputs 的根因）
+        kernel.register_service("app", self)
         for plugin in self.tool_plugins():
             kernel.use(plugin)
         self.mcp_manager.register_tools(registry, allowed=allowed, exclude=exclude)
@@ -689,6 +693,8 @@ class AgentApp:
           registry（无 tool_filter 服务时插件全量注册），plan 只读模式失效。
         """
         kernel = Kernel(session_id)
+        # app 服务先于插件 install 注册（时序约定，见 build_registry 同名注释）
+        kernel.register_service("app", self)
         if registry is not None:
             kernel.register_service(TOOLS_SERVICE, registry)
             if registry.has("spawn_sub_agent"):
@@ -709,7 +715,6 @@ class AgentApp:
                 kernel.use(plugin)
         kernel.use(SecurityPlugin(self.guard, self.approval_gate, self.workspace,
                                   skill_perm_resolver=self.skill_permission_rules))
-        kernel.register_service("app", self)
         return kernel
 
     # ------------------------------------------------------------ Agent
@@ -741,13 +746,15 @@ class AgentApp:
         from .tools.skills import SkillsTools
         return SkillsTools(self.workspace).create_skill(name, description, scope)
 
-    def skills_import(self, source: str, scope: str = "workspace", name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def skills_import(self, source: str, scope: str = "workspace", name: Optional[str] = None,
+                      overwrite: bool = False) -> List[Dict[str, Any]]:
         from .tools.skills import SkillsTools
-        return SkillsTools(self.workspace).import_skill(source, scope, name)
+        return SkillsTools(self.workspace).import_skill(source, scope, name, overwrite)
 
-    def skills_import_zip(self, data: bytes, scope: str = "workspace", name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def skills_import_zip(self, data: bytes, scope: str = "workspace", name: Optional[str] = None,
+                          overwrite: bool = False) -> List[Dict[str, Any]]:
         from .tools.skills import SkillsTools
-        return SkillsTools(self.workspace).import_zip_bytes(data, scope, name)
+        return SkillsTools(self.workspace).import_zip_bytes(data, scope, name, overwrite)
 
     def skills_delete(self, name: str, scope: str) -> Dict[str, Any]:
         from .tools.skills import SkillsTools
@@ -777,6 +784,14 @@ class AgentApp:
         from .tools.plugin_loader import list_plugins
         return list_plugins(self.config_dir)
 
+    def _invalidate_plugin_cache(self) -> None:
+        """清空已加载插件实例缓存：安装/删除/覆盖后立即生效。
+
+        每个任务（TaskManager.start）都会重新装配 kernel + registry，
+        缓存失效后无需重启 Core，下一条消息即可用上新工具集。
+        """
+        self._local_plugins = None
+
     def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
                            overwrite: bool = False) -> List[Dict[str, Any]]:
         from .tools.plugin_loader import import_zip_bytes, record_installed
@@ -785,16 +800,21 @@ class AgentApp:
         # zip 上传无更新源 URL，记录占位来源以保持列表一致（版本从插件自身读取）
         for r in results:
             record_installed(self.config_dir, r["name"], "", "zip-upload")
+        self._invalidate_plugin_cache()
         return results
 
     def plugins_import(self, source: str, name: Optional[str] = None,
                        overwrite: bool = False) -> List[Dict[str, Any]]:
         from .tools.plugin_loader import import_source
-        return import_source(self.config_dir, source, name, overwrite)
+        results = import_source(self.config_dir, source, name, overwrite)
+        self._invalidate_plugin_cache()
+        return results
 
     def plugins_delete(self, name: str) -> Dict[str, Any]:
         from .tools.plugin_loader import delete_plugin
-        return delete_plugin(self.config_dir, name)
+        result = delete_plugin(self.config_dir, name)
+        self._invalidate_plugin_cache()
+        return result
 
     def plugins_builtin(self) -> List[Dict[str, Any]]:
         """列出内置插件元信息（name/description/tools/version/是否被用户版覆盖）。"""
@@ -834,7 +854,9 @@ class AgentApp:
         """安装/更新插件，记录版本与来源。"""
         from .tools.plugin_loader import install_from_source
 
-        return install_from_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
+        results = install_from_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
+        self._invalidate_plugin_cache()
+        return results
 
     def commands_list(self) -> List[Dict[str, str]]:
         from .core.commands import build_command_list
