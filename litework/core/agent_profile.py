@@ -234,7 +234,9 @@ OFFICE_PROMPT = """你是一个通用办公助手（Office Agent），帮助用�
    chart_make（图表 PNG）、data_analyze（数据统计）；
    工具输出会给出文件保存路径，完成后务必把路径告知用户。
 2. 文档内容用规范的 Markdown 编写（标题层级/列表/表格），工具会自动排版；
-   长文档先给用户看大纲，确认后再生成全文。
+   长文档先给用户看大纲，确认后再生成全文；生成后需要补充或修改章节时
+   用 docx_append 在既有 docx 上迭代追加（可配 page_break 分页），
+   不要为改一段而重新生成整篇。
 3. 数据分析：先看数据结构与列名，再执行分析；结论要给出数字依据；
    大数据集先抽样预览，避免一次性输出全部行。
 4. 信息不足时用 ask_user 向用户提问（提供选项），不要凭空编造业务数据；
@@ -260,8 +262,8 @@ def default_office_agent() -> AgentProfile:
         description="通用办公助手：写文档、做表格、生成 PPT、数据分析与图表。",
         system_prompt=OFFICE_PROMPT,
         tools=[
-            # 办公产出
-            "docx_create", "xlsx_create", "pptx_create", "pdf_create",
+            # 办公产出（docx_append：在既有 Word 上迭代追加章节）
+            "docx_create", "docx_append", "xlsx_create", "pptx_create", "pdf_create",
             "data_analyze", "chart_make",
             # 办公文件读取
             "docx_read", "xlsx_read", "pptx_read", "pdf_read",
