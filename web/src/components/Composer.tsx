@@ -60,10 +60,12 @@ export default function Composer({
   // 协作模式选择（多智能体）：自动=模型按任务特征路由；其余为技能配方显式触发。
   // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落自动。
   const COLLAB_MODES: { id: string; skill: string; label: string; title: string }[] = [
-    { id: "auto", skill: "", label: "🤝 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论）" },
+    { id: "auto", skill: "", label: "🤝 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论/会议/开发冲刺）" },
     { id: "brainstorm", skill: "brainstorm", label: "💡 头脑风暴", title: "多视角并行提案 → 交叉批判 → 综合" },
     { id: "agent-debate", skill: "agent-debate", label: "⚔ 辩论评审", title: "提案者 vs 批判者多轮对抗 → 裁决收敛" },
     { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
+    { id: "meeting", skill: "meeting", label: "💬 群聊会议", title: "多 Agent 轮流发言、互相看到彼此观点后收敛共识" },
+    { id: "code-sprint", skill: "code-sprint", label: "⚡ 开发冲刺", title: "软件开发特化：测试驱动接力（实现⇄测试循环）与模块领地并行" },
   ];
   const [collabMode, setCollabMode] = useState("auto");
   const [collabOpen, setCollabOpen] = useState(false);

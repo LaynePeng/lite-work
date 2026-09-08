@@ -377,6 +377,7 @@ const MODE_META: Record<string, { icon: string; label: string }> = {
   pipeline: { icon: "⛓", label: "流水线 · 顺序交接" },
   brainstorm: { icon: "💡", label: "头脑风暴 · 多视角提案" },
   debate: { icon: "⚔", label: "辩论 · 对抗评审" },
+  meeting: { icon: "💬", label: "会议 · 群聊共议" },
 };
 
 function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onToggleShowAll,
@@ -444,8 +445,8 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
           {pendingReview > 0 && <span className="agent-mode-stat warn">⚠ 待审 {pendingReview}</span>}
         </span>
       </div>
-      {mode === "brainstorm" ? (
-        // 视角提案墙：并列平铺（运行中脉冲点标识未完）
+      {mode === "brainstorm" || mode === "meeting" ? (
+        // 视角提案墙 / 会议发言流：卡片平铺（会议按发言序，运行中脉冲点标识未完）
         <div className="agent-brainstorm-wall">
           {(filter === "running" ? runningList : [...runningList, ...doneShown]).map((a) => (
             <AgentCard {...cardProps(a)} />
