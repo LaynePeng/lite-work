@@ -50,6 +50,8 @@ export const api = {
     req<import("./types").SessionModelResponse>(`/api/sessions/${id}/model`, {
       method: "POST", body: JSON.stringify(model ?? {}),
     }),
+  sessionAgents: (id: string) =>
+    req<{ agents: import("./types").SubAgentStatus[] }>(`/api/sessions/${id}/agents`),
   deleteSession: (id: string) =>
     req<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   cleanupSessions: () =>

@@ -474,6 +474,20 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
             "model": override["model"] if override else default.get("model", ""),
         }}
 
+    @fast_app.get("/api/sessions/{session_id}/agents")
+    async def list_session_agents(session_id: str, request: Request):
+        """会话级子 Agent 状态查询（主任务结束后前端同步 Agents 看板用）。
+
+        背景子 Agent 的生命周期超出主任务 SSE 连接：主任务结束后 EventSource
+        关闭，subagent:completed 事件无法再到达前端，看板卡片会永久卡在
+        "running"。前端在收到 [DONE] 后调用此端点同步最终状态。
+        """
+        _check_auth(request)
+        manager = app.agent_manager(session_id, create=False)
+        if manager is None:
+            return {"agents": []}
+        return {"agents": manager.list_agents(include_closed=True)}
+
     # ------------------------------------------------------------ Skills 与命令
 
     @fast_app.get("/api/skills")

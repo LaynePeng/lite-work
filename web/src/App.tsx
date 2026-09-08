@@ -327,6 +327,40 @@ export default function App() {
     []
   );
 
+  /** 主任务结束后同步子 Agent 最终状态到 Agents 看板（SSE 已断，卡片不会自动更新）。
+   *
+   * 后台子 Agent 生命周期可能超出主任务 SSE 连接：当有 agent 仍在 running 时，
+   * 每 5 秒轮询 API 直到全部终态（最多 20 次 = 100 秒，超时自动停止防泄漏）。 */
+  const syncSessionAgents = useCallback(async (sid: string, retry = 0) => {
+    const MAX_RETRY = 20;
+    try {
+      const resp = await api.sessionAgents(sid);
+      if (!resp.agents?.length) return;
+      let hasRunning = false;
+      for (const agent of resp.agents) {
+        if (agent.status === "completed" || agent.status === "errored" || agent.status === "closed") {
+          pushAgentEvent(sid, "completed", {
+            subagentId: agent.agent_id,
+            role: agent.role,
+            task: agent.task,
+            turns: agent.turns,
+            summary: agent.summary,
+            tokens_used: agent.tokens,
+            changed_files: agent.changed_files,
+          } as Record<string, unknown>);
+        } else if (agent.status === "running") {
+          hasRunning = true;
+        }
+      }
+      // 还有 running 的 agent：定时轮询（后台子 Agent 生命周期超出任务）
+      if (hasRunning && retry < MAX_RETRY) {
+        window.setTimeout(() => void syncSessionAgents(sid, retry + 1), 5000);
+      }
+    } catch {
+      // API 调用失败不影响主流程
+    }
+  }, [pushAgentEvent]);
+
   // ------------------------------------------------------------ 技能注入气泡
 
   // 气泡随任务生命周期显示：skill:loaded 时出现，task:done / task:error 清空
@@ -1350,6 +1384,9 @@ export default function App() {
           if (e.data === "[DONE]") {
             es.close();
             eventSourcesRef.current.delete(sid);
+            // 主任务结束：后台子 Agent 可能仍在运行或刚完成，SSE 已断。
+            // 调用 API 同步最终状态到 Agents 看板（否则卡片永久卡在 running）。
+            void syncSessionAgents(sid);
             return;
           }
           try {
@@ -1409,7 +1446,7 @@ export default function App() {
         pushLog(`✗ 提交失败: ${(e as Error).message}`);
       }
     },
-    [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact]
+    [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact, syncSessionAgents]
   );
 
   // 发送队列中的单条指令到当前运行任务（queue_input 注入下一回合）
@@ -1446,6 +1483,7 @@ export default function App() {
           if (e.data === "[DONE]") {
             es.close();
             eventSourcesRef.current.delete(sid);
+            void syncSessionAgents(sid);
             return;
           }
           try {
@@ -1485,7 +1523,7 @@ export default function App() {
           pushLog(`🔗 已连接任务 ${task_id}`);
         };
         es.onmessage = (e) => {
-          if (e.data === "[DONE]") { es.close(); eventSourcesRef.current.delete(targetSid); return; }
+          if (e.data === "[DONE]") { es.close(); eventSourcesRef.current.delete(targetSid); void syncSessionAgents(targetSid); return; }
           try { handleSSEEvent(targetSid, JSON.parse(e.data)); } catch { /* ignore */ }
         };
         es.onerror = () => pushLog("⚠ SSE 连接中断，等待重连…");

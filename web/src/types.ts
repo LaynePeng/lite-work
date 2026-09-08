@@ -280,6 +280,19 @@ export interface SubAgentProgress {
   changedFiles?: string[];
 }
 
+/** 后端 list_agents 返回的子 Agent 状态（前端通过 API 同步，非 SSE 事件）。 */
+export interface SubAgentStatus {
+  agent_id: string;
+  nickname: string;
+  role: string;
+  status: string;
+  task: string;
+  tokens: number;
+  turns: number;
+  changed_files: string[];
+  summary: string;
+}
+
 // Electron 注入的原生能力（浏览器模式下不存在）
 export interface LiteWorkBridge {
   platform: string;

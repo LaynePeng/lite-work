@@ -289,6 +289,31 @@ async def test_approval_flow(live_client):
     assert r.status_code == 404
 
 
+async def test_session_agents_endpoint(live_client):
+    """/api/sessions/{session_id}/agents 返回子 Agent 状态（含 running/completed/errored）。"""
+    c, app, _ = live_client
+    r = await c.post("/api/sessions", json={"name": "agent测试"})
+    sid = r.json()["session_id"]
+    from litework.orchestration.agent_manager import AgentRecord, SessionAgentManager
+
+    # 直接往 manager 注入两条记录模拟已派生的子 Agent
+    mgr = app.agent_manager(sid)
+    mgr.agents["sa_test1"] = AgentRecord(
+        agent_id="sa_test1", nickname="test-1", role="explorer",
+        task="调研报告", status="completed", summary="完成",
+    )
+    mgr.agents["sa_test2"] = AgentRecord(
+        agent_id="sa_test2", nickname="test-2", role="explorer",
+        task="代码审查", status="running",
+    )
+    r = await c.get(f"/api/sessions/{sid}/agents")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["agents"]) == 2
+    ids = {a["agent_id"] for a in data["agents"]}
+    assert ids == {"sa_test1", "sa_test2"}
+
+
 async def test_security_hot_reload(live_client):
     c, app, _ = live_client
     r = await c.get("/api/security")
