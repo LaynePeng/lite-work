@@ -57,6 +57,15 @@ export default function Composer({
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
+  // 协作模式选择（多智能体）：自动=模型按任务特征路由；其余为技能配方显式触发。
+  // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落到自动。
+  const COLLAB_MODES: { id: string; skill: string; label: string; title: string }[] = [
+    { id: "auto", skill: "", label: "协作: 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论）" },
+    { id: "brainstorm", skill: "brainstorm", label: "💡 头脑风暴", title: "多视角并行提案 → 交叉批判 → 综合" },
+    { id: "agent-debate", skill: "agent-debate", label: "⚔ 辩论评审", title: "提案者 vs 批判者多轮对抗 → 裁决收敛" },
+    { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
+  ];
+  const [collabMode, setCollabMode] = useState("auto");
   // Agent 图标与中文名（AGI 通用入口：办公/调研/代码一站式）
   const AGENT_META: Record<string, { icon: string; label: string }> = {
     build: { icon: "💻", label: "代码" },
@@ -322,10 +331,17 @@ export default function Composer({
       setText("");
       return;
     }
-    pushHistory(t);
+    // 协作模式（非自动）：改写为 /技能 命令（复用技能展开机制），发送后回落自动
+    let outgoing = t;
+    if (collabMode !== "auto" && !t.startsWith("/")) {
+      const mode = COLLAB_MODES.find((m) => m.id === collabMode);
+      if (mode?.skill) outgoing = `/${mode.skill} ${t}`;
+    }
+    pushHistory(outgoing);
     setHistoryIdx(-1);
-    onSend(t);
+    onSend(outgoing);
     setText("");
+    if (collabMode !== "auto") setCollabMode("auto");
   };
 
   const primary = agents.filter((a) => a.mode !== "subagent");
@@ -353,6 +369,18 @@ export default function Composer({
           <span className="agent-bar-hint" title="按 Tab 在 Agent 之间切换">
             Tab
           </span>
+          <span className="agent-bar-label">协作:</span>
+          <select
+            className="model-select collab-select"
+            value={collabMode}
+            onChange={(e) => setCollabMode(e.target.value)}
+            disabled={disabled || running}
+            title="多 Agent 协作模式：自动=模型按任务特征路由；选择具体模式则下一条消息以对应技能发送"
+          >
+            {COLLAB_MODES.map((m) => (
+              <option key={m.id} value={m.id} title={m.title}>{m.label}</option>
+            ))}
+          </select>
           <span className="agent-bar-label">模型:</span>
           <select
             className="model-select"

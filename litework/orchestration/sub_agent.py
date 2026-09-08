@@ -237,6 +237,7 @@ class SubAgentRunner:
                 "role": role,
                 "subagentId": sub_id,
                 "nickname": nickname or sub_id,
+                "mode": getattr(record, "mode", "orchestrate") if record is not None else "orchestrate",
                 "callId": call_id,
             })
 

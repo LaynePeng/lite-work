@@ -3538,6 +3538,117 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--green, #3fb950);
 }
 
+/* -------- 合作模式分组（Agents 看板多视图） -------- */
+
+.agent-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.agent-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent, #4f8cff);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent, #4f8cff) 30%, transparent);
+}
+
+.agent-mode-count {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+/* 头脑风暴：视角提案墙（并列平铺对比） */
+.agent-brainstorm-wall {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 辩论：对抗泳道（提案方 vs 批判方） */
+.agent-debate-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agent-debate-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 4%, transparent);
+}
+
+.agent-debate-lane.critic {
+  background: color-mix(in srgb, var(--accent-2, #8b5cf6) 6%, transparent);
+}
+
+.agent-debate-lane-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.agent-debate-vs {
+  align-self: center;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1;
+  margin: -2px 0;
+}
+
+/* 流水线：顺序接力链（编号 + 箭头） */
+.agent-pipeline-chain {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-pipeline-arrow {
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.2;
+  margin: 1px 0;
+}
+
+.agent-pipeline-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.agent-pipeline-no {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 18%, transparent);
+  color: var(--accent, #4f8cff);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-pipeline-step .agent-card {
+  flex: 1;
+}
+
 .agent-task {
   font-size: 12px;
   color: var(--text-1);

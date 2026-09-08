@@ -74,6 +74,7 @@ function reduceAgentBoard(
       role: role ?? "general",
       task: typeof d.task === "string" ? d.task : "",
       turn: 0, steps: [], status: "running", startedAt: Date.now(),
+      mode: typeof d.mode === "string" ? d.mode : "orchestrate",
     });
     return list;
   }

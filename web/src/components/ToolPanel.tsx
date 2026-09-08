@@ -228,19 +228,18 @@ function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: 
   );
 }
 
-/** Agents 看板：竖排 kanban 交接视图。
+/** Agents 看板：按合作模式分组的多视图交接看板（对齐 docs/multi-agent-design.md §9）。
  *
- * 关系：顶部「主 Agent」根节点，子 Agent 卡片通过左侧树形连接线挂在根下
- * （编排 → 派生的从属关系可见）。
- * 流转：子 Agent 完成时卡片跨分区流入「已完成」（入场滑动动画标记这一交接），
- * 交付标记「↩ 已交付」表示结果已回传主 Agent 上下文。
- */
+ * - orchestrate（编排-工人，默认）：竖排 kanban——运行中/已完成分区，卡片跨区流动
+ * - brainstorm（头脑风暴）：视角提案墙——多视角卡片平铺（无状态分区，提案并列对比）
+ * - debate（辩论/互批）：对抗泳道——proposer 与 critic 分组对垒
+ * - pipeline（流水线）：顺序接力链——按派生序编号，箭头串联交接
+ * 主 Agent 根节点置顶；子 Agent 卡片经树形连接线挂在各分组下。 */
 function AgentsPanel({ agents, orchestrator }: {
   agents: SubAgentProgress[];
   orchestrator?: { agentId: string; running: boolean };
 }) {
   const running = agents.filter((a) => a.status === "running");
-  const done = agents.filter((a) => a.status !== "running");
   // 运行时长计时：有 running 卡片时每秒重渲染
   const [, tick] = useState(0);
   useEffect(() => {
@@ -250,6 +249,15 @@ function AgentsPanel({ agents, orchestrator }: {
   }, [running.length]);
 
   const orch = orchestrator ?? { agentId: "build", running: false };
+
+  // 按 mode 分组（保持派生顺序）
+  const groups = new Map<string, SubAgentProgress[]>();
+  for (const a of agents) {
+    const m = a.mode && a.mode !== "orchestrate" ? a.mode : "orchestrate";
+    if (!groups.has(m)) groups.set(m, []);
+    groups.get(m)!.push(a);
+  }
+
   return (
     <div className="agents-panel">
       <div className={`agent-orchestrator ${orch.running ? "running" : "idle"}`}>
@@ -258,28 +266,102 @@ function AgentsPanel({ agents, orchestrator }: {
           <div className="agent-orch-name">{orch.agentId}</div>
           <div className="agent-orch-meta">
             {orch.running ? "编排运行中" : "空闲"}
-            {agents.length > 0 && ` · 派生 ${done.length}/${agents.length}`}
+            {agents.length > 0 && ` · 派生 ${agents.filter((a) => a.status !== "running").length}/${agents.length}`}
           </div>
         </div>
       </div>
       {agents.length === 0 ? (
-        <div className="tool-panel-empty">暂无派生的子 Agent（主 Agent 派生任务时在此显示交接看板）</div>
+        <div className="tool-panel-empty">暂无派生的子 Agent（主 Agent 派生任务时在此显示看板）</div>
       ) : (
         <div className="agent-branches">
-          <div className="agent-section-head">
-            <span className="agent-dot running" />运行中（{running.length}）
-          </div>
-          {running.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
-          {done.length > 0 && (
-            <>
-              <div className="agent-section-head">
-                <span className="agent-dot done" />已完成（{done.length}）
-              </div>
-              {done.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} delivered />)}
-            </>
-          )}
+          {[...groups.entries()].map(([mode, list]) => (
+            <ModeSection key={mode} mode={mode} agents={list} />
+          ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 模式分组标题 */
+const MODE_META: Record<string, { icon: string; label: string }> = {
+  orchestrate: { icon: "⚙", label: "编排 · 并行派发" },
+  pipeline: { icon: "⛓", label: "流水线 · 顺序交接" },
+  brainstorm: { icon: "💡", label: "头脑风暴 · 多视角提案" },
+  debate: { icon: "⚔", label: "辩论 · 对抗评审" },
+};
+
+function ModeSection({ mode, agents }: { mode: string; agents: SubAgentProgress[] }) {
+  const meta = MODE_META[mode] ?? MODE_META.orchestrate;
+  return (
+    <div className="agent-mode-group">
+      <div className="agent-mode-head">
+        <span>{meta.icon}</span>{meta.label}
+        <span className="agent-mode-count">({agents.length})</span>
+      </div>
+      {mode === "brainstorm" ? (
+        // 视角提案墙：并列平铺（运行中脉冲点标识未完）
+        <div className="agent-brainstorm-wall">
+          {agents.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        </div>
+      ) : mode === "debate" ? (
+        // 对抗泳道：proposer（提案/修订） vs critic（批判）
+        <DebateLanes agents={agents} />
+      ) : mode === "pipeline" ? (
+        // 接力链：按派生序编号 + 箭头串联
+        <div className="agent-pipeline-chain">
+          {[...agents].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((a, i) => (
+            <div key={a.subagentId || a.task} className="agent-pipeline-node">
+              {i > 0 && <span className="agent-pipeline-arrow">↓</span>}
+              <div className="agent-pipeline-step">
+                <span className="agent-pipeline-no">{i + 1}</span>
+                <AgentCard agent={a} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        // orchestrate：竖排 kanban（运行中/已完成分区，卡片跨区流动）
+        <>
+          <div className="agent-section-head">
+            <span className="agent-dot running" />运行中（{agents.filter((a) => a.status === "running").length}）
+          </div>
+          {agents.filter((a) => a.status === "running").map((a) => (
+            <AgentCard key={a.subagentId || a.task} agent={a} />
+          ))}
+          {agents.some((a) => a.status !== "running") && (
+            <>
+              <div className="agent-section-head">
+                <span className="agent-dot done" />已完成（{agents.filter((a) => a.status !== "running").length}）
+              </div>
+              {agents.filter((a) => a.status !== "running").map((a) => (
+                <AgentCard key={a.subagentId || a.task} agent={a} delivered />
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 辩论泳道：proposer vs critic 对垒（角色归位：critic 单独一组，其余为提案方） */
+function DebateLanes({ agents }: { agents: SubAgentProgress[] }) {
+  const critics = agents.filter((a) => a.role === "critic");
+  const proposers = agents.filter((a) => a.role !== "critic");
+  return (
+    <div className="agent-debate-lanes">
+      <div className="agent-debate-lane">
+        <div className="agent-debate-lane-head">提案方</div>
+        {proposers.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        {proposers.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
+      </div>
+      <span className="agent-debate-vs">⇄</span>
+      <div className="agent-debate-lane critic">
+        <div className="agent-debate-lane-head">批判方</div>
+        {critics.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        {critics.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
+      </div>
     </div>
   );
 }

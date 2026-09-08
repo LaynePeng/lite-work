@@ -135,6 +135,42 @@ TaskManager.start(session)
 | **辩论多轮** | 生成者 vs 批判者交替对抗 N 轮 | ✅ P2 切片：多轮 send_message + followup 往返（编排者驱动轮次） |
 | **红蓝对抗** | 产出→审查→修复循环 | ✅ P2 切片：followup 唤醒原 agent 按批判意见修订 |
 
+### 模式怎么选（两层选择机制）
+
+1. **自动路由**（模型侧）：spawn_agent 工具描述内嵌「模式选择决策表」
+   （任务特征 → 模式 → 工具序列）——并行子任务→编排-工人、顺序依赖→流水线、
+   要多样性→头脑风暴、要把关→互批、高风险→辩论、要迭代→红蓝对抗。
+   模型按任务特征自动选择，用户无需指定。
+2. **显式触发**（用户侧）：
+   - **输入框「协作」选择器**（Composer agent-bar）：自动 / 💡头脑风暴 / ⚔辩论评审 /
+     ⛓流水线——选中后下一条消息以 `/技能名` 命令发送（复用技能展开机制），发送后回落自动
+   - 内置技能配方：`brainstorm`（多视角并行提案→交叉批判→综合）、`agent-debate`
+     （提案者 vs 批判者对抗循环→裁决）、`pipeline`（按序接力交接）；
+     触发词（"头脑风暴/红蓝对抗"）与 `/` 命令面板均可唤起
+   - `spawn_agent(mode=...)` 参数：模型声明合作模式 → 事件携带 → 看板按模式分组渲染
+
+### Agents 看板多视图（按模式分组渲染）
+
+- **orchestrate**：竖排 kanban（运行中/已完成分区，卡片跨区流动）
+- **brainstorm**：视角提案墙（多视角卡片并列平铺对比）
+- **debate**：对抗泳道（提案方 vs 批判方分组对垒，critic 角色归批判侧）
+- **pipeline**：顺序接力链（按派生序编号 + 箭头串联交接）
+
+### 业界调研结论（Claude Code / Codex / OpenCode / Cursor / Multica / Trae Work，2026-09）
+
+- **Claude Code** 四层体系（subagent → agent teams → 跨会话消息 → background agents）：
+  辩论是官方推荐用例且**无专用工具**（纯原语+提示词）——验证我们的原语+技能配方路线；
+  共享任务清单（teammate 自领+依赖解锁+文件锁）是「去中心化合作」的核心，我们缺（P3）；
+  agent 消息不能代答审批/改配置、消息限流防死循环（P2 待补）
+- **Multica**（49k★）：「Agents that show up on the board」——agent 即 teammate 的看板式
+  工作区，issue 流转 + review gate（工作落 review 不落 main）+ Inbox（需要决策才 ping 人）
+  + 26 runtime 不绑模型 → 印证看板中心协作与 spawn 加 model 参数
+- **Trae Work**：Define Tasks → AI 拆解执行 → Review Results，任务级并行 + 统一 Workspace
+  ——与 Multica 同向（任务并行+人审），agent 间协作无增量
+- **Codex**：thread=agent + 工具原语 + 委派策略提示词（已对齐）
+- **OpenCode**：@-mention 手动调用 subagent + task 权限 glob（谁能 spawn 谁）→
+  @agent 触发方式与权限白名单记入 P3
+
 ### agent 间合作机制（P2 切片，已实施）
 
 - **send_message**（编排者与子 Agent 均可用）：

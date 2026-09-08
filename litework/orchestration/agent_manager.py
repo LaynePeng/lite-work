@@ -44,6 +44,9 @@ class AgentRecord:
     role: str
     task: str
     allowed_dirs: Optional[List[str]] = None
+    # 合作模式标记（编排者声明，前端按模式分区渲染）：
+    # orchestrate（编排-工人，默认）/ pipeline（流水线）/ brainstorm（头脑风暴）/ debate（辩论）
+    mode: str = "orchestrate"
     status: str = "pending"
     summary: str = ""
     changed_files: List[str] = field(default_factory=list)
@@ -155,11 +158,14 @@ class SessionAgentManager:
 
     async def spawn(self, task: str, role: str = "general", agent_name: Optional[str] = None,
                     allowed_dirs: Optional[List[str]] = None, max_steps: int = 12,
-                    parent_events=None) -> Dict[str, Any]:
+                    parent_events=None, mode: str = "orchestrate") -> Dict[str, Any]:
         """异步派生：校验限额 → 建记录 → 后台执行，立即返回。"""
         err = self._check_limits()
         if err:
             return {"ok": False, "error": err}
+
+        if mode not in ("orchestrate", "pipeline", "brainstorm", "debate"):
+            mode = "orchestrate"
 
         agent_id = f"sa_{uuid.uuid4().hex[:8]}"
         nickname = _safe_nickname(agent_name or "")
@@ -171,7 +177,7 @@ class SessionAgentManager:
         record = AgentRecord(
             agent_id=agent_id, nickname=nickname, role=role or "general",
             task=task, allowed_dirs=list(allowed_dirs) if allowed_dirs else None,
-            started_at=time.time(),
+            mode=mode, started_at=time.time(),
         )
         self.agents[agent_id] = record
         self._spawned_total += 1
@@ -208,7 +214,7 @@ class SessionAgentManager:
 
         await self._emit(parent_events, "agent:spawned", {
             "agentId": agent_id, "nickname": nickname, "role": role,
-            "task": task, "allowedDirs": record.allowed_dirs,
+            "task": task, "allowedDirs": record.allowed_dirs, "mode": mode,
         })
         return {"ok": True, "agent_id": agent_id, "nickname": nickname}
 

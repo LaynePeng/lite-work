@@ -261,6 +261,8 @@ export interface SubAgentProgress {
   streaming_text?: string;
   /** 派生时间戳（Agents 看板运行时长显示） */
   startedAt?: number;
+  /** 合作模式（编排者声明，看板按模式分组渲染）：orchestrate/pipeline/brainstorm/debate */
+  mode?: string;
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）

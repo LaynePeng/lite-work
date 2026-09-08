@@ -433,3 +433,49 @@ async def test_spawn_agent_tool_handler(tmp_path):
         assert "已关闭" in out
     finally:
         current_session_id.reset(token)
+
+# ---------------------------------------------------------------- 合作模式标记
+
+async def test_spawn_mode_tagged_events(tmp_path):
+    """spawn 声明 mode → record 携带（前端看板按模式分组渲染的数据源）。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("调研 A", role="explorer", mode="brainstorm")
+    assert r["ok"]
+    assert mgr.get(r["agent_id"]).mode == "brainstorm"
+    # 非法 mode 归一为 orchestrate
+    r2 = await mgr.spawn("调研 B", role="explorer", mode="invalid-mode")
+    assert mgr.get(r2["agent_id"]).mode == "orchestrate"
+    await mgr.wait([r["agent_id"], r2["agent_id"]], timeout_ms=10000)
+
+
+async def test_spawn_agent_tool_mode_param(tmp_path):
+    """工具层 mode 参数直达 manager。"""
+    from litework.tools.agent_tools import make_agent_tool_handlers
+    from litework.core.agent_loop import current_session_id
+
+    app = _make_app(tmp_path)
+    handlers = make_agent_tool_handlers(app)
+    token = current_session_id.set("s1")
+    try:
+        out = await handlers["spawn_agent"]({"task": "提案 X", "role": "general", "mode": "brainstorm"})
+        assert "[Agent 已派生]" in out
+        agent_id = out.split("id=")[1].split()[0]
+        assert app.agent_manager("s1").get(agent_id).mode == "brainstorm"
+    finally:
+        current_session_id.reset(token)
+
+
+async def test_collab_mode_skills_available(tmp_path):
+    """三个协作模式技能（brainstorm/agent-debate/pipeline）内置可加载，命令面板可派生。"""
+    from litework.tools.skills import SkillsTools, _builtin_skills_dir
+    from litework.core.commands import build_command_list
+
+    d = _builtin_skills_dir()
+    for name in ("brainstorm", "agent-debate", "pipeline"):
+        assert (d / name / "SKILL.md").is_file(), f"缺少技能 {name}"
+    st = SkillsTools(str(tmp_path))
+    skills = st.list_skills()
+    cmds = build_command_list(skills)
+    names = {c["name"] for c in cmds if c.get("kind") == "skill"}
+    assert {"brainstorm", "agent-debate", "pipeline"} <= names

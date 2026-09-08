@@ -13,13 +13,17 @@ from ..core.agent_loop import current_session_id
 from ..core.types import ToolDefinition
 from ..tools.plugin import ToolPlugin
 
-# 委派策略提示（借鉴 Codex spawn_agent 描述，写入工具 description 供模型学习）
+# 模式选择指引（写入工具描述：模型按任务特征自动路由，借鉴 Codex 委派策略）
 DELEGATION_GUIDE = (
-    "使用指引：先区分关键路径（阻塞的下一步自己做）与 sidecar（可并行委派）任务；"
-    "委派任务必须具体、有界、自包含，不与主任务重叠；并行写任务用 allowed_dirs "
-    "声明互不相交的写入范围；派生后继续做自己的工作，仅在下一步被阻塞时 wait_agents；"
-    "头脑风暴：对同一问题 spawn 多个不同视角的 agent 后综合；"
-    "互批：spawn role=critic 的批判者审查方案或代码。"
+    "模式选择（按任务特征路由）：\n"
+    "① 并行调研/互不依赖的子任务 → 编排-工人：spawn_agent 并行 + 继续自己的工作，结果自动送达；\n"
+    "② 顺序依赖的分工（设计→实现→审查） → 流水线：按序 spawn，把前序 agent 的产出写进后续任务描述；\n"
+    "③ 需要多样的方案/创意 → 头脑风暴：对同一问题 spawn 3+ 个不同视角/立场的 agent 并行提案，综合取舍；\n"
+    "④ 方案或代码需要把关 → 互批：spawn role=critic 的批判者审查，产出问题清单；\n"
+    "⑤ 高风险/争议决策 → 辩论：提案者与 critic 多轮对抗（send_message 传意见 + followup_task 唤醒修订）；\n"
+    "⑥ 产出需按意见迭代 → 红蓝对抗：followup_task 唤醒原 agent 按批判意见修订，循环至收敛。\n"
+    "通用纪律：先区分关键路径（自己做）与 sidecar（可并行）；任务具体、有界、自包含；"
+    "并行写任务用 allowed_dirs 声明互不相交范围；wait_agents 仅在下一步被阻塞时使用。"
 )
 
 
@@ -59,6 +63,7 @@ def make_agent_tool_handlers(app, parent_events=None):
             allowed_dirs=[str(d) for d in allowed_dirs] if allowed_dirs else None,
             max_steps=int(args.get("max_steps") or 12),
             parent_events=parent_events,
+            mode=str(args.get("mode") or "orchestrate"),
         )
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
@@ -190,6 +195,11 @@ class MultiAgentPlugin(ToolPlugin):
                                                         "并行写任务必须声明互不相交的范围"},
                         "max_steps": {"type": "integer",
                                       "description": "最大执行轮数（默认 12）"},
+                        "mode": {"type": "string",
+                                 "description": "合作模式标记：orchestrate（默认，编排-工人）/"
+                                                "pipeline（流水线：按序交接）/brainstorm（头脑风暴："
+                                                "并行多视角提案）/debate（辩论：批判对抗）——"
+                                                "按你选择的模式声明，供界面分组展示"},
                     },
                     "required": ["task"],
                 },
