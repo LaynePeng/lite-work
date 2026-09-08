@@ -94,13 +94,18 @@ class TaskHandle:
                     "subagentId": payload.get("subagentId") or "",
                     "role": payload.get("role") or "general",
                     "task": payload.get("task") or "",
+                    "nickname": payload.get("nickname") or "",
+                    "mode": payload.get("mode") or "orchestrate",
+                    "changed_files": payload.get("changed_files") or [],
                     "tokens": payload.get("tokens_used") or 0,
                     "turns": payload.get("turns") or 0,
                     "summary": payload.get("summary") or "",
                     "status": "completed",
                 })
-                # 最多保留 20 条；update_metadata 会合并到现有 metadata
-                self.app.session_store.update_metadata(self.kernel.session_id, {"subagent_records": records[-20:]})
+                # 保留条数取配置（默认 20）；update_metadata 会合并到现有 metadata
+                keep = int(self.app.config.get("agent_persist_max", 20))
+                self.app.session_store.update_metadata(
+                    self.kernel.session_id, {"subagent_records": records[-keep:]})
             except Exception:
                 logger.debug("[Task %s] 子 Agent 归档落盘失败", self.task_id, exc_info=True)
 

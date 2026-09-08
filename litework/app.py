@@ -54,9 +54,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "approval_timeout": 600,
     "context_full_turns": 2,
     "mcp_servers": {},
-    # 多智能体 P1 限额（docs/multi-agent-design.md §3）
+    # 多智能体 P1/P2 配置（docs/multi-agent-design.md §3）
     "max_parallel_agents": 4,   # 并发活 agent 上限
     "agent_total_limit": 16,    # 单会话累计派生上限
+    "agent_max_steps": 12,      # 单个子 agent 默认最大轮数（spawn 可覆盖，上限 agent_max_steps_cap）
+    "agent_max_steps_cap": 50,  # spawn max_steps 参数的绝对上限（防失控）
+    "agent_spawn_depth": 2,     # 嵌套深度上限（1=子不可再派，2=子可派孙，孙不可再派）
+    "agent_message_max_chars": 8000,   # agent 间消息单条长度上限（防上下文爆仓）
+    "agent_meeting_rounds": 3,  # 会议模式默认轮次（技能配方参考）
+    "agent_ledger_interval": 5, # 进度账本：每完成 N 个工具/回合后检查一次子 agent 状态
+    "agent_persist_max": 20,    # 落盘归档上限（会话 metadata subagent_records 保留条数）
     # 技能权限（对齐 OpenCode permission.skill）：glob 模式 → allow/deny/ask，
     # 插入序首个命中生效，默认 allow；deny 对 Agent 完全隐藏，ask 使用前需审批
     "skill_permissions": {},
@@ -720,11 +727,11 @@ class AgentApp:
                 registry.set_handler(
                     "spawn_sub_agent", make_sub_agent_handler(self, kernel.events)
                 )
-            # 多 Agent 工具（P1）：handler 绑定本 kernel.events（progress 转发到当前任务流）
+            # 多 Agent 工具（P1/P2）：handler 绑定本 kernel（fork_context 消息源 + events 转发）
             if registry.has("spawn_agent"):
                 from .tools.agent_tools import make_agent_tool_handlers
 
-                for tool_name, handler in make_agent_tool_handlers(self, kernel.events).items():
+                for tool_name, handler in make_agent_tool_handlers(self, kernel.events, kernel).items():
                     if registry.has(tool_name):
                         registry.set_handler(tool_name, handler)
             if registry.has("ask_user"):

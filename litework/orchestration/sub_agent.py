@@ -50,12 +50,23 @@ ROLE_TOOLS: Dict[str, List[str]] = {
     "general": None,
 }
 
-# 子 Agent 禁用的工具：禁止嵌套派生（P1；P2 放开到限深）+ 交互工具（通道未转发）。
-# send_message / list_agents / 共享任务认领开放给子 Agent——协作模式（互批/接力/
-# 自领分工）需要；followup_task（唤醒续跑）与 create_shared_tasks（建池权）保留给编排者。
-SUB_AGENT_EXCLUDE = ["spawn_sub_agent", "spawn_agent",
-                     "close_agent", "wait_agents", "followup_task", "ask_user",
-                     "create_shared_tasks"]
+# 子 Agent 禁用的工具：交互工具（通道未转发）+ 编排者专属（唤醒/建池）。
+# 嵌套派生按深度动态放开：depth < agent_spawn_depth 时子 Agent 获得 spawn_agent
+# （可再派一层，深度受配置上限约束）；达到上限则排除。
+SUB_AGENT_EXCLUDE_BASE = ["spawn_sub_agent", "close_agent", "wait_agents",
+                          "followup_task", "ask_user", "create_shared_tasks"]
+
+
+def sub_agent_excludes(depth: int, max_depth: int = 2) -> List[str]:
+    """按嵌套深度构造子 Agent 的工具排除表。
+
+    depth=1（主 Agent 直接派生）且 max_depth>=2：放开 spawn_agent（可派孙）；
+    更深层级：排除全部派生工具（防失控嵌套）。
+    """
+    excludes = list(SUB_AGENT_EXCLUDE_BASE)
+    if depth >= max_depth:
+        excludes.append("spawn_agent")
+    return excludes
 
 # 声明 allowed_dirs 的写域 agent：读全开 + 三个写文件工具（写受 IsolationPlugin 约束；
 # shell 命令无法静态判定写目标，P1 不授予，由父 Agent 执行）
@@ -107,6 +118,7 @@ class SubAgentRunner:
         record=None,
         initial_messages: Optional[List[Any]] = None,
         model: Optional[str] = None,
+        sub_depth: int = 1,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -124,9 +136,12 @@ class SubAgentRunner:
         if allowed_dirs:
             allowed = WRITE_SCOPE_TOOLS
 
+        # 嵌套深度：按配置动态决定是否放开子 Agent 的再派生能力
+        from .agent_manager import current_agent_depth
+        max_spawn_depth = int(self.app.config.get("agent_spawn_depth", 2))
         registry = self.app.build_registry(
             allowed=allowed,
-            exclude=SUB_AGENT_EXCLUDE,
+            exclude=sub_agent_excludes(sub_depth, max_spawn_depth),
             permissions=permissions,
         )
         sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
@@ -165,9 +180,15 @@ class SubAgentRunner:
         )
         loop.workspace = self.app.workspace
         loop.truncation_dir = self.app.create_loop(sub_kernel, registry).truncation_dir
+        # 孙 agent 完成通知注入源：按 sub_id 查其专属 manager（嵌套派生时懒创建）
+        loop.agent_manager_factory = lambda sid: self.app.agent_manager(sid, create=False)
         # 挂载 loop 引用（send_message 直达运行中的 agent 的 agent_inbox）
         if record is not None:
             record.loop = loop
+
+        # 嵌套深度 ContextVar：本子 Agent 的工具 handler（spawn_agent 等）
+        # 读取当前深度，派生时传 depth+1 给孙 agent 的 manager
+        depth_token = current_agent_depth.set(sub_depth)
 
         logger.info('[SubAgent] 派生子 Agent role=%s task="%s..."',
                     role, task_description[:60])
@@ -274,6 +295,11 @@ class SubAgentRunner:
         except asyncio.TimeoutError:
             summary = f"[SubAgent Timeout]: 子任务超过 {timeout}s 被终止，已完成部分: {getattr(loop, 'last_summary', '无')}"
             stats = {"input_tokens": 0, "output_tokens": 0, "turns": 0, "status": "TIMEOUT"}
+        finally:
+            try:
+                current_agent_depth.reset(depth_token)
+            except (LookupError, ValueError):
+                pass
         completed_payload = {
             "task": task_description,
             "role": role,

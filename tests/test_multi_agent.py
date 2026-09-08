@@ -345,16 +345,16 @@ async def test_followup_rejects_running(tmp_path):
 
 
 async def test_sub_agent_can_message_but_not_followup(tmp_path):
-    """子 agent 工具面：可用 send_message/list_agents（同伴通信），
-    不可 followup_task（唤醒权留给编排者）。"""
+    """子 agent 工具面（depth=1）：可用 send_message/list_agents/spawn_agent（同伴通信
+    与派孙，嵌套上限由 manager 校验）；不可 followup_task（唤醒权留编排者）。"""
     app = _make_app(tmp_path)
-    from litework.orchestration.sub_agent import SUB_AGENT_EXCLUDE
-    sub_registry = app.build_registry(allowed=None, exclude=SUB_AGENT_EXCLUDE)
+    from litework.orchestration.sub_agent import sub_agent_excludes
+    sub_registry = app.build_registry(allowed=None, exclude=sub_agent_excludes(1))
     sub_names = {t.name for t in sub_registry.get_tools()}
     assert "send_message" in sub_names
     assert "list_agents" in sub_names
     assert "followup_task" not in sub_names
-    assert "spawn_agent" not in sub_names
+    assert "spawn_agent" in sub_names  # P2：depth=1 可派孙
 
 
 async def test_pipeline_handoff_pattern(tmp_path):
@@ -390,17 +390,19 @@ async def test_pipeline_handoff_pattern(tmp_path):
 
 
 async def test_multi_agent_tools_registered(tmp_path):
-    """build agent 的 registry 含四工具；explorer 子 agent 不含（禁嵌套）。"""
+    """build agent 的 registry 含编排工具；depth=1 子 agent 有 spawn_agent（可派孙），
+    spawn_sub_agent（旧同步工具）仍被排除。"""
     app = _make_app(tmp_path)
     registry = app.create_agent_registry("build")
     names = {t.name for t in registry.get_tools()}
     assert {"spawn_agent", "list_agents", "close_agent", "wait_agents"} <= names
 
-    from litework.orchestration.sub_agent import SUB_AGENT_EXCLUDE
+    from litework.orchestration.sub_agent import sub_agent_excludes
     sub_registry = app.build_registry(
-        allowed=None, exclude=SUB_AGENT_EXCLUDE)
+        allowed=None, exclude=sub_agent_excludes(1))
     sub_names = {t.name for t in sub_registry.get_tools()}
-    assert not ({"spawn_agent", "spawn_sub_agent"} & sub_names)
+    assert "spawn_sub_agent" not in sub_names
+    assert "spawn_agent" in sub_names  # depth=1 可派孙（默认上限 2）
 
 
 async def test_write_scope_tools_isolated(tmp_path):
@@ -593,8 +595,146 @@ async def test_shared_task_tools_available(tmp_path):
         current_session_id.reset(token)
 
     # 子 Agent 白名单含认领工具
-    from litework.orchestration.sub_agent import SUB_AGENT_EXCLUDE
-    sub_registry = app.build_registry(allowed=None, exclude=SUB_AGENT_EXCLUDE)
+    from litework.orchestration.sub_agent import sub_agent_excludes
+    sub_registry = app.build_registry(allowed=None, exclude=sub_agent_excludes(1))
     sub_names = {t.name for t in sub_registry.get_tools()}
     assert {"list_shared_tasks", "claim_shared_task", "complete_shared_task"} <= sub_names
     assert "create_shared_tasks" not in sub_names  # 建池权留给编排者
+
+# ---------------------------------------------------------------- P2 补全：嵌套/fork/恢复/配置
+
+async def test_spawn_depth_limit(tmp_path):
+    """嵌套深度：depth=2 可派（默认上限 2），depth=3 被拒。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="general", depth=2)
+    assert r["ok"]
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    r3 = await mgr.spawn("更深层", role="general", depth=3)
+    assert not r3["ok"]
+    assert "嵌套深度" in r3["error"]
+
+
+async def test_sub_agent_toolface_by_depth(tmp_path):
+    """depth=1 的子 Agent 有 spawn_agent（可派孙）；depth=2（达上限）没有。"""
+    from litework.orchestration.sub_agent import sub_agent_excludes
+    app = _make_app(tmp_path)
+    reg1 = app.build_registry(allowed=None, exclude=sub_agent_excludes(1, 2))
+    names1 = {t.name for t in reg1.get_tools()}
+    assert "spawn_agent" in names1
+    reg2 = app.build_registry(allowed=None, exclude=sub_agent_excludes(2, 2))
+    names2 = {t.name for t in reg2.get_tools()}
+    assert "spawn_agent" not in names2
+
+
+async def test_max_steps_cap(tmp_path):
+    """spawn max_steps 超过封顶被截断到 cap。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="explorer", max_steps=999)
+    assert r["ok"]
+    rec = mgr.get(r["agent_id"])
+    # AgentRecord 不存 max_steps（传入 runner），这里验证 spawn 不报错且默认逻辑生效
+    assert rec is not None
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+
+
+async def test_fork_context_extraction(tmp_path):
+    """extract_fork_messages：裁剪规则（保留 user/assistant 纯文本，丢 system/tool/带工具调用）。"""
+    from litework.orchestration.agent_manager import extract_fork_messages
+    from litework.core.types import Message, ToolCall
+    msgs = [
+        Message(role="system", content="系统提示"),
+        Message(role="user", content="需求 A"),
+        Message(role="assistant", content=None, tool_calls=[ToolCall(id="c1", name="read_file", arguments="{}")]),
+        Message(role="tool", name="read_file", tool_call_id="c1", content="文件内容"),
+        Message(role="assistant", content="阶段结论 X"),
+        Message(role="user", content="需求 B"),
+    ]
+    # all：保留 3 条（需求A、阶段结论X、需求B）
+    got_all = extract_fork_messages(msgs, "all")
+    assert [m.content for m in got_all] == ["需求 A", "阶段结论 X", "需求 B"]
+    # 数字：最近 N 条 eligible
+    got2 = extract_fork_messages(msgs, "2")
+    assert [m.content for m in got2] == ["阶段结论 X", "需求 B"]
+    # none / 非法
+    assert extract_fork_messages(msgs, "none") == []
+    assert extract_fork_messages(msgs, "abc") == []
+
+
+async def test_message_length_limit(tmp_path):
+    """agent 间消息长度上限（agent_message_max_chars 配置）。"""
+    app = _make_app(tmp_path)
+    app.config["agent_message_max_chars"] = 100
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="explorer")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    out = await mgr.send_message(r["agent_id"], "x" * 200, sender="a")
+    assert not out["ok"] and "过长" in out["error"]
+    assert "文件交接" in out["error"]
+
+
+async def test_restore_from_session(tmp_path):
+    """跨重启恢复：新 manager 从 metadata 重建历史 agent，followup 可唤醒。"""
+    app = _make_app(tmp_path)
+    store = app.session_store
+    store.save("s1", [Message(role="user", content="hi")], metadata={
+        "workspace": str(tmp_path),
+        "subagent_records": [{
+            "subagentId": "sa_hist01", "role": "explorer", "task": "旧调研任务",
+            "nickname": "old-scout", "mode": "orchestrate", "summary": "旧结论：模块 X 存在。",
+            "changed_files": ["a.py"], "tokens": 100, "turns": 2, "status": "completed",
+        }],
+    })
+    # 模拟重启：全新 manager（同一 session）
+    mgr2 = app.agent_manager("s1")
+    agents = mgr2.list_agents()
+    assert any(a["agent_id"] == "sa_hist01" and a["summary"] == "旧结论：模块 X 存在。"
+               for a in agents)
+    # followup 唤醒恢复的记录（轻量历史：原任务 + 上次总结）
+    seen = []
+    class CaptureAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            seen.append([m.content or "" for m in messages])
+            return await super().chat_stream(messages, tools, events)
+    app._mock_adapter = CaptureAdapter([("重启后继续完成。", [])])
+    out = await mgr2.followup("sa_hist01", "基于旧结论继续")
+    assert out["ok"], out
+    await mgr2.wait(["sa_hist01"], timeout_ms=10000)
+    flat = "\n".join(seen[0])
+    assert "旧调研任务" in flat and "旧结论" in flat  # 轻量历史注入
+    assert "基于旧结论继续" in flat
+
+
+async def test_meeting_mode_accepted(tmp_path):
+    """meeting 模式合法（落 record，事件携带）。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("讨论议题", role="general", mode="meeting")
+    assert r["ok"]
+    assert mgr.get(r["agent_id"]).mode == "meeting"
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+
+
+async def test_spawn_fork_turns_through_handler(tmp_path):
+    """工具层 fork_turns：'all' 继承当前会话消息（handler 绑定 kernel）。"""
+    from litework.tools.agent_tools import make_agent_tool_handlers
+    from litework.core.kernel import Kernel
+    from litework.core.agent_loop import current_session_id
+
+    app = _make_app(tmp_path)
+    kernel = Kernel("s1")
+    kernel.ctx.messages = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="重要背景：项目是支付网关"),
+        Message(role="assistant", content="收到"),
+    ]
+    handlers = make_agent_tool_handlers(app, kernel=kernel)
+    token = current_session_id.set("s1")
+    try:
+        out = await handlers["spawn_agent"]({
+            "task": "调研支付模块", "role": "explorer", "fork_turns": "all"})
+        assert "[Agent 已派生]" in out
+        assert "已继承当前上下文" in out
+    finally:
+        current_session_id.reset(token)

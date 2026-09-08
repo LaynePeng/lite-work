@@ -3652,6 +3652,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .collab-picker {
   position: relative;
   flex: none;
+  /* 协作选择器起右对齐组（原 agent-bar-hint 的 margin-left:auto 职责，
+   * hint 移除后由这里承担：协作/模型推到 Agent 按钮的右侧） */
+  margin-left: auto;
 }
 
 .collab-btn {

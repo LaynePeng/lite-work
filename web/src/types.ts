@@ -122,6 +122,16 @@ export interface AppConfig {
   max_zip_size_mb?: number;
   /** triggers 匹配模式：substring | advanced */
   skill_trigger_mode?: "substring" | "advanced";
+  // 多智能体配置（docs/multi-agent-design.md §3）
+  max_parallel_agents?: number;
+  agent_total_limit?: number;
+  agent_max_steps?: number;
+  agent_max_steps_cap?: number;
+  agent_spawn_depth?: number;
+  agent_message_max_chars?: number;
+  agent_meeting_rounds?: number;
+  agent_ledger_interval?: number;
+  agent_persist_max?: number;
 }
 
 export interface ContextTaskStats {

@@ -11,9 +11,11 @@ from typing import Any, Dict, List
 
 from ..core.agent_loop import current_session_id
 from ..core.types import ToolDefinition
+from ..orchestration.agent_manager import current_agent_depth, extract_fork_messages
 from ..tools.plugin import ToolPlugin
 
-# 模式选择指引（写入工具描述：模型按任务特征自动路由，借鉴 Codex 委派策略）
+# 模式选择指引（写入工具描述：模型按任务特征自动路由，借鉴 Codex 委派策略 +
+# Magentic-One 进度账本 + AutoGen 群聊会议）
 DELEGATION_GUIDE = (
     "模式选择（按任务特征路由）：\n"
     "① 并行调研/互不依赖的子任务 → 编排-工人：spawn_agent 并行 + 继续自己的工作，结果自动送达；\n"
@@ -21,9 +23,13 @@ DELEGATION_GUIDE = (
     "③ 需要多样的方案/创意 → 头脑风暴：对同一问题 spawn 3+ 个不同视角/立场的 agent 并行提案，综合取舍；\n"
     "④ 方案或代码需要把关 → 互批：spawn role=critic 的批判者审查，产出问题清单；\n"
     "⑤ 高风险/争议决策 → 辩论：提案者与 critic 多轮对抗（send_message 传意见 + followup_task 唤醒修订）；\n"
-    "⑥ 产出需按意见迭代 → 红蓝对抗：followup_task 唤醒原 agent 按批判意见修订，循环至收敛。\n"
+    "⑥ 需要集体讨论达成共识 → 会议（meeting）：多 agent 围绕议题轮流发言、互相看到彼此观点后收敛；\n"
+    "⑦ 软件开发任务 → 测试驱动接力：实现 agent 与测试 agent 配对（实现→测试→修复循环）。\n"
+    "进度账本（长程任务纪律）：派发后每隔几步用 list_agents 检查各 agent 状态——"
+    "卡住的 send_message 督促或 close 换人重派；全部完成后综合。\n"
     "通用纪律：先区分关键路径（自己做）与 sidecar（可并行）；任务具体、有界、自包含；"
-    "并行写任务用 allowed_dirs 声明互不相交范围；wait_agents 仅在下一步被阻塞时使用。"
+    "并行写任务用 allowed_dirs 声明互不相交范围；wait_agents 仅在下一步被阻塞时使用；"
+    "子任务需要当前上下文才能理解时用 fork_turns 继承（'all' 或最近 N 条）。"
 )
 
 
@@ -39,11 +45,10 @@ def _manager(app):
     return app.agent_manager(str(sid)), sid
 
 
-def make_agent_tool_handlers(app, parent_events=None):
-    """绑定到具体 kernel.events 的四个工具 handler（create_kernel 重绑用）。
+def make_agent_tool_handlers(app, parent_events=None, kernel=None):
+    """绑定到具体 kernel 的六个工具 handler（create_kernel 重绑用）。
 
-    异步 spawn 的 progress 转发依赖 parent bus；callId 经 ContextVar 快照
-    传给子任务（spawn_agent 卡片关联）。
+    kernel：fork_context 的消息源（spawn 时从当前会话消息链裁剪继承上下文）。
     """
 
     async def _spawn(args: Dict[str, Any]) -> str:
@@ -56,15 +61,25 @@ def make_agent_tool_handlers(app, parent_events=None):
         manager, _sid = _manager(app)
         if manager is None:
             return "[Error]: 无活动会话，无法派生 agent。"
+        # 嵌套深度：主会话=0 → 派生 depth=1；子 Agent（handler 在子 loop 中重绑）
+        # 经 ContextVar 读自身深度 → 派生 depth+1（manager 校验配置上限）
+        depth = current_agent_depth.get() + 1
+        # fork_context：从当前会话消息链裁剪继承上下文（none/all/N）
+        fork_spec = str(args.get("fork_turns") or "none")
+        fork_messages = None
+        if kernel is not None and fork_spec != "none":
+            fork_messages = extract_fork_messages(kernel.ctx.messages, fork_spec)
         result = await manager.spawn(
             task,
             role=str(args.get("role") or "general"),
             agent_name=args.get("agent_name"),
             allowed_dirs=[str(d) for d in allowed_dirs] if allowed_dirs else None,
-            max_steps=int(args.get("max_steps") or 12),
+            max_steps=int(args.get("max_steps") or 0),
             parent_events=parent_events,
             mode=str(args.get("mode") or "orchestrate"),
             model=str(args.get("model")) if args.get("model") else None,
+            depth=depth,
+            initial_messages=fork_messages,
         )
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
@@ -75,9 +90,10 @@ def make_agent_tool_handlers(app, parent_events=None):
             f"。写入范围限定：{', '.join(allowed_dirs)}；"
             "继续你的工作，完成通知会自动送达。"
         )
+        fork_hint = f"；已继承当前上下文（{fork_spec}）" if fork_messages else ""
         return (
             f"[Agent 已派生] id={result['agent_id']} name={result['nickname']}"
-            f" role={args.get('role') or 'general'}{hint}"
+            f" role={args.get('role') or 'general'}{fork_hint}{hint}"
         )
 
     async def _list(args: Dict[str, Any]) -> str:
@@ -242,15 +258,20 @@ class MultiAgentPlugin(ToolPlugin):
                                                         "不声明则按角色默认（explorer/critic 只读）。"
                                                         "并行写任务必须声明互不相交的范围"},
                         "max_steps": {"type": "integer",
-                                      "description": "最大执行轮数（默认 12）"},
+                                      "description": "最大执行轮数（默认取配置，有封顶）"},
                         "model": {"type": "string",
                                   "description": "模型路由覆盖（可选）：'provider/model' 或裸 model。"
                                                  "探索/调研类子任务可指定更快的模型；默认跟随全局"},
+                        "fork_turns": {"type": "string",
+                                       "description": "上下文继承（可选）：'none'（默认）| 'all' | 数字字符串如 '6'"
+                                                      "（继承最近 N 条）。子任务需要当前对话背景才能理解时使用；"
+                                                      "自包含任务不要继承（省 token）"},
                         "mode": {"type": "string",
                                  "description": "合作模式标记：orchestrate（默认，编排-工人）/"
                                                 "pipeline（流水线：按序交接）/brainstorm（头脑风暴："
-                                                "并行多视角提案）/debate（辩论：批判对抗）——"
-                                                "按你选择的模式声明，供界面分组展示"},
+                                                "并行多视角提案）/debate（辩论：批判对抗）/"
+                                                "meeting（会议：群聊共议）——按你选择的模式声明，"
+                                                "供界面分组展示"},
                     },
                     "required": ["task"],
                 },

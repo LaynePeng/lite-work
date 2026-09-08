@@ -48,6 +48,15 @@ export default function SettingsModal({
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
   const [timeoutSaved, setTimeoutSaved] = useState(false);
+  // 综合设置：多智能体限额与行为（docs/multi-agent-design.md §3）
+  const [maParallel, setMaParallel] = useState<number>(4);
+  const [maTotal, setMaTotal] = useState<number>(16);
+  const [maSteps, setMaSteps] = useState<number>(12);
+  const [maStepsCap, setMaStepsCap] = useState<number>(50);
+  const [maDepth, setMaDepth] = useState<number>(2);
+  const [maMsgChars, setMaMsgChars] = useState<number>(8000);
+  const [maMeetingRounds, setMaMeetingRounds] = useState<number>(3);
+  const [maSaved, setMaSaved] = useState(false);
   // Skills triggers 匹配模式
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
@@ -243,6 +252,14 @@ export default function SettingsModal({
       if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
       if (typeof c.subagent_timeout === "number" && c.subagent_timeout > 0) setSubagentTimeout(c.subagent_timeout);
       if (typeof c.max_steps === "number" && c.max_steps > 0) setMaxSteps(c.max_steps);
+      // 多智能体配置
+      if (typeof c.max_parallel_agents === "number" && c.max_parallel_agents > 0) setMaParallel(c.max_parallel_agents);
+      if (typeof c.agent_total_limit === "number" && c.agent_total_limit > 0) setMaTotal(c.agent_total_limit);
+      if (typeof c.agent_max_steps === "number" && c.agent_max_steps > 0) setMaSteps(c.agent_max_steps);
+      if (typeof c.agent_max_steps_cap === "number" && c.agent_max_steps_cap > 0) setMaStepsCap(c.agent_max_steps_cap);
+      if (typeof c.agent_spawn_depth === "number" && c.agent_spawn_depth > 0) setMaDepth(c.agent_spawn_depth);
+      if (typeof c.agent_message_max_chars === "number" && c.agent_message_max_chars > 0) setMaMsgChars(c.agent_message_max_chars);
+      if (typeof c.agent_meeting_rounds === "number" && c.agent_meeting_rounds > 0) setMaMeetingRounds(c.agent_meeting_rounds);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
 
@@ -728,6 +745,27 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [toolTimeout, llmTimeout, subagentTimeout, maxSteps, onSaved]);
+
+  // 多智能体配置保存（限额与行为，立即生效于下一个任务）
+  const saveMaConfig = useCallback(async () => {
+    setMaSaved(false);
+    try {
+      await api.updateConfig({
+        max_parallel_agents: maParallel,
+        agent_total_limit: maTotal,
+        agent_max_steps: maSteps,
+        agent_max_steps_cap: maStepsCap,
+        agent_spawn_depth: maDepth,
+        agent_message_max_chars: maMsgChars,
+        agent_meeting_rounds: maMeetingRounds,
+      });
+      setMaSaved(true);
+      setTimeout(() => setMaSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds, onSaved]);
 
   return (
       <div className="modal-overlay">
@@ -1691,6 +1729,77 @@ export default function SettingsModal({
                     type="number" className="form-input" min={1} max={500}
                     value={maxSteps}
                     onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 100))}
+                  />
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>多智能体协作</span>
+                <button className="btn-test" onClick={() => void saveMaConfig()}>
+                  {maSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                并发上限：同时运行的子 Agent 数量；累计上限：单会话累计派生数量；
+                子 Agent 轮数：默认/封顶（spawn 可覆盖但不超过封顶）；嵌套深度：子 Agent 最多再派生几层；
+                消息长度：agent 间单条消息字符上限；会议轮次：群聊共议模式的默认轮数。
+              </p>
+              <div className="timeout-grid">
+                <div className="form-group">
+                  <label>并发上限</label>
+                  <input
+                    type="number" className="form-input" min={1} max={16}
+                    value={maParallel}
+                    onChange={(e) => setMaParallel(Math.max(1, parseInt(e.target.value, 10) || 4))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>累计上限</label>
+                  <input
+                    type="number" className="form-input" min={1} max={100}
+                    value={maTotal}
+                    onChange={(e) => setMaTotal(Math.max(1, parseInt(e.target.value, 10) || 16))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>子 Agent 轮数（默认）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={200}
+                    value={maSteps}
+                    onChange={(e) => setMaSteps(Math.max(1, parseInt(e.target.value, 10) || 12))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>子 Agent 轮数（封顶）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={500}
+                    value={maStepsCap}
+                    onChange={(e) => setMaStepsCap(Math.max(1, parseInt(e.target.value, 10) || 50))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>嵌套深度</label>
+                  <input
+                    type="number" className="form-input" min={1} max={4}
+                    value={maDepth}
+                    onChange={(e) => setMaDepth(Math.max(1, parseInt(e.target.value, 10) || 2))}
+                    title="1=子 Agent 不可再派生；2=子可派孙，孙不可再派"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>消息长度上限（字符）</label>
+                  <input
+                    type="number" className="form-input" min={100} max={100000}
+                    value={maMsgChars}
+                    onChange={(e) => setMaMsgChars(Math.max(100, parseInt(e.target.value, 10) || 8000))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>会议轮次</label>
+                  <input
+                    type="number" className="form-input" min={1} max={10}
+                    value={maMeetingRounds}
+                    onChange={(e) => setMaMeetingRounds(Math.max(1, parseInt(e.target.value, 10) || 3))}
                   />
                 </div>
               </div>

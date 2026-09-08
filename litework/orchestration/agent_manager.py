@@ -19,12 +19,43 @@ import os
 import re
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..core.types import Plugin
 
 logger = logging.getLogger("litework.agents")
+
+# 当前执行体的嵌套深度（0=主 Agent 会话；子 Agent 由 SubAgentRunner set）。
+# spawn_agent handler 读取它决定派生深度与是否允许（防失控嵌套）。
+current_agent_depth: ContextVar[int] = ContextVar("litework_agent_depth", default=0)
+
+
+def extract_fork_messages(messages: List[Any], spec: str) -> List[Any]:
+    """fork_context 语义（对齐 Codex fork_turns）：从父上下文裁剪可继承消息。
+
+    spec: "none"（默认，不继承）| "all"（全部）| "<N>"（最近 N 条）。
+    裁剪规则：保留 user 与 assistant 纯文本消息（最终回答），
+    丢弃 system（子 Agent 有自己的）、tool 结果、工具调用型 assistant（过程噪音）。
+    """
+    eligible = []
+    for m in messages:
+        role = getattr(m, "role", "")
+        if role == "system":
+            continue
+        if role == "tool":
+            continue
+        if role == "assistant" and getattr(m, "tool_calls", None):
+            continue
+        eligible.append(m)
+    if spec == "all":
+        return list(eligible)
+    try:
+        n = int(str(spec).strip())
+    except (TypeError, ValueError):
+        return []
+    return eligible[-n:] if n > 0 else []
 
 # 状态机：pending → running → (completed | errored | timeout) ；close 可从任意态进入 closed
 FINAL_STATUSES = frozenset({"completed", "errored", "timeout", "closed"})
@@ -66,6 +97,8 @@ class AgentRecord:
     mode: str = "orchestrate"
     # 模型路由（"provider/model" 或裸 model；None=跟随全局）
     model: Optional[str] = None
+    # 嵌套深度（1=主 Agent 直接派生；agent_spawn_depth 配置上限）
+    depth: int = 1
     status: str = "pending"
     summary: str = ""
     changed_files: List[str] = field(default_factory=list)
@@ -151,7 +184,7 @@ def _safe_nickname(name: str) -> Optional[str]:
 
 
 class SessionAgentManager:
-    """会话级多 Agent 管理：spawn / 限额 / 通知队列 / 查询。"""
+    """会话级多 Agent 管理：spawn / 限额 / 通知队列 / 查询 / 落盘恢复。"""
 
     def __init__(self, app, session_id: str) -> None:
         self.app = app
@@ -165,6 +198,49 @@ class SessionAgentManager:
         # 共享任务池（去中心化认领，对齐 Claude Code agent teams）
         self.shared_tasks: List[SharedTask] = []
         self._task_seq = 0
+        # 落盘恢复标记（restore 只做一次）
+        self._restored = False
+
+    def _restore_from_session(self) -> None:
+        """跨重启恢复：从会话 metadata 的 subagent_records 重建已完成 agent 记录。
+
+        恢复的记录 status=completed、带原任务与总结——list_agents 可见、
+        followup_task 可唤醒（以「原任务 + 上次总结」构造轻量历史上下文，
+        完整消息链不落盘，代价可接受）。
+        """
+        if self._restored:
+            return
+        self._restored = True
+        try:
+            snapshot = self.app.session_store.load(self.session_id)
+            if snapshot is None:
+                return
+            records = (snapshot.metadata or {}).get("subagent_records") or []
+            for r in records:
+                if not isinstance(r, dict):
+                    continue
+                aid = str(r.get("subagentId") or "")
+                if not aid or aid in self.agents:
+                    continue
+                self.agents[aid] = AgentRecord(
+                    agent_id=aid,
+                    nickname=str(r.get("nickname") or r.get("role") or aid),
+                    role=str(r.get("role") or "general"),
+                    task=str(r.get("task") or ""),
+                    mode=str(r.get("mode") or "orchestrate"),
+                    status="completed",
+                    summary=str(r.get("summary") or ""),
+                    changed_files=[str(f) for f in (r.get("changed_files") or [])],
+                    tokens=int(r.get("tokens") or 0),
+                    turns=int(r.get("turns") or 0),
+                    started_at=float(r.get("started_at") or 0) or time.time(),
+                )
+            if self.agents:
+                self._spawned_total = max(self._spawned_total, len(self.agents))
+                logger.info("[AgentManager] 会话 %s 恢复 %d 条历史 agent 记录",
+                            self.session_id, len(self.agents))
+        except Exception:
+            logger.debug("[AgentManager] 历史记录恢复失败（忽略）", exc_info=True)
 
     # ------------------------------------------------------------ 限额
 
@@ -181,15 +257,30 @@ class SessionAgentManager:
     # ------------------------------------------------------------ spawn
 
     async def spawn(self, task: str, role: str = "general", agent_name: Optional[str] = None,
-                    allowed_dirs: Optional[List[str]] = None, max_steps: int = 12,
+                    allowed_dirs: Optional[List[str]] = None, max_steps: int = 0,
                     parent_events=None, mode: str = "orchestrate",
-                    model: Optional[str] = None) -> Dict[str, Any]:
-        """异步派生：校验限额 → 建记录 → 后台执行，立即返回。"""
+                    model: Optional[str] = None, depth: int = 1,
+                    initial_messages: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """异步派生：校验限额 → 建记录 → 后台执行，立即返回。
+
+        depth：嵌套深度（1=主 Agent 直接派生）。子 Agent 再派生时传 2，
+        超过 agent_spawn_depth 配置被拒（防失控嵌套）。
+        initial_messages：fork_context 继承的父上下文消息（裁剪后）。
+        """
+        self._restore_from_session()
         err = self._check_limits()
         if err:
             return {"ok": False, "error": err}
+        max_depth = int(self.app.config.get("agent_spawn_depth", 2))
+        if depth > max_depth:
+            return {"ok": False,
+                    "error": f"嵌套深度超限（{depth} > {max_depth}）：不允许在更深层级继续派生 agent。"}
+        # max_steps：默认取配置，封顶防失控
+        default_steps = int(self.app.config.get("agent_max_steps", 12))
+        cap = int(self.app.config.get("agent_max_steps_cap", 50))
+        max_steps = min(int(max_steps or default_steps), cap)
 
-        if mode not in ("orchestrate", "pipeline", "brainstorm", "debate"):
+        if mode not in ("orchestrate", "pipeline", "brainstorm", "debate", "meeting"):
             mode = "orchestrate"
 
         agent_id = f"sa_{uuid.uuid4().hex[:8]}"
@@ -202,7 +293,7 @@ class SessionAgentManager:
         record = AgentRecord(
             agent_id=agent_id, nickname=nickname, role=role or "general",
             task=task, allowed_dirs=list(allowed_dirs) if allowed_dirs else None,
-            mode=mode, model=model, started_at=time.time(),
+            mode=mode, model=model, depth=depth, started_at=time.time(),
         )
         self.agents[agent_id] = record
         self._spawned_total += 1
@@ -218,6 +309,8 @@ class SessionAgentManager:
                     agent_id=agent_id, nickname=nickname,
                     allowed_dirs=record.allowed_dirs, record=record,
                     model=model,
+                    initial_messages=initial_messages,  # fork_context 继承的父上下文
+                    sub_depth=depth,  # 嵌套深度：子 Agent 可按 depth+1 再派（受配置上限约束）
                 )
                 record.summary = result.get("summary", "")
                 record.tokens = int(result.get("total_tokens_used", 0))
@@ -275,6 +368,7 @@ class SessionAgentManager:
     # ------------------------------------------------------------ 查询 / 生命周期
 
     def list_agents(self, include_closed: bool = False) -> List[Dict[str, Any]]:
+        self._restore_from_session()
         out = []
         for r in self.agents.values():
             if r.status == "closed" and not include_closed:
@@ -362,6 +456,7 @@ class SessionAgentManager:
         - 消息是纯文本输入，不能替代用户审批/授权（SecurityPlugin 审批门只认用户操作）
         - 限流防两个 agent 互发死循环耗尽 token
         """
+        self._restore_from_session()
         record = self.agents.get(agent_id)
         if record is None:
             return {"ok": False, "error": f"未知 agent: {agent_id}"}
@@ -370,6 +465,10 @@ class SessionAgentManager:
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "消息内容不能为空。"}
+        max_chars = int(self.app.config.get("agent_message_max_chars", 8000))
+        if len(text) > max_chars:
+            return {"ok": False,
+                    "error": f"消息过长（{len(text)} > {max_chars} 字符上限）。请精简内容或改用文件交接（写入文件后告知路径）。"}
         if not self._check_message_rate(sender, agent_id):
             return {"ok": False,
                     "error": f"消息限流：{sender} → {record.nickname} 每分钟最多 "
@@ -389,6 +488,7 @@ class SessionAgentManager:
                        max_steps: int = 12) -> Dict[str, Any]:
         """唤醒已完成的 agent 继续工作（接力合作）：
         携带全部历史消息链 + 滞留 mailbox 消息 + 新任务。运行中则拒绝（用 send_message）。"""
+        self._restore_from_session()
         record = self.agents.get(agent_id)
         if record is None:
             return {"ok": False, "error": f"未知 agent: {agent_id}"}
@@ -405,8 +505,15 @@ class SessionAgentManager:
             return {"ok": False, "error": err}
         self._spawned_total += 1  # 唤醒计入总量（新的一轮执行）
 
-        # 历史消息链（首 run 的 system prompt 已在头部，续跑保留）
+        # 历史消息链（首 run 的 system prompt 已在头部，续跑保留）。
+        # 跨重启恢复的记录无消息链 → 以「原任务 + 上次总结」构造轻量历史
         history = list(record.messages)
+        if not history and (record.task or record.summary):
+            from ..core.types import Message as _Msg
+            history = [
+                _Msg(role="user", content=f"（上次任务）{record.task}"),
+                _Msg(role="assistant", content=record.summary or "（完成）"),
+            ]
         # 滞留消息并入上下文（唤醒即送达）
         backlog = list(record.mailbox)
         record.mailbox.clear()

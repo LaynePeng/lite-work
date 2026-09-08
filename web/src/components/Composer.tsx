@@ -369,7 +369,8 @@ export default function Composer({
       setText("");
       return;
     }
-    // 协作模式（非自动）：改写为 /技能 命令（复用技能展开机制），发送后回落自动
+    // 协作模式（非自动）：改写为 /技能 命令（复用技能展开机制）。
+    // 模式保持选择（不回落）：与 Agent 选择器一致的持久语义，用户手动切回自动
     let outgoing = t;
     if (collabMode !== "auto" && !t.startsWith("/")) {
       const mode = COLLAB_MODES.find((m) => m.id === collabMode);
@@ -385,6 +386,7 @@ export default function Composer({
     setHistoryIdx(-1);
     onSend(outgoing);
     setText("");
+    // 协作模式为一次性修饰：发送后回落自动，避免后续消息被持续强制走该模式
     if (collabMode !== "auto") setCollabMode("auto");
   };
 
@@ -411,7 +413,7 @@ export default function Composer({
              );
            })}
           {/* 协作模式：按钮显示当前模式 + popover 选择（自动=模型路由；选中显式模式，
-              发送后回落自动） */}
+              发送后回落自动——一次性修饰语义） */}
           <div className="collab-picker" ref={collabRef}>
             <button
               className={`collab-btn ${collabMode !== "auto" ? "active" : ""}`}

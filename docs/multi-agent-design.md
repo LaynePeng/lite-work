@@ -134,6 +134,12 @@ TaskManager.start(session)
 | **接力合作** | A 产出 → send_message 直达 B → followup 唤醒 B 继续 | ✅ P2 切片：send_message + followup_task（agent 间直接通信，不经父中转） |
 | **辩论多轮** | 生成者 vs 批判者交替对抗 N 轮 | ✅ P2 切片：多轮 send_message + followup 往返（编排者驱动轮次） |
 | **红蓝对抗** | 产出→审查→修复循环 | ✅ P2 切片：followup 唤醒原 agent 按批判意见修订 |
+| **群聊会议** | 多 agent 共享议题轮流发言、互相影响后收敛（AutoGen GroupChat） | ✅ P2：meeting 模式 + meeting 技能（轮流发言 + 观点传递 + 裁决） |
+| **进度账本** | 编排者周期检查子 agent 进度、督促/换人（Magentic-One） | ✅ P2：list_agents 周期检查指引（DELEGATION_GUIDE ledger 纪律） |
+| **测试驱动接力** | 实现 agent ⇄ 测试 agent 配对循环（软件开发特化） | ✅ P2：code-sprint 技能（模式 A 接力 / 模式 B 模块领地并行） |
+| **嵌套团队** | 子 agent 再派孙（深度受限） | ✅ P2：agent_spawn_depth=2，depth=1 可派孙、孙不可再派 |
+| **上下文继承** | 子 agent 带父上下文启动（Codex fork_turns） | ✅ P2：fork_turns=none/all/"N"（裁剪：留 user+assistant 纯文本） |
+| **断点恢复** | 子 agent 跨重启恢复可唤醒（CrewAI checkpointing 轻量版） | ✅ P2：metadata 落档 + manager 惰性恢复 + followup 轻量历史唤醒 |
 
 ### 模式怎么选（两层选择机制）
 
@@ -197,8 +203,8 @@ agent 持久化恢复跨会话。
 | 阶段 | 内容 |
 |---|---|
 | **P1**（本文档，已实施） | 异步 spawn + 并行 + 4 工具 + 目录硬隔离 + 完成通知 + Agents tab + critic 角色 |
-| **P2** | send_message / followup_task、嵌套 spawn（depth=2）、fork_context（继承父最近 N 轮）、子 Agent 落盘恢复、辩论/红蓝对抗一等模式 |
-| **P3** | MultiAgentMode 三档（默认 ExplicitRequestOnly）、角色 description 进 spawn 提示、nickname 池、权限默认收敛 |
+| **P2**（已实施） | send_message / followup_task、嵌套 spawn（agent_spawn_depth，默认 2）、fork_context（fork_turns=none/all/N）、子 Agent 落盘恢复（metadata 重建 + 轻量历史唤醒）、模型路由、消息限流+长度上限+防伪、共享任务池、review gate、meeting 会议模式、进度账本指引、code-sprint 软件开发特化、配置界面（综合设置·多智能体区） |
+| **P3** | MultiAgentMode 三档（默认 ExplicitRequestOnly）、角色 description 进 spawn 提示、nickname 池、权限默认收敛、worktree 物理隔离、共享任务依赖图 |
 
 ## 附：Codex 参考要点速查
 
