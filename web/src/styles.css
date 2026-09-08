@@ -3366,7 +3366,88 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   gap: 5px;
 }
 
-.agent-section-head {
+/* 主 Agent 根节点：编排者，子 Agent 从它派生（树根） */
+.agent-orchestrator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.agent-orchestrator.running {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 55%, var(--border));
+}
+
+.agent-orch-icon {
+  font-size: 16px;
+  flex: none;
+}
+
+.agent-orchestrator.running .agent-orch-icon {
+  animation: agent-orch-bounce 1.8s ease-in-out infinite;
+}
+
+@keyframes agent-orch-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+.agent-orch-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.agent-orch-name {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+
+.agent-orch-meta {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.agent-orchestrator.running .agent-orch-meta {
+  color: var(--accent, #4f8cff);
+}
+
+/* 子 Agent 分支区：左侧树形连接线（从主 Agent 分出） */
+.agent-branches {
+  position: relative;
+  margin-left: 12px;
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 连接线：竖线贯穿分支区，顶端一段横线回连主 Agent */
+.agent-branches::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -4px;
+  bottom: 4px;
+  width: 1.5px;
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
+}
+
+.agent-branches::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 8px;
+  height: 1.5px;
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
+}
+
+.agent-branches .agent-section-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3408,6 +3489,19 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex-direction: column;
   gap: 4px;
   transition: border-color 0.2s ease;
+  /* 流转交接：卡片（跨分区移动/新增时）入场滑动，标记状态迁移 */
+  animation: agent-slide-in 0.28s ease;
+}
+
+@keyframes agent-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .agent-card.running {
@@ -3437,6 +3531,11 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   font-family: ui-monospace, monospace;
   white-space: nowrap;
+}
+
+/* 交付标记：结果已回传主 Agent 上下文（交接完成） */
+.agent-meta .agent-delivered {
+  color: var(--green, #3fb950);
 }
 
 .agent-task {

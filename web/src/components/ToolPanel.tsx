@@ -185,8 +185,8 @@ function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKil
 
 // ---------------------------------------------------------------- Agents 看板（竖排 kanban）
 
-/** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary。 */
-function AgentCard({ agent }: { agent: SubAgentProgress }) {
+/** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary + 交付标记。 */
+function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const running = agent.status === "running";
   const elapsed = agent.startedAt ? Math.floor((Date.now() - agent.startedAt) / 1000) : null;
@@ -198,7 +198,10 @@ function AgentCard({ agent }: { agent: SubAgentProgress }) {
         <span className="agent-role">{agent.role || "general"}</span>
         {running
           ? <span className="agent-meta">{elapsed != null ? `${elapsed}s` : ""}{agent.turn ? ` · turn ${agent.turn}` : ""}</span>
-          : <span className="agent-meta">{agent.tokens ? `${(agent.tokens / 1000).toFixed(1)}k tok` : ""}</span>}
+          : <span className="agent-meta">
+              {agent.tokens ? `${(agent.tokens / 1000).toFixed(1)}k tok` : ""}
+              {delivered && <span className="agent-delivered"> · ↩ 已交付</span>}
+            </span>}
       </div>
       <div className="agent-task" title={agent.task}>{agent.task || "（未描述任务）"}</div>
       {running ? (
@@ -225,9 +228,17 @@ function AgentCard({ agent }: { agent: SubAgentProgress }) {
   );
 }
 
-/** Agents 看板：竖排 kanban——「运行中」/「已完成」两个状态分区纵向堆叠，
- *  agent 卡片完成时从上分区流入下分区（交接可视化）。 */
-function AgentsPanel({ agents }: { agents: SubAgentProgress[] }) {
+/** Agents 看板：竖排 kanban 交接视图。
+ *
+ * 关系：顶部「主 Agent」根节点，子 Agent 卡片通过左侧树形连接线挂在根下
+ * （编排 → 派生的从属关系可见）。
+ * 流转：子 Agent 完成时卡片跨分区流入「已完成」（入场滑动动画标记这一交接），
+ * 交付标记「↩ 已交付」表示结果已回传主 Agent 上下文。
+ */
+function AgentsPanel({ agents, orchestrator }: {
+  agents: SubAgentProgress[];
+  orchestrator?: { agentId: string; running: boolean };
+}) {
   const running = agents.filter((a) => a.status === "running");
   const done = agents.filter((a) => a.status !== "running");
   // 运行时长计时：有 running 卡片时每秒重渲染
@@ -238,22 +249,36 @@ function AgentsPanel({ agents }: { agents: SubAgentProgress[] }) {
     return () => window.clearInterval(t);
   }, [running.length]);
 
-  if (agents.length === 0) {
-    return <div className="tool-panel-empty">暂无 Agent（主 Agent 派生子任务时在此显示看板）</div>;
-  }
+  const orch = orchestrator ?? { agentId: "build", running: false };
   return (
     <div className="agents-panel">
-      <div className="agent-section-head">
-        <span className="agent-dot running" />运行中（{running.length}）
-      </div>
-      {running.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
-      {done.length > 0 && (
-        <>
-          <div className="agent-section-head">
-            <span className="agent-dot done" />已完成（{done.length}）
+      <div className={`agent-orchestrator ${orch.running ? "running" : "idle"}`}>
+        <span className="agent-orch-icon">🤖</span>
+        <div className="agent-orch-main">
+          <div className="agent-orch-name">{orch.agentId}</div>
+          <div className="agent-orch-meta">
+            {orch.running ? "编排运行中" : "空闲"}
+            {agents.length > 0 && ` · 派生 ${done.length}/${agents.length}`}
           </div>
-          {done.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
-        </>
+        </div>
+      </div>
+      {agents.length === 0 ? (
+        <div className="tool-panel-empty">暂无派生的子 Agent（主 Agent 派生任务时在此显示交接看板）</div>
+      ) : (
+        <div className="agent-branches">
+          <div className="agent-section-head">
+            <span className="agent-dot running" />运行中（{running.length}）
+          </div>
+          {running.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+          {done.length > 0 && (
+            <>
+              <div className="agent-section-head">
+                <span className="agent-dot done" />已完成（{done.length}）
+              </div>
+              {done.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} delivered />)}
+            </>
+          )}
+        </div>
       )}
     </div>
   );
@@ -316,13 +341,14 @@ function useTabStripDrag() {
 }
 
 export default function ToolPanel({
-  contextStats, mcpServers, tools, todos, agentBoard, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  contextStats, mcpServers, tools, todos, agentBoard, orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
 }: {
   contextStats: ContextStats | null;
   mcpServers: MCPServerStatus[];
   tools: { name: string; description: string }[];
   todos: TodoItem[];
   agentBoard?: SubAgentProgress[];
+  orchestrator?: { agentId: string; running: boolean };
   backgroundTasks?: BackgroundTaskInfo[];
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -377,7 +403,7 @@ export default function ToolPanel({
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />
             : panelTab === "agents"
-              ? <AgentsPanel agents={agentBoard ?? []} />
+              ? <AgentsPanel agents={agentBoard ?? []} orchestrator={orchestrator} />
               : panelTab === "mcp"
                 ? <McpPanel servers={mcpServers} />
                 : panelTab === "background"

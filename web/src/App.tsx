@@ -184,11 +184,11 @@ export default function App() {
     storageKey: "litework.sidebarWidth.v2",
   });
   const toolPanelResize = useResizable({
-    // 右侧工具面板默认约为窗口宽度的 23%
-    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.23), min: 260,
+    // 右侧工具面板默认约为窗口宽度的 25%（从中间聊天区压缩）
+    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.25), min: 260,
     max: () => Math.min(720, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
-    storageKey: "litework.toolPanelWidth.v2",
+    storageKey: "litework.toolPanelWidth.v3",
   });
 
   // 后台命令轮询：每 2s 拉取右侧工具面板「后台」tab 数据
@@ -1726,6 +1726,7 @@ export default function App() {
             tools={registeredTools}
             todos={currentChat.todos}
             agentBoard={currentChat.agentBoard}
+            orchestrator={{ agentId: currentAgent, running: currentChat.running }}
             backgroundTasks={backgroundTasks}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}
