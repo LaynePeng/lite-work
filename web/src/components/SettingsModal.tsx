@@ -91,8 +91,9 @@ export default function SettingsModal({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMsg, setAgentMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean }>>({});
-  const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "" });
+  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean; model?: string }>>({});
+  const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "",
+    mode: "subagent" as "primary" | "subagent", model: "" });
 
   const refreshSkills = useCallback(() => {
     api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
@@ -223,7 +224,8 @@ export default function SettingsModal({
         for (const a of Object.values(r.agents)) {
           if (!next[a.id]) {
             const t = a.tools;
-            next[a.id] = { tools: Array.isArray(t) ? t : r.tools.map((x) => x.name), useAll: !Array.isArray(t) };
+            next[a.id] = { tools: Array.isArray(t) ? t : r.tools.map((x) => x.name), useAll: !Array.isArray(t),
+              model: a.model || "" };
           }
         }
         return next;
@@ -385,6 +387,7 @@ export default function SettingsModal({
       await api.saveAgent({
         id: agentId,
         tools: draft.useAll ? null : draft.tools,
+        model: draft.model || null,
       });
       setAgentMsg({ ok: true, text: `Agent ${agentId} 已保存` });
       setEditingAgent(null);
@@ -395,6 +398,12 @@ export default function SettingsModal({
       setAgentBusy(false);
     }
   }, [agentDrafts, refreshAgents]);
+
+  // 模型选项：全部供应商 × 各自模型列表（值 "provider/model"，SubAgentRunner 路由用）
+  const agentModelOptions: string[] = [];
+  for (const p of providers) {
+    for (const m of p.models || []) agentModelOptions.push(`${p.id}/${m}`);
+  }
 
   const createNewAgent = useCallback(async () => {
     const { name, description, prompt } = newAgentForm;
@@ -407,10 +416,11 @@ export default function SettingsModal({
         description: description.trim() || "自定义 Agent",
         system_prompt: prompt.trim(),
         tools: null,
-        mode: "primary",
+        mode: newAgentForm.mode,
+        model: newAgentForm.model || null,
       });
       setAgentMsg({ ok: true, text: `Agent ${name} 已创建` });
-      setNewAgentForm({ name: "", description: "", prompt: "" });
+      setNewAgentForm({ name: "", description: "", prompt: "", mode: "subagent", model: "" });
       void refreshAgents();
     } catch (err) {
       setAgentMsg({ ok: false, text: `创建失败: ${(err as Error).message}` });
@@ -1617,9 +1627,25 @@ export default function SettingsModal({
                               })}
                             </div>
                           )}
+                          {!isBuiltin && (
+                            <div className="form-group" style={{ marginTop: 6, marginBottom: 0 }}>
+                              <label>该角色的模型（派生时使用）</label>
+                              <select
+                                className="form-input"
+                                value={draft.model ?? ""}
+                                onChange={(e) => setAgentDrafts((p) => ({
+                                  ...p, [a.id]: { ...p[a.id], model: e.target.value },
+                                }))}
+                                title="spawn_agent(role=该角色) / @该角色 派生时使用的模型；跟随全局 = 会话默认"
+                              >
+                                <option value="">跟随全局</option>
+                                {agentModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                              </select>
+                            </div>
+                          )}
                           <div className="form-actions" style={{ marginTop: 8 }}>
                             <button className="btn-test" disabled={agentBusy}
-                              onClick={() => void saveAgent(a.id)}>保存工具</button>
+                              onClick={() => void saveAgent(a.id)}>保存</button>
                           </div>
                         </div>
                       )}
@@ -1643,6 +1669,27 @@ export default function SettingsModal({
                 placeholder="系统提示词（定义该 Agent 的人格与工作准则）"
                 value={newAgentForm.prompt}
                 onChange={(e) => setNewAgentForm({ ...newAgentForm, prompt: e.target.value })} />
+              <div className="skills-create-row" style={{ marginTop: 6, flexWrap: "wrap" }}>
+                <select
+                  className="form-input" style={{ flex: "0 0 auto", minWidth: 150 }}
+                  value={newAgentForm.mode}
+                  onChange={(e) => setNewAgentForm({ ...newAgentForm,
+                    mode: e.target.value === "primary" ? "primary" : "subagent" })}
+                  title="主 Agent：输入框上方切换使用；子 Agent 角色：spawn_agent(role=...) / @角色 派生使用"
+                >
+                  <option value="subagent">子 Agent 角色（@ 派生用）</option>
+                  <option value="primary">主 Agent（输入框切换用）</option>
+                </select>
+                <select
+                  className="form-input" style={{ flex: "1 1 180px" }}
+                  value={newAgentForm.model}
+                  onChange={(e) => setNewAgentForm({ ...newAgentForm, model: e.target.value })}
+                  title="该角色派生时使用的模型；跟随全局 = 用当前会话/全局默认模型"
+                >
+                  <option value="">模型：跟随全局</option>
+                  {agentModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
               <div className="form-actions" style={{ marginTop: 8 }}>
                 <button className="btn-test" disabled={agentBusy || !newAgentForm.name.trim()}
                   onClick={() => void createNewAgent()}>创建 Agent</button>
