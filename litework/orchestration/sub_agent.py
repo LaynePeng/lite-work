@@ -130,6 +130,10 @@ class SubAgentRunner:
             allowed = profile.tools
             permissions = profile.permissions
             base_prompt = profile.system_prompt or ROLE_PROMPTS.get("general", "")
+            # 角色级模型路由：profile 声明了 model 且 spawn 未显式指定时生效
+            # （优先级：spawn 参数 > 角色定义 > 全局）
+            if not model and profile.model:
+                model = profile.model
         else:
             allowed = ROLE_TOOLS.get(role)
             permissions = None

@@ -543,7 +543,7 @@ export default function Composer({
                 onMouseDown={(e) => { e.preventDefault(); applySuggestion(c.name); }}
                 onMouseEnter={() => setSelIdx(i)}
               >
-                <span className="command-palette-name">/{c.name}</span>
+                <span className="command-palette-name">{c.hint === "agent" ? "@" : "/"}{c.name}</span>
                 <span className="command-palette-desc">{c.description}</span>
                 {c.hint && <span className="command-palette-hint">{c.hint}</span>}
               </button>
