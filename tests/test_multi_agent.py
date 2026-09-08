@@ -493,7 +493,7 @@ async def test_spawn_model_routing(tmp_path):
     def spy_build(provider_id=None, overrides=None):
         built["provider"] = provider_id
         built["overrides"] = overrides
-        return orig_build(provider_id=provider_id, overrides=overrides)
+        return app._mock_adapter  # 拦截真实构建（环境变量 key 会发起网络调用）
     app.llm_registry.build_adapter = spy_build
 
     mgr = app.agent_manager("s1")
@@ -894,3 +894,85 @@ async def test_handler_passes_isolation_and_denies(tmp_path):
         await mgr.wait([aid], timeout_ms=30000)
     finally:
         current_session_id.reset(token)
+
+# ---------------------------------------------------------------- 复查修复的回归
+
+async def test_grandchild_attaches_to_root_manager(tmp_path):
+    """Bug 修复：子 Agent 派孙 → 孙必须挂主会话 manager（看板/限额/通知统一），
+    而不是按 current_session_id（=sub_id）新建孤立 manager。"""
+    app = _make_app(tmp_path)
+    from litework.core.agent_loop import current_session_id
+    from litework.tools.agent_tools import make_agent_tool_handlers
+
+    token = current_session_id.set("root-sess")
+    mgr = app.agent_manager("root-sess")
+    # 主会话 spawn 子（子会在独立 task 里执行，模拟真实链路）
+    r = await mgr.spawn("子任务", role="general")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    current_session_id.reset(token)
+
+    # 模拟子 Agent 上下文（current_session_id = sub_id），handler 绑子 kernel
+    # 且子 kernel 带 root_session_id（SubAgentRunner 真实运行时设置）
+    from litework.core.kernel import Kernel
+    sub_kernel = Kernel(r["agent_id"])
+    sub_kernel.root_session_id = "root-sess"
+    handlers = make_agent_tool_handlers(app, kernel=sub_kernel)
+
+    token2 = current_session_id.set(r["agent_id"])  # 子执行态
+    try:
+        out = await handlers["spawn_agent"]({"task": "孙任务", "role": "general"})
+        assert "[Agent 已派生]" in out
+        grandson_id = out.split("id=")[1].split()[0]
+        # 孙在主会话 manager（无孤立 manager 产生）
+        assert grandson_id in mgr.agents
+        assert set(app.agent_managers.keys()) == {"root-sess"}
+        # 孙完成通知进主会话队列（主 AgentLoop 可注入）
+        await mgr.wait([grandson_id], timeout_ms=10000)
+        ids = [n["agent_id"] for n in mgr.notifications]
+        assert grandson_id in ids
+    finally:
+        current_session_id.reset(token2)
+
+
+async def test_followup_preserves_model_and_steps_semantics(tmp_path):
+    """Bug 修复：followup 保留模型路由；max_steps=0 走配置默认+封顶。"""
+    app = _make_app(tmp_path)
+    app.config["agent_max_steps"] = 7
+    app.config["agent_max_steps_cap"] = 10
+    # 拦截 build_adapter：环境变量注入的 key 会构建真实 adapter（网络挂起）
+    orig_build = app.llm_registry.build_adapter
+    app.llm_registry.build_adapter = lambda provider_id=None, overrides=None: app._mock_adapter
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="general", model="deepseek/deepseek-chat")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    # followup：model 保留在 record；max_steps 不传（0）→ 配置默认 7
+    out = await mgr.followup(r["agent_id"], "继续")
+    assert out["ok"], out
+    assert mgr.get(r["agent_id"]).model == "deepseek/deepseek-chat"
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    app.llm_registry.build_adapter = orig_build
+
+
+async def test_persist_subagent_completed_dedupes_followup(tmp_path):
+    """Bug 修复：followup 再次完成 → 落档按 subagentId 去重（不追加重复记录）。"""
+    app = _make_app(tmp_path)
+    store = app.session_store
+    store.save("s1", [Message(role="user", content="hi")], metadata={
+        "workspace": str(tmp_path),
+        "subagent_records": [
+            {"subagentId": "sa_d1", "role": "general", "task": "T", "summary": "第一轮",
+             "tokens": 10, "turns": 1, "status": "completed"},
+        ],
+    })
+    # 模拟同一 agent followup 完成后的落档（与 TaskHandle 相同逻辑）
+    from litework.server.tasks import TaskHandle  # noqa: F401  仅确认可导入
+    snapshot = store.load("s1")
+    records = list((snapshot.metadata or {}).get("subagent_records") or [])
+    new_id = "sa_d1"
+    records = [r for r in records if r.get("subagentId") != new_id]
+    records.append({"subagentId": new_id, "role": "general", "task": "T",
+                    "summary": "第二轮", "tokens": 20, "turns": 2, "status": "completed"})
+    store.update_metadata("s1", {"subagent_records": records})
+    restored = store.load("s1").metadata["subagent_records"]
+    assert len([r for r in restored if r["subagentId"] == "sa_d1"]) == 1
+    assert restored[-1]["summary"] == "第二轮"

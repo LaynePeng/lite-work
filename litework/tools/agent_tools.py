@@ -33,13 +33,19 @@ DELEGATION_GUIDE = (
 )
 
 
-def _manager(app):
-    """当前会话的 SessionAgentManager（工具执行期经 ContextVar 定位会话）。"""
-    sid = None
-    try:
-        sid = current_session_id.get()
-    except LookupError:
-        return None, None
+def _manager(app, kernel=None):
+    """当前会话的 SessionAgentManager。
+
+    优先级：kernel.root_session_id（子 Agent 执行时指向主会话——孙 agent
+    必须挂主会话 manager，否则脱离看板与通知注入）> current_session_id
+    （主会话 loop 中执行时的 ContextVar）。
+    """
+    sid = getattr(kernel, "root_session_id", None) if kernel is not None else None
+    if not sid:
+        try:
+            sid = current_session_id.get()
+        except LookupError:
+            return None, None
     if not sid:
         return None, None
     return app.agent_manager(str(sid)), sid
@@ -84,7 +90,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         allowed_dirs = args.get("allowed_dirs")
         if allowed_dirs is not None and not isinstance(allowed_dirs, list):
             return "[Error]: allowed_dirs 必须是目录数组。"
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话，无法派生 agent。"
         # 嵌套深度：主会话=0 → 派生 depth=1；子 Agent（handler 在子 loop 中重绑）
@@ -140,7 +146,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         )
 
     async def _list(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[]"
         agents = manager.list_agents()
@@ -149,7 +155,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return json.dumps(agents, ensure_ascii=False, indent=1)
 
     async def _close(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         result = await manager.close(str(args.get("agent_id", "")))
@@ -158,7 +164,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return f"[Agent 已关闭] {result['agent_id']}（关闭前状态：{result['previous_status']}）"
 
     async def _wait(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         ids = args.get("agent_ids") or []
@@ -180,7 +186,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return head + "\n".join(lines)
 
     async def _send_message(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         result = await manager.send_message(
@@ -193,7 +199,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return f"[消息已发送] → {result['nickname']}：{result['delivered']}"
 
     async def _followup(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         task = str(args.get("task", "")).strip()
@@ -202,7 +208,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         result = await manager.followup(
             str(args.get("agent_id", "")), task,
             parent_events=parent_events,
-            max_steps=int(args.get("max_steps") or 12),
+            max_steps=int(args.get("max_steps") or 0),
         )
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
@@ -215,7 +221,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
     # -------- 共享任务池（去中心化认领：编排者建池，子 Agent 自领）--------
 
     async def _create_tasks(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         titles = args.get("titles") or []
@@ -235,7 +241,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         )
 
     async def _list_tasks(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "当前没有共享任务。"
         tasks = manager.list_shared_tasks()
@@ -244,7 +250,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return json.dumps(tasks, ensure_ascii=False, indent=1)
 
     async def _claim_task(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         claimer = str(args.get("claimer") or "agent")
@@ -254,7 +260,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         return f"[已认领] {result['id']}：{result['title']}。完成后请 complete_shared_task。"
 
     async def _finish_task(args: Dict[str, Any]) -> str:
-        manager, _sid = _manager(app)
+        manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话。"
         result = manager.finish_shared_task(str(args.get("task_id", "")),

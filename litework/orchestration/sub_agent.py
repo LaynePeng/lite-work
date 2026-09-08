@@ -121,6 +121,7 @@ class SubAgentRunner:
         sub_depth: int = 1,
         workspace_override: Optional[str] = None,
         extra_denied_tools: Optional[List[str]] = None,
+        root_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -156,6 +157,19 @@ class SubAgentRunner:
         sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
         sub_kernel = self.app.create_kernel(sub_id, registry=registry,
                                              security_workspace=agent_ws)
+        # 根会话标记：子 Agent 的工具 handler（spawn_agent 等）经它定位
+        # 主会话的 SessionAgentManager——否则按 current_session_id（=sub_id）
+        # 会新建孤立 manager，孙 agent 脱离主会话看板与通知注入。
+        # fallback 链：显式传入（异步路径 manager.session_id）→ current_session_id
+        # （同步路径 run_task 在主 Agent 工具执行中被 await，此刻即主会话 id）→ sub_id
+        root_sid = root_session_id
+        if not root_sid:
+            try:
+                from ..core.agent_loop import current_session_id as _csi
+                root_sid = _csi.get() or None
+            except LookupError:
+                root_sid = None
+        sub_kernel.root_session_id = root_sid or sub_id
         if record is not None:
             from .agent_manager import IsolationPlugin
             # allowed_dirs=None → 仅记录模式（全放行 + 记录 changed_files）；

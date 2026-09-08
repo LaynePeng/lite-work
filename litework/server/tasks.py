@@ -83,13 +83,17 @@ class TaskHandle:
             if event_name in EVENT_FORWARD:
                 self._forward_event({"type": event_name, "data": payload})
 
-        # 子 Agent 完成归档：写入会话 metadata（跨页面刷新/重启恢复）
+        # 子 Agent 完成归档：写入会话 metadata（跨页面刷新/重启恢复）。
+        # followup 唤醒同一 agent 会再次完成 → 按 subagentId 去重（更新而非追加，
+        # 否则恢复时看板出现同一 agent 的多张卡）
         async def _persist_subagent_completed(payload: Any) -> None:
             try:
                 snapshot = self.app.session_store.load(self.kernel.session_id)
                 if snapshot is None:
                     return
                 records = list((snapshot.metadata or {}).get("subagent_records") or [])
+                new_id = payload.get("subagentId") or ""
+                records = [r for r in records if r.get("subagentId") != new_id]
                 records.append({
                     "subagentId": payload.get("subagentId") or "",
                     "role": payload.get("role") or "general",

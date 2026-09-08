@@ -69,8 +69,23 @@ function reduceAgentBoard(
   const role = typeof d.role === "string" ? d.role : undefined;
 
   if (ev.type === "started") {
+    const newId = id ?? `sa_${Date.now().toString(36)}`;
+    // followup 唤醒同一 agent 会再次触发 started：同 id 卡片重置为 running
+    // （保留任务/模式），而非追加重复卡片
+    const idx = id ? list.findIndex((a) => a.subagentId === id) : -1;
+    if (idx >= 0) {
+      list[idx] = {
+        ...list[idx],
+        status: "running",
+        task: typeof d.task === "string" ? d.task : list[idx].task,
+        turn: 0, steps: [], summary: undefined,
+        mode: typeof d.mode === "string" ? d.mode : list[idx].mode,
+        startedAt: Date.now(),
+      };
+      return list;
+    }
     list.push({
-      subagentId: id ?? `sa_${Date.now().toString(36)}`,
+      subagentId: newId,
       role: role ?? "general",
       task: typeof d.task === "string" ? d.task : "",
       turn: 0, steps: [], status: "running", startedAt: Date.now(),

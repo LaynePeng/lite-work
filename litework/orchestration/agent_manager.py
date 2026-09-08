@@ -345,6 +345,7 @@ class SessionAgentManager:
                     initial_messages=initial_messages,  # fork_context 继承的父上下文
                     sub_depth=depth,  # 嵌套深度：子 Agent 可按 depth+1 再派（受配置上限约束）
                     extra_denied_tools=record.parent_denies,  # 权限收敛：不超过编排者
+                    root_session_id=self.session_id,  # 孙 agent 归主会话 manager
                 ))
                 record.summary = result.get("summary", "")
                 record.tokens = int(result.get("total_tokens_used", 0))
@@ -519,7 +520,7 @@ class SessionAgentManager:
         return {"ok": True, "agent_id": agent_id, "nickname": record.nickname, "delivered": delivered}
 
     async def followup(self, agent_id: str, task: str, parent_events=None,
-                       max_steps: int = 12) -> Dict[str, Any]:
+                       max_steps: int = 0) -> Dict[str, Any]:
         """唤醒已完成的 agent 继续工作（接力合作）：
         携带全部历史消息链 + 滞留 mailbox 消息 + 新任务。运行中则拒绝（用 send_message）。"""
         self._restore_from_session()
@@ -537,6 +538,10 @@ class SessionAgentManager:
         err = self._check_limits()
         if err:
             return {"ok": False, "error": err}
+        # max_steps 语义与 spawn 一致：默认取配置，封顶防失控
+        default_steps = int(self.app.config.get("agent_max_steps", 12))
+        cap = int(self.app.config.get("agent_max_steps_cap", 50))
+        max_steps = min(int(max_steps or default_steps), cap)
         self._spawned_total += 1  # 唤醒计入总量（新的一轮执行）
 
         # 历史消息链（首 run 的 system prompt 已在头部，续跑保留）。
@@ -570,8 +575,10 @@ class SessionAgentManager:
                     parent_events=parent_events,
                     agent_id=record.agent_id, nickname=record.nickname,
                     allowed_dirs=record.allowed_dirs, record=record,
+                    model=record.model,  # Bug 修复：唤醒保留模型路由
                     initial_messages=initial,
                     extra_denied_tools=record.parent_denies,
+                    root_session_id=self.session_id,
                 ))
                 record.summary = result.get("summary", "")
                 record.tokens += int(result.get("total_tokens_used", 0))
@@ -594,6 +601,7 @@ class SessionAgentManager:
         await self._emit(parent_events, "agent:spawned", {
             "agentId": record.agent_id, "nickname": record.nickname, "role": record.role,
             "task": f"[followup] {task}", "allowedDirs": record.allowed_dirs,
+            "mode": record.mode, "model": record.model,
         })
         return {"ok": True, "agent_id": agent_id, "nickname": record.nickname,
                 "delivered_backlog": len(backlog)}
@@ -635,10 +643,9 @@ class SessionAgentManager:
 
     def _apply_patch_to_workspace(self, patch: str) -> bool:
         """把 worktree 补丁应用回主工作区（--3way 优先，失败回退普通 apply）。"""
+        import subprocess
         ws = self.app.workspace
         for extra in (["--3way"], []):
-            r = self._git(ws, "apply", *extra, "-")
-            import subprocess
             r = subprocess.run(["git", "-C", ws, "apply", *extra, "-"],
                                input=patch, capture_output=True, text=True, timeout=60)
             if r.returncode == 0:
