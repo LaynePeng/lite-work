@@ -201,6 +201,23 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
+/* ── 设置弹窗面板容器：所有 tab 面板同格叠加渲染（grid-area: 1/1），
+      行高恒等于最高面板，切 tab 时弹窗高度不跳动；
+      非激活面板 visibility:hidden 保留占位但不响应交互 ── */
+.settings-panels {
+  display: grid;
+}
+
+.settings-tabpanel {
+  grid-area: 1 / 1;
+  min-width: 0;
+  visibility: hidden;
+}
+
+.settings-tabpanel.active {
+  visibility: visible;
+}
+
 /* ============================== 右侧面板 Tab ============================== */
 
 /* 外层：滚动 tab 条 + 固定收起按钮（收起按钮不随队列滚动） */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { BuiltinPluginInfo, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
 
@@ -94,6 +94,13 @@ export default function SettingsModal({
   const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean; model?: string }>>({});
   const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "",
     mode: "subagent" as "primary" | "subagent", model: "" });
+
+  // 设置弹窗滚动容器：所有 tab 面板同格叠加渲染后，弹窗高度固定为最高面板；
+  // 切 tab 时把内部滚动复位到顶部，避免停留在上个 tab 的滚动位置。
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [activeTab]);
 
   const refreshSkills = useCallback(() => {
     api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
@@ -792,7 +799,7 @@ export default function SettingsModal({
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body" ref={bodyRef}>
           <div className="settings-tabs">
             <button
               className={`settings-tab ${activeTab === "llm" ? "active" : ""}`}
@@ -832,8 +839,8 @@ export default function SettingsModal({
             </button>
           </div>
 
-          {activeTab === "llm" ? (
-            <>
+          <div className="settings-panels">
+            <div className={`settings-tabpanel ${activeTab === "llm" ? "active" : ""}`}>
               <div className="settings-section">
                 <h3>LLM 供应商</h3>
                 <div className="provider-selector">
@@ -1040,9 +1047,8 @@ export default function SettingsModal({
                   )}
                 </div>
               )}
-            </>
-          ) : activeTab === "mcp" ? (
-            <div className="settings-section">
+            </div>
+            <div className={`settings-section settings-tabpanel ${activeTab === "mcp" ? "active" : ""}`}>
               <div className="mcp-section-head">
                 <h3>MCP Server（stdio）</h3>
                 <button className="btn-test" onClick={addMcpServer}>＋ 添加</button>
@@ -1136,8 +1142,7 @@ export default function SettingsModal({
               </div>
               {mcpResult && <div className="test-result ok">{mcpResult}</div>}
             </div>
-          ) : activeTab === "skills" ? (
-            <div className="settings-section">
+            <div className={`settings-section settings-tabpanel ${activeTab === "skills" ? "active" : ""}`}>
               <h3>技能（Skills）</h3>
               <p className="mcp-hint">
                 技能是 <code>.agents/skills/&lt;名称&gt;/SKILL.md</code>（frontmatter: name/description/triggers）。
@@ -1322,8 +1327,7 @@ export default function SettingsModal({
                 </button>
               </div>
             </div>
-          ) : activeTab === "plugins" ? (
-            <div className="settings-section">
+            <div className={`settings-section settings-tabpanel ${activeTab === "plugins" ? "active" : ""}`}>
               <h3>插件（Plugins）</h3>
               <p className="mcp-hint">
                 工具以插件形式提供：<b>内置</b>随主程序发布；社区安装 / 手动导入的为<b>本地</b>版本，
@@ -1560,8 +1564,7 @@ export default function SettingsModal({
                 </>
               )}
             </div>
-          ) : activeTab === "agents" ? (
-            <div className="settings-section">
+            <div className={`settings-section settings-tabpanel ${activeTab === "agents" ? "active" : ""}`}>
               <h3>Agents（工作模式）</h3>
               <p className="mcp-hint">
                 每个 Agent 是一套独立的工作人格与工具集。内置 build/plan/office/research 可调整工具白名单；
@@ -1695,8 +1698,7 @@ export default function SettingsModal({
                   onClick={() => void createNewAgent()}>创建 Agent</button>
               </div>
             </div>
-          ) : activeTab === "general" ? (
-            <div className="settings-section">
+            <div className={`settings-section settings-tabpanel ${activeTab === "general" ? "active" : ""}`}>
               <h3>综合设置</h3>
               <div className="mcp-section-head">
                 <span>会话缓存清理</span>
@@ -1878,7 +1880,7 @@ export default function SettingsModal({
                 </div>
               </div>
             </div>
-          ) : null}
+          </div>
         </div>
       </div>
     </div>
