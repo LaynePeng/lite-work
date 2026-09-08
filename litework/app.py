@@ -21,6 +21,7 @@ from .security.guard import SecurityGuard
 from .security.plugin import SecurityPlugin
 from .security.question import QuestionGate
 from .tools.ask import QuestionPlugin
+from .tools.agent_tools import MultiAgentPlugin
 from .tools.plugin import (
     ASTPlugin,
     CodebasePlugin,
@@ -53,6 +54,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "approval_timeout": 600,
     "context_full_turns": 2,
     "mcp_servers": {},
+    # 多智能体 P1/P2 配置（docs/multi-agent-design.md §3）
+    "max_parallel_agents": 4,   # 并发活 agent 上限
+    "agent_total_limit": 16,    # 单会话累计派生上限
+    "agent_max_steps": 12,      # 单个子 agent 默认最大轮数（spawn 可覆盖，上限 agent_max_steps_cap）
+    "agent_max_steps_cap": 50,  # spawn max_steps 参数的绝对上限（防失控）
+    "agent_spawn_depth": 2,     # 嵌套深度上限（1=子不可再派，2=子可派孙，孙不可再派）
+    "agent_message_max_chars": 8000,   # agent 间消息单条长度上限（防上下文爆仓）
+    "agent_meeting_rounds": 3,  # 会议模式默认轮次（技能配方参考）
+    "agent_ledger_interval": 5, # 进度账本：每完成 N 个工具/回合后检查一次子 agent 状态
+    "agent_persist_max": 20,    # 落盘归档上限（会话 metadata subagent_records 保留条数）
+    # 治理档位（P3，对齐 Codex MultiAgentMode）：explicit=用户明确要求才派生（默认）；
+    # proactive=主动并行委派。注入 spawn_agent 工具描述
+    "agent_collab_mode": "explicit",
     # 技能权限（对齐 OpenCode permission.skill）：glob 模式 → allow/deny/ask，
     # 插入序首个命中生效，默认 allow；deny 对 Agent 完全隐藏，ask 使用前需审批
     "skill_permissions": {},
@@ -163,6 +177,18 @@ class AgentApp:
         # 子 Agent 运行器（延迟绑定）
         from .orchestration.sub_agent import SubAgentRunner
         self.sub_agent_runner = SubAgentRunner(self)
+
+        # 多智能体：会话级 AgentManager 注册表（懒创建，spawn 时首次建立）
+        from .orchestration.agent_manager import SessionAgentManager
+        self.agent_managers: Dict[str, SessionAgentManager] = {}
+
+    def agent_manager(self, session_id: str, create: bool = True) -> Optional["SessionAgentManager"]:
+        """取（或建）会话级多 Agent 管理器。create=False 时仅查询（AgentLoop 注入用）。"""
+        m = self.agent_managers.get(session_id)
+        if m is None and create:
+            from .orchestration.agent_manager import SessionAgentManager
+            m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
+        return m
 
     def _apply_env_api_key(self, cli_key: Optional[str] = None) -> None:
         """CLI 传入的 --api-key 回填到所有未配置的供应商。"""
@@ -596,46 +622,55 @@ class AgentApp:
 
     # ------------------------------------------------------------ 工具
 
-    def _builtin_plugins(self) -> List[Plugin]:
+    def _builtin_plugins(self, workspace_override: Optional[str] = None) -> List[Plugin]:
         """内置 Cordis 插件清单（内核装配与元信息读取共用）。
 
         workspace 可能为 None（桌面态未打开项目）：此时用家目录兜底——
         仅构造实例读取工具定义，不会真正执行文件操作。
+        workspace_override（P3 worktree 隔离）：以指定目录为工作区构建全新
+        插件实例（不复用缓存——缓存实例绑定主工作区，重用会破坏隔离）。
         """
-        ws = self.workspace or os.path.expanduser("~")
+        ws = workspace_override or self.workspace or os.path.expanduser("~")
         shell_timeout = float(self.config.get("tool_timeout", 120))
-        if self._shell_plugin is None:
-            self._shell_plugin = ShellPlugin(ws, timeout_seconds=shell_timeout)
+        if workspace_override is None and self._shell_plugin is not None:
+            shell = self._shell_plugin
+        else:
+            shell = ShellPlugin(ws, timeout_seconds=shell_timeout)
+            if workspace_override is None:
+                self._shell_plugin = shell
         return [
             FileSystemPlugin(ws),
             CodebasePlugin(ws),
             ASTPlugin(ws),
             EditorPlugin(ws),
-            self._shell_plugin,
+            shell,
             GitPlugin(ws),
             ReviewPlugin(ws),
             WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
             OfficePlugin(ws),
             OcrPlugin(ws),
             SubAgentPlugin(self),
+            MultiAgentPlugin(self),
             SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
         ]
 
-    def tool_plugins(self) -> List[Plugin]:
+    def tool_plugins(self, workspace: Optional[str] = None) -> List[Plugin]:
         """Cordis 风格工具插件清单（空间解耦：工具能力全部由插件提供）。
 
         优先级：用户插件 > 内置插件。同名用户插件会跳过内置版（用户可单独
         更新/覆盖内置插件），卸载用户版后自动回退内置版。
         本地插件只加载一次（缓存），避免每次建内核重复 import。
+        workspace（P3）：worktree 隔离时以指定目录构建内置插件实例。
         """
         if self._local_plugins is None:
             from .tools.plugin_loader import load_plugins
 
             self._local_plugins = load_plugins(self.config_dir)
         local_names = {p.name for p in self._local_plugins}
-        plugins: List[Plugin] = [p for p in self._builtin_plugins() if p.name not in local_names]
+        plugins: List[Plugin] = [
+            p for p in self._builtin_plugins(workspace) if p.name not in local_names]
         plugins.extend(self._local_plugins)
         return plugins
 
@@ -663,6 +698,7 @@ class AgentApp:
         allowed: Optional[List[str]] = None,
         exclude: Optional[List[str]] = None,
         permissions: Optional[Dict[str, str]] = None,
+        workspace: Optional[str] = None,
     ) -> ToolRegistry:
         """通过 Cordis 内核组装工具集：插件安装到引导内核，注册进 tools 服务。
 
@@ -677,14 +713,15 @@ class AgentApp:
         # install(kernel) 时从 app 服务捕获 workspace，晚注册会拿到 None
         # → OfficeTools(None) 兜底到家目录（.outputs 落到 ~/.outputs 的根因）
         kernel.register_service("app", self)
-        for plugin in self.tool_plugins():
+        for plugin in self.tool_plugins(workspace):
             kernel.use(plugin)
         self.mcp_manager.register_tools(registry, allowed=allowed, exclude=exclude)
         return registry
 
     # ------------------------------------------------------------ 内核
 
-    def create_kernel(self, session_id: str, registry: Optional[ToolRegistry] = None) -> Kernel:
+    def create_kernel(self, session_id: str, registry: Optional[ToolRegistry] = None,
+                      security_workspace: Optional[str] = None) -> Kernel:
         """Cordis 内核装配：工具插件 + 安全插件全部挂载，服务进入依赖注入容器。
 
         - registry 为 None：挂载全量工具（默认内核）。
@@ -703,6 +740,13 @@ class AgentApp:
                 registry.set_handler(
                     "spawn_sub_agent", make_sub_agent_handler(self, kernel.events)
                 )
+            # 多 Agent 工具（P1/P2）：handler 绑定本 kernel（fork_context 消息源 + events 转发）
+            if registry.has("spawn_agent"):
+                from .tools.agent_tools import make_agent_tool_handlers
+
+                for tool_name, handler in make_agent_tool_handlers(self, kernel.events, kernel).items():
+                    if registry.has(tool_name):
+                        registry.set_handler(tool_name, handler)
             if registry.has("ask_user"):
                 from .tools.ask import make_ask_user_handler
 
@@ -713,7 +757,10 @@ class AgentApp:
             kernel.register_service(TOOLS_SERVICE, ToolRegistry())
             for plugin in self.tool_plugins():
                 kernel.use(plugin)
-        kernel.use(SecurityPlugin(self.guard, self.approval_gate, self.workspace,
+        # security_workspace（P3 worktree 隔离）：子 Agent 在独立工作树执行时，
+        # 安全门的「项目内」边界以工作树为准（否则写入全被当项目外拦截）
+        kernel.use(SecurityPlugin(self.guard, self.approval_gate,
+                                  security_workspace or self.workspace,
                                   skill_perm_resolver=self.skill_permission_rules))
         return kernel
 
@@ -1141,6 +1188,8 @@ class AgentApp:
         )
         loop.workspace = self.workspace
         loop.truncation_dir = os.path.join(self.config_dir, "truncations")
+        # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
+        loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)
         return loop
 
     async def close(self) -> None:

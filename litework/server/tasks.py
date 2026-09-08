@@ -83,24 +83,33 @@ class TaskHandle:
             if event_name in EVENT_FORWARD:
                 self._forward_event({"type": event_name, "data": payload})
 
-        # 子 Agent 完成归档：写入会话 metadata（跨页面刷新/重启恢复）
+        # 子 Agent 完成归档：写入会话 metadata（跨页面刷新/重启恢复）。
+        # followup 唤醒同一 agent 会再次完成 → 按 subagentId 去重（更新而非追加，
+        # 否则恢复时看板出现同一 agent 的多张卡）
         async def _persist_subagent_completed(payload: Any) -> None:
             try:
                 snapshot = self.app.session_store.load(self.kernel.session_id)
                 if snapshot is None:
                     return
                 records = list((snapshot.metadata or {}).get("subagent_records") or [])
+                new_id = payload.get("subagentId") or ""
+                records = [r for r in records if r.get("subagentId") != new_id]
                 records.append({
                     "subagentId": payload.get("subagentId") or "",
                     "role": payload.get("role") or "general",
                     "task": payload.get("task") or "",
+                    "nickname": payload.get("nickname") or "",
+                    "mode": payload.get("mode") or "orchestrate",
+                    "changed_files": payload.get("changed_files") or [],
                     "tokens": payload.get("tokens_used") or 0,
                     "turns": payload.get("turns") or 0,
                     "summary": payload.get("summary") or "",
                     "status": "completed",
                 })
-                # 最多保留 20 条；update_metadata 会合并到现有 metadata
-                self.app.session_store.update_metadata(self.kernel.session_id, {"subagent_records": records[-20:]})
+                # 保留条数取配置（默认 20）；update_metadata 会合并到现有 metadata
+                keep = int(self.app.config.get("agent_persist_max", 20))
+                self.app.session_store.update_metadata(
+                    self.kernel.session_id, {"subagent_records": records[-keep:]})
             except Exception:
                 logger.debug("[Task %s] 子 Agent 归档落盘失败", self.task_id, exc_info=True)
 
@@ -226,6 +235,9 @@ class TaskManager:
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         registry = self.app.create_agent_registry(agent_id or "build")
         kernel = self.app.create_kernel(session_id, registry=registry)
+        # 权限收敛（P3）：编排者身份挂 kernel——spawn_agent handler 读取其 profile，
+        # 编排者 deny 的工具对子 Agent 强制 deny（子权限永不超过父）
+        kernel.orchestrator_agent_id = agent_id or "build"
         # 多轮对话：加载该 session 已落盘的历史消息到上下文，
         # 避免每轮新建 kernel 时从空上下文开始、落盘覆盖上一轮对话
         snapshot = self.app.session_store.load(session_id)

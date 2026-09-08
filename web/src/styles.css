@@ -245,7 +245,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 
 .panel-tab {
-  flex: none;                      /* 按内容宽度，不再均分 → 溢出才可滑动 */
+  flex: none;                      /* 内容宽度：文字完整显示，窄面板溢出走横向拖动滑动 */
   padding: 7px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -2158,17 +2158,6 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   cursor: default;
 }
 
-.agent-bar-hint {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-3);
-  background: var(--bg-2);
-  padding: 1px 6px;
-  border-radius: 3px;
-  border: 1px solid var(--border);
-  cursor: default;
-}
-
 .model-select {
   min-width: 160px;
   max-width: 260px;
@@ -3356,6 +3345,635 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-radius: 4px;
   flex-shrink: 0;
   align-self: center;
+}
+
+/* ==================== Agents 看板（右面板，竖排 kanban） ==================== */
+
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 主 Agent 根节点：编排者，子 Agent 从它派生（树根） */
+.agent-orchestrator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.agent-orchestrator.running {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 55%, var(--border));
+}
+
+.agent-orch-icon {
+  font-size: 16px;
+  flex: none;
+}
+
+.agent-orchestrator.running .agent-orch-icon {
+  animation: agent-orch-bounce 1.8s ease-in-out infinite;
+}
+
+@keyframes agent-orch-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+.agent-orch-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.agent-orch-name {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+
+.agent-orch-meta {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.agent-orchestrator.running .agent-orch-meta {
+  color: var(--accent, #4f8cff);
+}
+
+/* 子 Agent 分支区：左侧树形连接线（从主 Agent 分出） */
+.agent-branches {
+  position: relative;
+  margin-left: 12px;
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 连接线：竖线贯穿分支区，顶端一段横线回连主 Agent */
+.agent-branches::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -4px;
+  bottom: 4px;
+  width: 1.5px;
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
+}
+
+.agent-branches::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 8px;
+  height: 1.5px;
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
+}
+
+.agent-branches .agent-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 6px 0 1px;
+}
+
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.agent-dot.running {
+  background: var(--accent, #4f8cff);
+  animation: agent-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-dot.done {
+  background: var(--green, #3fb950);
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.agent-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.2s ease;
+  /* 流转交接：卡片（跨分区移动/新增时）入场滑动，标记状态迁移 */
+  animation: agent-slide-in 0.28s ease;
+}
+
+@keyframes agent-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.agent-card.running {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+  /* 左边框为 agent 专属色（内联注入，运行中标识归属） */
+  border-left: 3px solid var(--agent-color, var(--accent, #4f8cff));
+}
+
+.agent-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.agent-role {
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent, #4f8cff);
+}
+
+.agent-card.done .agent-role {
+  color: var(--text-1);
+}
+
+.agent-meta {
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* 交付标记：结果已回传主 Agent 上下文（交接完成） */
+.agent-meta .agent-delivered {
+  color: var(--green, #3fb950);
+}
+
+/* -------- 合作模式分组（Agents 看板多视图） -------- */
+
+.agent-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.agent-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent, #4f8cff);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent, #4f8cff) 30%, transparent);
+}
+
+/* 可折叠分组头（长程任务防乱：全完成组折叠为统计行） */
+.agent-mode-head.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-mode-head.collapsible:hover {
+  color: var(--text-1);
+}
+
+.agent-mode-caret {
+  flex: none;
+  width: 10px;
+  color: var(--text-2);
+  transition: transform 0.15s ease;
+}
+
+.agent-mode-caret.open {
+  transform: rotate(0deg);
+}
+
+.agent-mode-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  font-weight: 400;
+  color: var(--text-2);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.agent-mode-stat.live {
+  color: var(--accent, #4f8cff);
+}
+
+.agent-mode-stat.warn {
+  color: #eab308;
+}
+
+.agent-mode-count {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+/* 过滤条（全部 / 仅运行中 + 待审查聚合） */
+.agent-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 2px;
+}
+
+.agent-filter-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agent-filter-chip.on {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+  color: var(--accent, #4f8cff);
+}
+
+.agent-filter-review {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #eab308;
+  margin-left: auto;
+}
+
+/* 组内已完成截断的展开按钮 */
+.agent-group-more {
+  align-self: flex-start;
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.agent-group-more:hover {
+  color: var(--accent, #4f8cff);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+}
+
+/* -------- 协作模式选择器（图标 + popover，Composer agent-bar） -------- */
+
+.collab-picker {
+  position: relative;
+  flex: none;
+  /* 协作选择器起右对齐组（原 agent-bar-hint 的 margin-left:auto 职责，
+   * hint 移除后由这里承担：协作/模型推到 Agent 按钮的右侧） */
+  margin-left: auto;
+}
+
+.collab-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.collab-btn:hover {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 50%, var(--border));
+}
+
+.collab-btn.active {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 55%, var(--border));
+  color: var(--accent, #4f8cff);
+}
+
+.collab-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.collab-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.collab-option:hover {
+  background: var(--bg-1);
+}
+
+.collab-option.on {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 13%, transparent);
+}
+
+.collab-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.collab-option.on .collab-option-label {
+  color: var(--accent, #4f8cff);
+}
+
+.collab-option-desc {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+/* -------- 聊天区 Agent 协作状态条（入口 → 右面板 Agents tab） -------- */
+
+.agent-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin: 6px 12px 0;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent, #4f8cff) 7%, transparent);
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.agent-status-bar:hover {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 13%, transparent);
+}
+
+.agent-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.agent-status-dot.live {
+  background: var(--accent, #4f8cff);
+  animation: agent-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-status-dot.idle {
+  background: var(--green, #3fb950);
+}
+
+.agent-status-review {
+  color: #eab308;
+  font-weight: 600;
+}
+
+.agent-status-open {
+  margin-left: auto;
+  color: var(--accent, #4f8cff);
+  font-size: 11.5px;
+}
+
+/* 头脑风暴：视角提案墙（并列平铺对比） */
+.agent-brainstorm-wall {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 辩论：对抗泳道（提案方 vs 批判方） */
+.agent-debate-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agent-debate-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 4%, transparent);
+}
+
+.agent-debate-lane.critic {
+  background: color-mix(in srgb, var(--accent-2, #8b5cf6) 6%, transparent);
+}
+
+.agent-debate-lane-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.agent-debate-vs {
+  align-self: center;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1;
+  margin: -2px 0;
+}
+
+/* 流水线：顺序接力链（编号 + 箭头） */
+.agent-pipeline-chain {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-pipeline-arrow {
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.2;
+  margin: 1px 0;
+}
+
+.agent-pipeline-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.agent-pipeline-no {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 18%, transparent);
+  color: var(--accent, #4f8cff);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-pipeline-step .agent-card {
+  flex: 1;
+}
+
+/* -------- review gate：待审查徽标 + 改动文件清单 -------- */
+
+.agent-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-review-badge {
+  align-self: flex-start;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-review-badge.pending {
+  background: color-mix(in srgb, #eab308 16%, transparent);
+  color: #eab308;
+}
+
+.agent-review-badge.done {
+  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+  color: var(--green, #3fb950);
+}
+
+.agent-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.agent-file {
+  font-size: 10.5px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.agent-task {
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agent-live {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-step {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-stream {
+  font-size: 11px;
+  color: var(--text-2);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-summary {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  cursor: pointer;
+}
+
+.agent-summary:hover {
+  color: var(--text-1);
+}
+
+.agent-summary.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
 }
 .panel-collapse-btn:hover {
   background: rgba(79, 140, 255, 0.15);

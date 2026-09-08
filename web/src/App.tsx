@@ -46,11 +46,109 @@ const EMPTY_CHAT: ChatSessionState = {
   error: null,
   pendingApprovals: [],
   subAgentRecords: [],
+  agentBoard: [],
   stalled: false,
   todos: [],
   pendingQuestions: [],
   pendingQueue: [],
 };
+
+/** Agents 看板 reducer：subagent 事件 → 看板卡片更新（右面板 Agents tab 数据源）。
+ *
+ * 竖排 kanban 语义：started 追加「运行中」卡片；progress 原位更新（turn/步骤/流式文本）；
+ * completed 卡片流入「已完成」。匹配优先 subagentId，缺失时回退最近一张同角色运行卡
+ * （兼容老后端事件无 id 的情况）。返回 null 表示无变化（引用不变，跳过 setState）。
+ */
+function reduceAgentBoard(
+  board: SubAgentProgress[] | undefined,
+  ev: { type: "started" | "progress" | "completed"; data: Record<string, unknown> },
+): SubAgentProgress[] | null {
+  const list = board ? [...board] : [];
+  const d = ev.data ?? {};
+  const id = typeof d.subagentId === "string" ? d.subagentId : undefined;
+  const role = typeof d.role === "string" ? d.role : undefined;
+
+  if (ev.type === "started") {
+    const newId = id ?? `sa_${Date.now().toString(36)}`;
+    // followup 唤醒同一 agent 会再次触发 started：同 id 卡片重置为 running
+    // （保留任务/模式），而非追加重复卡片
+    const idx = id ? list.findIndex((a) => a.subagentId === id) : -1;
+    if (idx >= 0) {
+      list[idx] = {
+        ...list[idx],
+        status: "running",
+        task: typeof d.task === "string" ? d.task : list[idx].task,
+        turn: 0, steps: [], summary: undefined,
+        mode: typeof d.mode === "string" ? d.mode : list[idx].mode,
+        startedAt: Date.now(),
+      };
+      return list;
+    }
+    list.push({
+      subagentId: newId,
+      role: role ?? "general",
+      task: typeof d.task === "string" ? d.task : "",
+      turn: 0, steps: [], status: "running", startedAt: Date.now(),
+      mode: typeof d.mode === "string" ? d.mode : "orchestrate",
+    });
+    return list;
+  }
+
+  let idx = id ? list.findIndex((a) => a.subagentId === id) : -1;
+  if (idx === -1) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].status === "running" && (!role || list[i].role === role)) { idx = i; break; }
+    }
+  }
+  if (idx === -1) return null;
+  const prev = list[idx];
+
+  if (ev.type === "progress") {
+    const kind = d.kind;
+    if (kind === "llm:turn_start") {
+      list[idx] = { ...prev, turn: (typeof d.turn === "number" ? d.turn : prev.turn + 1) };
+    } else if (kind === "llm:stream") {
+      const text = typeof d.text === "string" ? d.text : "";
+      list[idx] = { ...prev, streaming_text: (prev.streaming_text ?? "") + text };
+    } else if (kind === "tool:before_execute") {
+      const step: SubAgentStep = {
+        tool: typeof d.tool === "string" ? d.tool : "?",
+        brief: typeof d.brief === "string" ? d.brief : undefined,
+        status: "running",
+      };
+      list[idx] = { ...prev, steps: [...prev.steps, step].slice(-3) };
+    } else if (kind === "tool:after_execute") {
+      const steps = [...prev.steps];
+      const tool = typeof d.tool === "string" ? d.tool : "";
+      for (let i = steps.length - 1; i >= 0; i -= 1) {
+        if (steps[i].tool === tool && steps[i].status === "running") {
+          const st = d.status;
+          steps[i] = {
+            ...steps[i],
+            status: st === "error" ? "error" : st === "cancelled" ? "cancelled" : "done",
+            durationMs: typeof d.durationMs === "number" ? d.durationMs : undefined,
+          };
+          break;
+        }
+      }
+      list[idx] = { ...prev, steps };
+    }
+    return list;
+  }
+
+  // completed：卡片流入「已完成」分区（changed_files 随通知送达 → review gate 数据源）
+  const changedFiles = Array.isArray(d.changed_files)
+    ? d.changed_files.map(String) : undefined;
+  list[idx] = {
+    ...prev,
+    status: "done",
+    summary: typeof d.summary === "string" ? d.summary : prev.summary,
+    tokens: typeof d.tokens_used === "number" ? d.tokens_used : prev.tokens,
+    turn: typeof d.turns === "number" ? d.turns : prev.turn,
+    changedFiles: changedFiles && changedFiles.length > 0 ? changedFiles : prev.changedFiles,
+  };
+  return list;
+}
 
 export default function App() {
   const [tabs, setTabs] = useState<TabItem[]>([]);
@@ -97,6 +195,8 @@ export default function App() {
   // 面板折叠状态：默认展开（false=展开）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
+  // 工具面板 tab 受控（聊天区 Agents 状态条可跳转）
+  const [toolPanelTab, setToolPanelTab] = useState<"context" | "todos" | "agents" | "mcp" | "background" | "tools">("context");
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
   const sidebarResize = useResizable({
@@ -105,11 +205,11 @@ export default function App() {
     storageKey: "litework.sidebarWidth.v2",
   });
   const toolPanelResize = useResizable({
-    // 右侧工具面板默认约为窗口宽度的 23%
-    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.23), min: 260,
+    // 右侧工具面板默认约为窗口宽度的 25%（从中间聊天区压缩）
+    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.25), min: 260,
     max: () => Math.min(720, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
-    storageKey: "litework.toolPanelWidth.v2",
+    storageKey: "litework.toolPanelWidth.v3",
   });
 
   // 后台命令轮询：每 2s 拉取右侧工具面板「后台」tab 数据
@@ -203,6 +303,20 @@ export default function App() {
       subagentTimersRef.current.set(timerKey, t);
     },
     [patchChat]
+  );
+
+  /** Agents 看板事件入口：subagent 事件 → reduceAgentBoard → 会话级看板状态。 */
+  const pushAgentEvent = useCallback(
+    (sid: string, type: "started" | "progress" | "completed", data: Record<string, unknown>) => {
+      setChatStates((cur) => {
+        const chat = cur[sid];
+        if (!chat) return cur;
+        const next = reduceAgentBoard(chat.agentBoard, { type, data });
+        if (!next) return cur;
+        return { ...cur, [sid]: { ...chat, agentBoard: next } };
+      });
+    },
+    []
   );
 
   // ------------------------------------------------------------ 技能注入气泡
@@ -462,7 +576,7 @@ export default function App() {
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
         // 从会话 metadata 恢复子 Agent 归档卡片（跨页面刷新保留）
         if (snap?.metadata?.subagent_records) {
-          initial.subAgentRecords = (snap.metadata.subagent_records as any[]).map((r) => ({
+          const restored = (snap.metadata.subagent_records as any[]).map((r) => ({
             subagentId: r.subagentId ?? "",
             role: r.role ?? "general",
             task: r.task ?? "",
@@ -471,8 +585,15 @@ export default function App() {
             status: "done" as const,
             summary: r.summary ?? "",
             tokens: r.tokens ?? 0,
+            mode: typeof r.mode === "string" ? r.mode : "orchestrate",
+            changedFiles: Array.isArray(r.changed_files)
+              ? r.changed_files.map(String) : undefined,
+            startedAt: typeof r.started_at === "number" ? r.started_at : undefined,
           }));
-          // 恢复的完成记录同样按 TTL 自动消失（临时通知语义）
+          initial.subAgentRecords = restored;
+          // 同一批记录进入 Agents 看板（「已完成」分区，无 TTL：看板是会话级交接记录）
+          initial.agentBoard = restored;
+          // 恢复的完成记录同样按 TTL 自动消失（临时通知语义，仅聊天区归档卡）
           scheduleSubagentRecordExpiry(sid, initial.subAgentRecords);
         }
         patchChat(sid, { ...EMPTY_CHAT, ...initial });
@@ -808,8 +929,8 @@ export default function App() {
             status: "running",
           };
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
-          // spawn_sub_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
-          if (ev.data.toolName === "spawn_sub_agent") {
+          // spawn_sub_agent / spawn_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
+          if (ev.data.toolName === "spawn_sub_agent" || ev.data.toolName === "spawn_agent") {
             const items = [...cur.items, { type: "tool" as const, id: card.id, card }];
             streamingRefs.current.set(sid, { ...cur, items });
           } else {
@@ -999,7 +1120,7 @@ export default function App() {
             const items = cur.items.map((item) => {
               if (matched) return item;
               const card = item.type === "tool" ? item.card : null;
-              if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+              if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
               if (ev.data.callId && card.callId && card.callId !== ev.data.callId) return item;
               matched = true;
               return {
@@ -1023,15 +1144,17 @@ export default function App() {
             }
           }
           log(`◈ 启动子 Agent ${ev.data.role}`);
+          pushAgentEvent(sid, "started", ev.data as unknown as Record<string, unknown>);
           break;
         }
         case "subagent:progress": {
+          pushAgentEvent(sid, "progress", ev.data as unknown as Record<string, unknown>);
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming;
           if (!cur) break;
           const evData = ev.data;
           const items = cur.items.map((item) => {
             const card = item.type === "tool" ? item.card : null;
-            if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+            if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
             const sa = card.subagent;
             if (!sa) return item;
             if (evData.callId && card.callId && evData.callId !== card.callId) return item;
@@ -1078,7 +1201,7 @@ export default function App() {
             let finalized: SubAgentProgress | null = null;
             const items = cur.items.map((item) => {
               const card = item.type === "tool" ? item.card : null;
-              if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+              if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
               if (data.callId && card.callId && data.callId !== card.callId) return item;
               if (!finalized) {
                 const sa = card.subagent;
@@ -1110,6 +1233,7 @@ export default function App() {
           }
           setTreeRevision((v) => v + 1);
           log(`◈ 子 Agent ${String(data.role ?? "general")} 已完成`);
+          pushAgentEvent(sid, "completed", data as unknown as Record<string, unknown>);
           break;
         }
         case "skill:loaded": {
@@ -1509,6 +1633,26 @@ export default function App() {
           <FileViewer tab={activeTab} />
         ) : (
           <>
+            {/* 多 Agent 协作状态条（有派生记录时出现）：点击跳转右侧 Agents 看板 */}
+            {(currentChat.agentBoard?.length ?? 0) > 0 && (() => {
+              const board = currentChat.agentBoard ?? [];
+              const running = board.filter((a) => a.status === "running").length;
+              const done = board.length - running;
+              const hasReview = board.some((a) => a.changedFiles && a.changedFiles.length > 0);
+              return (
+                <button
+                  className="agent-status-bar"
+                  onClick={() => { setToolPanelTab("agents"); setToolPanelCollapsed(false); }}
+                  title="打开 Agents 协作看板（运行中/已完成/待审查）"
+                >
+                  <span className={`agent-status-dot ${running > 0 ? "live" : "idle"}`} />
+                  🤖 Agents · {running > 0 ? `${running} 运行中` : "全部完成"}
+                  {done > 0 && ` · ${done} 已完成`}
+                  {hasReview && <span className="agent-status-review">⚠ 待过目</span>}
+                  <span className="agent-status-open">看板 →</span>
+                </button>
+              );
+            })()}
             <ChatView
               sessionId={activeSessionId ?? "（未选择）"}
               sessionTitle={activeSessionTitle}
@@ -1626,6 +1770,10 @@ export default function App() {
             mcpServers={mcpServers}
             tools={registeredTools}
             todos={currentChat.todos}
+            agentBoard={currentChat.agentBoard}
+            orchestrator={{ agentId: currentAgent, running: currentChat.running }}
+            activeTab={toolPanelTab}
+            onTabChange={setToolPanelTab}
             backgroundTasks={backgroundTasks}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}

@@ -197,6 +197,9 @@ def default_build_agent() -> AgentProfile:
             "review_code",
             # 联网 / 技能 / 子任务
             "webfetch", "webfetch_batch", "load_skill", "spawn_sub_agent",
+            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
+            "spawn_agent", "list_agents", "close_agent", "wait_agents",
+            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
             # 流程
             "todo_write", "ask_user",
         ],
@@ -277,6 +280,9 @@ def default_office_agent() -> AgentProfile:
             "webfetch", "webfetch_batch",
             # 流程与交互
             "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
+            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
+            "spawn_agent", "list_agents", "close_agent", "wait_agents",
+            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
         ],
         permissions={
             "execute_command": PERM_ASK,
@@ -321,6 +327,9 @@ def default_research_agent() -> AgentProfile:
             "ocr_image", "ocr_document", "ocr_pptx",
             # 流程与交互
             "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
+            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
+            "spawn_agent", "list_agents", "close_agent", "wait_agents",
+            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
         ],
         permissions={},
     )

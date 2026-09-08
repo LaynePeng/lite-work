@@ -122,6 +122,18 @@ export interface AppConfig {
   max_zip_size_mb?: number;
   /** triggers 匹配模式：substring | advanced */
   skill_trigger_mode?: "substring" | "advanced";
+  // 多智能体配置（docs/multi-agent-design.md §3）
+  max_parallel_agents?: number;
+  agent_total_limit?: number;
+  agent_max_steps?: number;
+  agent_max_steps_cap?: number;
+  agent_spawn_depth?: number;
+  agent_message_max_chars?: number;
+  agent_meeting_rounds?: number;
+  agent_ledger_interval?: number;
+  agent_persist_max?: number;
+  /** 治理档位：explicit（默认，明确要求才派生）| proactive（主动并行委派） */
+  agent_collab_mode?: "explicit" | "proactive";
 }
 
 export interface ContextTaskStats {
@@ -259,6 +271,12 @@ export interface SubAgentProgress {
   tokens?: number;
   /** 子 Agent 实时流式文本（llm:stream 累积） */
   streaming_text?: string;
+  /** 派生时间戳（Agents 看板运行时长显示） */
+  startedAt?: number;
+  /** 合作模式（编排者声明，看板按模式分组渲染）：orchestrate/pipeline/brainstorm/debate */
+  mode?: string;
+  /** 改动文件清单（review gate：完成卡片「待审查」徽标数据源） */
+  changedFiles?: string[];
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）
@@ -387,6 +405,8 @@ export interface ChatSessionState {
   pendingApprovals: { id: string; action: string; reason: string }[];
   // 任务完成后归档的子 Agent 活动卡（会话级内存态，刷新即失）
   subAgentRecords: SubAgentProgress[];
+  /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */
+  agentBoard: SubAgentProgress[];
   stalled: boolean;
   modelOverride?: SessionModel | null;
   effectiveModel?: SessionModel;

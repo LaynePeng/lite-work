@@ -57,6 +57,26 @@ export default function Composer({
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
+  // 协作模式选择（多智能体）：自动=模型按任务特征路由；其余为技能配方显式触发。
+  // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落自动。
+  const COLLAB_MODES: { id: string; skill: string; label: string; title: string }[] = [
+    { id: "auto", skill: "", label: "🤝 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论）" },
+    { id: "brainstorm", skill: "brainstorm", label: "💡 头脑风暴", title: "多视角并行提案 → 交叉批判 → 综合" },
+    { id: "agent-debate", skill: "agent-debate", label: "⚔ 辩论评审", title: "提案者 vs 批判者多轮对抗 → 裁决收敛" },
+    { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
+  ];
+  const [collabMode, setCollabMode] = useState("auto");
+  const [collabOpen, setCollabOpen] = useState(false);
+  // 点击外部关闭 popover
+  const collabRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!collabOpen) return;
+    const close = (e: MouseEvent) => {
+      if (collabRef.current && !collabRef.current.contains(e.target as Node)) setCollabOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [collabOpen]);
   // Agent 图标与中文名（AGI 通用入口：办公/调研/代码一站式）
   const AGENT_META: Record<string, { icon: string; label: string }> = {
     build: { icon: "💻", label: "代码" },
@@ -274,14 +294,37 @@ export default function Composer({
     return () => { cancelled = true; };
   }, [paletteOpen]);
 
-  // 面板打开时解析当前输入
+  // 面板打开时解析当前输入（/ 命令面板；@ 角色派生补全——OpenCode 式 mention）
   const input = text;
   const startsWithSlash = input.startsWith("/");
-  const panelVisible = paletteOpen && startsWithSlash && !running;
+  const startsWithAt = input.startsWith("@");
+  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt) && !running;
   const tokens = startsWithSlash ? input.slice(1).split(/\s+/) : [];
   const cmdToken = tokens[0] ?? "";
   const restAfterCmd = input.slice(1 + cmdToken.length).replace(/^\s+/, "");
   const pickingSkill = cmdToken.toLowerCase() === "skill" && !restAfterCmd.includes(" ");
+  const atToken = startsWithAt ? (input.slice(1).split(/\s+/)[0] ?? "") : "";
+  const pickingAgent = startsWithAt && !atToken.includes(" ") || (startsWithAt && input === "@");
+
+  // @-mention 候选：内置子 Agent 角色 + 用户自定义 subagent（去重）
+  const MENTION_ROLES: { name: string; description: string }[] = [
+    { name: "explorer", description: "只读调研员：搜索与分析代码" },
+    { name: "critic", description: "批判审查员：找漏洞/风险/未验证假设" },
+    { name: "tester", description: "测试执行员：跑测试并分析结果" },
+    { name: "general", description: "通用专家工人" },
+  ];
+  const mentionCandidates = useMemo(() => {
+    const custom = agents
+      .filter((a) => a.mode === "subagent")
+      .map((a) => ({ name: a.id, description: a.description || "自定义 subagent" }));
+    const merged = [...MENTION_ROLES];
+    for (const c of custom) {
+      if (!merged.some((m) => m.name === c.name)) merged.push(c);
+    }
+    const q = atToken.toLowerCase();
+    return merged.filter((m) => m.name.toLowerCase().startsWith(q));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, atToken]);
 
   const filtered = useMemo(() => {
     const q = cmdToken.toLowerCase();
@@ -294,15 +337,19 @@ export default function Composer({
     return skills.filter((s) => s.name.toLowerCase().includes(q));
   }, [skills, pickingSkill, restAfterCmd]);
 
-  const candidates: { name: string; description: string; hint: string }[] = pickingSkill
-    ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
-    : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
+  const candidates: { name: string; description: string; hint: string }[] = startsWithAt
+    ? mentionCandidates.map((m) => ({ ...m, hint: "agent" }))
+    : pickingSkill
+      ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
+      : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
 
   // 输入变化时重置选中索引
   useEffect(() => { setSelIdx(0); }, [input]);
 
   const applySuggestion = (name: string) => {
-    if (pickingSkill) {
+    if (startsWithAt) {
+      setText(`@${name} `);
+    } else if (pickingSkill) {
       setText(`/skill ${name} `);
     } else {
       setText(`/${name} `);
@@ -322,10 +369,25 @@ export default function Composer({
       setText("");
       return;
     }
-    pushHistory(t);
+    // 协作模式（非自动）：改写为 /技能 命令（复用技能展开机制）。
+    // 模式保持选择（不回落）：与 Agent 选择器一致的持久语义，用户手动切回自动
+    let outgoing = t;
+    if (collabMode !== "auto" && !t.startsWith("/")) {
+      const mode = COLLAB_MODES.find((m) => m.id === collabMode);
+      if (mode?.skill) outgoing = `/${mode.skill} ${t}`;
+    }
+    // @role 任务 → 显式派生指令（@-mention 触发多 Agent）
+    const atMatch = /^@([A-Za-z0-9_\-]+)\s+(.+)$/s.exec(outgoing);
+    if (atMatch) {
+      const [, role, rest] = atMatch;
+      outgoing = `请使用 spawn_agent 工具派生 role=${role} 的子 Agent 执行以下任务，派生后继续你自己的工作，结果会自动送达：\n${rest}`;
+    }
+    pushHistory(outgoing);
     setHistoryIdx(-1);
-    onSend(t);
+    onSend(outgoing);
     setText("");
+    // 协作模式为一次性修饰：发送后回落自动，避免后续消息被持续强制走该模式
+    if (collabMode !== "auto") setCollabMode("auto");
   };
 
   const primary = agents.filter((a) => a.mode !== "subagent");
@@ -348,11 +410,35 @@ export default function Composer({
                 <span className="agent-btn-icon" aria-hidden>{meta.icon}</span>
                 <span className="agent-btn-label">{meta.label}</span>
               </button>
-            );
-          })}
-          <span className="agent-bar-hint" title="按 Tab 在 Agent 之间切换">
-            Tab
-          </span>
+             );
+           })}
+          {/* 协作模式：按钮显示当前模式 + popover 选择（自动=模型路由；选中显式模式，
+              发送后回落自动——一次性修饰语义） */}
+          <div className="collab-picker" ref={collabRef}>
+            <button
+              className={`collab-btn ${collabMode !== "auto" ? "active" : ""}`}
+              onClick={() => setCollabOpen((v) => !v)}
+              disabled={disabled || running}
+              title="多 Agent 协作模式：点击选择；自动=模型按任务特征路由"
+            >
+              {COLLAB_MODES.find((m) => m.id === collabMode)?.label ?? "🤝 自动"}
+            </button>
+            {collabOpen && (
+              <div className="collab-popover">
+                {COLLAB_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    className={`collab-option ${collabMode === m.id ? "on" : ""}`}
+                    onClick={() => { setCollabMode(m.id); setCollabOpen(false); }}
+                    title={m.title}
+                  >
+                    <span className="collab-option-label">{m.label}</span>
+                    <span className="collab-option-desc">{m.title}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <span className="agent-bar-label">模型:</span>
           <select
             className="model-select"
@@ -497,9 +583,9 @@ export default function Composer({
             setText(v);
             // 用户手动编辑 → 退出历史翻阅态（下次 ↑ 从最新开始）
             exitHistoryMode();
-            // 仅首字符输入 "/" 时触发面板（消息中间的斜杠不触发）
-            if (v.startsWith("/") && !paletteOpen) setPaletteOpen(true);
-            if (!v.startsWith("/")) setPaletteOpen(false);
+            // 首字符输入 "/"（命令）或 "@"（角色派生）时触发面板
+            if ((v.startsWith("/") || v.startsWith("@")) && !paletteOpen) setPaletteOpen(true);
+            if (!v.startsWith("/") && !v.startsWith("@")) setPaletteOpen(false);
           }}
           onKeyDown={(e) => {
             if (panelVisible && candidates.length > 0) {
@@ -568,7 +654,7 @@ export default function Composer({
           onDragOver={handleDragOver}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
-          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（/ 命令 · @ 角色派生）`}
           rows={3}
           disabled={disabled}
         />

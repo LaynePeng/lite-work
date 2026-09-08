@@ -48,6 +48,17 @@ export default function SettingsModal({
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
   const [timeoutSaved, setTimeoutSaved] = useState(false);
+  // 综合设置：多智能体限额与行为（docs/multi-agent-design.md §3）
+  const [maParallel, setMaParallel] = useState<number>(4);
+  const [maTotal, setMaTotal] = useState<number>(16);
+  const [maSteps, setMaSteps] = useState<number>(12);
+  const [maStepsCap, setMaStepsCap] = useState<number>(50);
+  const [maDepth, setMaDepth] = useState<number>(2);
+  const [maMsgChars, setMaMsgChars] = useState<number>(8000);
+  const [maMeetingRounds, setMaMeetingRounds] = useState<number>(3);
+  const [maCollabMode, setMaCollabMode] = useState<"explicit" | "proactive">("explicit");
+  const [maLedgerInterval, setMaLedgerInterval] = useState<number>(5);
+  const [maSaved, setMaSaved] = useState(false);
   // Skills triggers 匹配模式
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
@@ -243,6 +254,16 @@ export default function SettingsModal({
       if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
       if (typeof c.subagent_timeout === "number" && c.subagent_timeout > 0) setSubagentTimeout(c.subagent_timeout);
       if (typeof c.max_steps === "number" && c.max_steps > 0) setMaxSteps(c.max_steps);
+      // 多智能体配置
+      if (typeof c.max_parallel_agents === "number" && c.max_parallel_agents > 0) setMaParallel(c.max_parallel_agents);
+      if (typeof c.agent_total_limit === "number" && c.agent_total_limit > 0) setMaTotal(c.agent_total_limit);
+      if (typeof c.agent_max_steps === "number" && c.agent_max_steps > 0) setMaSteps(c.agent_max_steps);
+      if (typeof c.agent_max_steps_cap === "number" && c.agent_max_steps_cap > 0) setMaStepsCap(c.agent_max_steps_cap);
+      if (typeof c.agent_spawn_depth === "number" && c.agent_spawn_depth > 0) setMaDepth(c.agent_spawn_depth);
+      if (typeof c.agent_message_max_chars === "number" && c.agent_message_max_chars > 0) setMaMsgChars(c.agent_message_max_chars);
+      if (typeof c.agent_meeting_rounds === "number" && c.agent_meeting_rounds > 0) setMaMeetingRounds(c.agent_meeting_rounds);
+      if (c.agent_collab_mode === "proactive") setMaCollabMode("proactive");
+      if (typeof c.agent_ledger_interval === "number" && c.agent_ledger_interval > 0) setMaLedgerInterval(c.agent_ledger_interval);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
 
@@ -421,6 +442,30 @@ export default function SettingsModal({
 
   // 自定义 Header 的编辑文本（每行 "Key: Value" 或 "Key=Value"），blur 时解析提交
   const [headersText, setHeadersText] = useState<Record<string, string>>({});
+  // 模型列表的编辑文本（每行一个）：编辑期间保留原始文本（允许空行/回车换行），
+  // blur / 保存时才解析为数组——受控数组会吃掉空行导致无法回车
+  const [modelsText, setModelsText] = useState<Record<string, string>>({});
+
+  // 拉取 LLM 配置并重置全部编辑态（初始化与保存成功后共用：
+  // 保存后服务端返回最新配置，用它刷新本地 providers/editing，避免"重开设置才生效"）
+  const refreshLLM = useCallback(() => {
+    Promise.all([api.llmProviders(), api.llmConfig()]).then(([p, c]) => {
+      setProviders(p);
+      setActiveProvider((cur) => (c.active && p.some((x) => x.id === cur) ? cur : c.active));
+      const edit: Record<string, Partial<LLMProviderSettings>> = {};
+      const texts: Record<string, string> = {};
+      const mtexts: Record<string, string> = {};
+      for (const [pid, s] of Object.entries(c.providers)) {
+        edit[pid] = { ...s };
+        const headers = (s as LLMProviderSettings).custom_headers || {};
+        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
+        mtexts[pid] = ((s as LLMProviderSettings).models || []).join("\n");
+      }
+      setEditing(edit);
+      setHeadersText(texts);
+      setModelsText(mtexts);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     Promise.all([api.llmProviders(), api.llmConfig(), api.mcpStatus()]).then(([p, c, m]) => {
@@ -428,10 +473,17 @@ export default function SettingsModal({
       setActiveProvider(c.active);
       // 初始化编辑状态
       const edit: Record<string, Partial<LLMProviderSettings>> = {};
+      const texts: Record<string, string> = {};
+      const mtexts: Record<string, string> = {};
       for (const [pid, s] of Object.entries(c.providers)) {
         edit[pid] = { ...s };
+        const headers = (s as LLMProviderSettings).custom_headers || {};
+        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
+        mtexts[pid] = (s.models || []).join("\n");
       }
       setEditing(edit);
+      setHeadersText(texts);
+      setModelsText(mtexts);
       // MCP：用运行状态初始化可编辑配置
       setMcpStatus(m.servers || []);
       const cfg: Record<string, MCPServerConfig> = {};
@@ -439,13 +491,6 @@ export default function SettingsModal({
         cfg[s.name] = { command: s.command, args: s.args, enabled: s.enabled };
       }
       setMcpServers(cfg);
-      // 自定义 Header：dict → 每行 "Key: Value" 的可编辑文本
-      const texts: Record<string, string> = {};
-      for (const [pid, s] of Object.entries(c.providers)) {
-        const headers = (s as LLMProviderSettings).custom_headers || {};
-        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
-      }
-      setHeadersText(texts);
     }).catch(() => {});
   }, []);
 
@@ -547,7 +592,10 @@ export default function SettingsModal({
 
   const providerMeta = providers.find((p) => p.id === activeProvider);
   const currentEdit = editing[activeProvider] || {};
-  const availableModels = (currentEdit.models as string[] | undefined) ?? providerMeta?.models ?? [];
+  // 模型下拉候选：以编辑中的列表文本为准（未 blur 的草稿也即时生效）
+  const availableModels = modelsText[activeProvider] !== undefined
+    ? modelsText[activeProvider].split("\n").map((m) => m.trim()).filter(Boolean)
+    : ((currentEdit.models as string[] | undefined) ?? providerMeta?.models ?? []);
   const isCustom = activeProvider.startsWith("custom_");
 
   // 推理强度中文标签
@@ -574,6 +622,8 @@ export default function SettingsModal({
       has_key: false, model: "",
     }]);
     setEditing((prev) => ({ ...prev, [id]: next }));
+    setHeadersText((prev) => ({ ...prev, [id]: "" }));
+    setModelsText((prev) => ({ ...prev, [id]: "" }));
     setActiveProvider(id);
   };
 
@@ -622,16 +672,24 @@ export default function SettingsModal({
         if (headersText[pid] !== undefined) {
           providersPayload[pid].custom_headers = parseHeaders(headersText[pid]);
         }
+        // 模型列表以编辑文本为准（未 blur 的草稿不丢），空行/空白过滤
+        if (modelsText[pid] !== undefined) {
+          providersPayload[pid].models = modelsText[pid]
+            .split("\n").map((m) => m.trim()).filter(Boolean);
+        }
       }
       await api.updateLLMConfig(activeProvider, providersPayload);
       setTestResult({ ok: true, message: "配置已保存" });
       onSaved();
+      // 用服务端返回的最新配置刷新本地编辑态与供应商列表：
+      // 修复"保存后供应商名不更新、需重开设置"的问题
+      refreshLLM();
     } catch (err) {
       setTestResult({ ok: false, message: (err as Error).message });
     } finally {
       setSaving(false);
     }
-  }, [activeProvider, editing, onSaved]);
+  }, [activeProvider, editing, headersText, modelsText, onSaved, refreshLLM]);
 
   // 一键清理孤儿会话：删除所有关联项目目录已不存在的会话
   const handleCleanup = useCallback(async () => {
@@ -691,6 +749,30 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [toolTimeout, llmTimeout, subagentTimeout, maxSteps, onSaved]);
+
+  // 多智能体配置保存（限额与行为，立即生效于下一个任务）
+  const saveMaConfig = useCallback(async () => {
+    setMaSaved(false);
+    try {
+      await api.updateConfig({
+        max_parallel_agents: maParallel,
+        agent_total_limit: maTotal,
+        agent_max_steps: maSteps,
+        agent_max_steps_cap: maStepsCap,
+        agent_spawn_depth: maDepth,
+        agent_message_max_chars: maMsgChars,
+        agent_meeting_rounds: maMeetingRounds,
+        agent_collab_mode: maCollabMode,
+        agent_ledger_interval: maLedgerInterval,
+      });
+      setMaSaved(true);
+      setTimeout(() => setMaSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds,
+      maCollabMode, maLedgerInterval, onSaved]);
 
   return (
       <div className="modal-overlay">
@@ -763,13 +845,17 @@ export default function SettingsModal({
 
               {providerMeta && (
                 <div className="settings-section" key={activeProvider}>
-                  <h3>{providerMeta.name} 配置</h3>
+                  <h3>{(isCustom ? (currentEdit.name as string) : providerMeta.name) || providerMeta.name} 配置</h3>
 
                   {isCustom && (
                     <div className="form-group">
                       <label>供应商名称</label>
-                      <input className="form-input" value={(currentEdit.name as string) || providerMeta.name}
-                        onChange={(e) => update(activeProvider, "name", e.target.value)} />
+                      <input
+                        className="form-input"
+                        placeholder="给这个供应商起个名字（如 智谱 / 本地 Ollama）"
+                        value={(currentEdit.name as string) ?? providerMeta.name}
+                        onChange={(e) => update(activeProvider, "name", e.target.value)}
+                      />
                     </div>
                   )}
 
@@ -880,9 +966,16 @@ export default function SettingsModal({
                     <label>该供应商的模型列表（每行一个，可添加多个）</label>
                     <textarea
                       className="form-input"
-                      rows={Math.min(6, Math.max(2, availableModels.length))}
-                      value={availableModels.join("\n")}
-                      onChange={(e) => update(
+                      rows={Math.min(
+                        6,
+                        Math.max(2, (modelsText[activeProvider] ?? "").split("\n").filter(Boolean).length),
+                      )}
+                      placeholder={"deepseek-chat\ndeepseek-reasoner"}
+                      value={modelsText[activeProvider] ?? ""}
+                      onChange={(e) =>
+                        setModelsText((prev) => ({ ...prev, [activeProvider]: e.target.value }))
+                      }
+                      onBlur={(e) => update(
                         activeProvider,
                         "models",
                         e.target.value.split("\n").map((m) => m.trim()).filter(Boolean),
@@ -1643,6 +1736,97 @@ export default function SettingsModal({
                     type="number" className="form-input" min={1} max={500}
                     value={maxSteps}
                     onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 100))}
+                  />
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>多智能体协作</span>
+                <button className="btn-test" onClick={() => void saveMaConfig()}>
+                  {maSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                并发上限：同时运行的子 Agent 数量；累计上限：单会话累计派生数量；
+                子 Agent 轮数：默认/封顶（spawn 可覆盖但不超过封顶）；嵌套深度：子 Agent 最多再派生几层；
+                消息长度：agent 间单条消息字符上限；会议轮次：群聊共议模式的默认轮数。
+              </p>
+              <div className="timeout-grid">
+                <div className="form-group">
+                  <label>并发上限</label>
+                  <input
+                    type="number" className="form-input" min={1} max={16}
+                    value={maParallel}
+                    onChange={(e) => setMaParallel(Math.max(1, parseInt(e.target.value, 10) || 4))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>累计上限</label>
+                  <input
+                    type="number" className="form-input" min={1} max={100}
+                    value={maTotal}
+                    onChange={(e) => setMaTotal(Math.max(1, parseInt(e.target.value, 10) || 16))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>子 Agent 轮数（默认）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={200}
+                    value={maSteps}
+                    onChange={(e) => setMaSteps(Math.max(1, parseInt(e.target.value, 10) || 12))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>子 Agent 轮数（封顶）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={500}
+                    value={maStepsCap}
+                    onChange={(e) => setMaStepsCap(Math.max(1, parseInt(e.target.value, 10) || 50))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>嵌套深度</label>
+                  <input
+                    type="number" className="form-input" min={1} max={4}
+                    value={maDepth}
+                    onChange={(e) => setMaDepth(Math.max(1, parseInt(e.target.value, 10) || 2))}
+                    title="1=子 Agent 不可再派生；2=子可派孙，孙不可再派"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>消息长度上限（字符）</label>
+                  <input
+                    type="number" className="form-input" min={100} max={100000}
+                    value={maMsgChars}
+                    onChange={(e) => setMaMsgChars(Math.max(100, parseInt(e.target.value, 10) || 8000))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>会议轮次</label>
+                  <input
+                    type="number" className="form-input" min={1} max={10}
+                    value={maMeetingRounds}
+                    onChange={(e) => setMaMeetingRounds(Math.max(1, parseInt(e.target.value, 10) || 3))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>治理档位</label>
+                  <select
+                    className="form-input" value={maCollabMode}
+                    onChange={(e) => setMaCollabMode(e.target.value === "proactive" ? "proactive" : "explicit")}
+                    title="显式：用户明确要求子 Agent/委派/并行时才派生（默认，省 token）；主动：能并行就并行"
+                  >
+                    <option value="explicit">显式（默认，明确要求才派生）</option>
+                    <option value="proactive">主动（能并行就并行）</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>进度账本间隔（轮）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={20}
+                    value={maLedgerInterval}
+                    onChange={(e) => setMaLedgerInterval(Math.max(1, parseInt(e.target.value, 10) || 5))}
+                    title="长程任务中每 N 轮用 list_agents 检查一次子 Agent 进度（提示词指引）"
                   />
                 </div>
               </div>
