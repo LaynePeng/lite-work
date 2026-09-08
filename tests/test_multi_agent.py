@@ -246,7 +246,148 @@ async def test_loop_turn_boundary_injection(tmp_path):
     assert any("[agent:completed]" in c for c in seen_messages[1])
 
 
-# ---------------------------------------------------------------- 工具协议
+# ---------------------------------------------------------------- agent 间合作（P2 切片）
+
+async def test_send_message_to_running_agent(tmp_path):
+    """运行中的 agent 在 turn 边界收到消息（合作中插话）。"""
+    app = _make_app(tmp_path)
+
+    seen = []
+
+    class CaptureAdapter(MockLLMAdapter):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.delay = 0.0
+
+        async def chat_stream(self, messages, tools, events=None):
+            seen.append([m.content for m in messages])
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            return await super().chat_stream(messages, tools, events)
+
+    # 第一轮回复让 agent 继续干活（保证还在 running 时消息到达）
+    app._mock_adapter = CaptureAdapter(
+        [("工作ing", [tool_call("read_file", '{"filePath":"a.txt"}')]),
+         ("收到消息，继续。", [])]
+    )
+    # 加大首轮延迟：确保 send_message 到达时第一轮 LLM 仍在飞行中，
+    # 消息在 G2（工具回填后）注入，第二轮 LLM 调用可见
+    app._mock_adapter.delay = 0.3
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务A", role="explorer", max_steps=5)
+    await asyncio.sleep(0.1)  # 首轮仍在飞行
+    out = await mgr.send_message(r["agent_id"], "补充线索：重点看 auth 模块")
+    assert out["ok"] and "已送达" in out["delivered"]
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    # 消息注入了 agent 上下文（第二轮 LLM 调用可见）
+    assert any("[来自其他 Agent 的消息]" in c and "auth" in c
+               for call in seen for c in call)
+
+
+async def test_send_message_to_finished_agent_backlog(tmp_path):
+    """已完成的 agent：消息滞留 mailbox，唤醒时送达。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务A", role="explorer")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    out = await mgr.send_message(r["agent_id"], "批判意见：样本量不足")
+    assert out["ok"] and "已暂存" in out["delivered"]
+    rec = mgr.get(r["agent_id"])
+    assert len(rec.mailbox) == 1
+
+
+async def test_followup_wakes_with_history_and_backlog(tmp_path):
+    """followup 唤醒：带历史上下文 + 滞留消息，token 累加。"""
+    app = _make_app(tmp_path)
+    # 首 run 给出含关键词的总结，唤醒 run 的历史里应能看到
+    app._mock_adapter = MockLLMAdapter([("首跑结论：MVP 完成。", [])])
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("方案设计", role="general")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    await mgr.send_message(r["agent_id"], "审查意见：缺错误处理")
+    first_tokens = mgr.get(r["agent_id"]).tokens
+    first_summary = mgr.get(r["agent_id"]).summary
+
+    # 唤醒：mock 第二轮脚本——验证历史与滞留消息都在上下文
+    seen = []
+
+    class CaptureAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            seen.append([m.content or "" for m in messages])
+            return await super().chat_stream(messages, tools, events)
+
+    app._mock_adapter = CaptureAdapter([("已按意见修订完成。", [])])
+    out = await mgr.followup(r["agent_id"], "根据审查意见修订方案")
+    assert out["ok"]
+    assert out["delivered_backlog"] == 1
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    rec = mgr.get(r["agent_id"])
+    assert rec.status == "completed"
+    assert "修订" in rec.summary
+    assert rec.tokens >= first_tokens  # 累加
+    # 唤醒 run 的上下文：历史（首跑结论）+ 滞留消息（审查意见）+ followup 任务
+    flat = "\n".join(seen[0])
+    assert "MVP" in flat            # 历史产出
+    assert "错误处理" in flat        # 滞留消息
+    assert "修订方案" in flat        # 新任务
+    assert first_summary  # 原总结保留（唤醒不丢）
+
+
+async def test_followup_rejects_running(tmp_path):
+    app = _make_app(tmp_path)
+    app._mock_adapter = _SlowAdapter()
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("长任务", role="explorer", max_steps=60)
+    out = await mgr.followup(r["agent_id"], "新任务")
+    assert not out["ok"]
+    assert "send_message" in out["error"]
+    await mgr.close(r["agent_id"])
+
+
+async def test_sub_agent_can_message_but_not_followup(tmp_path):
+    """子 agent 工具面：可用 send_message/list_agents（同伴通信），
+    不可 followup_task（唤醒权留给编排者）。"""
+    app = _make_app(tmp_path)
+    from litework.orchestration.sub_agent import SUB_AGENT_EXCLUDE
+    sub_registry = app.build_registry(allowed=None, exclude=SUB_AGENT_EXCLUDE)
+    sub_names = {t.name for t in sub_registry.get_tools()}
+    assert "send_message" in sub_names
+    assert "list_agents" in sub_names
+    assert "followup_task" not in sub_names
+    assert "spawn_agent" not in sub_names
+
+
+async def test_pipeline_handoff_pattern(tmp_path):
+    """流水线合作端到端：A 完成 → 产出滞留消息 → followup 唤醒 B？不——
+    B 是独立 agent；流水线由父中转。这里验证：A 的产出 send 给 B，
+    followup(B) 唤醒后 B 的上下文含 A 的产出。"""
+    app = _make_app(tmp_path)
+    app._mock_adapter = MockLLMAdapter([("A 的产出：接口设计 v1。", [])])
+    mgr = app.agent_manager("s1")
+    ra = await mgr.spawn("设计接口", role="general", agent_name="designer")
+    rb = await mgr.spawn("实现接口", role="general", agent_name="coder")
+    await mgr.wait([ra["agent_id"], rb["agent_id"]], timeout_ms=10000)
+
+    # A → B 直接传产出（agent 间合作，不经父中转）
+    out = await mgr.send_message(rb["agent_id"], "接口设计如下：v1 文档要点…",
+                                 sender=ra["nickname"])
+    assert out["ok"]
+
+    seen = []
+
+    class CaptureAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            seen.append([m.content or "" for m in messages])
+            return await super().chat_stream(messages, tools, events)
+
+    app._mock_adapter = CaptureAdapter([("已按 A 的设计实现完成。", [])])
+    await mgr.followup(rb["agent_id"], "按收到的接口设计完成实现")
+    await mgr.wait([rb["agent_id"]], timeout_ms=10000)
+    flat = "\n".join(seen[0])
+    assert "designer" in flat          # 来源可辨
+    assert "接口设计如下" in flat       # A 的产出直达 B
+    assert "已按 A 的设计实现完成" in mgr.get(rb["agent_id"]).summary
+
 
 async def test_multi_agent_tools_registered(tmp_path):
     """build agent 的 registry 含四工具；explorer 子 agent 不含（禁嵌套）。"""

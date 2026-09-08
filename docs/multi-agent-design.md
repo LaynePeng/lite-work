@@ -131,12 +131,20 @@ TaskManager.start(session)
 | **流水线** | 规划→实现→审查 顺序交接 | ✅ P1：顺序 spawn，前者产出写进后者 task 描述 |
 | **头脑风暴** | N 个 agent 不同视角独立提案 → 综合 | ✅ P1：并行 spawn（不同 role/stance 提示）+ 综合 |
 | **互批/批判** | critic 审查方案或代码，输出问题清单 | ✅ P1：内置 `critic` 角色（只读 + review_code） |
-| **辩论多轮** | 生成者 vs 批判者交替对抗 N 轮 | ⏳ P2：需要 agent 间消息（send_message/followup） |
-| **红蓝对抗** | 产出→审查→修复循环 | ⏳ P2：消息 + 状态查询 |
+| **接力合作** | A 产出 → send_message 直达 B → followup 唤醒 B 继续 | ✅ P2 切片：send_message + followup_task（agent 间直接通信，不经父中转） |
+| **辩论多轮** | 生成者 vs 批判者交替对抗 N 轮 | ✅ P2 切片：多轮 send_message + followup 往返（编排者驱动轮次） |
+| **红蓝对抗** | 产出→审查→修复循环 | ✅ P2 切片：followup 唤醒原 agent 按批判意见修订 |
 
-P1 的工具描述（`DELEGATION_GUIDE`）已内嵌模式指引：关键路径 vs sidecar、write set 不相交、
-头脑风暴多视角 spawn、critic 互批。P2 落地 send_message 后，辩论/红蓝对抗升级为一等模式，
-届时可考虑内置复合工具（如 `debate(proposal, rounds)`）封装多轮对抗循环。
+### agent 间合作机制（P2 切片，已实施）
+
+- **send_message**（编排者与子 Agent 均可用）：
+  - 目标运行中 → 直达其 `agent_inbox`，turn 边界注入上下文（`[来自其他 Agent 的消息]` 前缀，来源可辨）
+  - 目标已完成 → 滞留 mailbox，唤醒时送达
+- **followup_task**（仅编排者）：唤醒已完成的 agent——携带全部历史消息链 + 滞留消息 + 新任务；
+  token/轮数累加，原 summary 保留；运行中的 agent 拒绝唤醒（改用 send_message）
+- **子 Agent 工具面**：send_message / list_agents 开放（同伴通信与查询）；
+  followup_task / spawn / close / wait 保留给编排者（唤醒与派生属于编排权）
+- 后续（P2 余量）：mailbox 轮询通知优化、多轮辩论的复合工具封装（`debate(proposal, rounds)`）
 
 ## 10. 分期
 

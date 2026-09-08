@@ -54,6 +54,12 @@ class AgentRecord:
     error: str = ""
     # 后台执行任务（asyncio.Task；声明 Any 避免循环导入）
     runner: Any = None
+    # 运行中的 AgentLoop 引用（send_message 直达 agent_inbox；结束/取消后置 None）
+    loop: Any = None
+    # 最近一次运行的消息链历史（followup_task 唤醒续跑的上下文基础）
+    messages: List[Any] = field(default_factory=list)
+    # 滞留收件箱：agent 不在运行时收到的消息（唤醒时并入上下文）
+    mailbox: List[str] = field(default_factory=list)
 
 
 class IsolationPlugin(Plugin):
@@ -268,6 +274,7 @@ class SessionAgentManager:
         # （except/finally 均不触发），这里强制置终态
         record.status = "closed"
         record.finished_at = record.finished_at or time.time()
+        record.loop = None
         return {"ok": True, "agent_id": agent_id, "previous_status": previous}
 
     async def wait(self, agent_ids: List[str], timeout_ms: int = 120000) -> Dict[str, Any]:
@@ -295,6 +302,100 @@ class SessionAgentManager:
                 "changed_files": r.changed_files,
             }
         return {"ok": True, "statuses": statuses, "timed_out": timed_out}
+
+    # ------------------------------------------------------------ agent 间合作（P2 切片）
+
+    async def send_message(self, agent_id: str, text: str, sender: str = "main") -> Dict[str, Any]:
+        """agent 间消息：运行中 → 直达其 agent_inbox（turn 边界注入）；
+        已结束 → 滞留 mailbox（followup_task 唤醒时并入上下文）。"""
+        record = self.agents.get(agent_id)
+        if record is None:
+            return {"ok": False, "error": f"未知 agent: {agent_id}"}
+        if record.status == "closed":
+            return {"ok": False, "error": f"agent {record.nickname} 已关闭，无法接收消息。"}
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "消息内容不能为空。"}
+        payload = f"来自 {sender}：{text}"
+        loop = record.loop
+        if record.status == "running" and loop is not None:
+            loop.agent_inbox.append(payload)
+            delivered = "已送达（运行中，下轮生效）"
+        else:
+            record.mailbox.append(payload)
+            delivered = "已暂存（agent 未在运行，followup_task 唤醒时送达）"
+        return {"ok": True, "agent_id": agent_id, "nickname": record.nickname, "delivered": delivered}
+
+    async def followup(self, agent_id: str, task: str, parent_events=None,
+                       max_steps: int = 12) -> Dict[str, Any]:
+        """唤醒已完成的 agent 继续工作（接力合作）：
+        携带全部历史消息链 + 滞留 mailbox 消息 + 新任务。运行中则拒绝（用 send_message）。"""
+        record = self.agents.get(agent_id)
+        if record is None:
+            return {"ok": False, "error": f"未知 agent: {agent_id}"}
+        task = (task or "").strip()
+        if not task:
+            return {"ok": False, "error": "task 不能为空。"}
+        if record.status == "running":
+            return {"ok": False,
+                    "error": f"agent {record.nickname} 仍在运行，请用 send_message 传达补充信息。"}
+        if record.status == "closed":
+            return {"ok": False, "error": f"agent {record.nickname} 已关闭，无法唤醒。"}
+        err = self._check_limits()
+        if err:
+            return {"ok": False, "error": err}
+        self._spawned_total += 1  # 唤醒计入总量（新的一轮执行）
+
+        # 历史消息链（首 run 的 system prompt 已在头部，续跑保留）
+        history = list(record.messages)
+        # 滞留消息并入上下文（唤醒即送达）
+        backlog = list(record.mailbox)
+        record.mailbox.clear()
+
+        runner = self.app.sub_agent_runner
+        record.status = "running"
+        record.started_at = time.time()
+        record.finished_at = None
+
+        async def _run() -> None:
+            try:
+                initial = history
+                if backlog:
+                    joined = "\n".join(f"[来自其他 Agent 的消息] {m}" for m in backlog)
+                    # 历史尾部追加滞留消息（作为上一轮收到的消息进入上下文）
+                    from ..core.types import Message as _M
+                    initial = history + [_M(role="user", content=joined)]
+                result = await runner.run_task(
+                    task, role=record.role, max_steps=max_steps,
+                    parent_events=parent_events,
+                    agent_id=record.agent_id, nickname=record.nickname,
+                    allowed_dirs=record.allowed_dirs, record=record,
+                    initial_messages=initial,
+                )
+                record.summary = result.get("summary", "")
+                record.tokens += int(result.get("total_tokens_used", 0))
+                record.turns += int(result.get("turns", 0))
+                record.status = "completed" if result.get("completed") else "errored"
+            except asyncio.CancelledError:
+                record.status = "closed"
+                record.summary = record.summary or "（被 close_agent 终止）"
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("[AgentManager] followup 执行异常: %s", agent_id)
+                record.status = "errored"
+                record.error = str(exc)[:300]
+                record.summary = record.summary or f"[执行异常]: {exc}"
+            finally:
+                record.finished_at = time.time()
+                self._enqueue_notification(record)
+
+        record.runner = asyncio.create_task(_run())
+        await self._emit(parent_events, "agent:spawned", {
+            "agentId": record.agent_id, "nickname": record.nickname, "role": record.role,
+            "task": f"[followup] {task}", "allowedDirs": record.allowed_dirs,
+        })
+        return {"ok": True, "agent_id": agent_id, "nickname": record.nickname,
+                "delivered_backlog": len(backlog)}
 
     async def _emit(self, bus, event: str, payload: Dict[str, Any]) -> None:
         if bus is None:

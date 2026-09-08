@@ -114,8 +114,42 @@ def make_agent_tool_handlers(app, parent_events=None):
         head = "[Agent 等待结果]\n" + ("\n[注意] 部分agent仍在运行（超时）\n" if result.get("timed_out") else "\n")
         return head + "\n".join(lines)
 
+    async def _send_message(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "[Error]: 无活动会话。"
+        result = await manager.send_message(
+            str(args.get("agent_id", "")),
+            str(args.get("message", "")),
+            sender=str(args.get("sender") or "main-agent"),
+        )
+        if not result.get("ok"):
+            return f"[Error]: {result.get('error')}"
+        return f"[消息已发送] → {result['nickname']}：{result['delivered']}"
+
+    async def _followup(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "[Error]: 无活动会话。"
+        task = str(args.get("task", "")).strip()
+        if not task:
+            return "[Error]: task 不能为空。"
+        result = await manager.followup(
+            str(args.get("agent_id", "")), task,
+            parent_events=parent_events,
+            max_steps=int(args.get("max_steps") or 12),
+        )
+        if not result.get("ok"):
+            return f"[Error]: {result.get('error')}"
+        extra = f"，送达滞留消息 {result['delivered_backlog']} 条" if result.get("delivered_backlog") else ""
+        return (
+            f"[Agent 已唤醒] {result['nickname']} 带着完整历史上下文继续执行新任务{extra}。"
+            "完成后会自动通知。"
+        )
+
     return {"spawn_agent": _spawn, "list_agents": _list,
-            "close_agent": _close, "wait_agents": _wait}
+            "close_agent": _close, "wait_agents": _wait,
+            "send_message": _send_message, "followup_task": _followup}
 
 
 class MultiAgentPlugin(ToolPlugin):
@@ -193,8 +227,41 @@ class MultiAgentPlugin(ToolPlugin):
                     "required": ["agent_ids"],
                 },
             ),
+            ToolDefinition(
+                name="send_message",
+                description=(
+                    "给一个 agent 发消息（agent 间合作）。运行中的 agent 在下一步开始时收到；"
+                    "已完成的暂存，followup_task 唤醒时送达。用于：向同伴传达新信息/中间产出、"
+                    "批判意见（互批）、补充要求"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string", "description": "目标 agent id"},
+                        "message": {"type": "string", "description": "消息内容（可含产出/意见）"},
+                        "sender": {"type": "string", "description": "发送者标识（子 Agent 发送时填自己的昵称）"},
+                    },
+                    "required": ["agent_id", "message"],
+                },
+            ),
+            ToolDefinition(
+                name="followup_task",
+                description=(
+                    "唤醒一个已完成的 agent 继续执行新任务（接力合作）：携带其全部历史上下文"
+                    "与滞留消息。运行中的 agent 不可唤醒（改用 send_message）。适用于：流水线交接"
+                    "（前序产出交付后续）、红蓝对抗多轮往返、方案迭代修改"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string", "description": "spawn_agent 返回的 id"},
+                        "task": {"type": "string", "description": "后续任务描述（说明前序产出如何获取）"},
+                        "max_steps": {"type": "integer", "description": "最大执行轮数（默认 12）"},
+                    },
+                    "required": ["agent_id", "task"],
+                },
+            ),
         ]
-
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
         handler = self._handlers.get(name)
         if handler is None:

@@ -85,6 +85,9 @@ class AgentLoop:
         self.parallel_tool_calls: str = "auto"
         # 任务运行期间用户补充的输入队列（TaskHandle 持有同一个 deque，跨回合注入）
         self.injected_inputs = deque()
+        # agent 间消息队列（P2 合作）：其他 agent 经 send_message 发来的消息，
+        # turn 边界注入本 agent 上下文（与用户补充指令同一合法注入点）
+        self.agent_inbox: deque = deque()
 
     def request_stop(self) -> None:
         if self.abort_event:
@@ -496,17 +499,29 @@ class AgentLoop:
         期间到达的输入只做非破坏性窥探（interrupted_by_input），真正的
         注入统一发生在消息链合法位置——下一轮 LLM 调用立即可见。
         """
-        if not self.injected_inputs:
-            return False
-        while self.injected_inputs:
-            text = str(self.injected_inputs.popleft()).strip()
-            if not text:
-                continue
-            injected = Message(role="user", content=f"[用户补充指令] {text}")
-            messages.append(injected)
-            await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
-            logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
-        return True
+        injected_any = False
+        if self.injected_inputs:
+            while self.injected_inputs:
+                text = str(self.injected_inputs.popleft()).strip()
+                if not text:
+                    continue
+                injected = Message(role="user", content=f"[用户补充指令] {text}")
+                messages.append(injected)
+                await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
+                logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
+            injected_any = True
+        # agent 间消息（P2 合作）：同一注入点、不同前缀，来源语义可辨
+        if self.agent_inbox:
+            while self.agent_inbox:
+                text = str(self.agent_inbox.popleft()).strip()
+                if not text:
+                    continue
+                injected = Message(role="user", content=f"[来自其他 Agent 的消息] {text}")
+                messages.append(injected)
+                await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
+                logger.info("[AgentLoop] 已注入 agent 间消息（%d 字符）", len(text))
+            injected_any = True
+        return injected_any
 
     async def _inject_agent_notifications(self, messages: List[Message]) -> bool:
         """注入已完成的子 Agent 通知（完成即通知模型，多智能体 P1）。

@@ -47,9 +47,11 @@ ROLE_TOOLS: Dict[str, List[str]] = {
     "general": None,
 }
 
-# 子 Agent 禁用的工具：禁止嵌套派生（P1；P2 放开到限深）+ 交互工具（通道未转发）
-SUB_AGENT_EXCLUDE = ["spawn_sub_agent", "spawn_agent", "list_agents",
-                     "close_agent", "wait_agents", "ask_user"]
+# 子 Agent 禁用的工具：禁止嵌套派生（P1；P2 放开到限深）+ 交互工具（通道未转发）。
+# send_message / list_agents 开放给子 Agent——协作模式（互批/接力）里
+# 子 Agent 需要与同伴通信；followup_task（唤醒续跑）保留给编排者。
+SUB_AGENT_EXCLUDE = ["spawn_sub_agent", "spawn_agent",
+                     "close_agent", "wait_agents", "followup_task", "ask_user"]
 
 # 声明 allowed_dirs 的写域 agent：读全开 + 三个写文件工具（写受 IsolationPlugin 约束；
 # shell 命令无法静态判定写目标，P1 不授予，由父 Agent 执行）
@@ -83,6 +85,7 @@ class SubAgentRunner:
         nickname: Optional[str] = None,
         allowed_dirs: Optional[List[str]] = None,
         record=None,
+        initial_messages: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -112,6 +115,10 @@ class SubAgentRunner:
             sub_kernel.use(IsolationPlugin(self.app.workspace, allowed_dirs, record))
         tools: List[ToolDefinition] = registry.get_tools()
 
+        # 唤醒续跑（followup）：携带历史消息链，跳过 system 重插
+        if initial_messages:
+            sub_kernel.ctx.messages = list(initial_messages)
+
         system = (
             f"{FINAL_REPORT_REQUIREMENT}\n\n{base_prompt}\n\n[你的具体任务]\n{task_description}\n\n"
             f"工作目录: {self.app.workspace}\n"
@@ -137,6 +144,9 @@ class SubAgentRunner:
         )
         loop.workspace = self.app.workspace
         loop.truncation_dir = self.app.create_loop(sub_kernel, registry).truncation_dir
+        # 挂载 loop 引用（send_message 直达运行中的 agent 的 agent_inbox）
+        if record is not None:
+            record.loop = loop
 
         logger.info('[SubAgent] 派生子 Agent role=%s task="%s..."',
                     role, task_description[:60])
@@ -258,6 +268,9 @@ class SubAgentRunner:
 
         logger.info('[SubAgent] 完成 role=%s turns=%s tokens=%s',
                     role, stats["turns"], stats["input_tokens"] + stats["output_tokens"])
+        # 保存消息链历史（followup_task 唤醒续跑的上下文基础）
+        if record is not None:
+            record.messages = list(sub_kernel.ctx.messages)
         return {
             "summary": summary,
             "total_tokens_used": stats["input_tokens"] + stats["output_tokens"],
