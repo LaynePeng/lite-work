@@ -27,6 +27,11 @@ def _make_app(tmp_path, **config) -> AgentApp:
     app.config.update(cfg)
     # 子 Agent 的 LLM 用脚本化 mock（无需真实 key）
     app._mock_adapter = MockLLMAdapter([("子任务完成：调研结论 X。", [])])
+    # 隔离性护栏：默认拦截 build_adapter——环境变量注入的真实 key 会让
+    # spawn(model=...) 构建真实 adapter 并发起网络调用（曾致测试 22s 且
+    # 把任务文本发给真实 API）。需要验证模型路由的测试自行安装 spy 覆盖。
+    app.llm_registry.build_adapter = (
+        lambda provider_id=None, overrides=None: app._mock_adapter)
     return app
 
 
