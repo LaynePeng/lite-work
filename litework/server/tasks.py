@@ -20,6 +20,7 @@ EVENT_FORWARD = {
     "task:done", "task:error", "stats:update", "subagent:completed",
     "context:stats", "subagent:started", "subagent:progress", "skill:loaded",
     "todo:updated", "question:request", "question:resolved",
+    "agent:closed",
 }
 
 

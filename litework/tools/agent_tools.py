@@ -161,6 +161,13 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         result = await manager.close(str(args.get("agent_id", "")))
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
+        # 通知前端：agent 已关闭（agent:closed 事件 → Agents 看板移除卡片）
+        bus = parent_events or (kernel.events if kernel is not None else None)
+        if bus is not None:
+            try:
+                await bus.emit("agent:closed", {"agentId": result["agent_id"]})
+            except Exception:
+                pass
         return f"[Agent 已关闭] {result['agent_id']}（关闭前状态：{result['previous_status']}）"
 
     async def _wait(args: Dict[str, Any]) -> str:

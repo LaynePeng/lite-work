@@ -225,7 +225,8 @@ export type SSEEvent =
   | { type: "chat:queued"; data: { text: string; count: number } }
   | { type: "todo:updated"; data: { todos: TodoItem[] } }
   | { type: "question:request"; data: { id: string; question: string; options: string[] } }
-  | { type: "question:resolved"; data: { id: string; answer: string } };
+  | { type: "question:resolved"; data: { id: string; answer: string } }
+  | { type: "agent:closed"; data: { agentId: string } };
 
 // 子 Agent 实时进度事件（命名空间转发自隔离 kernel）
 export interface SubAgentProgressEvent {

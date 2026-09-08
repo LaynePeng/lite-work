@@ -41,6 +41,8 @@ class TypedEventBus:
         "question:request": dict,
         "question:resolved": dict,
         "todo:updated": dict,
+        "agent:spawned": dict,
+        "agent:closed": dict,
     }
 
     def __init__(self) -> None:

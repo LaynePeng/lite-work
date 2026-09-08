@@ -61,12 +61,20 @@ const EMPTY_CHAT: ChatSessionState = {
  */
 function reduceAgentBoard(
   board: SubAgentProgress[] | undefined,
-  ev: { type: "started" | "progress" | "completed"; data: Record<string, unknown> },
+  ev: { type: "started" | "progress" | "completed" | "closed"; data: Record<string, unknown> },
 ): SubAgentProgress[] | null {
   const list = board ? [...board] : [];
   const d = ev.data ?? {};
   const id = typeof d.subagentId === "string" ? d.subagentId : undefined;
   const role = typeof d.role === "string" ? d.role : undefined;
+
+  // closed：从看板移除该 agent 卡片（close_agent 主动关闭，非交付，不流入已完成区）
+  if (ev.type === "closed") {
+    const aid = typeof d.agentId === "string" ? d.agentId : id;
+    if (!aid) return list;
+    const next = list.filter((a) => a.subagentId !== aid);
+    return next.length === list.length ? null : next;
+  }
 
   if (ev.type === "started") {
     const newId = id ?? `sa_${Date.now().toString(36)}`;
@@ -305,9 +313,9 @@ export default function App() {
     [patchChat]
   );
 
-  /** Agents 看板事件入口：subagent 事件 → reduceAgentBoard → 会话级看板状态。 */
+  /** Agents 看板事件入口：subagent/agent 事件 → reduceAgentBoard → 会话级看板状态。 */
   const pushAgentEvent = useCallback(
-    (sid: string, type: "started" | "progress" | "completed", data: Record<string, unknown>) => {
+    (sid: string, type: "started" | "progress" | "completed" | "closed", data: Record<string, unknown>) => {
       setChatStates((cur) => {
         const chat = cur[sid];
         if (!chat) return cur;
@@ -1234,6 +1242,13 @@ export default function App() {
           setTreeRevision((v) => v + 1);
           log(`◈ 子 Agent ${String(data.role ?? "general")} 已完成`);
           pushAgentEvent(sid, "completed", data as unknown as Record<string, unknown>);
+          break;
+        }
+        case "agent:closed": {
+          // close_agent 主动关闭：从 Agents 看板移除卡片
+          const closedData = ev.data as Record<string, unknown>;
+          log(`◈ Agent ${String(closedData.agentId ?? "")} 已关闭`);
+          pushAgentEvent(sid, "closed", closedData);
           break;
         }
         case "skill:loaded": {

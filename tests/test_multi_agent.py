@@ -441,6 +441,38 @@ async def test_spawn_agent_tool_handler(tmp_path):
     finally:
         current_session_id.reset(token)
 
+
+async def test_close_agent_emits_closed_event(tmp_path):
+    """close_agent 成功后必须向事件总线发射 agent:closed（前端看板移除卡片的唯一信号）。"""
+    from litework.tools.agent_tools import make_agent_tool_handlers
+    from litework.core.agent_loop import current_session_id
+
+    class _Bus:
+        def __init__(self):
+            self.events = []
+
+        async def emit(self, name, payload):
+            self.events.append((name, payload))
+
+    app = _make_app(tmp_path)
+    bus = _Bus()
+    handlers = make_agent_tool_handlers(app, parent_events=bus)
+    token = current_session_id.set("s1")
+    try:
+        out = await handlers["spawn_agent"]({"task": "调研 X", "role": "explorer"})
+        assert "[Agent 已派生]" in out
+        agent_id = out.split("id=")[1].split()[0]
+        out = await handlers["wait_agents"]({"agent_ids": [agent_id], "timeout_ms": 10000})
+        assert "explorer" in out
+        out = await handlers["close_agent"]({"agent_id": agent_id})
+        assert "已关闭" in out
+        # agent:closed 事件必须带 agentId 发射（前端看板按此移除卡片）
+        closed_events = [p for n, p in bus.events if n == "agent:closed"]
+        assert len(closed_events) == 1
+        assert closed_events[0]["agentId"] == agent_id
+    finally:
+        current_session_id.reset(token)
+
 # ---------------------------------------------------------------- 合作模式标记
 
 async def test_spawn_mode_tagged_events(tmp_path):
