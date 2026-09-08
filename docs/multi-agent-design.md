@@ -204,7 +204,7 @@ agent 持久化恢复跨会话。
 |---|---|
 | **P1**（本文档，已实施） | 异步 spawn + 并行 + 4 工具 + 目录硬隔离 + 完成通知 + Agents tab + critic 角色 |
 | **P2**（已实施） | send_message / followup_task、嵌套 spawn（agent_spawn_depth，默认 2）、fork_context（fork_turns=none/all/N）、子 Agent 落盘恢复（metadata 重建 + 轻量历史唤醒）、模型路由、消息限流+长度上限+防伪、共享任务池、review gate、meeting 会议模式、进度账本指引、code-sprint 软件开发特化、配置界面（综合设置·多智能体区） |
-| **P3** | MultiAgentMode 三档（默认 ExplicitRequestOnly）、角色 description 进 spawn 提示、nickname 池、权限默认收敛、worktree 物理隔离、共享任务依赖图 |
+| **P3**（已实施） | 治理档位 agent_collab_mode（explicit 默认=明确要求才派生 / proactive=主动并行，注入 spawn 描述）、自定义角色清单进 spawn 提示、nickname 池（scout/atlas/nova…）、权限收敛（编排者 deny 工具对子强制 deny，kernel.orchestrator_agent_id）、worktree 物理隔离（独立 git 工作树 + 补丁自动合并回主区 + 冲突留 .agent-patches）、共享任务依赖图（depends_on 阻塞认领）、配置界面（治理档位/账本间隔） |
 
 ## 附：Codex 参考要点速查
 

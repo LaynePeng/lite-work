@@ -119,6 +119,8 @@ class SubAgentRunner:
         initial_messages: Optional[List[Any]] = None,
         model: Optional[str] = None,
         sub_depth: int = 1,
+        workspace_override: Optional[str] = None,
+        extra_denied_tools: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -139,16 +141,26 @@ class SubAgentRunner:
         # 嵌套深度：按配置动态决定是否放开子 Agent 的再派生能力
         from .agent_manager import current_agent_depth
         max_spawn_depth = int(self.app.config.get("agent_spawn_depth", 2))
+        # 权限收敛（P3）：编排者 deny 的工具对子 Agent 强制 deny——子权限永不超过父
+        effective_perms = dict(permissions or {})
+        for t in (extra_denied_tools or []):
+            effective_perms[t] = "deny"
+        # worktree 物理隔离：工具集以 worktree 为工作区构建
+        agent_ws = workspace_override or self.app.workspace
         registry = self.app.build_registry(
             allowed=allowed,
             exclude=sub_agent_excludes(sub_depth, max_spawn_depth),
-            permissions=permissions,
+            permissions=effective_perms,
+            workspace=agent_ws,
         )
         sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
-        sub_kernel = self.app.create_kernel(sub_id, registry=registry)
-        if allowed_dirs and record is not None:
+        sub_kernel = self.app.create_kernel(sub_id, registry=registry,
+                                             security_workspace=agent_ws)
+        if record is not None:
             from .agent_manager import IsolationPlugin
-            sub_kernel.use(IsolationPlugin(self.app.workspace, allowed_dirs, record))
+            # allowed_dirs=None → 仅记录模式（全放行 + 记录 changed_files）；
+            # 声明了 allowed_dirs → 白名单硬隔离（原语义）
+            sub_kernel.use(IsolationPlugin(agent_ws, allowed_dirs, record))
         tools: List[ToolDefinition] = registry.get_tools()
 
         # 唤醒续跑（followup）：携带历史消息链，跳过 system 重插
@@ -157,8 +169,8 @@ class SubAgentRunner:
 
         system = (
             f"{FINAL_REPORT_REQUIREMENT}\n\n{base_prompt}\n\n[你的具体任务]\n{task_description}\n\n"
-            f"工作目录: {self.app.workspace}\n"
-            f"{SystemPromptBuilder._git_info(self.app.workspace)}"
+            f"工作目录: {agent_ws}\n"
+            f"{SystemPromptBuilder._git_info(agent_ws)}"
         )
         if allowed_dirs:
             system += (
@@ -178,7 +190,7 @@ class SubAgentRunner:
             token_budget=int(self.app.config.get("token_budget", 48000)) // 2,
             auto_approve=bool(self.app.config.get("auto_approve", False)),
         )
-        loop.workspace = self.app.workspace
+        loop.workspace = agent_ws
         loop.truncation_dir = self.app.create_loop(sub_kernel, registry).truncation_dir
         # 孙 agent 完成通知注入源：按 sub_id 查其专属 manager（嵌套派生时懒创建）
         loop.agent_manager_factory = lambda sid: self.app.agent_manager(sid, create=False)

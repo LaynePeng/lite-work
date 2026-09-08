@@ -132,6 +132,8 @@ export interface AppConfig {
   agent_meeting_rounds?: number;
   agent_ledger_interval?: number;
   agent_persist_max?: number;
+  /** 治理档位：explicit（默认，明确要求才派生）| proactive（主动并行委派） */
+  agent_collab_mode?: "explicit" | "proactive";
 }
 
 export interface ContextTaskStats {

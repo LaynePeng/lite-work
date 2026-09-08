@@ -45,6 +45,32 @@ def _manager(app):
     return app.agent_manager(str(sid)), sid
 
 
+def _collab_gate(app) -> str:
+    """治理档位（P3，对齐 Codex MultiAgentMode）：explicit=默认（用户明确要求才派生），
+    proactive=主动委派。注入 spawn_agent 描述头部。"""
+    mode = str(app.config.get("agent_collab_mode") or "explicit")
+    if mode == "proactive":
+        return ("主动委派已开启：当并行能节省时间或提升质量时，应主动派生子 Agent"
+                "（用户可随时纠正，重活/急活优先自己做）。")
+    return ("默认策略：仅当用户明确要求子 Agent、委派或并行工作时才派生；"
+            "要求「深入/全面/多角度」不构成派生许可。")
+
+
+def _role_registry_hint(app) -> str:
+    """已注册的自定义 subagent 角色清单（P3：角色 description 进 spawn 提示）。"""
+    try:
+        rows = []
+        for p in app.agent_registry.all().values():
+            if p.mode in ("subagent", "all") and not p.hidden:
+                desc = (p.description or "").strip()[:60]
+                rows.append(f"{p.id}: {desc}" if desc else p.id)
+        if not rows:
+            return ""
+        return "\n已注册的自定义角色（role 参数可直接使用）：" + "；".join(rows)
+    except Exception:
+        return ""
+
+
 def make_agent_tool_handlers(app, parent_events=None, kernel=None):
     """绑定到具体 kernel 的六个工具 handler（create_kernel 重绑用）。
 
@@ -69,6 +95,21 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         fork_messages = None
         if kernel is not None and fork_spec != "none":
             fork_messages = extract_fork_messages(kernel.ctx.messages, fork_spec)
+        # 物理隔离（P3）：worktree=独立 git worktree，完成后自动合并回主工作区
+        isolation = str(args.get("isolation") or "shared")
+        if isolation not in ("shared", "worktree"):
+            isolation = "shared"
+        # 权限收敛（P3）：编排者 deny 的工具对子 Agent 强制 deny
+        parent_denies: List[str] = []
+        if kernel is not None:
+            oid = getattr(kernel, "orchestrator_agent_id", None)
+            if oid:
+                try:
+                    prof = app.get_agent(oid)
+                    parent_denies = [t for t, act in (prof.permissions or {}).items()
+                                     if act == "deny"]
+                except Exception:
+                    pass
         result = await manager.spawn(
             task,
             role=str(args.get("role") or "general"),
@@ -80,6 +121,8 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
             model=str(args.get("model")) if args.get("model") else None,
             depth=depth,
             initial_messages=fork_messages,
+            isolation=isolation,
+            parent_denies=parent_denies,
         )
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
@@ -178,9 +221,15 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         titles = args.get("titles") or []
         if not isinstance(titles, list) or not titles:
             return "[Error]: titles 不能为空。"
-        created = manager.create_shared_tasks([str(t) for t in titles])
+        deps = args.get("depends_on") or {}
+        deps_by_title = {str(k): [str(x) for x in v] for k, v in deps.items()} \
+            if isinstance(deps, dict) else {}
+        created = manager.create_shared_tasks([str(t) for t in titles],
+                                              deps_by_title=deps_by_title)
+        dep_note = "；含依赖关系（前置未完成时认领被阻塞）" if any(
+            t.get("depends_on") for t in manager.list_shared_tasks()) else ""
         return (
-            f"[共享任务池已建立] {len(created)} 个任务。子 Agent 可通过 "
+            f"[共享任务池已建立] {len(created)} 个任务{dep_note}。子 Agent 可通过 "
             "list_shared_tasks 查看并 claim_shared_task 认领（先到先得）；"
             "适合并行分工：spawn 多个 agent 后让它们自领。"
         )
@@ -233,13 +282,16 @@ class MultiAgentPlugin(ToolPlugin):
         self._handlers = make_agent_tool_handlers(app)
 
     def get_tools(self) -> List[ToolDefinition]:
+        gate = _collab_gate(self._app)
+        roles = _role_registry_hint(self._app)
         return [
             ToolDefinition(
                 name="spawn_agent",
                 description=(
+                    f"{gate}\n"
                     "异步派生一个子 Agent 并行执行任务，立即返回（不等待完成）。"
                     "结果完成后以 [agent:completed] 通知自动送达，无需轮询。"
-                    f"{DELEGATION_GUIDE}"
+                    f"{roles}\n{DELEGATION_GUIDE}"
                 ),
                 parameters={
                     "type": "object",
@@ -266,6 +318,10 @@ class MultiAgentPlugin(ToolPlugin):
                                        "description": "上下文继承（可选）：'none'（默认）| 'all' | 数字字符串如 '6'"
                                                       "（继承最近 N 条）。子任务需要当前对话背景才能理解时使用；"
                                                       "自包含任务不要继承（省 token）"},
+                        "isolation": {"type": "string",
+                                      "description": "物理隔离（可选）：'shared'（默认，共享工作区，配合 "
+                                                     "allowed_dirs 逻辑隔离）| 'worktree'（独立 git 工作树，"
+                                                     "完成自动合并回主工作区；适合大改动/实验性重构；非 git 仓库自动降级）"},
                         "mode": {"type": "string",
                                  "description": "合作模式标记：orchestrate（默认，编排-工人）/"
                                                 "pipeline（流水线：按序交接）/brainstorm（头脑风暴："
@@ -355,6 +411,9 @@ class MultiAgentPlugin(ToolPlugin):
                     "properties": {
                         "titles": {"type": "array", "items": {"type": "string"},
                                    "description": "任务标题列表（每条应具体、有界、自包含）"},
+                        "depends_on": {"type": "object",
+                                       "description": "依赖图（可选）：{任务标题: [前置任务标题,...]}，"
+                                                      "前置未完成时该任务认领被阻塞"},
                     },
                     "required": ["titles"],
                 },

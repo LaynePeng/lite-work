@@ -76,6 +76,8 @@ class SharedTask:
     created_by: str = "main"
     created_at: float = 0.0
     finished_at: Optional[float] = None
+    # 依赖图：本任务依赖的前置任务 id（全部 done 前不可认领，P3）
+    depends_on: List[str] = field(default_factory=list)
 
 # 受目录隔离约束的写类工具（参数名统一 filePath）
 ISOLATED_WRITE_TOOLS = frozenset({
@@ -99,6 +101,12 @@ class AgentRecord:
     model: Optional[str] = None
     # 嵌套深度（1=主 Agent 直接派生；agent_spawn_depth 配置上限）
     depth: int = 1
+    # 物理隔离：shared（共享工作区，默认）| worktree（独立 git worktree，完成后合并回）
+    isolation: str = "shared"
+    # worktree 临时目录（isolation=worktree 运行期间存在）
+    worktree: Optional[str] = None
+    # 权限收敛：编排者声明的 deny 工具（子 Agent 不得超过父权限，Codex 语义）
+    parent_denies: Optional[List[str]] = None
     status: str = "pending"
     summary: str = ""
     changed_files: List[str] = field(default_factory=list)
@@ -126,15 +134,22 @@ class IsolationPlugin(Plugin):
 
     name = "isolation-plugin"
 
-    def __init__(self, workspace: Optional[str], allowed_dirs: List[str],
+    def __init__(self, workspace: Optional[str], allowed_dirs: Optional[List[str]],
                  record: AgentRecord) -> None:
         self.workspace = os.path.abspath(workspace) if workspace else ""
-        # 规范化为绝对路径前缀集合
+        # allowed_dirs=None → 仅记录模式（全放行，只记 changed_files）；
+        # 声明白名单 → 硬隔离（写越界拒绝）
+        # 前缀统一 realpath 归一（macOS /var → /private/var 符号链接，
+        # 与 _resolve 的 realpath 对齐，否则前缀匹配永假）
         self.allowed: List[str] = []
-        for d in allowed_dirs or []:
-            p = os.path.abspath(os.path.join(self.workspace, d)) if workspace else os.path.abspath(d)
-            if p not in self.allowed:
-                self.allowed.append(p)
+        if allowed_dirs:
+            for d in allowed_dirs:
+                p = os.path.abspath(os.path.join(self.workspace, d)) if workspace else os.path.abspath(d)
+                p = os.path.realpath(p)
+                if p not in self.allowed:
+                    self.allowed.append(p)
+        else:
+            self.allowed = [os.path.realpath(self.workspace)] if self.workspace else []
         self.record = record
 
     def _resolve(self, raw: str) -> str:
@@ -171,6 +186,13 @@ class IsolationPlugin(Plugin):
             if rel not in self.record.changed_files:
                 self.record.changed_files.append(rel)
             return await next(data)
+
+
+# 昵称池（对齐 Codex agent_names）：agent_name 未指定时轮流取用，比 role-N 更可读
+NICKNAME_POOL = [
+    "scout", "atlas", "nova", "ranger", "sage", "ember", "falcon", "quill",
+    "delta", "iris", "comet", "lumen", "onyx", "vega", "zephyr", "lyra",
+]
 
 
 def _safe_nickname(name: str) -> Optional[str]:
@@ -260,7 +282,9 @@ class SessionAgentManager:
                     allowed_dirs: Optional[List[str]] = None, max_steps: int = 0,
                     parent_events=None, mode: str = "orchestrate",
                     model: Optional[str] = None, depth: int = 1,
-                    initial_messages: Optional[List[Any]] = None) -> Dict[str, Any]:
+                    initial_messages: Optional[List[Any]] = None,
+                    isolation: str = "shared",
+                    parent_denies: Optional[List[str]] = None) -> Dict[str, Any]:
         """异步派生：校验限额 → 建记录 → 后台执行，立即返回。
 
         depth：嵌套深度（1=主 Agent 直接派生）。子 Agent 再派生时传 2，
@@ -286,14 +310,23 @@ class SessionAgentManager:
         agent_id = f"sa_{uuid.uuid4().hex[:8]}"
         nickname = _safe_nickname(agent_name or "")
         if nickname is None:
-            base = (role or "agent").replace("-", "_")
-            self._nickname_counter[base] = self._nickname_counter.get(base, 0) + 1
-            nickname = f"{base}-{self._nickname_counter[base]}"
+            used = {r.nickname for r in self.agents.values()}
+            pooled = next((n for n in NICKNAME_POOL if n not in used), None)
+            if pooled is not None:
+                nickname = pooled
+            else:
+                base = (role or "agent").replace("-", "_")
+                self._nickname_counter[base] = self._nickname_counter.get(base, 0) + 1
+                nickname = f"{base}-{self._nickname_counter[base]}"
 
+        if isolation not in ("shared", "worktree"):
+            isolation = "shared"
         record = AgentRecord(
             agent_id=agent_id, nickname=nickname, role=role or "general",
             task=task, allowed_dirs=list(allowed_dirs) if allowed_dirs else None,
-            mode=mode, model=model, depth=depth, started_at=time.time(),
+            mode=mode, model=model, depth=depth, isolation=isolation,
+            parent_denies=list(parent_denies) if parent_denies else None,
+            started_at=time.time(),
         )
         self.agents[agent_id] = record
         self._spawned_total += 1
@@ -303,15 +336,16 @@ class SessionAgentManager:
 
         async def _run() -> None:
             try:
-                result = await runner.run_task(
-                    task, role=role, max_steps=max_steps,
+                result = await self._run_with_isolation(record, dict(
+                    task_description=task, role=role, max_steps=max_steps,
                     parent_events=parent_events,
                     agent_id=agent_id, nickname=nickname,
                     allowed_dirs=record.allowed_dirs, record=record,
                     model=model,
                     initial_messages=initial_messages,  # fork_context 继承的父上下文
                     sub_depth=depth,  # 嵌套深度：子 Agent 可按 depth+1 再派（受配置上限约束）
-                )
+                    extra_denied_tools=record.parent_denies,  # 权限收敛：不超过编排者
+                ))
                 record.summary = result.get("summary", "")
                 record.tokens = int(result.get("total_tokens_used", 0))
                 record.turns = int(result.get("turns", 0))
@@ -531,13 +565,14 @@ class SessionAgentManager:
                     # 历史尾部追加滞留消息（作为上一轮收到的消息进入上下文）
                     from ..core.types import Message as _M
                     initial = history + [_M(role="user", content=joined)]
-                result = await runner.run_task(
-                    task, role=record.role, max_steps=max_steps,
+                result = await self._run_with_isolation(record, dict(
+                    task_description=task, role=record.role, max_steps=max_steps,
                     parent_events=parent_events,
                     agent_id=record.agent_id, nickname=record.nickname,
                     allowed_dirs=record.allowed_dirs, record=record,
                     initial_messages=initial,
-                )
+                    extra_denied_tools=record.parent_denies,
+                ))
                 record.summary = result.get("summary", "")
                 record.tokens += int(result.get("total_tokens_used", 0))
                 record.turns += int(result.get("turns", 0))
@@ -563,6 +598,103 @@ class SessionAgentManager:
         return {"ok": True, "agent_id": agent_id, "nickname": record.nickname,
                 "delivered_backlog": len(backlog)}
 
+    # ------------------------------------------------------------ worktree 物理隔离（P3）
+
+    def _git(self, cwd: str, *args: str):
+        import subprocess
+        return subprocess.run(["git", "-C", cwd, *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def _create_worktree(self, agent_id: str) -> Optional[str]:
+        """为 agent 建独立 git worktree（从当前 HEAD 分支）；非 git 仓库/失败返回 None。"""
+        import tempfile
+        ws = self.app.workspace
+        if not ws:
+            return None
+        if self._git(ws, "rev-parse", "--is-inside-work-tree").returncode != 0:
+            return None
+        tmp = tempfile.mkdtemp(prefix="lw-wt-")
+        wt = os.path.join(tmp, agent_id)
+        r = self._git(ws, "worktree", "add", "-b", f"lw-agent/{agent_id}", wt)
+        if r.returncode != 0:
+            logger.warning("[AgentManager] worktree 创建失败: %s", r.stderr[:200])
+            try:
+                os.rmdir(tmp)
+            except OSError:
+                pass
+            return None
+        return wt
+
+    def _harvest_worktree(self, wt: str):
+        """收割改动：返回 (改动文件相对路径列表, patch 文本)。"""
+        self._git(wt, "add", "-A")
+        st = self._git(wt, "status", "--porcelain")
+        files = [ln[3:].strip().strip('"') for ln in st.stdout.splitlines() if ln.strip()]
+        diff = self._git(wt, "diff", "--cached", "--binary")
+        return files, diff.stdout
+
+    def _apply_patch_to_workspace(self, patch: str) -> bool:
+        """把 worktree 补丁应用回主工作区（--3way 优先，失败回退普通 apply）。"""
+        ws = self.app.workspace
+        for extra in (["--3way"], []):
+            r = self._git(ws, "apply", *extra, "-")
+            import subprocess
+            r = subprocess.run(["git", "-C", ws, "apply", *extra, "-"],
+                               input=patch, capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                return True
+        return False
+
+    def _save_patch(self, agent_id: str, patch: str) -> str:
+        patch_dir = os.path.join(self.app.workspace or ".", ".agent-patches")
+        os.makedirs(patch_dir, exist_ok=True)
+        path = os.path.join(patch_dir, f"{agent_id}.patch")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(patch)
+        return path
+
+    def _cleanup_worktree(self, agent_id: str, wt: str) -> None:
+        ws = self.app.workspace
+        self._git(ws, "worktree", "remove", "--force", wt)
+        self._git(ws, "branch", "-D", f"lw-agent/{agent_id}")
+        try:
+            os.rmdir(os.path.dirname(wt))
+        except OSError:
+            pass
+
+    async def _run_with_isolation(self, record: AgentRecord, run_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """统一执行入口：shared 直接跑；worktree 建临时工作树、跑完收割合并回主区。"""
+        runner = self.app.sub_agent_runner
+        if record.isolation != "worktree":
+            return await runner.run_task(**run_kwargs)
+        wt = self._create_worktree(record.agent_id)
+        if wt is None:
+            # 非 git 仓库：降级共享模式（记录说明，继续执行）
+            record.isolation = "shared"
+            logger.info("[AgentManager] %s worktree 不可用（非 git 仓库），降级共享模式", record.agent_id)
+            return await runner.run_task(**run_kwargs)
+        record.worktree = wt
+        try:
+            result = await runner.run_task(**{**run_kwargs, "workspace_override": wt})
+            files, patch = self._harvest_worktree(wt)
+            if patch and patch.strip():
+                merged = self._apply_patch_to_workspace(patch)
+                if merged:
+                    record.changed_files = files
+                    note = f"[worktree] 改动已合并回主工作区（{len(files)} 个文件）。"
+                else:
+                    patch_path = self._save_patch(record.agent_id, patch)
+                    record.changed_files = files
+                    note = (f"[worktree] 自动合并失败（并行改动冲突？），补丁已保存："
+                            f"{patch_path}，请检查后 git apply 或交给主 Agent 处理。")
+                result = {**result, "summary": (result.get("summary") or "") + f"\n{note}"}
+            else:
+                record.changed_files = []
+            return result
+        finally:
+            record.worktree = None
+            self._cleanup_worktree(record.agent_id, wt)
+
     async def _emit(self, bus, event: str, payload: Dict[str, Any]) -> None:
         if bus is None:
             return
@@ -573,9 +705,15 @@ class SessionAgentManager:
 
     # ------------------------------------------------------------ 共享任务池（去中心化认领）
 
-    def create_shared_tasks(self, titles: List[str], created_by: str = "main") -> List[Dict[str, Any]]:
-        """编排者批量建池（一次声明一批可并行认领的工作单元）。"""
+    def create_shared_tasks(self, titles: List[Any], created_by: str = "main",
+                            deps_by_title: Optional[Dict[str, List[str]]] = None) -> List[Dict[str, Any]]:
+        """编排者批量建池（一次声明一批可并行认领的工作单元）。
+
+        deps_by_title（P3 依赖图）：{任务标题: [前置任务标题, ...]}——
+        前置未完成的任务认领时被阻塞（claim 校验），前置完成后自动可认领。
+        """
         out = []
+        title_to_id: Dict[str, str] = {}
         for raw in titles:
             title = str(raw or "").strip()
             if not title:
@@ -584,24 +722,42 @@ class SessionAgentManager:
             t = SharedTask(id=f"t{self._task_seq:03d}", title=title,
                            created_by=created_by, created_at=time.time())
             self.shared_tasks.append(t)
+            title_to_id[title] = t.id
             out.append({"id": t.id, "title": t.title, "status": t.status})
+        # 依赖图解析（标题 → id，未知标题忽略）
+        for title, prereqs in (deps_by_title or {}).items():
+            tid = title_to_id.get(title)
+            if tid is None:
+                continue
+            task = next(t for t in self.shared_tasks if t.id == tid)
+            task.depends_on = [title_to_id[p] for p in (prereqs or []) if p in title_to_id]
         return out
 
     def list_shared_tasks(self) -> List[Dict[str, Any]]:
         return [
             {"id": t.id, "title": t.title, "status": t.status,
-             "assignee": t.assignee or None}
+             "assignee": t.assignee or None,
+             "depends_on": t.depends_on or None}
             for t in self.shared_tasks
         ]
 
     def claim_shared_task(self, task_id: str, claimer: str) -> Dict[str, Any]:
-        """原子认领：pending → claimed（重复认领/未知任务报错）。"""
+        """原子认领：pending → claimed（重复认领/未知任务/依赖未完成报错）。"""
         for t in self.shared_tasks:
             if t.id == task_id:
                 if t.status == "claimed" and t.assignee != claimer:
                     return {"ok": False, "error": f"任务 {t.id} 已被 {t.assignee} 认领。"}
                 if t.status == "done":
                     return {"ok": False, "error": f"任务 {t.id} 已完成。"}
+                # 依赖图：前置未全部完成 → 阻塞认领（P3）
+                if t.depends_on:
+                    pending = [d for d in t.depends_on
+                               if not any(x.id == d and x.status == "done"
+                                          for x in self.shared_tasks)]
+                    if pending:
+                        return {"ok": False,
+                                "error": f"任务 {t.id} 被依赖阻塞：{', '.join(pending)} 尚未完成。"
+                                         "请先做其他任务或等待。"}
                 t.status = "claimed"
                 t.assignee = claimer
                 return {"ok": True, "id": t.id, "title": t.title}

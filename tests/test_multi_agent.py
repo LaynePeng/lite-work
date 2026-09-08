@@ -738,3 +738,159 @@ async def test_spawn_fork_turns_through_handler(tmp_path):
         assert "已继承当前上下文" in out
     finally:
         current_session_id.reset(token)
+
+# ---------------------------------------------------------------- P3：治理/昵称/依赖图/权限收敛/worktree
+
+async def test_nickname_pool(tmp_path):
+    """昵称池：未命名 spawn 从池中取可读昵称（不再是 role-N），互不重复。"""
+    app = _make_app(tmp_path)
+    app.config["max_parallel_agents"] = 4  # 允许三个并行
+    mgr = app.agent_manager("s1")
+    from litework.orchestration.agent_manager import NICKNAME_POOL
+    names = []
+    for i in range(3):
+        r = await mgr.spawn(f"任务{i}", role="general")
+        assert r["ok"], r
+        names.append(mgr.get(r["agent_id"]).nickname)
+    assert all(n in NICKNAME_POOL for n in names)
+    assert len(set(names)) == 3
+    await mgr.wait([a.agent_id for a in mgr.agents.values()], timeout_ms=10000)
+
+
+async def test_shared_task_dependency_graph(tmp_path):
+    """依赖图：前置未完成 → 认领被阻塞；前置完成 → 自动可认领。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    created = mgr.create_shared_tasks(
+        ["数据库迁移", "API 适配", "集成测试"],
+        deps_by_title={"集成测试": ["数据库迁移", "API 适配"]})
+    assert len(created) == 3
+    # 集成测试被阻塞
+    out = mgr.claim_shared_task("t003", "w1")
+    assert not out["ok"] and "被依赖阻塞" in out["error"]
+    # 前置完成后自动解锁
+    mgr.claim_shared_task("t001", "w1"); mgr.finish_shared_task("t001", "w1")
+    mgr.claim_shared_task("t002", "w2"); mgr.finish_shared_task("t002", "w2")
+    out = mgr.claim_shared_task("t003", "w3")
+    assert out["ok"]
+    # 列表带依赖信息
+    listed = {t["id"]: t for t in mgr.list_shared_tasks()}
+    assert listed["t003"]["depends_on"] == ["t001", "t002"]
+
+
+async def test_permission_convergence(tmp_path):
+    """权限收敛：编排者 deny 的工具 → 子 Agent 强制 deny（子权限不超父）。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="general",  # general 全工具
+                        parent_denies=["write_file", "apply_search_replace"])
+    rec = mgr.get(r["agent_id"])
+    assert rec.parent_denies == ["write_file", "apply_search_replace"]
+    # registry 集成：SubAgentRunner 构建时 effective deny
+    from litework.orchestration.sub_agent import sub_agent_excludes
+    reg = app.build_registry(allowed=None,
+                             exclude=sub_agent_excludes(1),
+                             permissions={"write_file": "deny"})
+    assert "write_file" not in {t.name for t in reg.get_tools()}
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+
+
+async def test_collab_mode_gates_description(tmp_path):
+    """治理档位：explicit（默认）→ 明确要求才派生；proactive → 主动并行。"""
+    from litework.tools.agent_tools import MultiAgentPlugin
+    app = _make_app(tmp_path)
+    plugin = MultiAgentPlugin(app)
+    spawn = next(t for t in plugin.get_tools() if t.name == "spawn_agent")
+    assert "明确要求" in spawn.description
+    app.config["agent_collab_mode"] = "proactive"
+    spawn2 = next(t for t in plugin.get_tools() if t.name == "spawn_agent")
+    assert "主动委派已开启" in spawn2.description
+
+
+async def test_custom_roles_in_spawn_description(tmp_path):
+    """角色清单进 spawn 提示：注册自定义 subagent → 描述中出现其 id。"""
+    from litework.tools.agent_tools import MultiAgentPlugin
+    from litework.core.agent_profile import AgentProfile
+    app = _make_app(tmp_path)
+    app.agent_registry.register(AgentProfile(
+        id="db-migrator", mode="subagent",
+        description="数据库迁移专家：schema 变更与数据回填",
+        tools=["read_file", "write_file", "execute_command"]))
+    plugin = MultiAgentPlugin(app)
+    spawn = next(t for t in plugin.get_tools() if t.name == "spawn_agent")
+    assert "db-migrator" in spawn.description
+    assert "数据库迁移专家" in spawn.description
+
+
+def _init_git_repo(path):
+    import subprocess
+    def g(*a):
+        return subprocess.run(["git", "-C", str(path), *a],
+                              capture_output=True, text=True)
+    g("init", "-q")
+    g("config", "user.email", "t@t.local")
+    g("config", "user.name", "t")
+    g("commit", "--allow-empty", "-m", "init", "-q")
+    return g
+
+
+async def test_worktree_isolation_merge_back(tmp_path):
+    """worktree 物理隔离端到端：子 Agent 在独立工作树写文件 → 补丁自动合并回主工作区。"""
+    _init_git_repo(tmp_path)
+    app = _make_app(tmp_path)
+    # 子 Agent：写一个文件后结束
+    app._mock_adapter = MockLLMAdapter([
+        ("", [tool_call("write_file", '{"filePath":"wt-feature.txt","content":"from worktree"}')]),
+        ("已在独立工作树完成写入。", []),
+    ])
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("实现新特性", role="general", isolation="worktree")
+    await mgr.wait([r["agent_id"]], timeout_ms=30000)
+    rec = mgr.get(r["agent_id"])
+    assert rec.status == "completed"
+    # 改动合并回主工作区
+    assert (tmp_path / "wt-feature.txt").exists(), "worktree 改动未合并回主工作区"
+    assert "wt-feature.txt" in rec.changed_files
+    assert "worktree" in rec.summary
+    # worktree 已清理（临时分支不存在）
+    import subprocess
+    br = subprocess.run(["git", "-C", str(tmp_path), "branch", "--list", "lw-agent/*"],
+                        capture_output=True, text=True)
+    assert "lw-agent/" not in br.stdout
+
+
+async def test_worktree_fallback_non_git(tmp_path):
+    """非 git 仓库：worktree 请求自动降级共享模式，任务照常完成。"""
+    app = _make_app(tmp_path)  # tmp_path 无 .git
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="explorer", isolation="worktree")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    rec = mgr.get(r["agent_id"])
+    assert rec.status == "completed"
+    assert rec.isolation == "shared"  # 降级
+
+
+async def test_handler_passes_isolation_and_denies(tmp_path):
+    """工具层：isolation 参数 + kernel.orchestrator_agent_id 权限收敛传递。"""
+    from litework.tools.agent_tools import make_agent_tool_handlers
+    from litework.core.kernel import Kernel
+    from litework.core.agent_loop import current_session_id
+
+    app = _make_app(tmp_path)
+    kernel = Kernel("s1")
+    kernel.orchestrator_agent_id = "plan"  # plan deny write/execute
+    handlers = make_agent_tool_handlers(app, kernel=kernel)
+    token = current_session_id.set("s1")
+    try:
+        out = await handlers["spawn_agent"]({
+            "task": "调研", "role": "general", "isolation": "worktree"})
+        assert "[Agent 已派生]" in out
+        mgr = app.agent_manager("s1")
+        aid = out.split("id=")[1].split()[0]
+        rec = mgr.get(aid)
+        assert rec.isolation == "worktree"
+        assert "write_file" in rec.parent_denies  # plan 的 deny 继承
+        assert "execute_command" in rec.parent_denies
+        await mgr.wait([aid], timeout_ms=30000)
+    finally:
+        current_session_id.reset(token)

@@ -231,6 +231,9 @@ class TaskManager:
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         registry = self.app.create_agent_registry(agent_id or "build")
         kernel = self.app.create_kernel(session_id, registry=registry)
+        # 权限收敛（P3）：编排者身份挂 kernel——spawn_agent handler 读取其 profile，
+        # 编排者 deny 的工具对子 Agent 强制 deny（子权限永不超过父）
+        kernel.orchestrator_agent_id = agent_id or "build"
         # 多轮对话：加载该 session 已落盘的历史消息到上下文，
         # 避免每轮新建 kernel 时从空上下文开始、落盘覆盖上一轮对话
         snapshot = self.app.session_store.load(session_id)

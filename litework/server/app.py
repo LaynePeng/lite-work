@@ -232,6 +232,7 @@ def create_app(app: AgentApp, token: Optional[str] = None) -> FastAPI:
                 "max_parallel_agents", "agent_total_limit", "agent_max_steps",
                 "agent_max_steps_cap", "agent_spawn_depth", "agent_message_max_chars",
                 "agent_meeting_rounds", "agent_ledger_interval", "agent_persist_max",
+                "agent_collab_mode",
             )
         }
 

@@ -56,6 +56,8 @@ export default function SettingsModal({
   const [maDepth, setMaDepth] = useState<number>(2);
   const [maMsgChars, setMaMsgChars] = useState<number>(8000);
   const [maMeetingRounds, setMaMeetingRounds] = useState<number>(3);
+  const [maCollabMode, setMaCollabMode] = useState<"explicit" | "proactive">("explicit");
+  const [maLedgerInterval, setMaLedgerInterval] = useState<number>(5);
   const [maSaved, setMaSaved] = useState(false);
   // Skills triggers 匹配模式
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
@@ -260,6 +262,8 @@ export default function SettingsModal({
       if (typeof c.agent_spawn_depth === "number" && c.agent_spawn_depth > 0) setMaDepth(c.agent_spawn_depth);
       if (typeof c.agent_message_max_chars === "number" && c.agent_message_max_chars > 0) setMaMsgChars(c.agent_message_max_chars);
       if (typeof c.agent_meeting_rounds === "number" && c.agent_meeting_rounds > 0) setMaMeetingRounds(c.agent_meeting_rounds);
+      if (c.agent_collab_mode === "proactive") setMaCollabMode("proactive");
+      if (typeof c.agent_ledger_interval === "number" && c.agent_ledger_interval > 0) setMaLedgerInterval(c.agent_ledger_interval);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
 
@@ -758,6 +762,8 @@ export default function SettingsModal({
         agent_spawn_depth: maDepth,
         agent_message_max_chars: maMsgChars,
         agent_meeting_rounds: maMeetingRounds,
+        agent_collab_mode: maCollabMode,
+        agent_ledger_interval: maLedgerInterval,
       });
       setMaSaved(true);
       setTimeout(() => setMaSaved(false), 2000);
@@ -765,7 +771,8 @@ export default function SettingsModal({
     } catch (err) {
       window.alert(`保存失败: ${(err as Error).message}`);
     }
-  }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds, onSaved]);
+  }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds,
+      maCollabMode, maLedgerInterval, onSaved]);
 
   return (
       <div className="modal-overlay">
@@ -1800,6 +1807,26 @@ export default function SettingsModal({
                     type="number" className="form-input" min={1} max={10}
                     value={maMeetingRounds}
                     onChange={(e) => setMaMeetingRounds(Math.max(1, parseInt(e.target.value, 10) || 3))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>治理档位</label>
+                  <select
+                    className="form-input" value={maCollabMode}
+                    onChange={(e) => setMaCollabMode(e.target.value === "proactive" ? "proactive" : "explicit")}
+                    title="显式：用户明确要求子 Agent/委派/并行时才派生（默认，省 token）；主动：能并行就并行"
+                  >
+                    <option value="explicit">显式（默认，明确要求才派生）</option>
+                    <option value="proactive">主动（能并行就并行）</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>进度账本间隔（轮）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={20}
+                    value={maLedgerInterval}
+                    onChange={(e) => setMaLedgerInterval(Math.max(1, parseInt(e.target.value, 10) || 5))}
+                    title="长程任务中每 N 轮用 list_agents 检查一次子 Agent 进度（提示词指引）"
                   />
                 </div>
               </div>
