@@ -64,6 +64,7 @@ def make_agent_tool_handlers(app, parent_events=None):
             max_steps=int(args.get("max_steps") or 12),
             parent_events=parent_events,
             mode=str(args.get("mode") or "orchestrate"),
+            model=str(args.get("model")) if args.get("model") else None,
         )
         if not result.get("ok"):
             return f"[Error]: {result.get('error')}"
@@ -152,9 +153,56 @@ def make_agent_tool_handlers(app, parent_events=None):
             "完成后会自动通知。"
         )
 
+    # -------- 共享任务池（去中心化认领：编排者建池，子 Agent 自领）--------
+
+    async def _create_tasks(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "[Error]: 无活动会话。"
+        titles = args.get("titles") or []
+        if not isinstance(titles, list) or not titles:
+            return "[Error]: titles 不能为空。"
+        created = manager.create_shared_tasks([str(t) for t in titles])
+        return (
+            f"[共享任务池已建立] {len(created)} 个任务。子 Agent 可通过 "
+            "list_shared_tasks 查看并 claim_shared_task 认领（先到先得）；"
+            "适合并行分工：spawn 多个 agent 后让它们自领。"
+        )
+
+    async def _list_tasks(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "当前没有共享任务。"
+        tasks = manager.list_shared_tasks()
+        if not tasks:
+            return "当前没有共享任务。"
+        return json.dumps(tasks, ensure_ascii=False, indent=1)
+
+    async def _claim_task(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "[Error]: 无活动会话。"
+        claimer = str(args.get("claimer") or "agent")
+        result = manager.claim_shared_task(str(args.get("task_id", "")), claimer)
+        if not result.get("ok"):
+            return f"[Error]: {result.get('error')}"
+        return f"[已认领] {result['id']}：{result['title']}。完成后请 complete_shared_task。"
+
+    async def _finish_task(args: Dict[str, Any]) -> str:
+        manager, _sid = _manager(app)
+        if manager is None:
+            return "[Error]: 无活动会话。"
+        result = manager.finish_shared_task(str(args.get("task_id", "")),
+                                            str(args.get("claimer") or "agent"))
+        if not result.get("ok"):
+            return f"[Error]: {result.get('error')}"
+        return f"[任务完成] {result['id']} 已标记 done。"
+
     return {"spawn_agent": _spawn, "list_agents": _list,
             "close_agent": _close, "wait_agents": _wait,
-            "send_message": _send_message, "followup_task": _followup}
+            "send_message": _send_message, "followup_task": _followup,
+            "create_shared_tasks": _create_tasks, "list_shared_tasks": _list_tasks,
+            "claim_shared_task": _claim_task, "complete_shared_task": _finish_task}
 
 
 class MultiAgentPlugin(ToolPlugin):
@@ -195,6 +243,9 @@ class MultiAgentPlugin(ToolPlugin):
                                                         "并行写任务必须声明互不相交的范围"},
                         "max_steps": {"type": "integer",
                                       "description": "最大执行轮数（默认 12）"},
+                        "model": {"type": "string",
+                                  "description": "模型路由覆盖（可选）：'provider/model' 或裸 model。"
+                                                 "探索/调研类子任务可指定更快的模型；默认跟随全局"},
                         "mode": {"type": "string",
                                  "description": "合作模式标记：orchestrate（默认，编排-工人）/"
                                                 "pipeline（流水线：按序交接）/brainstorm（头脑风暴："
@@ -269,6 +320,51 @@ class MultiAgentPlugin(ToolPlugin):
                         "max_steps": {"type": "integer", "description": "最大执行轮数（默认 12）"},
                     },
                     "required": ["agent_id", "task"],
+                },
+            ),
+            ToolDefinition(
+                name="create_shared_tasks",
+                description=(
+                    "建立共享任务池（批量声明可并行认领的工作单元）：spawn 多个 agent 后让它们"
+                    "经 list_shared_tasks + claim_shared_task 自领分工（先到先得，认领即锁定），"
+                    "无需你逐一指派。适合一批同构子任务（如分模块迁移）"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "titles": {"type": "array", "items": {"type": "string"},
+                                   "description": "任务标题列表（每条应具体、有界、自包含）"},
+                    },
+                    "required": ["titles"],
+                },
+            ),
+            ToolDefinition(
+                name="list_shared_tasks",
+                description="列出共享任务池（id/标题/状态/认领者）",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="claim_shared_task",
+                description="认领一个 pending 任务（原子锁定，先到先得）；完成后用 complete_shared_task 标记",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "任务 id（t001 形式）"},
+                        "claimer": {"type": "string", "description": "你的昵称（默认 agent）"},
+                    },
+                    "required": ["task_id"],
+                },
+            ),
+            ToolDefinition(
+                name="complete_shared_task",
+                description="把你认领的任务标记完成",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "任务 id"},
+                        "claimer": {"type": "string", "description": "你的昵称（须与认领时一致）"},
+                    },
+                    "required": ["task_id"],
                 },
             ),
         ]

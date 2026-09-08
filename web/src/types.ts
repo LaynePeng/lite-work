@@ -263,6 +263,8 @@ export interface SubAgentProgress {
   startedAt?: number;
   /** 合作模式（编排者声明，看板按模式分组渲染）：orchestrate/pipeline/brainstorm/debate */
   mode?: string;
+  /** 改动文件清单（review gate：完成卡片「待审查」徽标数据源） */
+  changedFiles?: string[];
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）

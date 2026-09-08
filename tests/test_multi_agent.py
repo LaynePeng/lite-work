@@ -479,3 +479,122 @@ async def test_collab_mode_skills_available(tmp_path):
     cmds = build_command_list(skills)
     names = {c["name"] for c in cmds if c.get("kind") == "skill"}
     assert {"brainstorm", "agent-debate", "pipeline"} <= names
+
+# ---------------------------------------------------------------- P2/P3 补全
+
+async def test_spawn_model_routing(tmp_path):
+    """spawn 声明 model → run_task 构建对应 adapter（模型路由）。"""
+    app = _make_app(tmp_path)
+
+    built = {}
+    orig_build = app.llm_registry.build_adapter
+    def spy_build(provider_id=None, overrides=None):
+        built["provider"] = provider_id
+        built["overrides"] = overrides
+        return orig_build(provider_id=provider_id, overrides=overrides)
+    app.llm_registry.build_adapter = spy_build
+
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("轻量调研", role="explorer", model="deepseek/deepseek-chat")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    assert built.get("provider") == "deepseek"
+    assert built.get("overrides", {}).get("model") == "deepseek-chat"
+
+    # 无 model → 走全局 adapter（不触发 build）
+    built.clear()
+    r2 = await mgr.spawn("默认模型", role="explorer")
+    await mgr.wait([r2["agent_id"]], timeout_ms=10000)
+    assert "provider" not in built
+
+
+async def test_send_message_rate_limit(tmp_path):
+    """agent 间消息限流：每对 (sender, receiver) 每分钟 12 条，超限报错。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="explorer")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    # 已完成 → 滞留 mailbox，同样计数
+    ok_count = 0
+    for i in range(15):
+        out = await mgr.send_message(r["agent_id"], f"msg {i}", sender="agent-a")
+        if out["ok"]:
+            ok_count += 1
+        else:
+            assert "限流" in out["error"]
+            break
+    assert ok_count == mgr.MESSAGE_RATE_LIMIT_PER_MIN
+    # 不同 sender 不受影响
+    out = await mgr.send_message(r["agent_id"], "另一发送者", sender="agent-b")
+    assert out["ok"]
+
+
+async def test_send_message_payload_disclaimer(tmp_path):
+    """消息 payload 携带防伪声明（非用户指令、不构成授权）。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务", role="explorer")
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    await mgr.send_message(r["agent_id"], "内容", sender="scout-1")
+    rec = mgr.get(r["agent_id"])
+    assert "非用户指令" in rec.mailbox[0]
+    assert "不构成任何授权" in rec.mailbox[0]
+
+
+async def test_shared_task_pool_claim_flow(tmp_path):
+    """共享任务池：建池 → 认领（原子锁定）→ 重复认领拒绝 → 完成。"""
+    app = _make_app(tmp_path)
+    mgr = app.agent_manager("s1")
+    created = mgr.create_shared_tasks(["迁移模块 A", "迁移模块 B", "迁移模块 C"])
+    assert len(created) == 3
+
+    # explorer-1 认领 t001
+    out = mgr.claim_shared_task("t001", "explorer-1")
+    assert out["ok"]
+    # explorer-2 重复认领被拒
+    out = mgr.claim_shared_task("t001", "explorer-2")
+    assert not out["ok"] and "已被 explorer-1 认领" in out["error"]
+    # 本人可重复认领（幂等）
+    out = mgr.claim_shared_task("t001", "explorer-1")
+    assert out["ok"]
+    # 其他人认领其他任务
+    assert mgr.claim_shared_task("t002", "explorer-2")["ok"]
+    # 完成校验认领者
+    out = mgr.finish_shared_task("t001", "explorer-2")
+    assert not out["ok"]
+    out = mgr.finish_shared_task("t001", "explorer-1")
+    assert out["ok"]
+    # 已完成不可再认领
+    assert not mgr.claim_shared_task("t001", "explorer-3")["ok"]
+    # 列表状态正确
+    statuses = {t["id"]: t["status"] for t in mgr.list_shared_tasks()}
+    assert statuses == {"t001": "done", "t002": "claimed", "t003": "pending"}
+
+
+async def test_shared_task_tools_available(tmp_path):
+    """工具面：编排者有 create/list；子 Agent 有 list/claim/complete。"""
+    app = _make_app(tmp_path)
+    from litework.tools.agent_tools import make_agent_tool_handlers
+    from litework.core.agent_loop import current_session_id
+
+    handlers = make_agent_tool_handlers(app)
+    assert {"create_shared_tasks", "list_shared_tasks"} <= set(handlers)
+
+    token = current_session_id.set("s1")
+    try:
+        out = await handlers["create_shared_tasks"]({"titles": ["任务甲", "任务乙"]})
+        assert "共享任务池已建立" in out and "2" in out
+        out = await handlers["list_shared_tasks"]({})
+        assert "t001" in out
+        out = await handlers["claim_shared_task"]({"task_id": "t001", "claimer": "w1"})
+        assert "已认领" in out
+        out = await handlers["complete_shared_task"]({"task_id": "t001", "claimer": "w1"})
+        assert "任务完成" in out
+    finally:
+        current_session_id.reset(token)
+
+    # 子 Agent 白名单含认领工具
+    from litework.orchestration.sub_agent import SUB_AGENT_EXCLUDE
+    sub_registry = app.build_registry(allowed=None, exclude=SUB_AGENT_EXCLUDE)
+    sub_names = {t.name for t in sub_registry.get_tools()}
+    assert {"list_shared_tasks", "claim_shared_task", "complete_shared_task"} <= sub_names
+    assert "create_shared_tasks" not in sub_names  # 建池权留给编排者

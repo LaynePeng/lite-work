@@ -3506,6 +3506,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .agent-card.running {
   border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+  /* 左边框为 agent 专属色（内联注入，运行中标识归属） */
+  border-left: 3px solid var(--agent-color, var(--accent, #4f8cff));
 }
 
 .agent-card-head {
@@ -3647,6 +3649,54 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .agent-pipeline-step .agent-card {
   flex: 1;
+}
+
+/* -------- review gate：待审查徽标 + 改动文件清单 -------- */
+
+.agent-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-review-badge {
+  align-self: flex-start;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-review-badge.pending {
+  background: color-mix(in srgb, #eab308 16%, transparent);
+  color: #eab308;
+}
+
+.agent-review-badge.done {
+  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+  color: var(--green, #3fb950);
+}
+
+.agent-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.agent-file {
+  font-size: 10.5px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .agent-task {

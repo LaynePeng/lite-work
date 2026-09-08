@@ -35,29 +35,33 @@ ROLE_PROMPTS = {
 ROLE_TOOLS: Dict[str, List[str]] = {
     "explorer": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
                  "read_focused_symbol", "git_status", "git_diff", "git_log", "git_branch",
-                 "review_code", "webfetch", "webfetch_batch"],
+                 "review_code", "webfetch", "webfetch_batch",
+                 "list_shared_tasks", "claim_shared_task", "complete_shared_task"],
     "tester": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
                "read_focused_symbol", "execute_command", "git_status", "git_diff", "git_log",
-               "git_branch"],
+               "git_branch",
+                 "list_shared_tasks", "claim_shared_task", "complete_shared_task"],
     # 批判者：只读 + 代码审查（互批/红蓝对抗模式的角色基础）
     "critic": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
                "read_focused_symbol", "review_code", "git_status", "git_diff",
-               "webfetch", "webfetch_batch"],
+               "webfetch", "webfetch_batch",
+                 "list_shared_tasks", "claim_shared_task", "complete_shared_task"],
     "refactor": None,  # 全部工具
     "general": None,
 }
 
 # 子 Agent 禁用的工具：禁止嵌套派生（P1；P2 放开到限深）+ 交互工具（通道未转发）。
-# send_message / list_agents 开放给子 Agent——协作模式（互批/接力）里
-# 子 Agent 需要与同伴通信；followup_task（唤醒续跑）保留给编排者。
+# send_message / list_agents / 共享任务认领开放给子 Agent——协作模式（互批/接力/
+# 自领分工）需要；followup_task（唤醒续跑）与 create_shared_tasks（建池权）保留给编排者。
 SUB_AGENT_EXCLUDE = ["spawn_sub_agent", "spawn_agent",
-                     "close_agent", "wait_agents", "followup_task", "ask_user"]
+                     "close_agent", "wait_agents", "followup_task", "ask_user",
+                     "create_shared_tasks"]
 
 # 声明 allowed_dirs 的写域 agent：读全开 + 三个写文件工具（写受 IsolationPlugin 约束；
 # shell 命令无法静态判定写目标，P1 不授予，由父 Agent 执行）
 WRITE_SCOPE_TOOLS = ROLE_TOOLS["explorer"] + [
     "write_file", "apply_search_replace", "apply_unified_diff",
-]
+]  # 共享任务工具已含于 explorer 白名单
 
 
 class SubAgentRunner:
@@ -74,6 +78,22 @@ class SubAgentRunner:
             pass
         return None
 
+    def _resolve_adapter(self, model: Optional[str] = None):
+        """子 Agent 的 LLM 适配器：model 覆盖（"provider/model" 或裸 model）→
+        角色未指定时回退全局 adapter。探索类子任务路由到便宜模型的关键路径。"""
+        if not model:
+            return self.app.adapter
+        provider_id = None
+        model_id = model
+        if "/" in model:
+            provider_id, model_id = model.split("/", 1)
+        try:
+            return self.app.llm_registry.build_adapter(
+                provider_id=provider_id, overrides={"model": model_id})
+        except Exception:
+            logger.warning("[SubAgent] 模型 %s 构建失败，回退全局 adapter", model)
+            return self.app.adapter
+
     async def run_task(
         self,
         task_description: str,
@@ -86,6 +106,7 @@ class SubAgentRunner:
         allowed_dirs: Optional[List[str]] = None,
         record=None,
         initial_messages: Optional[List[Any]] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -132,7 +153,7 @@ class SubAgentRunner:
 
         loop = AgentLoop(
             kernel=sub_kernel,
-            adapter=self.app.adapter,
+            adapter=self._resolve_adapter(model),  # 模型路由：per-agent 覆盖
             registry=registry,
             session_store=None,  # 子 Agent 不落盘
             max_steps=max_steps,
@@ -258,6 +279,9 @@ class SubAgentRunner:
             "role": role,
             "subagentId": sub_id,
             "nickname": nickname or sub_id,
+            "mode": getattr(record, "mode", "orchestrate") if record is not None else "orchestrate",
+            # review gate 轻量版：改动文件清单随通知送达（看板「待审查」徽标数据源）
+            "changed_files": list(record.changed_files) if record is not None else [],
             "callId": call_id,
             "tokens_used": stats["input_tokens"] + stats["output_tokens"],
             "turns": stats["turns"],

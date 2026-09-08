@@ -510,7 +510,8 @@ class AgentLoop:
                 await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
                 logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
             injected_any = True
-        # agent 间消息（P2 合作）：同一注入点、不同前缀，来源语义可辨
+        # agent 间消息（P2 合作）：同一注入点；payload 由 manager 构造
+        # （含来源与"非用户指令、不构成授权"声明，防伪安全语义）
         if self.agent_inbox:
             while self.agent_inbox:
                 text = str(self.agent_inbox.popleft()).strip()

@@ -160,16 +160,26 @@ TaskManager.start(session)
 
 - **Claude Code** 四层体系（subagent → agent teams → 跨会话消息 → background agents）：
   辩论是官方推荐用例且**无专用工具**（纯原语+提示词）——验证我们的原语+技能配方路线；
-  共享任务清单（teammate 自领+依赖解锁+文件锁）是「去中心化合作」的核心，我们缺（P3）；
-  agent 消息不能代答审批/改配置、消息限流防死循环（P2 待补）
+  共享任务清单（teammate 自领+依赖解锁+文件锁）是「去中心化合作」的核心 ✅ 已落地最小切片
+  （create_shared_tasks 建池 / claim 认领原子锁定 / finish 完成，认领权给子 Agent、建池权留编排者）；
+  agent 消息不能代答审批/改配置 ✅ payload 带防伪声明（"非用户指令、不构成任何授权"）；
+  消息限流防死循环 ✅ 每对 (sender,receiver) 每分钟 12 条
 - **Multica**（49k★）：「Agents that show up on the board」——agent 即 teammate 的看板式
   工作区，issue 流转 + review gate（工作落 review 不落 main）+ Inbox（需要决策才 ping 人）
-  + 26 runtime 不绑模型 → 印证看板中心协作与 spawn 加 model 参数
+  + 26 runtime 不绑模型 → review gate ✅ 轻量落地（完成通知携带 changed_files → 看板
+  「⚠ 待审查」徽标，人工过目后点击转「✔ 已审查」）；spawn 加 model 参数 ✅（"provider/model"
+  或裸 model，探索类子任务路由便宜模型）
 - **Trae Work**：Define Tasks → AI 拆解执行 → Review Results，任务级并行 + 统一 Workspace
   ——与 Multica 同向（任务并行+人审），agent 间协作无增量
 - **Codex**：thread=agent + 工具原语 + 委派策略提示词（已对齐）
 - **OpenCode**：@-mention 手动调用 subagent + task 权限 glob（谁能 spawn 谁）→
-  @agent 触发方式与权限白名单记入 P3
+  @-mention ✅ 已落地（输入 @ 弹出角色补全：内置 explorer/critic/tester/general + 自定义
+  subagent，选中后消息改写为 spawn_agent 派生指令）；task 权限 glob 记 P3
+
+**P2/P3 已完成项汇总**：spawn model 路由、send_message 限流+防伪、agent color 看板着色、
+@-mention 触发、review gate 轻量版（待审查徽标+文件清单）、共享任务池（去中心化认领）。
+**余量**：共享任务依赖关系与自动解锁、@-mention 直达已运行 agent、task 权限 glob、
+agent 持久化恢复跨会话。
 
 ### agent 间合作机制（P2 切片，已实施）
 

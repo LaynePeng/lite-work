@@ -121,13 +121,16 @@ function reduceAgentBoard(
     return list;
   }
 
-  // completed：卡片流入「已完成」分区
+  // completed：卡片流入「已完成」分区（changed_files 随通知送达 → review gate 数据源）
+  const changedFiles = Array.isArray(d.changed_files)
+    ? d.changed_files.map(String) : undefined;
   list[idx] = {
     ...prev,
     status: "done",
     summary: typeof d.summary === "string" ? d.summary : prev.summary,
     tokens: typeof d.tokens_used === "number" ? d.tokens_used : prev.tokens,
     turn: typeof d.turns === "number" ? d.turns : prev.turn,
+    changedFiles: changedFiles && changedFiles.length > 0 ? changedFiles : prev.changedFiles,
   };
   return list;
 }
@@ -565,6 +568,10 @@ export default function App() {
             status: "done" as const,
             summary: r.summary ?? "",
             tokens: r.tokens ?? 0,
+            mode: typeof r.mode === "string" ? r.mode : "orchestrate",
+            changedFiles: Array.isArray(r.changed_files)
+              ? r.changed_files.map(String) : undefined,
+            startedAt: typeof r.started_at === "number" ? r.started_at : undefined,
           }));
           initial.subAgentRecords = restored;
           // 同一批记录进入 Agents 看板（「已完成」分区，无 TTL：看板是会话级交接记录）

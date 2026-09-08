@@ -283,14 +283,37 @@ export default function Composer({
     return () => { cancelled = true; };
   }, [paletteOpen]);
 
-  // 面板打开时解析当前输入
+  // 面板打开时解析当前输入（/ 命令面板；@ 角色派生补全——OpenCode 式 mention）
   const input = text;
   const startsWithSlash = input.startsWith("/");
-  const panelVisible = paletteOpen && startsWithSlash && !running;
+  const startsWithAt = input.startsWith("@");
+  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt) && !running;
   const tokens = startsWithSlash ? input.slice(1).split(/\s+/) : [];
   const cmdToken = tokens[0] ?? "";
   const restAfterCmd = input.slice(1 + cmdToken.length).replace(/^\s+/, "");
   const pickingSkill = cmdToken.toLowerCase() === "skill" && !restAfterCmd.includes(" ");
+  const atToken = startsWithAt ? (input.slice(1).split(/\s+/)[0] ?? "") : "";
+  const pickingAgent = startsWithAt && !atToken.includes(" ") || (startsWithAt && input === "@");
+
+  // @-mention 候选：内置子 Agent 角色 + 用户自定义 subagent（去重）
+  const MENTION_ROLES: { name: string; description: string }[] = [
+    { name: "explorer", description: "只读调研员：搜索与分析代码" },
+    { name: "critic", description: "批判审查员：找漏洞/风险/未验证假设" },
+    { name: "tester", description: "测试执行员：跑测试并分析结果" },
+    { name: "general", description: "通用专家工人" },
+  ];
+  const mentionCandidates = useMemo(() => {
+    const custom = agents
+      .filter((a) => a.mode === "subagent")
+      .map((a) => ({ name: a.id, description: a.description || "自定义 subagent" }));
+    const merged = [...MENTION_ROLES];
+    for (const c of custom) {
+      if (!merged.some((m) => m.name === c.name)) merged.push(c);
+    }
+    const q = atToken.toLowerCase();
+    return merged.filter((m) => m.name.toLowerCase().startsWith(q));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, atToken]);
 
   const filtered = useMemo(() => {
     const q = cmdToken.toLowerCase();
@@ -303,15 +326,19 @@ export default function Composer({
     return skills.filter((s) => s.name.toLowerCase().includes(q));
   }, [skills, pickingSkill, restAfterCmd]);
 
-  const candidates: { name: string; description: string; hint: string }[] = pickingSkill
-    ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
-    : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
+  const candidates: { name: string; description: string; hint: string }[] = startsWithAt
+    ? mentionCandidates.map((m) => ({ ...m, hint: "agent" }))
+    : pickingSkill
+      ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
+      : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
 
   // 输入变化时重置选中索引
   useEffect(() => { setSelIdx(0); }, [input]);
 
   const applySuggestion = (name: string) => {
-    if (pickingSkill) {
+    if (startsWithAt) {
+      setText(`@${name} `);
+    } else if (pickingSkill) {
       setText(`/skill ${name} `);
     } else {
       setText(`/${name} `);
@@ -336,6 +363,12 @@ export default function Composer({
     if (collabMode !== "auto" && !t.startsWith("/")) {
       const mode = COLLAB_MODES.find((m) => m.id === collabMode);
       if (mode?.skill) outgoing = `/${mode.skill} ${t}`;
+    }
+    // @role 任务 → 显式派生指令（@-mention 触发多 Agent）
+    const atMatch = /^@([A-Za-z0-9_\-]+)\s+(.+)$/s.exec(outgoing);
+    if (atMatch) {
+      const [, role, rest] = atMatch;
+      outgoing = `请使用 spawn_agent 工具派生 role=${role} 的子 Agent 执行以下任务，派生后继续你自己的工作，结果会自动送达：\n${rest}`;
     }
     pushHistory(outgoing);
     setHistoryIdx(-1);
@@ -525,9 +558,9 @@ export default function Composer({
             setText(v);
             // 用户手动编辑 → 退出历史翻阅态（下次 ↑ 从最新开始）
             exitHistoryMode();
-            // 仅首字符输入 "/" 时触发面板（消息中间的斜杠不触发）
-            if (v.startsWith("/") && !paletteOpen) setPaletteOpen(true);
-            if (!v.startsWith("/")) setPaletteOpen(false);
+            // 首字符输入 "/"（命令）或 "@"（角色派生）时触发面板
+            if ((v.startsWith("/") || v.startsWith("@")) && !paletteOpen) setPaletteOpen(true);
+            if (!v.startsWith("/") && !v.startsWith("@")) setPaletteOpen(false);
           }}
           onKeyDown={(e) => {
             if (panelVisible && candidates.length > 0) {
@@ -596,7 +629,7 @@ export default function Composer({
           onDragOver={handleDragOver}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
-          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（输入 / 唤起命令面板）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（/ 命令 · @ 角色派生）`}
           rows={3}
           disabled={disabled}
         />

@@ -185,17 +185,30 @@ function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKil
 
 // ---------------------------------------------------------------- Agents 看板（竖排 kanban）
 
+// agent 配色板（对齐 Claude Code per-agent color）：按 role+nickname 稳定哈希取色
+const AGENT_PALETTE = ["#f97583", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#4f8cff", "#8b5cf6", "#ec4899"];
+function agentColor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return AGENT_PALETTE[h % AGENT_PALETTE.length];
+}
+
 /** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary + 交付标记。 */
 function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
   const running = agent.status === "running";
   const elapsed = agent.startedAt ? Math.floor((Date.now() - agent.startedAt) / 1000) : null;
   const current = [...agent.steps].reverse().find((s) => s.status === "running");
   const doneSteps = agent.steps.filter((s) => s.status !== "running").length;
+  const color = agentColor(`${agent.role}/${agent.subagentId || agent.task}`);
   return (
-    <div className={`agent-card ${running ? "running" : "done"}`}>
+    <div
+      className={`agent-card ${running ? "running" : "done"}`}
+      style={{ borderLeftColor: running ? color : undefined }}
+    >
       <div className="agent-card-head">
-        <span className="agent-role">{agent.role || "general"}</span>
+        <span className="agent-role" style={{ color }}>{agent.role || "general"}</span>
         {running
           ? <span className="agent-meta">{elapsed != null ? `${elapsed}s` : ""}{agent.turn ? ` · turn ${agent.turn}` : ""}</span>
           : <span className="agent-meta">
@@ -216,12 +229,28 @@ function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: 
           )}
         </div>
       ) : (
-        <div
-          className={`agent-summary ${expanded ? "expanded" : ""}`}
-          onClick={() => setExpanded((v) => !v)}
-          title="点击展开/收起总结"
-        >
-          {agent.summary || "（无总结）"}
+        <div className="agent-result">
+          {agent.changedFiles && agent.changedFiles.length > 0 && (
+            <div
+              className={`agent-review-badge ${reviewed ? "done" : "pending"}`}
+              onClick={() => setReviewed((v) => !v)}
+              title={reviewed ? "已人工过目（点击恢复待审查）" : "有改动文件待人工过目（点击标记已审查）"}
+            >
+              {reviewed ? "✔ 已审查" : `⚠ 待审查（${agent.changedFiles.length} 文件）`}
+            </div>
+          )}
+          <div
+            className={`agent-summary ${expanded ? "expanded" : ""}`}
+            onClick={() => setExpanded((v) => !v)}
+            title="点击展开/收起总结"
+          >
+            {agent.summary || "（无总结）"}
+          </div>
+          {expanded && agent.changedFiles && agent.changedFiles.length > 0 && (
+            <div className="agent-files">
+              {agent.changedFiles.map((f) => <span className="agent-file" key={f} title={f}>{f}</span>)}
+            </div>
+          )}
         </div>
       )}
     </div>
