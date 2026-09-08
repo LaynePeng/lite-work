@@ -26,6 +26,9 @@ ROLE_PROMPTS = {
                 "聚焦任务，给出简洁结论与关键文件/行号证据。",
     "tester": "你是一名测试执行员。负责运行测试并分析结果，可执行命令但禁止修改生产代码。",
     "refactor": "你是一名重构工程师。拥有完整工具集，负责完成指定的重构任务并验证。",
+    "critic": "你是一名批判性审查员（Critic）。对给定的方案/代码/结论进行严格审查："
+              "找出漏洞、边界情况、风险与未验证的假设；指出具体位置并给出改进建议。"
+              "只读不写。输出按「问题清单（按严重度排序）→ 改进建议」组织。",
     "general": "你是一名专注的专家工人，聚焦你的任务并返回简洁总结。",
 }
 
@@ -36,9 +39,23 @@ ROLE_TOOLS: Dict[str, List[str]] = {
     "tester": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
                "read_focused_symbol", "execute_command", "git_status", "git_diff", "git_log",
                "git_branch"],
+    # 批判者：只读 + 代码审查（互批/红蓝对抗模式的角色基础）
+    "critic": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
+               "read_focused_symbol", "review_code", "git_status", "git_diff",
+               "webfetch", "webfetch_batch"],
     "refactor": None,  # 全部工具
     "general": None,
 }
+
+# 子 Agent 禁用的工具：禁止嵌套派生（P1；P2 放开到限深）+ 交互工具（通道未转发）
+SUB_AGENT_EXCLUDE = ["spawn_sub_agent", "spawn_agent", "list_agents",
+                     "close_agent", "wait_agents", "ask_user"]
+
+# 声明 allowed_dirs 的写域 agent：读全开 + 三个写文件工具（写受 IsolationPlugin 约束；
+# shell 命令无法静态判定写目标，P1 不授予，由父 Agent 执行）
+WRITE_SCOPE_TOOLS = ROLE_TOOLS["explorer"] + [
+    "write_file", "apply_search_replace", "apply_unified_diff",
+]
 
 
 class SubAgentRunner:
@@ -62,6 +79,10 @@ class SubAgentRunner:
         system_prompt: Optional[str] = None,
         max_steps: int = 12,
         parent_events=None,
+        agent_id: Optional[str] = None,
+        nickname: Optional[str] = None,
+        allowed_dirs: Optional[List[str]] = None,
+        record=None,
     ) -> Dict[str, Any]:
         if role == "explore":
             role = "explorer"
@@ -75,14 +96,20 @@ class SubAgentRunner:
             permissions = None
             base_prompt = system_prompt or ROLE_PROMPTS.get(role, ROLE_PROMPTS["general"])
 
+        # 目录硬隔离模式：写域工具集（写操作由 IsolationPlugin 白名单约束）
+        if allowed_dirs:
+            allowed = WRITE_SCOPE_TOOLS
+
         registry = self.app.build_registry(
             allowed=allowed,
-            # 子 Agent 不再嵌套派生（防止失控）；ask_user 交互通道未转发，暂不开放
-            exclude=["spawn_sub_agent", "ask_user"],
+            exclude=SUB_AGENT_EXCLUDE,
             permissions=permissions,
         )
-        sub_id = f"sub_{uuid.uuid4().hex[:8]}"
+        sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
         sub_kernel = self.app.create_kernel(sub_id, registry=registry)
+        if allowed_dirs and record is not None:
+            from .agent_manager import IsolationPlugin
+            sub_kernel.use(IsolationPlugin(self.app.workspace, allowed_dirs, record))
         tools: List[ToolDefinition] = registry.get_tools()
 
         system = (
@@ -90,6 +117,11 @@ class SubAgentRunner:
             f"工作目录: {self.app.workspace}\n"
             f"{SystemPromptBuilder._git_info(self.app.workspace)}"
         )
+        if allowed_dirs:
+            system += (
+                f"\n[写入范围] 你只能修改以下目录内的文件：{', '.join(allowed_dirs)}。"
+                "范围外的改动需求请写入最终报告，由主 Agent 决定。"
+            )
 
         loop = AgentLoop(
             kernel=sub_kernel,
@@ -194,6 +226,7 @@ class SubAgentRunner:
                 "task": task_description,
                 "role": role,
                 "subagentId": sub_id,
+                "nickname": nickname or sub_id,
                 "callId": call_id,
             })
 
@@ -213,6 +246,7 @@ class SubAgentRunner:
             "task": task_description,
             "role": role,
             "subagentId": sub_id,
+            "nickname": nickname or sub_id,
             "callId": call_id,
             "tokens_used": stats["input_tokens"] + stats["output_tokens"],
             "turns": stats["turns"],

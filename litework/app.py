@@ -21,6 +21,7 @@ from .security.guard import SecurityGuard
 from .security.plugin import SecurityPlugin
 from .security.question import QuestionGate
 from .tools.ask import QuestionPlugin
+from .tools.agent_tools import MultiAgentPlugin
 from .tools.plugin import (
     ASTPlugin,
     CodebasePlugin,
@@ -53,6 +54,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "approval_timeout": 600,
     "context_full_turns": 2,
     "mcp_servers": {},
+    # 多智能体 P1 限额（docs/multi-agent-design.md §3）
+    "max_parallel_agents": 4,   # 并发活 agent 上限
+    "agent_total_limit": 16,    # 单会话累计派生上限
     # 技能权限（对齐 OpenCode permission.skill）：glob 模式 → allow/deny/ask，
     # 插入序首个命中生效，默认 allow；deny 对 Agent 完全隐藏，ask 使用前需审批
     "skill_permissions": {},
@@ -163,6 +167,18 @@ class AgentApp:
         # 子 Agent 运行器（延迟绑定）
         from .orchestration.sub_agent import SubAgentRunner
         self.sub_agent_runner = SubAgentRunner(self)
+
+        # 多智能体：会话级 AgentManager 注册表（懒创建，spawn 时首次建立）
+        from .orchestration.agent_manager import SessionAgentManager
+        self.agent_managers: Dict[str, SessionAgentManager] = {}
+
+    def agent_manager(self, session_id: str, create: bool = True) -> Optional["SessionAgentManager"]:
+        """取（或建）会话级多 Agent 管理器。create=False 时仅查询（AgentLoop 注入用）。"""
+        m = self.agent_managers.get(session_id)
+        if m is None and create:
+            from .orchestration.agent_manager import SessionAgentManager
+            m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
+        return m
 
     def _apply_env_api_key(self, cli_key: Optional[str] = None) -> None:
         """CLI 传入的 --api-key 回填到所有未配置的供应商。"""
@@ -618,6 +634,7 @@ class AgentApp:
             OfficePlugin(ws),
             OcrPlugin(ws),
             SubAgentPlugin(self),
+            MultiAgentPlugin(self),
             SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
@@ -703,6 +720,13 @@ class AgentApp:
                 registry.set_handler(
                     "spawn_sub_agent", make_sub_agent_handler(self, kernel.events)
                 )
+            # 多 Agent 工具（P1）：handler 绑定本 kernel.events（progress 转发到当前任务流）
+            if registry.has("spawn_agent"):
+                from .tools.agent_tools import make_agent_tool_handlers
+
+                for tool_name, handler in make_agent_tool_handlers(self, kernel.events).items():
+                    if registry.has(tool_name):
+                        registry.set_handler(tool_name, handler)
             if registry.has("ask_user"):
                 from .tools.ask import make_ask_user_handler
 
@@ -1141,6 +1165,8 @@ class AgentApp:
         )
         loop.workspace = self.workspace
         loop.truncation_dir = os.path.join(self.config_dir, "truncations")
+        # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
+        loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)
         return loop
 
     async def close(self) -> None:

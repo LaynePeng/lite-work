@@ -121,12 +121,29 @@ TaskManager.start(session)
   - 超时路径、限额报错
 - 回归：现有测试套件全绿
 
-## 9. 分期
+## 9. 协作模式层（Patterns on Primitives）
+
+**核心认知**：编排-工人 / 流水线 / 头脑风暴 / 辩论互批不是不同的底层机制，而是同一组原语（spawn / 消息 / 等待 / 收集）之上的**提示词编排配方**（Codex 同此思路：只提供工具原语，模式由模型编排）。
+
+| 模式 | 结构 | 落地状态 |
+|---|---|---|
+| **编排-工人** | 主 Agent 拆解 → 并行派发 → 整合 | ✅ P1：spawn_agent + wait_agents |
+| **流水线** | 规划→实现→审查 顺序交接 | ✅ P1：顺序 spawn，前者产出写进后者 task 描述 |
+| **头脑风暴** | N 个 agent 不同视角独立提案 → 综合 | ✅ P1：并行 spawn（不同 role/stance 提示）+ 综合 |
+| **互批/批判** | critic 审查方案或代码，输出问题清单 | ✅ P1：内置 `critic` 角色（只读 + review_code） |
+| **辩论多轮** | 生成者 vs 批判者交替对抗 N 轮 | ⏳ P2：需要 agent 间消息（send_message/followup） |
+| **红蓝对抗** | 产出→审查→修复循环 | ⏳ P2：消息 + 状态查询 |
+
+P1 的工具描述（`DELEGATION_GUIDE`）已内嵌模式指引：关键路径 vs sidecar、write set 不相交、
+头脑风暴多视角 spawn、critic 互批。P2 落地 send_message 后，辩论/红蓝对抗升级为一等模式，
+届时可考虑内置复合工具（如 `debate(proposal, rounds)`）封装多轮对抗循环。
+
+## 10. 分期
 
 | 阶段 | 内容 |
 |---|---|
-| **P1**（本文档） | 异步 spawn + 并行 + 4 工具 + 目录硬隔离 + 完成通知 + Agents tab |
-| **P2** | send_message / followup_task、嵌套 spawn（depth=2）、fork_context（继承父最近 N 轮）、子 Agent 落盘恢复 |
+| **P1**（本文档，已实施） | 异步 spawn + 并行 + 4 工具 + 目录硬隔离 + 完成通知 + Agents tab + critic 角色 |
+| **P2** | send_message / followup_task、嵌套 spawn（depth=2）、fork_context（继承父最近 N 轮）、子 Agent 落盘恢复、辩论/红蓝对抗一等模式 |
 | **P3** | MultiAgentMode 三档（默认 ExplicitRequestOnly）、角色 description 进 spawn 提示、nickname 池、权限默认收敛 |
 
 ## 附：Codex 参考要点速查

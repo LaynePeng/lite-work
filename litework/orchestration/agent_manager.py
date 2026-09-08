@@ -1,0 +1,305 @@
+"""多智能体会话管理器（Phase 1：异步 spawn + 并行 + 目录硬隔离 + 完成通知）。
+
+设计对齐 docs/multi-agent-design.md：
+- SessionAgentManager 挂 AgentApp（按 session_id 一会话一个），持有 AgentRecord 表
+- 子 Agent 异步执行（asyncio.Task），spawn 立即返回
+- 完成即通知：终态写入通知队列，父 AgentLoop 在 turn 边界 drain 注入上下文；
+  父已结束时通知留在队列，下个任务 run_task 开头注入（随消息链落盘持久化）
+- 目录级硬隔离：IsolationPlugin 挂子 kernel before_tool，写类工具做白名单前缀校验
+- 限额：并发活 agent（max_parallel_agents）+ 单会话总派生量（agent_total_limit）
+
+协作模式（编排-工人 / 流水线 / 头脑风暴）是这组原语之上的提示词配方；
+辩论/红蓝对抗需要 agent 间消息传递（P2）。
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from ..core.types import Plugin
+
+logger = logging.getLogger("litework.agents")
+
+# 状态机：pending → running → (completed | errored | timeout) ；close 可从任意态进入 closed
+FINAL_STATUSES = frozenset({"completed", "errored", "timeout", "closed"})
+
+# 受目录隔离约束的写类工具（参数名统一 filePath）
+ISOLATED_WRITE_TOOLS = frozenset({
+    "write_file", "apply_search_replace", "apply_unified_diff",
+})
+
+
+@dataclass
+class AgentRecord:
+    """一个已派生 agent 的运行时记录。"""
+
+    agent_id: str
+    nickname: str
+    role: str
+    task: str
+    allowed_dirs: Optional[List[str]] = None
+    status: str = "pending"
+    summary: str = ""
+    changed_files: List[str] = field(default_factory=list)
+    tokens: int = 0
+    turns: int = 0
+    started_at: float = 0.0
+    finished_at: Optional[float] = None
+    error: str = ""
+    # 后台执行任务（asyncio.Task；声明 Any 避免循环导入）
+    runner: Any = None
+
+
+class IsolationPlugin(Plugin):
+    """目录级硬隔离：声明了 allowed_dirs 的 agent，写类工具只能落在白名单目录内。
+
+    同时记录写操作路径到 record.changed_files（交付清单，可归因到单个 agent——
+    并行 agent 共享 workspace，git diff 无法归因）。
+    """
+
+    name = "isolation-plugin"
+
+    def __init__(self, workspace: Optional[str], allowed_dirs: List[str],
+                 record: AgentRecord) -> None:
+        self.workspace = os.path.abspath(workspace) if workspace else ""
+        # 规范化为绝对路径前缀集合
+        self.allowed: List[str] = []
+        for d in allowed_dirs or []:
+            p = os.path.abspath(os.path.join(self.workspace, d)) if workspace else os.path.abspath(d)
+            if p not in self.allowed:
+                self.allowed.append(p)
+        self.record = record
+
+    def _resolve(self, raw: str) -> str:
+        """目标路径归一：相对 workspace 展开 + realpath 消解符号链接。"""
+        p = os.path.expanduser(str(raw or ""))
+        if not os.path.isabs(p) and self.workspace:
+            p = os.path.join(self.workspace, p)
+        return os.path.realpath(os.path.abspath(p))
+
+    def _allowed(self, target: str) -> bool:
+        for prefix in self.allowed:
+            if target == prefix or target.startswith(prefix + os.sep):
+                return True
+        return False
+
+    def install(self, kernel) -> None:
+        @kernel.before_tool.use
+        async def _isolate(ctx, data, next):
+            tool = data.get("toolName", "")
+            if tool not in ISOLATED_WRITE_TOOLS:
+                return await next(data)
+            args = data.get("args") or {}
+            target = self._resolve(args.get("filePath", ""))
+            if not self._allowed(target):
+                data["cancel"] = True
+                data["reason"] = (
+                    f"[Isolation]: 写入被拒绝——目标 {args.get('filePath')} 不在你被授权的目录内。"
+                    f"允许写入的目录：{', '.join(self.allowed)}。"
+                    "请在授权范围内工作；需要改动其他目录时在最终报告中说明，由主 Agent 决定。"
+                )
+                return await next(data)
+            # 记录交付文件（相对 workspace 展示）
+            rel = os.path.relpath(target, self.workspace) if self.workspace else target
+            if rel not in self.record.changed_files:
+                self.record.changed_files.append(rel)
+            return await next(data)
+
+
+def _safe_nickname(name: str) -> Optional[str]:
+    """agent 名安全化：字母/数字/_/-，≤32 字符。"""
+    name = (name or "").strip()
+    if not name:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,32}", name):
+        return None
+    return name
+
+
+class SessionAgentManager:
+    """会话级多 Agent 管理：spawn / 限额 / 通知队列 / 查询。"""
+
+    def __init__(self, app, session_id: str) -> None:
+        self.app = app
+        self.session_id = session_id
+        self.agents: Dict[str, AgentRecord] = {}
+        self.notifications: List[Dict[str, Any]] = []
+        self._spawned_total = 0
+        self._nickname_counter: Dict[str, int] = {}
+
+    # ------------------------------------------------------------ 限额
+
+    def _check_limits(self) -> Optional[str]:
+        running = sum(1 for r in self.agents.values() if r.status == "running")
+        max_parallel = int(self.app.config.get("max_parallel_agents", 4))
+        if running >= max_parallel:
+            return f"并发 agent 数已达上限（{max_parallel}）。请先 wait_agents 等待完成或 close_agent 释放。"
+        total_limit = int(self.app.config.get("agent_total_limit", 16))
+        if self._spawned_total >= total_limit:
+            return f"本会话累计派生 agent 数已达上限（{total_limit}）。"
+        return None
+
+    # ------------------------------------------------------------ spawn
+
+    async def spawn(self, task: str, role: str = "general", agent_name: Optional[str] = None,
+                    allowed_dirs: Optional[List[str]] = None, max_steps: int = 12,
+                    parent_events=None) -> Dict[str, Any]:
+        """异步派生：校验限额 → 建记录 → 后台执行，立即返回。"""
+        err = self._check_limits()
+        if err:
+            return {"ok": False, "error": err}
+
+        agent_id = f"sa_{uuid.uuid4().hex[:8]}"
+        nickname = _safe_nickname(agent_name or "")
+        if nickname is None:
+            base = (role or "agent").replace("-", "_")
+            self._nickname_counter[base] = self._nickname_counter.get(base, 0) + 1
+            nickname = f"{base}-{self._nickname_counter[base]}"
+
+        record = AgentRecord(
+            agent_id=agent_id, nickname=nickname, role=role or "general",
+            task=task, allowed_dirs=list(allowed_dirs) if allowed_dirs else None,
+            started_at=time.time(),
+        )
+        self.agents[agent_id] = record
+        self._spawned_total += 1
+        record.status = "running"
+
+        runner = self.app.sub_agent_runner
+
+        async def _run() -> None:
+            try:
+                result = await runner.run_task(
+                    task, role=role, max_steps=max_steps,
+                    parent_events=parent_events,
+                    agent_id=agent_id, nickname=nickname,
+                    allowed_dirs=record.allowed_dirs, record=record,
+                )
+                record.summary = result.get("summary", "")
+                record.tokens = int(result.get("total_tokens_used", 0))
+                record.turns = int(result.get("turns", 0))
+                record.status = "completed" if result.get("completed") else "errored"
+            except asyncio.CancelledError:
+                record.status = "closed"
+                record.summary = record.summary or "（被 close_agent 终止）"
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("[AgentManager] 子 agent 执行异常: %s", agent_id)
+                record.status = "errored"
+                record.error = str(exc)[:300]
+                record.summary = record.summary or f"[执行异常]: {exc}"
+            finally:
+                record.finished_at = time.time()
+                self._enqueue_notification(record)
+
+        record.runner = asyncio.create_task(_run())
+
+        await self._emit(parent_events, "agent:spawned", {
+            "agentId": agent_id, "nickname": nickname, "role": role,
+            "task": task, "allowedDirs": record.allowed_dirs,
+        })
+        return {"ok": True, "agent_id": agent_id, "nickname": nickname}
+
+    # ------------------------------------------------------------ 通知
+
+    def _enqueue_notification(self, record: AgentRecord) -> None:
+        """终态 → 通知队列（完成即通知模型的数据源）。"""
+        if record.status == "closed":
+            return  # 主动关闭不算交付
+        files = f"（改动文件：{', '.join(record.changed_files[:10])}）" if record.changed_files else ""
+        self.notifications.append({
+            "agent_id": record.agent_id,
+            "nickname": record.nickname,
+            "role": record.role,
+            "status": record.status,
+            "summary": record.summary,
+            "changed_files": list(record.changed_files),
+            "tokens": record.tokens,
+            "text": (
+                f"[agent:{record.status}] {record.nickname}（{record.role}）"
+                f"已完成任务「{record.task[:80]}」：{record.summary}{files}"
+            ),
+        })
+
+    def drain_notifications(self) -> List[str]:
+        """取走全部待投递通知文本（父 AgentLoop 注入用），取后清空。"""
+        out = [n["text"] for n in self.notifications]
+        self.notifications.clear()
+        return out
+
+    # ------------------------------------------------------------ 查询 / 生命周期
+
+    def list_agents(self, include_closed: bool = False) -> List[Dict[str, Any]]:
+        out = []
+        for r in self.agents.values():
+            if r.status == "closed" and not include_closed:
+                continue
+            out.append({
+                "agent_id": r.agent_id, "nickname": r.nickname, "role": r.role,
+                "status": r.status, "task": r.task,
+                "tokens": r.tokens, "turns": r.turns,
+                "changed_files": r.changed_files,
+                "summary": (r.summary[:200] + "…") if len(r.summary) > 200 else r.summary,
+            })
+        return out
+
+    def get(self, agent_id: str) -> Optional[AgentRecord]:
+        return self.agents.get(agent_id)
+
+    async def close(self, agent_id: str) -> Dict[str, Any]:
+        record = self.agents.get(agent_id)
+        if record is None:
+            return {"ok": False, "error": f"未知 agent: {agent_id}"}
+        previous = record.status
+        runner = getattr(record, "runner", None)
+        if runner is not None and not runner.done():
+            runner.cancel()
+            try:
+                await runner
+            except (asyncio.CancelledError, Exception):
+                pass
+        # 兜底：task 尚未首次调度就被 cancel 时协程体不会执行
+        # （except/finally 均不触发），这里强制置终态
+        record.status = "closed"
+        record.finished_at = record.finished_at or time.time()
+        return {"ok": True, "agent_id": agent_id, "previous_status": previous}
+
+    async def wait(self, agent_ids: List[str], timeout_ms: int = 120000) -> Dict[str, Any]:
+        """阻塞门：等指定 agent 终态，返回状态与总结。"""
+        records = [self.agents.get(a) for a in agent_ids]
+        missing = [a for a, r in zip(agent_ids, records) if r is None]
+        if missing:
+            return {"ok": False, "error": f"未知 agent: {', '.join(missing)}"}
+        runners = [getattr(r, "runner", None) for r in records if r]
+        pending = [t for t in runners if t is not None and not t.done()]
+        timed_out = False
+        if pending:
+            done, still = await asyncio.wait(
+                pending, timeout=max(0.0, timeout_ms / 1000.0)
+            )
+            if still:
+                timed_out = True
+        statuses = {}
+        for r in records:
+            if r is None:
+                continue
+            statuses[r.agent_id] = {
+                "nickname": r.nickname, "role": r.role, "status": r.status,
+                "summary": r.summary, "tokens": r.tokens,
+                "changed_files": r.changed_files,
+            }
+        return {"ok": True, "statuses": statuses, "timed_out": timed_out}
+
+    async def _emit(self, bus, event: str, payload: Dict[str, Any]) -> None:
+        if bus is None:
+            return
+        try:
+            await bus.emit(event, payload)
+        except Exception:
+            logger.debug("[AgentManager] 事件发送失败: %s", event, exc_info=True)

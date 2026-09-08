@@ -163,6 +163,10 @@ class AgentLoop:
         messages.append(user_message)
         await self.kernel.events.emit("message:added", {"message": user_message.to_dict()})
 
+        # 2.5 上一任务遗留的子 Agent 完成通知先行注入（父已结束场景，
+        #     通知滞留 manager 队列，本任务首轮 LLM 调用前投递）
+        await self._inject_agent_notifications(messages)
+
         # 首条消息立即落盘，避免 session 创建后、首轮 LLM 完成前刷新列表时消失。
         if store_snapshot:
             self._save_session()
@@ -182,6 +186,9 @@ class AgentLoop:
 
                 # A-. 注入任务运行期间用户补充的指令（排队输入在下一回合进入对话）
                 await self._inject_queued(messages)
+
+                # A-.2 子 Agent 完成通知（完成即通知：turn 边界投递，本轮 LLM 即可见）
+                await self._inject_agent_notifications(messages)
 
                 # A. 上下文裁剪（保护 system 与 assistant/tool 原子对）
                 #    有效上限 = max(预算下限, 90% × 模型窗口)，到阈值先尝试 LLM 摘要压缩
@@ -501,6 +508,27 @@ class AgentLoop:
             logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
         return True
 
+    async def _inject_agent_notifications(self, messages: List[Message]) -> bool:
+        """注入已完成的子 Agent 通知（完成即通知模型，多智能体 P1）。
+
+        数据源：loop.agent_manager_factory（按 session_id 查询 SessionAgentManager，
+        create_loop 挂载）。父运行中每轮 turn 边界投递；跨任务的遗留通知
+        在 run_task 开头注入；任务结束时 _finish 注入后随落盘持久化。
+        """
+        factory = getattr(self, "agent_manager_factory", None)
+        if factory is None:
+            return False
+        manager = factory(self.kernel.session_id)
+        if manager is None:
+            return False
+        notes = manager.drain_notifications()
+        for text in notes:
+            injected = Message(role="user", content=text)
+            messages.append(injected)
+            await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
+            logger.info("[AgentLoop] 已注入子 Agent 完成通知（%d 字符）", len(text))
+        return bool(notes)
+
     # ------------------------------------------------------------------ 上下文压缩
 
     async def _try_compact(
@@ -569,6 +597,12 @@ class AgentLoop:
 
     async def _finish(self, content: str, messages: List[Message], stats: Dict[str, Any],
                       store_snapshot: bool) -> Tuple[str, Dict[str, Any]]:
+        # 任务收尾前投递剩余子 Agent 通知：随消息链落盘持久化，
+        # 下个任务（或本会话重新打开）自然在上下文中看到交付结果
+        try:
+            await self._inject_agent_notifications(messages)
+        except Exception:
+            logger.debug("[AgentLoop] 收尾通知注入失败", exc_info=True)
         if store_snapshot:
             self._save_session()
         payload = self._stats_payload(stats)

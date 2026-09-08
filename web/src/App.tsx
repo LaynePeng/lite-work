@@ -904,8 +904,8 @@ export default function App() {
             status: "running",
           };
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
-          // spawn_sub_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
-          if (ev.data.toolName === "spawn_sub_agent") {
+          // spawn_sub_agent / spawn_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
+          if (ev.data.toolName === "spawn_sub_agent" || ev.data.toolName === "spawn_agent") {
             const items = [...cur.items, { type: "tool" as const, id: card.id, card }];
             streamingRefs.current.set(sid, { ...cur, items });
           } else {
@@ -1095,7 +1095,7 @@ export default function App() {
             const items = cur.items.map((item) => {
               if (matched) return item;
               const card = item.type === "tool" ? item.card : null;
-              if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+              if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
               if (ev.data.callId && card.callId && card.callId !== ev.data.callId) return item;
               matched = true;
               return {
@@ -1129,7 +1129,7 @@ export default function App() {
           const evData = ev.data;
           const items = cur.items.map((item) => {
             const card = item.type === "tool" ? item.card : null;
-            if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+            if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
             const sa = card.subagent;
             if (!sa) return item;
             if (evData.callId && card.callId && evData.callId !== card.callId) return item;
@@ -1176,7 +1176,7 @@ export default function App() {
             let finalized: SubAgentProgress | null = null;
             const items = cur.items.map((item) => {
               const card = item.type === "tool" ? item.card : null;
-              if (!card || card.name !== "spawn_sub_agent" || card.status !== "running") return item;
+              if (!card || (card.name !== "spawn_sub_agent" && card.name !== "spawn_agent") || card.status !== "running") return item;
               if (data.callId && card.callId && data.callId !== card.callId) return item;
               if (!finalized) {
                 const sa = card.subagent;
