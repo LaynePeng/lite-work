@@ -58,9 +58,9 @@ export default function Composer({
   }, []);
 
   // 协作模式选择（多智能体）：自动=模型按任务特征路由；其余为技能配方显式触发。
-  // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落到自动。
+  // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落自动。
   const COLLAB_MODES: { id: string; skill: string; label: string; title: string }[] = [
-    { id: "auto", skill: "", label: "协作: 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论）" },
+    { id: "auto", skill: "", label: "🤝 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论）" },
     { id: "brainstorm", skill: "brainstorm", label: "💡 头脑风暴", title: "多视角并行提案 → 交叉批判 → 综合" },
     { id: "agent-debate", skill: "agent-debate", label: "⚔ 辩论评审", title: "提案者 vs 批判者多轮对抗 → 裁决收敛" },
     { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
@@ -413,15 +413,16 @@ export default function Composer({
           <span className="agent-bar-hint" title="按 Tab 在 Agent 之间切换">
             Tab
           </span>
-          {/* 协作模式：图标按钮 + popover（不占常驻宽度；选中高亮，发送后回落自动） */}
+          {/* 协作模式：按钮显示当前模式 + popover 选择（自动=模型路由；选中显式模式，
+              发送后回落自动） */}
           <div className="collab-picker" ref={collabRef}>
             <button
               className={`collab-btn ${collabMode !== "auto" ? "active" : ""}`}
               onClick={() => setCollabOpen((v) => !v)}
               disabled={disabled || running}
-              title="多 Agent 协作模式：自动=模型按任务特征路由；点击选择显式模式"
+              title="多 Agent 协作模式：点击选择；自动=模型按任务特征路由"
             >
-              🎭
+              {COLLAB_MODES.find((m) => m.id === collabMode)?.label ?? "🤝 自动"}
             </button>
             {collabOpen && (
               <div className="collab-popover">

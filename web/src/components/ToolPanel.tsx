@@ -540,8 +540,10 @@ function DebateLanes({ agents, doneList, doneHidden, onToggleShowAll, reviewedMa
 type PanelTabId = "context" | "todos" | "agents" | "mcp" | "background" | "tools";
 
 // tab 条横向滑动：面板拖窄后 tab 队列整体滑动（不是拖动单个 tab）。
-// pointer 按住横向拖动 → scrollLeft 跟随位移；位移 < 5px 视为点击不拦截，
-// 同时支持触摸板/滚轮横向滚动与键盘左右键。
+// 按住横向拖动 → scrollLeft 跟随位移；位移 < 5px 视为点击不拦截。
+// 实现注意：不能用 setPointerCapture——capture 后浏览器把 click 派发到
+// 捕获元素（容器）而非实际按下的 tab 按钮，导致切 tab 失效；因此拖动
+// 跟随用 document 级监听（任意位置生效），click 保持原生目标。
 function useTabStripDrag() {
   const ref = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ startX: number; startScroll: number; moved: boolean; pointerId: number | null }>({
@@ -553,32 +555,32 @@ function useTabStripDrag() {
     const el = ref.current;
     if (e.button !== 0 || !el || el.scrollWidth <= el.clientWidth + 1) return;
     drag.current = { startX: e.clientX, startScroll: el.scrollLeft, moved: false, pointerId: e.pointerId };
-    el.setPointerCapture(e.pointerId);
+
+    const onMove = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (d.pointerId !== ev.pointerId) return;
+      const dx = ev.clientX - d.startX;
+      if (!d.moved && Math.abs(dx) < 5) return;
+      if (!d.moved) {
+        d.moved = true;
+        el.classList.add("dragging");
+      }
+      el.scrollLeft = d.startScroll - dx;
+    };
+    const onEnd = (ev: PointerEvent) => {
+      if (drag.current.pointerId !== ev.pointerId) return;
+      drag.current.pointerId = null;
+      el.classList.remove("dragging");
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onEnd);
+      document.removeEventListener("pointercancel", onEnd);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onEnd);
+    document.addEventListener("pointercancel", onEnd);
   };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const el = ref.current;
-    const d = drag.current;
-    if (!el || d.pointerId !== e.pointerId) return;
-    const dx = e.clientX - d.startX;
-    if (!d.moved && Math.abs(dx) < 5) return;
-    if (!d.moved) {
-      d.moved = true;
-      el.classList.add("dragging");
-    }
-    el.scrollLeft = d.startScroll - dx;
-  };
-
-  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    const el = ref.current;
-    const d = drag.current;
-    if (!el || d.pointerId !== e.pointerId) return;
-    d.pointerId = null;
-    el.classList.remove("dragging");
-  };
-
-  // 拖动结束后浏览器仍会向按下元素派发 click（pointer capture 不抑制 click），
-  // tab 的 onClick 用此判定吞掉：拖完松手 ≠ 点击
+  // 拖动后松手的 click 不应触发切 tab（拖完松手 ≠ 点击）
   const wasDragged = () => {
     const d = drag.current;
     if (d.moved) {
@@ -588,7 +590,7 @@ function useTabStripDrag() {
     return false;
   };
 
-  return { ref, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, wasDragged };
+  return { ref, onPointerDown, wasDragged };
 }
 
 export default function ToolPanel({
@@ -639,9 +641,6 @@ export default function ToolPanel({
           className="panel-tabs"
           ref={strip.ref}
           onPointerDown={strip.onPointerDown}
-          onPointerMove={strip.onPointerMove}
-          onPointerUp={strip.onPointerUp}
-          onPointerCancel={strip.onPointerCancel}
         >
           {TABS.map((t) => (
             <button

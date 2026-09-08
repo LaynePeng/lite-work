@@ -421,6 +421,30 @@ export default function SettingsModal({
 
   // 自定义 Header 的编辑文本（每行 "Key: Value" 或 "Key=Value"），blur 时解析提交
   const [headersText, setHeadersText] = useState<Record<string, string>>({});
+  // 模型列表的编辑文本（每行一个）：编辑期间保留原始文本（允许空行/回车换行），
+  // blur / 保存时才解析为数组——受控数组会吃掉空行导致无法回车
+  const [modelsText, setModelsText] = useState<Record<string, string>>({});
+
+  // 拉取 LLM 配置并重置全部编辑态（初始化与保存成功后共用：
+  // 保存后服务端返回最新配置，用它刷新本地 providers/editing，避免"重开设置才生效"）
+  const refreshLLM = useCallback(() => {
+    Promise.all([api.llmProviders(), api.llmConfig()]).then(([p, c]) => {
+      setProviders(p);
+      setActiveProvider((cur) => (c.active && p.some((x) => x.id === cur) ? cur : c.active));
+      const edit: Record<string, Partial<LLMProviderSettings>> = {};
+      const texts: Record<string, string> = {};
+      const mtexts: Record<string, string> = {};
+      for (const [pid, s] of Object.entries(c.providers)) {
+        edit[pid] = { ...s };
+        const headers = (s as LLMProviderSettings).custom_headers || {};
+        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
+        mtexts[pid] = ((s as LLMProviderSettings).models || []).join("\n");
+      }
+      setEditing(edit);
+      setHeadersText(texts);
+      setModelsText(mtexts);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     Promise.all([api.llmProviders(), api.llmConfig(), api.mcpStatus()]).then(([p, c, m]) => {
@@ -428,10 +452,17 @@ export default function SettingsModal({
       setActiveProvider(c.active);
       // 初始化编辑状态
       const edit: Record<string, Partial<LLMProviderSettings>> = {};
+      const texts: Record<string, string> = {};
+      const mtexts: Record<string, string> = {};
       for (const [pid, s] of Object.entries(c.providers)) {
         edit[pid] = { ...s };
+        const headers = (s as LLMProviderSettings).custom_headers || {};
+        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
+        mtexts[pid] = (s.models || []).join("\n");
       }
       setEditing(edit);
+      setHeadersText(texts);
+      setModelsText(mtexts);
       // MCP：用运行状态初始化可编辑配置
       setMcpStatus(m.servers || []);
       const cfg: Record<string, MCPServerConfig> = {};
@@ -439,13 +470,6 @@ export default function SettingsModal({
         cfg[s.name] = { command: s.command, args: s.args, enabled: s.enabled };
       }
       setMcpServers(cfg);
-      // 自定义 Header：dict → 每行 "Key: Value" 的可编辑文本
-      const texts: Record<string, string> = {};
-      for (const [pid, s] of Object.entries(c.providers)) {
-        const headers = (s as LLMProviderSettings).custom_headers || {};
-        texts[pid] = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
-      }
-      setHeadersText(texts);
     }).catch(() => {});
   }, []);
 
@@ -547,7 +571,10 @@ export default function SettingsModal({
 
   const providerMeta = providers.find((p) => p.id === activeProvider);
   const currentEdit = editing[activeProvider] || {};
-  const availableModels = (currentEdit.models as string[] | undefined) ?? providerMeta?.models ?? [];
+  // 模型下拉候选：以编辑中的列表文本为准（未 blur 的草稿也即时生效）
+  const availableModels = modelsText[activeProvider] !== undefined
+    ? modelsText[activeProvider].split("\n").map((m) => m.trim()).filter(Boolean)
+    : ((currentEdit.models as string[] | undefined) ?? providerMeta?.models ?? []);
   const isCustom = activeProvider.startsWith("custom_");
 
   // 推理强度中文标签
@@ -574,6 +601,8 @@ export default function SettingsModal({
       has_key: false, model: "",
     }]);
     setEditing((prev) => ({ ...prev, [id]: next }));
+    setHeadersText((prev) => ({ ...prev, [id]: "" }));
+    setModelsText((prev) => ({ ...prev, [id]: "" }));
     setActiveProvider(id);
   };
 
@@ -622,16 +651,24 @@ export default function SettingsModal({
         if (headersText[pid] !== undefined) {
           providersPayload[pid].custom_headers = parseHeaders(headersText[pid]);
         }
+        // 模型列表以编辑文本为准（未 blur 的草稿不丢），空行/空白过滤
+        if (modelsText[pid] !== undefined) {
+          providersPayload[pid].models = modelsText[pid]
+            .split("\n").map((m) => m.trim()).filter(Boolean);
+        }
       }
       await api.updateLLMConfig(activeProvider, providersPayload);
       setTestResult({ ok: true, message: "配置已保存" });
       onSaved();
+      // 用服务端返回的最新配置刷新本地编辑态与供应商列表：
+      // 修复"保存后供应商名不更新、需重开设置"的问题
+      refreshLLM();
     } catch (err) {
       setTestResult({ ok: false, message: (err as Error).message });
     } finally {
       setSaving(false);
     }
-  }, [activeProvider, editing, onSaved]);
+  }, [activeProvider, editing, headersText, modelsText, onSaved, refreshLLM]);
 
   // 一键清理孤儿会话：删除所有关联项目目录已不存在的会话
   const handleCleanup = useCallback(async () => {
@@ -763,13 +800,17 @@ export default function SettingsModal({
 
               {providerMeta && (
                 <div className="settings-section" key={activeProvider}>
-                  <h3>{providerMeta.name} 配置</h3>
+                  <h3>{(isCustom ? (currentEdit.name as string) : providerMeta.name) || providerMeta.name} 配置</h3>
 
                   {isCustom && (
                     <div className="form-group">
                       <label>供应商名称</label>
-                      <input className="form-input" value={(currentEdit.name as string) || providerMeta.name}
-                        onChange={(e) => update(activeProvider, "name", e.target.value)} />
+                      <input
+                        className="form-input"
+                        placeholder="给这个供应商起个名字（如 智谱 / 本地 Ollama）"
+                        value={(currentEdit.name as string) ?? providerMeta.name}
+                        onChange={(e) => update(activeProvider, "name", e.target.value)}
+                      />
                     </div>
                   )}
 
@@ -880,9 +921,16 @@ export default function SettingsModal({
                     <label>该供应商的模型列表（每行一个，可添加多个）</label>
                     <textarea
                       className="form-input"
-                      rows={Math.min(6, Math.max(2, availableModels.length))}
-                      value={availableModels.join("\n")}
-                      onChange={(e) => update(
+                      rows={Math.min(
+                        6,
+                        Math.max(2, (modelsText[activeProvider] ?? "").split("\n").filter(Boolean).length),
+                      )}
+                      placeholder={"deepseek-chat\ndeepseek-reasoner"}
+                      value={modelsText[activeProvider] ?? ""}
+                      onChange={(e) =>
+                        setModelsText((prev) => ({ ...prev, [activeProvider]: e.target.value }))
+                      }
+                      onBlur={(e) => update(
                         activeProvider,
                         "models",
                         e.target.value.split("\n").map((m) => m.trim()).filter(Boolean),
