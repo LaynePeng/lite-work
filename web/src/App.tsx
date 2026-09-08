@@ -46,11 +46,90 @@ const EMPTY_CHAT: ChatSessionState = {
   error: null,
   pendingApprovals: [],
   subAgentRecords: [],
+  agentBoard: [],
   stalled: false,
   todos: [],
   pendingQuestions: [],
   pendingQueue: [],
 };
+
+/** Agents 看板 reducer：subagent 事件 → 看板卡片更新（右面板 Agents tab 数据源）。
+ *
+ * 竖排 kanban 语义：started 追加「运行中」卡片；progress 原位更新（turn/步骤/流式文本）；
+ * completed 卡片流入「已完成」。匹配优先 subagentId，缺失时回退最近一张同角色运行卡
+ * （兼容老后端事件无 id 的情况）。返回 null 表示无变化（引用不变，跳过 setState）。
+ */
+function reduceAgentBoard(
+  board: SubAgentProgress[] | undefined,
+  ev: { type: "started" | "progress" | "completed"; data: Record<string, unknown> },
+): SubAgentProgress[] | null {
+  const list = board ? [...board] : [];
+  const d = ev.data ?? {};
+  const id = typeof d.subagentId === "string" ? d.subagentId : undefined;
+  const role = typeof d.role === "string" ? d.role : undefined;
+
+  if (ev.type === "started") {
+    list.push({
+      subagentId: id ?? `sa_${Date.now().toString(36)}`,
+      role: role ?? "general",
+      task: typeof d.task === "string" ? d.task : "",
+      turn: 0, steps: [], status: "running", startedAt: Date.now(),
+    });
+    return list;
+  }
+
+  let idx = id ? list.findIndex((a) => a.subagentId === id) : -1;
+  if (idx === -1) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].status === "running" && (!role || list[i].role === role)) { idx = i; break; }
+    }
+  }
+  if (idx === -1) return null;
+  const prev = list[idx];
+
+  if (ev.type === "progress") {
+    const kind = d.kind;
+    if (kind === "llm:turn_start") {
+      list[idx] = { ...prev, turn: (typeof d.turn === "number" ? d.turn : prev.turn + 1) };
+    } else if (kind === "llm:stream") {
+      const text = typeof d.text === "string" ? d.text : "";
+      list[idx] = { ...prev, streaming_text: (prev.streaming_text ?? "") + text };
+    } else if (kind === "tool:before_execute") {
+      const step: SubAgentStep = {
+        tool: typeof d.tool === "string" ? d.tool : "?",
+        brief: typeof d.brief === "string" ? d.brief : undefined,
+        status: "running",
+      };
+      list[idx] = { ...prev, steps: [...prev.steps, step].slice(-3) };
+    } else if (kind === "tool:after_execute") {
+      const steps = [...prev.steps];
+      const tool = typeof d.tool === "string" ? d.tool : "";
+      for (let i = steps.length - 1; i >= 0; i -= 1) {
+        if (steps[i].tool === tool && steps[i].status === "running") {
+          const st = d.status;
+          steps[i] = {
+            ...steps[i],
+            status: st === "error" ? "error" : st === "cancelled" ? "cancelled" : "done",
+            durationMs: typeof d.durationMs === "number" ? d.durationMs : undefined,
+          };
+          break;
+        }
+      }
+      list[idx] = { ...prev, steps };
+    }
+    return list;
+  }
+
+  // completed：卡片流入「已完成」分区
+  list[idx] = {
+    ...prev,
+    status: "done",
+    summary: typeof d.summary === "string" ? d.summary : prev.summary,
+    tokens: typeof d.tokens_used === "number" ? d.tokens_used : prev.tokens,
+    turn: typeof d.turns === "number" ? d.turns : prev.turn,
+  };
+  return list;
+}
 
 export default function App() {
   const [tabs, setTabs] = useState<TabItem[]>([]);
@@ -203,6 +282,20 @@ export default function App() {
       subagentTimersRef.current.set(timerKey, t);
     },
     [patchChat]
+  );
+
+  /** Agents 看板事件入口：subagent 事件 → reduceAgentBoard → 会话级看板状态。 */
+  const pushAgentEvent = useCallback(
+    (sid: string, type: "started" | "progress" | "completed", data: Record<string, unknown>) => {
+      setChatStates((cur) => {
+        const chat = cur[sid];
+        if (!chat) return cur;
+        const next = reduceAgentBoard(chat.agentBoard, { type, data });
+        if (!next) return cur;
+        return { ...cur, [sid]: { ...chat, agentBoard: next } };
+      });
+    },
+    []
   );
 
   // ------------------------------------------------------------ 技能注入气泡
@@ -462,7 +555,7 @@ export default function App() {
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
         // 从会话 metadata 恢复子 Agent 归档卡片（跨页面刷新保留）
         if (snap?.metadata?.subagent_records) {
-          initial.subAgentRecords = (snap.metadata.subagent_records as any[]).map((r) => ({
+          const restored = (snap.metadata.subagent_records as any[]).map((r) => ({
             subagentId: r.subagentId ?? "",
             role: r.role ?? "general",
             task: r.task ?? "",
@@ -472,7 +565,10 @@ export default function App() {
             summary: r.summary ?? "",
             tokens: r.tokens ?? 0,
           }));
-          // 恢复的完成记录同样按 TTL 自动消失（临时通知语义）
+          initial.subAgentRecords = restored;
+          // 同一批记录进入 Agents 看板（「已完成」分区，无 TTL：看板是会话级交接记录）
+          initial.agentBoard = restored;
+          // 恢复的完成记录同样按 TTL 自动消失（临时通知语义，仅聊天区归档卡）
           scheduleSubagentRecordExpiry(sid, initial.subAgentRecords);
         }
         patchChat(sid, { ...EMPTY_CHAT, ...initial });
@@ -1023,9 +1119,11 @@ export default function App() {
             }
           }
           log(`◈ 启动子 Agent ${ev.data.role}`);
+          pushAgentEvent(sid, "started", ev.data as unknown as Record<string, unknown>);
           break;
         }
         case "subagent:progress": {
+          pushAgentEvent(sid, "progress", ev.data as unknown as Record<string, unknown>);
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming;
           if (!cur) break;
           const evData = ev.data;
@@ -1110,6 +1208,7 @@ export default function App() {
           }
           setTreeRevision((v) => v + 1);
           log(`◈ 子 Agent ${String(data.role ?? "general")} 已完成`);
+          pushAgentEvent(sid, "completed", data as unknown as Record<string, unknown>);
           break;
         }
         case "skill:loaded": {
@@ -1626,6 +1725,7 @@ export default function App() {
             mcpServers={mcpServers}
             tools={registeredTools}
             todos={currentChat.todos}
+            agentBoard={currentChat.agentBoard}
             backgroundTasks={backgroundTasks}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}

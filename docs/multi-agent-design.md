@@ -90,10 +90,18 @@ TaskManager.start(session)
 ## 6. UI
 
 - 聊天区：spawn_agent 卡片按 agent_id 展示（复用现有 SubAgentProgress 卡片，支持多个并存、并行滚动）
-- 右面板新增 **Agents tab**（ToolPanel tab 条已支持横向滑动）：
-  - live agent 列表：昵称 / 角色 / 状态徽标 / token 消耗 / 任务摘要
-  - 完成态保留可查（含 summary），close 后移除
-  - 手动 close 按钮（等价工具调用）
+- 右面板新增 **Agents tab**（位于 TODOs 右侧，ToolPanel tab 条已支持横向滑动）：
+  - **竖排 kanban 式看板**（已实现）：kanban 的「卡片跨状态列流动」适配窄面板改为纵向——
+    「运行中」「已完成」两个状态分区竖向堆叠，agent 卡片完成时从上分区流入下分区，
+    完成交接即分区流动的可视化
+  - 运行中卡片：角色 + 运行时长（秒级计时）+ turn 数 + 当前执行工具 + 流式输出尾部预览
+  - 完成卡片：角色 + token 消耗 + 任务摘要（点击展开全文）；**会话级保留**（不随聊天区
+    TTL 通知消失，跨页面刷新从 session metadata 恢复）
+  - 数据源：现有 `subagent:started/progress/completed` 事件（`reduceAgentBoard` reducer），
+    现网 spawn_sub_agent 即可用；P1 后端落地后切换 `agent:*` 事件流（增加 agent:closed 分区）
+  - tab 标签带运行计数（`Agents (N)`）
+  - Phase 2 扩展：父子层级缩进（spawn 树形交接）、close 手动释放按钮、agent 间消息泳道、
+    改动文件数徽标
 
 ## 7. 兼容与迁移
 

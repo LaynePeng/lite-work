@@ -259,6 +259,8 @@ export interface SubAgentProgress {
   tokens?: number;
   /** 子 Agent 实时流式文本（llm:stream 累积） */
   streaming_text?: string;
+  /** 派生时间戳（Agents 看板运行时长显示） */
+  startedAt?: number;
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）
@@ -387,6 +389,8 @@ export interface ChatSessionState {
   pendingApprovals: { id: string; action: string; reason: string }[];
   // 任务完成后归档的子 Agent 活动卡（会话级内存态，刷新即失）
   subAgentRecords: SubAgentProgress[];
+  /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */
+  agentBoard: SubAgentProgress[];
   stalled: boolean;
   modelOverride?: SessionModel | null;
   effectiveModel?: SessionModel;

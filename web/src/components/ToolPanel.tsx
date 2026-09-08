@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, TodoItem } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, SubAgentProgress, TodoItem } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
 
@@ -183,9 +183,85 @@ function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKil
   );
 }
 
+// ---------------------------------------------------------------- Agents 看板（竖排 kanban）
+
+/** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary。 */
+function AgentCard({ agent }: { agent: SubAgentProgress }) {
+  const [expanded, setExpanded] = useState(false);
+  const running = agent.status === "running";
+  const elapsed = agent.startedAt ? Math.floor((Date.now() - agent.startedAt) / 1000) : null;
+  const current = [...agent.steps].reverse().find((s) => s.status === "running");
+  const doneSteps = agent.steps.filter((s) => s.status !== "running").length;
+  return (
+    <div className={`agent-card ${running ? "running" : "done"}`}>
+      <div className="agent-card-head">
+        <span className="agent-role">{agent.role || "general"}</span>
+        {running
+          ? <span className="agent-meta">{elapsed != null ? `${elapsed}s` : ""}{agent.turn ? ` · turn ${agent.turn}` : ""}</span>
+          : <span className="agent-meta">{agent.tokens ? `${(agent.tokens / 1000).toFixed(1)}k tok` : ""}</span>}
+      </div>
+      <div className="agent-task" title={agent.task}>{agent.task || "（未描述任务）"}</div>
+      {running ? (
+        <div className="agent-live">
+          {current
+            ? <span className="agent-step" title={current.brief}>▸ {current.tool}</span>
+            : (doneSteps > 0 || agent.turn > 0
+                ? <span className="agent-step">已执行 {doneSteps} 步</span>
+                : <span className="agent-step">启动中…</span>)}
+          {agent.streaming_text && (
+            <span className="agent-stream">{agent.streaming_text.slice(-100)}</span>
+          )}
+        </div>
+      ) : (
+        <div
+          className={`agent-summary ${expanded ? "expanded" : ""}`}
+          onClick={() => setExpanded((v) => !v)}
+          title="点击展开/收起总结"
+        >
+          {agent.summary || "（无总结）"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Agents 看板：竖排 kanban——「运行中」/「已完成」两个状态分区纵向堆叠，
+ *  agent 卡片完成时从上分区流入下分区（交接可视化）。 */
+function AgentsPanel({ agents }: { agents: SubAgentProgress[] }) {
+  const running = agents.filter((a) => a.status === "running");
+  const done = agents.filter((a) => a.status !== "running");
+  // 运行时长计时：有 running 卡片时每秒重渲染
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (running.length === 0) return;
+    const t = window.setInterval(() => tick((v) => v + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [running.length]);
+
+  if (agents.length === 0) {
+    return <div className="tool-panel-empty">暂无 Agent（主 Agent 派生子任务时在此显示看板）</div>;
+  }
+  return (
+    <div className="agents-panel">
+      <div className="agent-section-head">
+        <span className="agent-dot running" />运行中（{running.length}）
+      </div>
+      {running.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+      {done.length > 0 && (
+        <>
+          <div className="agent-section-head">
+            <span className="agent-dot done" />已完成（{done.length}）
+          </div>
+          {done.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- 主组件
 
-type PanelTabId = "context" | "todos" | "mcp" | "background" | "tools";
+type PanelTabId = "context" | "todos" | "agents" | "mcp" | "background" | "tools";
 
 // tab 条横向滑动：面板拖窄后 tab 队列整体滑动（不是拖动单个 tab）。
 // pointer 按住横向拖动 → scrollLeft 跟随位移；位移 < 5px 视为点击不拦截，
@@ -240,12 +316,13 @@ function useTabStripDrag() {
 }
 
 export default function ToolPanel({
-  contextStats, mcpServers, tools, todos, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  contextStats, mcpServers, tools, todos, agentBoard, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
 }: {
   contextStats: ContextStats | null;
   mcpServers: MCPServerStatus[];
   tools: { name: string; description: string }[];
   todos: TodoItem[];
+  agentBoard?: SubAgentProgress[];
   backgroundTasks?: BackgroundTaskInfo[];
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -255,11 +332,14 @@ export default function ToolPanel({
   const strip = useTabStripDrag();
   const todoDone = todos.filter((t) => t.status === "completed").length;
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
+  const runningAgents = (agentBoard ?? []).filter((a) => a.status === "running").length;
 
   const TABS: { id: PanelTabId; label: string; title?: string }[] = [
     { id: "context", label: "上下文" },
     { id: "todos", label: todos.length ? `TODOs ${todoDone}/${todos.length}` : "TODOs",
       title: todos.length ? `进度 ${todoDone}/${todos.length}` : "Agent 规划多步骤任务时生成 TODO 清单" },
+    { id: "agents", label: runningAgents > 0 ? `Agents (${runningAgents})` : "Agents",
+      title: "多 Agent 看板：运行中/已完成 竖排交接视图" },
     { id: "mcp", label: "MCP" },
     { id: "background", label: runningCount > 0 ? `后台 (${runningCount})` : "后台" },
     { id: "tools", label: "工具" },
@@ -296,11 +376,13 @@ export default function ToolPanel({
           ? <ContextPanel stats={contextStats} />
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />
-            : panelTab === "mcp"
-              ? <McpPanel servers={mcpServers} />
-              : panelTab === "background"
-                ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
-                : <ToolsPanel tools={tools} />}
+            : panelTab === "agents"
+              ? <AgentsPanel agents={agentBoard ?? []} />
+              : panelTab === "mcp"
+                ? <McpPanel servers={mcpServers} />
+                : panelTab === "background"
+                  ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
+                  : <ToolsPanel tools={tools} />}
       </div>
     </aside>
   );
