@@ -2158,17 +2158,6 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   cursor: default;
 }
 
-.agent-bar-hint {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-3);
-  background: var(--bg-2);
-  padding: 1px 6px;
-  border-radius: 3px;
-  border: 1px solid var(--border);
-  cursor: default;
-}
-
 .model-select {
   min-width: 160px;
   max-width: 260px;

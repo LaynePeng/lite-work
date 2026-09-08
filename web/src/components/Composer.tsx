@@ -408,11 +408,8 @@ export default function Composer({
                 <span className="agent-btn-icon" aria-hidden>{meta.icon}</span>
                 <span className="agent-btn-label">{meta.label}</span>
               </button>
-            );
-          })}
-          <span className="agent-bar-hint" title="按 Tab 在 Agent 之间切换">
-            Tab
-          </span>
+             );
+           })}
           {/* 协作模式：按钮显示当前模式 + popover 选择（自动=模型路由；选中显式模式，
               发送后回落自动） */}
           <div className="collab-picker" ref={collabRef}>
