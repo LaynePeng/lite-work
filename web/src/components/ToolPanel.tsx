@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, SubAgentProgress, TodoItem } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
@@ -194,9 +194,13 @@ function agentColor(key: string): string {
 }
 
 /** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary + 交付标记。 */
-function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: boolean }) {
+function AgentCard({ agent, delivered, reviewed, onToggleReview }: {
+  agent: SubAgentProgress;
+  delivered?: boolean;
+  reviewed?: boolean;
+  onToggleReview?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const [reviewed, setReviewed] = useState(false);
   const running = agent.status === "running";
   const elapsed = agent.startedAt ? Math.floor((Date.now() - agent.startedAt) / 1000) : null;
   const current = [...agent.steps].reverse().find((s) => s.status === "running");
@@ -233,7 +237,7 @@ function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: 
           {agent.changedFiles && agent.changedFiles.length > 0 && (
             <div
               className={`agent-review-badge ${reviewed ? "done" : "pending"}`}
-              onClick={() => setReviewed((v) => !v)}
+              onClick={() => onToggleReview?.()}
               title={reviewed ? "已人工过目（点击恢复待审查）" : "有改动文件待人工过目（点击标记已审查）"}
             >
               {reviewed ? "✔ 已审查" : `⚠ 待审查（${agent.changedFiles.length} 文件）`}
@@ -263,12 +267,20 @@ function AgentCard({ agent, delivered }: { agent: SubAgentProgress; delivered?: 
  * - brainstorm（头脑风暴）：视角提案墙——多视角卡片平铺（无状态分区，提案并列对比）
  * - debate（辩论/互批）：对抗泳道——proposer 与 critic 分组对垒
  * - pipeline（流水线）：顺序接力链——按派生序编号，箭头串联交接
- * 主 Agent 根节点置顶；子 Agent 卡片经树形连接线挂在各分组下。 */
+ *
+ * 长程任务的防乱设计：
+ * - 有运行中 agent 的分组置顶且展开；全部完成的分组自动折叠为统计行（点击展开）
+ * - 过滤开关：全部 / 仅运行中（默认全部；只想盯活跃工作时一键收窄）
+ * - 分组内已完成卡片截断（最近 MAX_DONE_SHOWN 个），"展开全部 N" 按需展开
+ * - 待审查计数聚合到折叠头部（review gate 不因折叠而不可见） */
+const MAX_DONE_SHOWN = 3;
+
 function AgentsPanel({ agents, orchestrator }: {
   agents: SubAgentProgress[];
   orchestrator?: { agentId: string; running: boolean };
 }) {
   const running = agents.filter((a) => a.status === "running");
+  const done = agents.filter((a) => a.status !== "running");
   // 运行时长计时：有 running 卡片时每秒重渲染
   const [, tick] = useState(0);
   useEffect(() => {
@@ -277,15 +289,33 @@ function AgentsPanel({ agents, orchestrator }: {
     return () => window.clearInterval(t);
   }, [running.length]);
 
+  // 过滤（全部 / 仅运行中）；分组展开覆盖（默认：有运行中的展开，全完成折叠）；
+  // 组内已完成截断展开；审查状态（提升到面板级，供分组头聚合待审数）
+  const [filter, setFilter] = useState<"all" | "running">("all");
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
+  const [showAllDone, setShowAllDone] = useState<Record<string, boolean>>({});
+  const [reviewedMap, setReviewedMap] = useState<Record<string, boolean>>({});
+  const toggleReview = useCallback((id: string) => {
+    setReviewedMap((m) => ({ ...m, [id]: !m[id] }));
+  }, []);
+
   const orch = orchestrator ?? { agentId: "build", running: false };
 
-  // 按 mode 分组（保持派生顺序）
+  // 按 mode 分组（保持派生顺序）；仅运行中过滤时隐藏无活跃 agent 的组
   const groups = new Map<string, SubAgentProgress[]>();
   for (const a of agents) {
     const m = a.mode && a.mode !== "orchestrate" ? a.mode : "orchestrate";
     if (!groups.has(m)) groups.set(m, []);
     groups.get(m)!.push(a);
   }
+  const pendingReview = done.filter((a) =>
+    a.changedFiles && a.changedFiles.length > 0 && !reviewedMap[a.subagentId || a.task]).length;
+
+  // 排序：有运行中 agent 的分组置顶（活跃工作永远在视野上方）
+  const orderedModes = [...groups.keys()].sort((a, b) => {
+    const rank = (m: string) => (groups.get(m)!.some((x) => x.status === "running") ? 0 : 1);
+    return rank(a) - rank(b);
+  });
 
   return (
     <div className="agents-panel">
@@ -295,18 +325,47 @@ function AgentsPanel({ agents, orchestrator }: {
           <div className="agent-orch-name">{orch.agentId}</div>
           <div className="agent-orch-meta">
             {orch.running ? "编排运行中" : "空闲"}
-            {agents.length > 0 && ` · 派生 ${agents.filter((a) => a.status !== "running").length}/${agents.length}`}
+            {agents.length > 0 && ` · 派生 ${done.length}/${agents.length}`}
           </div>
         </div>
       </div>
       {agents.length === 0 ? (
         <div className="tool-panel-empty">暂无派生的子 Agent（主 Agent 派生任务时在此显示看板）</div>
       ) : (
-        <div className="agent-branches">
-          {[...groups.entries()].map(([mode, list]) => (
-            <ModeSection key={mode} mode={mode} agents={list} />
-          ))}
-        </div>
+        <>
+          {/* 过滤条：全部 / 仅运行中 + 待审查聚合提醒 */}
+          <div className="agent-filter-row">
+            <button
+              className={`agent-filter-chip ${filter === "all" ? "on" : ""}`}
+              onClick={() => setFilter("all")}
+            >全部 {agents.length}</button>
+            <button
+              className={`agent-filter-chip ${filter === "running" ? "on" : ""}`}
+              onClick={() => setFilter("running")}
+            >运行中 {running.length}</button>
+            {pendingReview > 0 && (
+              <span className="agent-filter-review" title="有 agent 改动文件待人工过目（展开对应分组查看）">
+                ⚠ 待审查 {pendingReview}
+              </span>
+            )}
+          </div>
+          <div className="agent-branches">
+            {orderedModes.map((mode) => (
+              <ModeSection
+                key={mode}
+                mode={mode}
+                agents={groups.get(mode)!}
+                filter={filter}
+                open={groupOpen[mode] ?? groups.get(mode)!.some((x) => x.status === "running")}
+                onToggle={() => setGroupOpen((m) => ({ ...m, [mode]: !(m[mode] ?? groups.get(mode)!.some((x) => x.status === "running")) }))}
+                showAllDone={!!showAllDone[mode]}
+                onToggleShowAll={() => setShowAllDone((m) => ({ ...m, [mode]: !m[mode] }))}
+                reviewedMap={reviewedMap}
+                onToggleReview={toggleReview}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -320,54 +379,117 @@ const MODE_META: Record<string, { icon: string; label: string }> = {
   debate: { icon: "⚔", label: "辩论 · 对抗评审" },
 };
 
-function ModeSection({ mode, agents }: { mode: string; agents: SubAgentProgress[] }) {
+function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onToggleShowAll,
+                       reviewedMap, onToggleReview }: {
+  mode: string;
+  agents: SubAgentProgress[];
+  filter: "all" | "running";
+  open: boolean;
+  onToggle: () => void;
+  showAllDone: boolean;
+  onToggleShowAll: () => void;
+  reviewedMap: Record<string, boolean>;
+  onToggleReview: (id: string) => void;
+}) {
   const meta = MODE_META[mode] ?? MODE_META.orchestrate;
+  const runningList = agents.filter((a) => a.status === "running");
+  const doneList = agents.filter((a) => a.status !== "running");
+  const pendingReview = doneList.filter(
+    (a) => a.changedFiles && a.changedFiles.length > 0 && !reviewedMap[a.subagentId || a.task]).length;
+
+  // 仅运行中过滤：无活跃 agent 的组直接隐藏
+  if (filter === "running" && runningList.length === 0) return null;
+
+  // 折叠头部：统计行代替卡片堆（默认：全完成组自动折叠，活跃组展开）
+  if (!open) {
+    return (
+      <div className="agent-mode-group">
+        <div className="agent-mode-head collapsible" onClick={onToggle} title="点击展开分组">
+          <span className="agent-mode-caret">▸</span>
+          <span>{meta.icon}</span>{meta.label}
+          <span className="agent-mode-stats">
+            {runningList.length > 0 && <span className="agent-mode-stat live">运行中 {runningList.length}</span>}
+            <span>已完成 {doneList.length}</span>
+            {pendingReview > 0 && <span className="agent-mode-stat warn">⚠ 待审 {pendingReview}</span>}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // 完成卡片截断：默认最近 MAX_DONE_SHOWN 个（最近派生），"展开全部"按需
+  const doneShown = showAllDone ? doneList : doneList.slice(-MAX_DONE_SHOWN);
+  const doneHidden = doneList.length - doneShown.length;
+  const cardProps = (a: SubAgentProgress, delivered = false) => ({
+    key: a.subagentId || a.task,
+    agent: a,
+    delivered,
+    reviewed: !!reviewedMap[a.subagentId || a.task],
+    onToggleReview: () => onToggleReview(a.subagentId || a.task),
+  });
+  const moreBtn = doneHidden > 0 && (
+    <button className="agent-group-more" onClick={onToggleShowAll}>
+      ⋯ 展开全部已完成（{doneList.length}）
+    </button>
+  );
+
   return (
     <div className="agent-mode-group">
-      <div className="agent-mode-head">
+      <div className="agent-mode-head collapsible" onClick={onToggle} title="点击折叠分组">
+        <span className="agent-mode-caret open">▾</span>
         <span>{meta.icon}</span>{meta.label}
-        <span className="agent-mode-count">({agents.length})</span>
+        <span className="agent-mode-stats">
+          {runningList.length > 0 && <span className="agent-mode-stat live">运行中 {runningList.length}</span>}
+          <span>已完成 {doneList.length}</span>
+          {pendingReview > 0 && <span className="agent-mode-stat warn">⚠ 待审 {pendingReview}</span>}
+        </span>
       </div>
       {mode === "brainstorm" ? (
         // 视角提案墙：并列平铺（运行中脉冲点标识未完）
         <div className="agent-brainstorm-wall">
-          {agents.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+          {(filter === "running" ? runningList : [...runningList, ...doneShown]).map((a) => (
+            <AgentCard {...cardProps(a)} />
+          ))}
+          {moreBtn}
         </div>
       ) : mode === "debate" ? (
         // 对抗泳道：proposer（提案/修订） vs critic（批判）
-        <DebateLanes agents={agents} />
+        <DebateLanes agents={filter === "running" ? runningList : agents}
+                     doneList={filter === "running" ? [] : doneShown}
+                     doneHidden={doneHidden} onToggleShowAll={onToggleShowAll}
+                     reviewedMap={reviewedMap} onToggleReview={onToggleReview} />
       ) : mode === "pipeline" ? (
         // 接力链：按派生序编号 + 箭头串联
         <div className="agent-pipeline-chain">
-          {[...agents].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((a, i) => (
-            <div key={a.subagentId || a.task} className="agent-pipeline-node">
-              {i > 0 && <span className="agent-pipeline-arrow">↓</span>}
-              <div className="agent-pipeline-step">
-                <span className="agent-pipeline-no">{i + 1}</span>
-                <AgentCard agent={a} />
+          {(filter === "running" ? runningList : [...runningList, ...doneShown])
+            .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+            .map((a, i) => (
+              <div key={a.subagentId || a.task} className="agent-pipeline-node">
+                {i > 0 && <span className="agent-pipeline-arrow">↓</span>}
+                <div className="agent-pipeline-step">
+                  <span className="agent-pipeline-no">{i + 1}</span>
+                  <AgentCard {...cardProps(a)} />
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          {moreBtn}
         </div>
       ) : (
         // orchestrate：竖排 kanban（运行中/已完成分区，卡片跨区流动）
         <>
           <div className="agent-section-head">
-            <span className="agent-dot running" />运行中（{agents.filter((a) => a.status === "running").length}）
+            <span className="agent-dot running" />运行中（{runningList.length}）
           </div>
-          {agents.filter((a) => a.status === "running").map((a) => (
-            <AgentCard key={a.subagentId || a.task} agent={a} />
-          ))}
-          {agents.some((a) => a.status !== "running") && (
+          {runningList.map((a) => <AgentCard {...cardProps(a)} />)}
+          {doneShown.length > 0 && (
             <>
               <div className="agent-section-head">
-                <span className="agent-dot done" />已完成（{agents.filter((a) => a.status !== "running").length}）
+                <span className="agent-dot done" />已完成（{doneList.length}）
               </div>
-              {agents.filter((a) => a.status !== "running").map((a) => (
-                <AgentCard key={a.subagentId || a.task} agent={a} delivered />
-              ))}
+              {doneShown.map((a) => <AgentCard {...cardProps(a, true)} />)}
             </>
           )}
+          {moreBtn}
         </>
       )}
     </div>
@@ -375,22 +497,40 @@ function ModeSection({ mode, agents }: { mode: string; agents: SubAgentProgress[
 }
 
 /** 辩论泳道：proposer vs critic 对垒（角色归位：critic 单独一组，其余为提案方） */
-function DebateLanes({ agents }: { agents: SubAgentProgress[] }) {
+function DebateLanes({ agents, doneList, doneHidden, onToggleShowAll, reviewedMap, onToggleReview }: {
+  agents: SubAgentProgress[];
+  doneList: SubAgentProgress[];
+  doneHidden: number;
+  onToggleShowAll: () => void;
+  reviewedMap: Record<string, boolean>;
+  onToggleReview: (id: string) => void;
+}) {
   const critics = agents.filter((a) => a.role === "critic");
   const proposers = agents.filter((a) => a.role !== "critic");
+  const cardProps = (a: SubAgentProgress) => ({
+    key: a.subagentId || a.task,
+    agent: a,
+    reviewed: !!reviewedMap[a.subagentId || a.task],
+    onToggleReview: () => onToggleReview(a.subagentId || a.task),
+  });
   return (
     <div className="agent-debate-lanes">
       <div className="agent-debate-lane">
         <div className="agent-debate-lane-head">提案方</div>
-        {proposers.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        {proposers.map((a) => <AgentCard {...cardProps(a)} />)}
         {proposers.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
       </div>
       <span className="agent-debate-vs">⇄</span>
       <div className="agent-debate-lane critic">
         <div className="agent-debate-lane-head">批判方</div>
-        {critics.map((a) => <AgentCard key={a.subagentId || a.task} agent={a} />)}
+        {critics.map((a) => <AgentCard {...cardProps(a)} />)}
         {critics.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
       </div>
+      {doneHidden > 0 && (
+        <button className="agent-group-more" onClick={onToggleShowAll}>
+          ⋯ 展开全部已完成（{doneList.length}）
+        </button>
+      )}
     </div>
   );
 }
@@ -452,7 +592,8 @@ function useTabStripDrag() {
 }
 
 export default function ToolPanel({
-  contextStats, mcpServers, tools, todos, agentBoard, orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  contextStats, mcpServers, tools, todos, agentBoard, orchestrator, backgroundTasks,
+  collapsed, onToggleCollapsed, onKillBackground, activeTab, onTabChange,
 }: {
   contextStats: ContextStats | null;
   mcpServers: MCPServerStatus[];
@@ -464,8 +605,17 @@ export default function ToolPanel({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onKillBackground?: (taskId: string) => void;
+  /** 受控 tab（可选）：聊天区状态条等外部入口可跳转到指定 tab */
+  activeTab?: PanelTabId;
+  onTabChange?: (tab: PanelTabId) => void;
 }) {
-  const [panelTab, setPanelTab] = useState<PanelTabId>("context");
+  const [panelTabLocal, setPanelTabLocal] = useState<PanelTabId>("context");
+  // 受控优先（外部传入），否则内部状态
+  const panelTab = activeTab ?? panelTabLocal;
+  const setPanelTab = (t: PanelTabId) => {
+    setPanelTabLocal(t);
+    onTabChange?.(t);
+  };
   const strip = useTabStripDrag();
   const todoDone = todos.filter((t) => t.status === "completed").length;
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;

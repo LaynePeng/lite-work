@@ -66,6 +66,17 @@ export default function Composer({
     { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
   ];
   const [collabMode, setCollabMode] = useState("auto");
+  const [collabOpen, setCollabOpen] = useState(false);
+  // 点击外部关闭 popover
+  const collabRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!collabOpen) return;
+    const close = (e: MouseEvent) => {
+      if (collabRef.current && !collabRef.current.contains(e.target as Node)) setCollabOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [collabOpen]);
   // Agent 图标与中文名（AGI 通用入口：办公/调研/代码一站式）
   const AGENT_META: Record<string, { icon: string; label: string }> = {
     build: { icon: "💻", label: "代码" },
@@ -402,18 +413,32 @@ export default function Composer({
           <span className="agent-bar-hint" title="按 Tab 在 Agent 之间切换">
             Tab
           </span>
-          <span className="agent-bar-label">协作:</span>
-          <select
-            className="model-select collab-select"
-            value={collabMode}
-            onChange={(e) => setCollabMode(e.target.value)}
-            disabled={disabled || running}
-            title="多 Agent 协作模式：自动=模型按任务特征路由；选择具体模式则下一条消息以对应技能发送"
-          >
-            {COLLAB_MODES.map((m) => (
-              <option key={m.id} value={m.id} title={m.title}>{m.label}</option>
-            ))}
-          </select>
+          {/* 协作模式：图标按钮 + popover（不占常驻宽度；选中高亮，发送后回落自动） */}
+          <div className="collab-picker" ref={collabRef}>
+            <button
+              className={`collab-btn ${collabMode !== "auto" ? "active" : ""}`}
+              onClick={() => setCollabOpen((v) => !v)}
+              disabled={disabled || running}
+              title="多 Agent 协作模式：自动=模型按任务特征路由；点击选择显式模式"
+            >
+              🎭
+            </button>
+            {collabOpen && (
+              <div className="collab-popover">
+                {COLLAB_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    className={`collab-option ${collabMode === m.id ? "on" : ""}`}
+                    onClick={() => { setCollabMode(m.id); setCollabOpen(false); }}
+                    title={m.title}
+                  >
+                    <span className="collab-option-label">{m.label}</span>
+                    <span className="collab-option-desc">{m.title}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <span className="agent-bar-label">模型:</span>
           <select
             className="model-select"

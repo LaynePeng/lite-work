@@ -180,6 +180,8 @@ export default function App() {
   // 面板折叠状态：默认展开（false=展开）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
+  // 工具面板 tab 受控（聊天区 Agents 状态条可跳转）
+  const [toolPanelTab, setToolPanelTab] = useState<"context" | "todos" | "agents" | "mcp" | "background" | "tools">("context");
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
   const sidebarResize = useResizable({
@@ -1616,6 +1618,26 @@ export default function App() {
           <FileViewer tab={activeTab} />
         ) : (
           <>
+            {/* 多 Agent 协作状态条（有派生记录时出现）：点击跳转右侧 Agents 看板 */}
+            {(currentChat.agentBoard?.length ?? 0) > 0 && (() => {
+              const board = currentChat.agentBoard ?? [];
+              const running = board.filter((a) => a.status === "running").length;
+              const done = board.length - running;
+              const hasReview = board.some((a) => a.changedFiles && a.changedFiles.length > 0);
+              return (
+                <button
+                  className="agent-status-bar"
+                  onClick={() => { setToolPanelTab("agents"); setToolPanelCollapsed(false); }}
+                  title="打开 Agents 协作看板（运行中/已完成/待审查）"
+                >
+                  <span className={`agent-status-dot ${running > 0 ? "live" : "idle"}`} />
+                  🤖 Agents · {running > 0 ? `${running} 运行中` : "全部完成"}
+                  {done > 0 && ` · ${done} 已完成`}
+                  {hasReview && <span className="agent-status-review">⚠ 待过目</span>}
+                  <span className="agent-status-open">看板 →</span>
+                </button>
+              );
+            })()}
             <ChatView
               sessionId={activeSessionId ?? "（未选择）"}
               sessionTitle={activeSessionTitle}
@@ -1735,6 +1757,8 @@ export default function App() {
             todos={currentChat.todos}
             agentBoard={currentChat.agentBoard}
             orchestrator={{ agentId: currentAgent, running: currentChat.running }}
+            activeTab={toolPanelTab}
+            onTabChange={setToolPanelTab}
             backgroundTasks={backgroundTasks}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}

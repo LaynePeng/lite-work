@@ -3563,9 +3563,231 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-bottom: 1px dashed color-mix(in srgb, var(--accent, #4f8cff) 30%, transparent);
 }
 
+/* 可折叠分组头（长程任务防乱：全完成组折叠为统计行） */
+.agent-mode-head.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-mode-head.collapsible:hover {
+  color: var(--text-1);
+}
+
+.agent-mode-caret {
+  flex: none;
+  width: 10px;
+  color: var(--text-2);
+  transition: transform 0.15s ease;
+}
+
+.agent-mode-caret.open {
+  transform: rotate(0deg);
+}
+
+.agent-mode-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  font-weight: 400;
+  color: var(--text-2);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.agent-mode-stat.live {
+  color: var(--accent, #4f8cff);
+}
+
+.agent-mode-stat.warn {
+  color: #eab308;
+}
+
 .agent-mode-count {
   color: var(--text-2);
   font-weight: 400;
+}
+
+/* 过滤条（全部 / 仅运行中 + 待审查聚合） */
+.agent-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 2px;
+}
+
+.agent-filter-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agent-filter-chip.on {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+  color: var(--accent, #4f8cff);
+}
+
+.agent-filter-review {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #eab308;
+  margin-left: auto;
+}
+
+/* 组内已完成截断的展开按钮 */
+.agent-group-more {
+  align-self: flex-start;
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.agent-group-more:hover {
+  color: var(--accent, #4f8cff);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--border));
+}
+
+/* -------- 协作模式选择器（图标 + popover，Composer agent-bar） -------- */
+
+.collab-picker {
+  position: relative;
+  flex: none;
+}
+
+.collab-btn {
+  width: 26px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.collab-btn:hover {
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 50%, var(--border));
+}
+
+.collab-btn.active {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #4f8cff) 55%, var(--border));
+}
+
+.collab-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.collab-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.collab-option:hover {
+  background: var(--bg-1);
+}
+
+.collab-option.on {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 13%, transparent);
+}
+
+.collab-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.collab-option.on .collab-option-label {
+  color: var(--accent, #4f8cff);
+}
+
+.collab-option-desc {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+/* -------- 聊天区 Agent 协作状态条（入口 → 右面板 Agents tab） -------- */
+
+.agent-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin: 6px 12px 0;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent, #4f8cff) 7%, transparent);
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.agent-status-bar:hover {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 13%, transparent);
+}
+
+.agent-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.agent-status-dot.live {
+  background: var(--accent, #4f8cff);
+  animation: agent-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-status-dot.idle {
+  background: var(--green, #3fb950);
+}
+
+.agent-status-review {
+  color: #eab308;
+  font-weight: 600;
+}
+
+.agent-status-open {
+  margin-left: auto;
+  color: var(--accent, #4f8cff);
+  font-size: 11.5px;
 }
 
 /* 头脑风暴：视角提案墙（并列平铺对比） */
