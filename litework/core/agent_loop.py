@@ -140,11 +140,7 @@ class AgentLoop:
         tools: Optional[List[ToolDefinition]] = None,
         store_snapshot: bool = True,
     ) -> Tuple[str, Dict[str, Any]]:
-        """Think-Act-Observe 主循环（P1-4 拆分为三阶段，可独立测试）：
-
-        初始化（消息链/system prompt/落盘）→ 每轮 [LLM 调用（含重试）
-        → 状态更新（usage/消息链）→ 工具批次执行] 循环，直至收敛或超限。
-        """
+        """Think-Act-Observe 主循环。"""
         messages: List[Message] = self.kernel.ctx.messages
         tools = tools if tools is not None else self.registry.get_tools()
         # 工具处理器（todo_write 等）经 ContextVar 知道当前会话

@@ -53,7 +53,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "agent_max_steps_cap", "agent_spawn_depth", "agent_message_max_chars",
                 "agent_meeting_rounds", "agent_ledger_interval", "agent_persist_max",
                 "agent_collab_mode",
-                # 协作模式（Tier 1 配方文本 / Tier 2 模式名，见 orchestration/collab_policy.py）
+                # 协作模式（配方文本 / 模式名）
                 "collab_policy", "collab_recipe",
             )
         }

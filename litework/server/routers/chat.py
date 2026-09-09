@@ -68,8 +68,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if handle is None:
             raise HTTPException(status_code=404, detail="任务不存在")
 
-        # 每个连接一个独立订阅队列（P2-6）：断线重连窗口期内旧 reader 与新 reader
-        # 不再竞争同一队列——旧 reader 的取消由 finally 兜底，事件各自独立投递。
+        # 每个连接独立订阅队列，避免断线重连窗口期新旧 reader 竞争
         queue = handle.subscribe()
 
         async def _stream():
@@ -85,8 +84,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
                         break
                     yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
             finally:
-                # 客户端断连或 [DONE] 收尾：退订本连接的队列。任务真正结束
-                # （哨兵已投递）且剩余订阅者都排空时才清理句柄，避免重连 404
+                handle.unsubscribe(queue)
+                if handle.done and handle.subscribers_drained:
+                    tasks.cleanup(task_id)
                 handle.unsubscribe(queue)
                 if handle.done and handle.subscribers_drained:
                     tasks.cleanup(task_id)

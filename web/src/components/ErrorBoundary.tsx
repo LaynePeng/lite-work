@@ -18,10 +18,7 @@ interface State {
 }
 
 /**
- * 分层错误边界（P2-7）：子组件崩溃按区域兜底不白屏。
- * - 全局层：main.tsx 包裹整个 App（最后的防线）
- * - 区域层：Sidebar / 主聊天区 / 工具面板各自包裹，单区崩溃其余照常
- * - 「重试」清除错误状态原地恢复（不强制整页刷新）
+ * 分层错误边界：子组件崩溃按区域兜底不白屏。
  */
 export default class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { isDriveRoot, pathSegments } from "../lib/path";
 
@@ -14,6 +14,8 @@ interface FsEntry {
   dirs: string[];
   files: string[];
   truncated: boolean;
+  /** Windows 全部可用盘符，空数组 = 非 Windows */
+  drives: string[];
 }
 
 export default function ProjectPicker({
@@ -34,6 +36,9 @@ export default function ProjectPicker({
   const [loading, setLoading] = useState(false);
   // 默认隐藏 . 开头的隐藏文件/目录（可切换）
   const [showHidden, setShowHidden] = useState(false);
+  // Windows 盘符下拉（C:\ / D:\ …）；空数组 = 非 Windows 平台
+  const [drives, setDrives] = useState<string[]>([]);
+  const [drivesOpen, setDrivesOpen] = useState(false);
 
   // 新建项目状态
   const [showCreate, setShowCreate] = useState(initialCreate);
@@ -72,6 +77,32 @@ export default function ProjectPicker({
   const goUp = () => {
     if (entry?.parent) setCurrent(entry.parent);
   };
+
+  // 从后端响应更新 drives 列表
+  useEffect(() => {
+    if (entry && Array.isArray(entry.drives)) {
+      setDrives(entry.drives);
+    }
+  }, [entry]);
+
+  // 点击外部自动收起盘符下拉
+  const drivesRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!drivesOpen) return;
+    const close = (e: MouseEvent) => {
+      if (drivesRef.current && !drivesRef.current.contains(e.target as Node)) setDrivesOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [drivesOpen]);
+
+  // 点击下拉外部自动收起盘符菜单
+  useEffect(() => {
+    if (!drivesOpen) return;
+    const close = () => setDrivesOpen(false);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [drivesOpen]);
 
   const breadcrumb = pathSegments(current || "");
   const jumpTo = (idx: number) => {
@@ -117,6 +148,32 @@ export default function ProjectPicker({
         <div className="picker-pathbar">
           <button className="picker-nav" onClick={goHome} title="主目录">🏠</button>
           <button className="picker-nav" onClick={goUp} title="上级目录">⬆</button>
+          {drives.length > 0 && (
+            <div className="picker-drives" ref={drivesRef} onClick={(e) => e.stopPropagation()}>
+              <button
+                className={`picker-nav picker-drives-toggle ${drivesOpen ? "active" : ""}`}
+                onClick={() => setDrivesOpen((v) => !v)}
+                title="选择磁盘（Windows 多盘符切换）"
+              >
+                💽 盘符
+              </button>
+              {drivesOpen && (
+                <div className="picker-drives-menu">
+                  {drives.map((d) => (
+                    <button
+                      key={d}
+                      className={`picker-drive-item ${current.toUpperCase().startsWith(d.toUpperCase()) ? "on" : ""}`}
+                      onClick={() => { setCurrent(d); setDrivesOpen(false); }}
+                      title={`切换到 ${d}`}
+                    >
+                      <span className="picker-ico">💽</span>
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="picker-breadcrumb">
             {breadcrumb.map((seg, i) => (
               <span key={i}>

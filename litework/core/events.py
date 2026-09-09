@@ -3,9 +3,7 @@
 
 """强类型异步事件总线（对应课程第10课（插件架构） TypedEventEmitter，asyncio 版）。
 
-P1-3 重构：EVENT_MAP 值从裸 dict 改为带结构的 TypedDict，emit() 增加
-运行时负载校验——payload 缺字段/类型漂移在开发与测试期立即暴露，
-不再依赖前端静默丢事件。
+EVENT_MAP 值为带结构的 TypedDict，emit() 做运行时负载校验。
 """
 from __future__ import annotations
 

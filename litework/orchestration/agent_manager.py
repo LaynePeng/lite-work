@@ -374,7 +374,7 @@ class SessionAgentManager:
             "task": task, "allowedDirs": record.allowed_dirs, "mode": mode,
             "model": model,
         })
-        # 策略钩子（Tier 2）：派生成功后触发 on_agent_spawned（异常隔离）
+        # 策略钩子：on_agent_spawned（异常隔离）
         try:
             from .collab_policy import CollabContext, fire_collab_hook
 
@@ -405,7 +405,7 @@ class SessionAgentManager:
                 f"已完成任务「{record.task[:80]}」：{record.summary}{files}"
             ),
         })
-        # 策略钩子（Tier 2）：终态后触发 on_agent_complete（异常隔离，不进内核栈）
+        # 策略钩子：on_agent_complete（异常隔离）
         try:
             from .collab_policy import CollabContext, fire_collab_hook
 

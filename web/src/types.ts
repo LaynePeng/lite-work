@@ -453,7 +453,7 @@ export interface ChatSessionState {
   /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */
   agentBoard: SubAgentProgress[];
   stalled: boolean;
-  /** SSE 连接状态（P1-5）：连接指示器（绿/黄/红）与重连策略的数据源 */
+  /** SSE 连接状态：绿=已连接 / 黄=重连中 / 红=失联 */
   sseState?: SseConnState;
   modelOverride?: SessionModel | null;
   effectiveModel?: SessionModel;
@@ -558,6 +558,8 @@ export interface PluginInfo {
   description: string;
   version?: string;
   source?: string;
+  /** 插件类别：collab=协作模式（进模式选择器，不注册工具）/ tool=工具插件 */
+  kind?: "tool" | "collab";
 }
 
 export interface BuiltinPluginInfo {
@@ -568,6 +570,8 @@ export interface BuiltinPluginInfo {
   builtin: true;
   /** 已被用户版（~/.lite-work/plugins/ 同名插件）覆盖 */
   overridden?: boolean;
+  /** 插件类别：collab=协作模式 / tool=工具插件 */
+  kind?: "tool" | "collab";
 }
 
 export interface CommunityManifest {

@@ -50,10 +50,18 @@ def app_with_mode_plugin(tmp_path):
 
 
 def test_collab_mode_plugin_discovered(app_with_mode_plugin):
-    """本地插件目录中的 CollabModePlugin 被发现，基类自身不被实例化。"""
+    """方案 B：7 个内置模式 + 本地同名社区包覆盖（不重复），基类自身不被实例化。"""
     modes = app_with_mode_plugin.collab_modes()
-    assert [m.mode_name for m in modes] == ["meeting"]
-    assert modes[0].display_name == "会议（群聊共识）"
+    names = [m.mode_name for m in modes]
+    # 7 个内置全部在场
+    for builtin in ("orchestrate", "pipeline", "brainstorm", "critic",
+                    "debate", "meeting", "code-sprint"):
+        assert builtin in names, f"缺少内置模式 {builtin}"
+    # 本地安装的 collab-meeting 覆盖内置 meeting（同名插件包名 collab-meeting）
+    assert names.count("meeting") == 1, "同名模式不应重复"
+    meeting = next(m for m in modes if m.mode_name == "meeting")
+    assert getattr(meeting, "_is_local_override", False) is True
+    assert meeting.display_name == "会议（群聊共识）"
 
 
 def test_get_collab_policy_resolves_installed_mode(app_with_mode_plugin):
@@ -92,6 +100,13 @@ def test_collab_modes_api_lists_builtin_and_installed(app_with_mode_plugin):
         by_name = {m["name"]: m for m in modes}
         assert by_name["default"]["source"] == "builtin"
         assert by_name["review"]["source"] == "builtin"
+        # 7 个内置模式随主程序发布（v1.0.0）；
+        # meeting 被本地社区包覆盖 → source=plugin（见下）
+        for builtin in ("orchestrate", "pipeline", "brainstorm", "critic",
+                        "debate", "code-sprint"):
+            assert by_name[builtin]["source"] == "builtin", builtin
+            assert by_name[builtin]["version"] == "1.0.0", builtin
+        # 本地安装的社区包覆盖内置 meeting → source=plugin
         assert by_name["meeting"]["source"] == "plugin"
         assert by_name["meeting"]["display_name"] == "会议（群聊共识）"
 
@@ -132,7 +147,8 @@ def test_mode_plugin_hooks_fire_isolated(tmp_path):
     app.config["collab_policy"] = "boom"
     (app.agent_managers.setdefault("s1", SessionAgentManager(app, "s1")))
 
-    fired_mode = app.collab_modes()[0]
+    # 本地插件目录里的 boom 模式（collab_modes 里排在 7 个内置之后）
+    fired_mode = next(m for m in app.collab_modes() if m.mode_name == "boom")
 
     async def run():
         # 直接经内核入口触发（真实路径是 _enqueue_notification 里的调用）
@@ -156,14 +172,23 @@ def test_mode_plugin_installs_via_community_flow(tmp_path):
 
     config_dir = tmp_path / ".lite-work"
     app = AgentApp(workspace=str(tmp_path), config_dir=str(config_dir))
-    assert app.collab_modes() == []
+    # 方案 B：7 个内置模式始终在场；meeting 此时应为内置版（非本地覆盖）
+    modes_before = app.collab_modes()
+    assert len(modes_before) == 7
+    assert not any(getattr(m, "_is_local_override", False) for m in modes_before)
 
     # install_from_source（社区/本地目录统一入口；GitHub 子目录安装时
     # 目录名即插件名，本地目录场景显式传 name 保持同语义）
     results = app.plugins_install(str(src_pkg), name="collab-meeting")
     assert any(p["name"] == "collab-meeting" for p in results)
     modes = app.collab_modes()
-    assert [m.mode_name for m in modes] == ["meeting"]
+    # 7 个内置仍在 + meeting 被本地社区包覆盖（同名不重复）
+    assert len(modes) == 7
+    meeting = next(m for m in modes if m.mode_name == "meeting")
+    assert getattr(meeting, "_is_local_override", False) is True
+    # 已安装列表按 kind 区分：协作模式 ≠ 工具插件
+    installed = {p["name"]: p for p in app.plugins_list()}
+    assert installed["collab-meeting"]["kind"] == "collab"
 
 
 # ---------------------------------------------------------------- 图标与会话级选择
@@ -190,7 +215,7 @@ def test_collab_modes_api_includes_icon_url(app_with_mode_plugin):
     with TestClient(fast) as client:
         r = client.get("/api/collab/modes")
         meeting = next(m for m in r.json()["modes"] if m["name"] == "meeting")
-        assert meeting["icon_url"] == "/api/plugins/collab-meeting/icon"
+        assert meeting["icon_url"] == "/api/collab/icon/meeting"
         default = next(m for m in r.json()["modes"] if m["name"] == "default")
         assert default["icon_url"] is None
 

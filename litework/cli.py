@@ -42,7 +42,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve = sub.add_parser("serve", help="启动 Core 服务")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8787)
-    serve.add_argument("--token", default=None, help="访问令牌；缺省时自动生成（P0-2 默认开启鉴权）")
+    serve.add_argument("--token", default=None, help="访问令牌；缺省时自动生成")
     serve.add_argument("--no-token", action="store_true",
                        help="显式关闭鉴权（仅建议本机开发调试使用）")
     serve.add_argument("--workspace", default=None, help="工作区目录（默认不打开项目）")
@@ -103,7 +103,6 @@ def main(argv: list = None) -> None:
     log_path = _configure_logging(args.log_level, args.config_dir)
     logging.getLogger("litework.cli").info("日志文件: %s", log_path)
 
-    # P0-2 默认开启 Bearer 鉴权：未显式指定 token 时自动生成随机令牌，
     # 经就绪标记（token=...）下发给 Electron 桌面外壳自动注入请求头。
     # --no-token 显式关闭（本机开发调试），此时输出醒目告警。
     if args.no_token and args.token:

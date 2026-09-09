@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo, SseConnState } from "../types";
 
-/** SSE 连接指示器文案（P1-5） */
+/** SSE 连接指示器文案 */
 const SSE_LABELS: Record<SseConnState, string> = {
   idle: "",
   connecting: "连接中…",
@@ -52,7 +52,7 @@ export default function Composer({
 }: {
   disabled?: boolean;
   running: boolean;
-  /** SSE 连接状态（P1-5）：运行中显示连接指示器（绿=已连接/黄=重连中/红=失联） */
+  /** SSE 连接状态：绿=已连接 / 黄=重连中 / 红=失联 */
   sseState?: SseConnState;
   agents: AgentInfo[];
   currentAgent: string;
@@ -99,21 +99,11 @@ export default function Composer({
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
-  // 协作模式选择（多智能体）：自动=模型按任务特征路由；其余为技能配方显式触发。
-  // 选中后下一条消息以 /技能 命令发送（复用技能展开机制），发送后回落自动。
-  const COLLAB_MODES: { id: string; skill: string; label: string; title: string }[] = [
-    { id: "auto", skill: "", label: "🤝 自动", title: "模型按任务特征自动选择合作模式（编排/流水线/头脑风暴/辩论/会议/开发冲刺）" },
-    { id: "brainstorm", skill: "brainstorm", label: "💡 头脑风暴", title: "多视角并行提案 → 交叉批判 → 综合" },
-    { id: "agent-debate", skill: "agent-debate", label: "⚔ 辩论评审", title: "提案者 vs 批判者多轮对抗 → 裁决收敛" },
-    { id: "pipeline", skill: "pipeline", label: "⛓ 流水线", title: "设计→实现→审查 顺序接力交接" },
-    { id: "meeting", skill: "meeting", label: "💬 群聊会议", title: "多 Agent 轮流发言、互相看到彼此观点后收敛共识" },
-    { id: "code-sprint", skill: "code-sprint", label: "⚡ 开发冲刺", title: "软件开发特化：测试驱动接力（实现⇄测试循环）与模块领地并行" },
-  ];
-  const [collabMode, setCollabMode] = useState("auto");
+  // 协作模式：自动=按任务特征路由；选中模式会话级生效（后端注入 system prompt）
   const [collabOpen, setCollabOpen] = useState(false);
-  // 已安装协作模式（插件形态，可带 logo）
-  const pluginModes = useMemo(
-    () => collabModes.filter((m) => m.source === "plugin"),
+  // 可选协作模式（内置 + 本地覆盖，排除 default/review 两个策略项，由设置页配置）
+  const modeChoices = useMemo(
+    () => collabModes.filter((m) => m.name !== "default" && m.name !== "review"),
     [collabModes]
   );
   // 点击外部关闭 popover
@@ -418,15 +408,10 @@ export default function Composer({
       setText("");
       return;
     }
-    // 协作模式（非自动）：改写为 /技能 命令（复用技能展开机制）。
-    // 模式保持选择（不回落）：与 Agent 选择器一致的持久语义，用户手动切回自动
-    let outgoing = t;
-    if (collabMode !== "auto" && !t.startsWith("/")) {
-      const mode = COLLAB_MODES.find((m) => m.id === collabMode);
-      if (mode?.skill) outgoing = `/${mode.skill} ${t}`;
-    }
     // @role 任务 → 显式派生指令（@-mention 触发多 Agent）
-    const atMatch = /^@([A-Za-z0-9_\-]+)\s+(.+)$/s.exec(outgoing);
+    // （协作模式已全会话级生效——由后端注入 system prompt，发送不再改写）
+    let outgoing = t;
+    const atMatch = /^@([A-Za-z0-9_\-]+)\s+(.+)$/s.exec(t);
     if (atMatch) {
       const [, role, rest] = atMatch;
       outgoing = `请使用 spawn_agent 工具派生 role=${role} 的子 Agent 执行以下任务，派生后继续你自己的工作，结果会自动送达：\n${rest}`;
@@ -435,8 +420,6 @@ export default function Composer({
     setHistoryIdx(-1);
     onSend(outgoing);
     setText("");
-    // 协作模式为一次性修饰：发送后回落自动，避免后续消息被持续强制走该模式
-    if (collabMode !== "auto") setCollabMode("auto");
   };
 
   const primary = agents.filter((a) => a.mode !== "subagent");
@@ -461,10 +444,7 @@ export default function Composer({
               </button>
              );
            })}
-          {/* 协作模式：按钮显示当前模式 + popover 选择。
-              - 已安装协作模式（插件，带 logo）：会话级启用——写入会话 metadata，
-                本会话后续任务按该模式配方编排（由后端 system prompt 注入）；
-              - 技能模式：一次性修饰——下一条消息以 /技能 命令发送，发送后回落。 */}
+          {/* 协作模式：按钮显示当前模式 + popover 选择（会话级生效，后端注入 system prompt） */}
           <div className="collab-picker" ref={collabRef}>
             <button
               className={`collab-btn ${sessionCollabMode ? "active" : ""}`}
@@ -474,11 +454,11 @@ export default function Composer({
                 if (next) onCollabModesRefresh?.();
               }}
               disabled={disabled || running}
-              title="多 Agent 协作模式：已安装模式对本会话持续生效；技能模式对下一条消息生效"
+              title="多 Agent 协作模式：选中后本会话持续生效；自动=按任务特征路由"
             >
               {(() => {
                 if (sessionCollabMode) {
-                  const m = pluginModes.find((p) => p.name === sessionCollabMode);
+                  const m = modeChoices.find((p) => p.name === sessionCollabMode);
                   if (m) return <><ModeIcon mode={m} size={14} /> {m.display_name}</>;
                 }
                 return "🤝 自动";
@@ -494,10 +474,10 @@ export default function Composer({
                   <span className="collab-option-label">🤝 自动</span>
                   <span className="collab-option-desc">跟随全局设置，模型按任务特征路由</span>
                 </button>
-                {pluginModes.length > 0 && (
+                {modeChoices.length > 0 && (
                   <>
-                    <div className="collab-popover-group">已安装协作模式（本会话生效）</div>
-                    {pluginModes.map((m) => (
+                    <div className="collab-popover-group">协作模式（本会话生效）</div>
+                    {modeChoices.map((m) => (
                       <button
                         key={m.name}
                         className={`collab-option with-icon ${sessionCollabMode === m.name ? "on" : ""}`}
@@ -507,117 +487,18 @@ export default function Composer({
                         <span className="collab-option-label">
                           <ModeIcon mode={m} size={16} />
                           {m.display_name}
+                          {m.source === "plugin" && (
+                            <span className="collab-mode-src" title="本地安装的社区版本">社区版</span>
+                          )}
                         </span>
                         <span className="collab-option-desc">{m.description}</span>
                       </button>
                     ))}
                   </>
                 )}
-                <div className="collab-popover-group">技能触发（对下一条消息生效）</div>
-                {COLLAB_MODES.filter((m) => m.id !== "auto").map((m) => (
-                  <button
-                    key={m.id}
-                    className={`collab-option ${collabMode === m.id ? "on" : ""}`}
-                    onClick={() => { setCollabMode(m.id); setCollabOpen(false); }}
-                    title={m.title}
-                  >
-                    <span className="collab-option-label">{m.label}</span>
-                    <span className="collab-option-desc">{m.title}</span>
-                  </button>
-                ))}
               </div>
             )}
           </div>
-          <span className="agent-bar-label">模型:</span>
-          <select
-            className="model-select"
-            value={isDefaultModel ? "__global__" : effSelectValue}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return;
-              if (v === globalSelectValue || v === "__global__") {
-                // 选回全局默认 → 清除会话 override
-                onSessionModelChange(null);
-                return;
-              }
-              const [provider, model] = v.split("\n");
-              onSessionModelChange({ provider, model });
-            }}
-            disabled={disabled || running}
-            title={isDefaultModel ? `当前使用全局默认模型（${effProviderName} / ${effModel}），选择可切换为会话专用` : `当前会话模型：${effProviderName} / ${effModel}；选中“全局默认”可恢复`}
-          >
-            {/* 始终提供「全局默认」入口：显示实际生效的默认模型名，不再是抽象占位 */}
-            <option value="__global__">
-              {llmConfig?.active ? `${allProviders.find((p) => p.id === llmConfig.active)?.name || llmConfig.active} / ${llmConfig.providers[llmConfig.active]?.model || "未配置"}` : "未配置全局模型"}
-              {isDefaultModel ? "" : "（默认）"}
-            </option>
-            {showFallbackOption && sessionModel && (
-              // 会话 override 确实不在任何已配置的 provider 模型列表里（供应商被删/模型列表变更）
-              // 才补这一项避免 select 空白；文案用供应商显示名而非内部 ID（如 custom_xxx）
-              <option value={`${sessionModel.provider}\n${sessionModel.model}`}>
-                {fallbackProviderName} / {sessionModel.model}（会话）
-              </option>
-            )}
-            {allProviders.map((provider) =>
-              provider.has_key && (provider.models ?? []).map((model) => (
-                <option key={`${provider.id}:${model}`} value={`${provider.id}\n${model}`}>
-                  {provider.name || provider.id} / {model}
-                  {model === globalModel && provider.id === llmConfig?.active ? "（默认）" : ""}
-                </option>
-              ))
-            )}
-          </select>
-          {onReasoningEffortChange && (
-            <div className="reasoning-popover reasoning-quick">
-              <button
-                type="button"
-                className={`reasoning-trigger reasoning-quick-trigger reasoning-effort-${displayEffort === "off" ? "off" : displayEffort}`}
-                onClick={() => setReasoningOpen(!reasoningOpen)}
-                title={
-                  hasEffortOverride
-                    ? `推理强度：${reasoningLabel(reasoningEffort)}（会话级）`
-                    : providerEffort
-                      ? `推理强度：${reasoningLabel(providerEffort)}（供应商默认，${effProviderName} 设置中配置）`
-                      : "推理强度：关闭（未配置）"
-                }
-              >
-                {reasoningLabel(displayEffort)}
-              </button>
-              {reasoningOpen && (
-                <div className="reasoning-menu">
-                  <div className="reasoning-track">
-                    {providerEffort && (
-                      <button
-                        className={`reasoning-option ${!hasEffortOverride ? "active" : ""}`}
-                        onClick={() => { onReasoningEffortChange(""); setReasoningOpen(false); }}
-                        type="button"
-                      >
-                        <span className="reasoning-option-label">跟随全局 · {reasoningLabel(providerEffort)}</span>
-                        <span className="reasoning-option-desc">使用供应商默认（{effProviderName} 设置中配置）</span>
-                      </button>
-                    )}
-                    {[
-                      { value: "off", label: "关闭", desc: "常规回答（本会话）" },
-                      { value: "low", label: "低", desc: "轻量推理" },
-                      { value: "medium", label: "中", desc: "平衡速度与深度" },
-                      { value: "high", label: "高", desc: "深度推理" },
-                      { value: "max", label: "最大", desc: "极限推理（Token 消耗大）" },
-                    ].map((item) => (
-                      <button
-                        key={item.value}
-                        className={`reasoning-option ${hasEffortOverride && reasoningEffort === item.value ? "active" : ""}`}
-                        onClick={() => { onReasoningEffortChange(item.value); setReasoningOpen(false); }}
-                        type="button"
-                      >
-                        <span className="reasoning-option-label">{item.label}</span>
-                        <span className="reasoning-option-desc">{item.desc}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
       <div className={`composer ${dragOver ? "drag-over" : ""}`}>
@@ -779,12 +660,106 @@ export default function Composer({
           </>
         )}
       </div>
-      <div className="composer-hint">
+      <div className="composer-bottom">
+        <div className="composer-bottom-left">
+          <span className="agent-bar-label">模型:</span>
+          <select
+            className="model-select"
+            value={isDefaultModel ? "__global__" : effSelectValue}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              if (v === globalSelectValue || v === "__global__") {
+                // 选回全局默认 → 清除会话 override
+                onSessionModelChange(null);
+                return;
+              }
+              const [provider, model] = v.split("\n");
+              onSessionModelChange({ provider, model });
+            }}
+            disabled={disabled || running}
+            title={isDefaultModel ? `当前使用全局默认模型（${effProviderName} / ${effModel}），选择可切换为会话专用` : `当前会话模型：${effProviderName} / ${effModel}；选中“全局默认”可恢复`}
+          >
+            {/* 始终提供「全局默认」入口：显示实际生效的默认模型名，不再是抽象占位 */}
+            <option value="__global__">
+              {llmConfig?.active ? `${allProviders.find((p) => p.id === llmConfig.active)?.name || llmConfig.active} / ${llmConfig.providers[llmConfig.active]?.model || "未配置"}` : "未配置全局模型"}
+              {isDefaultModel ? "" : "（默认）"}
+            </option>
+            {showFallbackOption && sessionModel && (
+              // 会话 override 确实不在任何已配置的 provider 模型列表里（供应商被删/模型列表变更）
+              // 才补这一项避免 select 空白；文案用供应商显示名而非内部 ID（如 custom_xxx）
+              <option value={`${sessionModel.provider}\n${sessionModel.model}`}>
+                {fallbackProviderName} / {sessionModel.model}（会话）
+              </option>
+            )}
+            {allProviders.map((provider) =>
+              provider.has_key && (provider.models ?? []).map((model) => (
+                <option key={`${provider.id}:${model}`} value={`${provider.id}\n${model}`}>
+                  {provider.name || provider.id} / {model}
+                  {model === globalModel && provider.id === llmConfig?.active ? "（默认）" : ""}
+                </option>
+              ))
+            )}
+          </select>
+          {onReasoningEffortChange && (
+            <div className="reasoning-popover reasoning-quick">
+              <button
+                type="button"
+                className={`reasoning-trigger reasoning-quick-trigger reasoning-effort-${displayEffort === "off" ? "off" : displayEffort}`}
+                onClick={() => setReasoningOpen(!reasoningOpen)}
+                title={
+                  hasEffortOverride
+                    ? `推理强度：${reasoningLabel(reasoningEffort)}（会话级）`
+                    : providerEffort
+                      ? `推理强度：${reasoningLabel(providerEffort)}（供应商默认，${effProviderName} 设置中配置）`
+                      : "推理强度：关闭（未配置）"
+                }
+              >
+                {reasoningLabel(displayEffort)}
+              </button>
+              {reasoningOpen && (
+                <div className="reasoning-menu">
+                  <div className="reasoning-track">
+                    {providerEffort && (
+                      <button
+                        className={`reasoning-option ${!hasEffortOverride ? "active" : ""}`}
+                        onClick={() => { onReasoningEffortChange(""); setReasoningOpen(false); }}
+                        type="button"
+                      >
+                        <span className="reasoning-option-label">跟随全局 · {reasoningLabel(providerEffort)}</span>
+                        <span className="reasoning-option-desc">使用供应商默认（{effProviderName} 设置中配置）</span>
+                      </button>
+                    )}
+                    {[
+                      { value: "off", label: "关闭", desc: "常规回答（本会话）" },
+                      { value: "low", label: "低", desc: "轻量推理" },
+                      { value: "medium", label: "中", desc: "平衡速度与深度" },
+                      { value: "high", label: "高", desc: "深度推理" },
+                      { value: "max", label: "最大", desc: "极限推理（Token 消耗大）" },
+                    ].map((item) => (
+                      <button
+                        key={item.value}
+                        className={`reasoning-option ${hasEffortOverride && reasoningEffort === item.value ? "active" : ""}`}
+                        onClick={() => { onReasoningEffortChange(item.value); setReasoningOpen(false); }}
+                        type="button"
+                      >
+                        <span className="reasoning-option-label">{item.label}</span>
+                        <span className="reasoning-option-desc">{item.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="composer-hint">
         {running && <span className={`sse-dot sse-${sseState}`} title={SSE_LABELS[sseState]} />}
         {running && sseState !== "idle" && <span className={`sse-label sse-${sseState}`}>{SSE_LABELS[sseState]}</span>}
         {uploadToast && <span className="upload-toast">{uploadToast}</span>}
         {uploadToast ? " · " : ""}
         {running ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送" : "工具执行受安全策略保护，中危操作会请求你确认"}
+        </div>
       </div>
     </div>
   );

@@ -22,11 +22,36 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/collab/modes")
     async def list_collab_modes(request: Request):
-        """协作模式选择器数据源：内置策略 + 已安装模式插件（kind=collab 社区包）。"""
         ctx.check_auth(request)
         from ...orchestration.collab_policy import list_collab_modes as _list
 
         return {"modes": _list(app)}
+
+    @router.get("/api/collab/icon/{mode_name}")
+    async def collab_mode_icon(mode_name: str, request: Request):
+        """协作模式图标：本地覆盖包优先，回退内置包目录。"""
+        ctx.check_auth(request)
+        import mimetypes
+        import os as _os
+
+        from fastapi.responses import FileResponse
+
+        from ...orchestration.collab_policy import _installed_mode_plugins
+        from ...tools.plugin_loader import builtin_plugins_root, find_plugin_icon
+
+        for plugin in _installed_mode_plugins(app):
+            if plugin.mode_name != mode_name:
+                continue
+            local_root = _os.path.join(app.config_dir, "plugins")
+            roots = (local_root, builtin_plugins_root()) if getattr(
+                plugin, "_is_local_override", False) else (builtin_plugins_root(),)
+            icon_path = find_plugin_icon(plugin.name, *roots)
+            if icon_path:
+                media, _ = mimetypes.guess_type(icon_path)
+                return FileResponse(icon_path, media_type=media or "application/octet-stream",
+                                    headers={"Cache-Control": "max-age=3600"})
+            raise HTTPException(status_code=404, detail="该模式无图标")
+        raise HTTPException(status_code=404, detail="未知的协作模式")
 
     @router.get("/api/agents")
     async def list_agents(request: Request):

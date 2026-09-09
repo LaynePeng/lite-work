@@ -23,9 +23,11 @@ const baseProps = {
 };
 
 const MODES: CollabMode[] = [
-  { name: "default", display_name: "默认", description: "内置路由", source: "builtin", version: "", icon_url: null },
-  { name: "meeting", display_name: "会议（群聊共识）", description: "轮流发言收敛共识", source: "plugin", version: "1.0.0", icon_url: "/api/plugins/collab-meeting/icon" },
-  { name: "debate", display_name: "辩论（对抗收敛）", description: "多轮对抗审查", source: "plugin", version: "1.0.0", icon_url: null },
+  { name: "default", display_name: "默认（自动路由）", description: "内置路由", source: "builtin", version: "", icon_url: null },
+  { name: "review", display_name: "审查门", description: "审查策略", source: "builtin", version: "", icon_url: null },
+  { name: "meeting", display_name: "会议（群聊共识）", description: "轮流发言收敛共识", source: "builtin", version: "1.0.0", icon_url: null },
+  { name: "orchestrate", display_name: "编排-工人（并行派发）", description: "并行派发子任务", source: "builtin", version: "1.0.0", icon_url: null },
+  { name: "debate", display_name: "辩论（对抗收敛）", description: "多轮对抗审查", source: "plugin", version: "1.1.0", icon_url: null },
 ];
 
 describe("Composer · SSE 连接状态指示器（P1-5）", () => {
@@ -52,8 +54,8 @@ describe("Composer · SSE 连接状态指示器（P1-5）", () => {
   });
 });
 
-describe("Composer · 协作模式选择器（安装的模式插件 + 会话级生效）", () => {
-  it("已安装协作模式在选择器中分组展示（含说明）", async () => {
+describe("Composer · 协作模式选择器（方案 B 全插件化，会话级生效）", () => {
+  it("协作模式在选择器中分组展示（内置 + 社区覆盖版，含说明）", async () => {
     const user = userEvent.setup();
     render(
       <Composer
@@ -64,15 +66,17 @@ describe("Composer · 协作模式选择器（安装的模式插件 + 会话级�
       />
     );
     await user.click(screen.getByTitle(/多 Agent 协作模式/));
-    // 分组标题 + 插件模式条目（描述进 title 属性）
-    expect(screen.getByText("已安装协作模式（本会话生效）")).toBeInTheDocument();
+    // 分组标题 + 模式条目（内置与本地覆盖版并列；描述进 title 属性）
+    expect(screen.getByText("协作模式（本会话生效）")).toBeInTheDocument();
     expect(screen.getByText("会议（群聊共识）")).toBeInTheDocument();
     expect(screen.getByText("辩论（对抗收敛）")).toBeInTheDocument();
-    // 技能触发组保留
-    expect(screen.getByText("技能触发（对下一条消息生效）")).toBeInTheDocument();
+    // 方案 B：不再有「技能触发」一次性分组
+    expect(screen.queryByText(/技能触发/)).not.toBeInTheDocument();
+    // 本地覆盖版带「社区版」标记
+    expect(screen.getByText("社区版")).toBeInTheDocument();
   });
 
-  it("选中插件模式 → 会话级回调触发；按钮切换为该模式显示", async () => {
+  it("选中模式 → 会话级回调触发（写入会话 metadata，全任务生效）", async () => {
     const onSessionCollabMode = vi.fn();
     const user = userEvent.setup();
     render(

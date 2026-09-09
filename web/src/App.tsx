@@ -245,7 +245,7 @@ export default function App() {
   const streamingRefs = useRef<Map<string, StreamingState>>(new Map());
   const lastEventTimesRef = useRef<Map<string, number>>(new Map());
   const flushTimersRef = useRef<Map<string, number>>(new Map());
-  // SSE 重连控制器（P1-5）：每会话一个 {taskId, attempts, timer}
+  // SSE 重连控制器：每会话一个 {taskId, attempts, timer}
   const streamCtlRef = useRef<Map<string, { taskId: string; attempts: number; timer: number | null }>>(new Map());
   const chatStatesRef = useRef<Record<string, ChatSessionState>>({});
   const tabsRef = useRef<TabItem[]>([]);
@@ -1372,7 +1372,7 @@ export default function App() {
     [getChat, patchChat, pushLog, scheduleSubagentRecordExpiry, scheduleStreamFlush, cancelStreamFlush, closeStream, refreshSessions]
   );
 
-  // ------------------------------------------------------------ SSE 连接管理（P1-5）
+  // ------------------------------------------------------------ SSE 连接管理
 
   const MAX_SSE_RECONNECT = 8;
   const SSE_BACKOFF_CAP_MS = 15_000;
@@ -1483,8 +1483,7 @@ export default function App() {
     [closeStream, handleSSEEvent, patchChat, probeTaskAlive, pushLog, syncSessionAgents]
   );
 
-  // 30s stall 检测（P1-5）：任务运行中超过 30s 无任何 SSE 事件（含 keepalive
-  // 不触发 onmessage），提示用户可能卡住——长工具执行属正常场景，仅提示不阻断。
+  // 30s stall 检测：任务运行中超时无事件仅提示不阻断
   useEffect(() => {
     const STALL_MS = 30_000;
     const timer = setInterval(() => {
@@ -1657,7 +1656,7 @@ export default function App() {
       }
       const base = getChat(sid);
       // SSE 连接（新任务提交与排队竞态续接共用，统一走 connectTaskStream：
-      // 含断线重连、连接状态指示与 [DONE] 收尾，见 P1-5）
+      // 含断线重连与 [DONE] 收尾）
       const connect = (taskId: string) => connectTaskStream(sid, taskId);
 
       if (base.running) {

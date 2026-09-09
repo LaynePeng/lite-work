@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""APIRouter 拆分集合（P0-1）：server/app.py 只保留应用工厂与静态托管。
-
-路由按领域分组，各自暴露 create_router(ctx) 工厂，经 ServerContext 注入
-AgentApp / TaskManager / TokenAuth——路由处理器可独立实例化测试，
-解决原先 50+ 路由闭包内联无法单测的问题。
-"""
+"""APIRouter 集合：按领域分组，各自暴露 create_router(ctx) 工厂。"""
 from .agents import create_router as create_agents_router
 from .chat import create_router as create_chat_router
 from .llm import create_router as create_llm_router

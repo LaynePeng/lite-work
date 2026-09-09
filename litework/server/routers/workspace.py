@@ -271,6 +271,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "dirs": dirs[:cap],
             "files": files[:cap],
             "truncated": len(dirs) + len(files) > cap,
+            # Windows 全部可用盘符，供前端盘符下拉（非 Windows 返回空数组）
+            "drives": list_drives() if is_win else [],
         }
 
     @router.get("/api/fs/read")

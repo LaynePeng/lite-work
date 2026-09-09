@@ -1,19 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""协作模式策略层（Tier 1 配方外置 + Tier 2 行为钩子）。
-
-三层分工（评审决议：编排内核保留，模式做成可插拔配方/策略）：
-- 编排内核（SessionAgentManager：限额/隔离/通知注入）不插件化——安全关键路径；
-- 配方（collab_recipe）：提示词层模式指引，配置文本可直接替换内置版（Tier 1）；
-- 策略（collab_policy）：带生命周期钩子的行为插件（on_agent_spawned /
-  on_agent_complete / on_task_done），异常与内核完全隔离（Tier 2）。
-"""
+"""协作模式策略层：配方（提示词指引）+ 行为钩子（on_agent_* 生命周期）。"""
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,11 +45,7 @@ class CollabContext:
 
 
 class CollabPolicy:
-    """协作模式策略基类。子类覆盖 recipe / 生命周期钩子。
-
-    钩子契约：任何异常都被内核捕获并记录，绝不影响任务与子 Agent 的
-    正常执行——策略是增强，不是依赖。
-    """
+    """策略基类：钩子异常由内核隔离，不影响任务执行。"""
 
     name: str = "default"
 
@@ -80,11 +70,7 @@ class DefaultCollabPolicy(CollabPolicy):
 
 
 class ReviewCollabPolicy(CollabPolicy):
-    """审查门策略：有文件改动的 agent 交付后，通知注入 review 提醒。
-
-    行为示例（Tier 2）：策略不改编排流程，只往 manager 通知队列追加
-    "待审查"提醒，下一回合注入主 Agent 上下文。
-    """
+    """有文件改动的 agent 交付后注入 review 提醒。"""
 
     name = "review"
 
@@ -110,7 +96,7 @@ class ReviewCollabPolicy(CollabPolicy):
 
 
 class UserRecipeCollabPolicy(CollabPolicy):
-    """自定义配方（Tier 1）：collab_recipe 文本替换内置指引。"""
+    """自定义配方：collab_recipe 文本替换内置指引。"""
 
     name = "user-recipe"
 
@@ -148,14 +134,7 @@ def _resolve_mode(app, name: str) -> Optional[CollabPolicy]:
 
 
 def get_collab_policy(app, session_id: Optional[str] = None) -> CollabPolicy:
-    """按配置解析当前策略（每次读取——与 MCP/工具集一致，下个任务热生效）。
-
-    优先级：
-    1. session metadata.collab_mode（对话框选择器的会话级覆盖）
-    2. config.collab_recipe 非空 → UserRecipeCollabPolicy（Tier 1，整体替换配方文本）
-    3. config.collab_policy 命中模式名（default / review / 已安装模式插件）
-    4. 兜底 default
-    """
+    """优先级：会话覆盖 > collab_recipe > collab_policy > default。"""
     try:
         # 1. 会话级覆盖（对话框协作模式选择器写入 session metadata）
         if session_id:
@@ -185,7 +164,7 @@ def get_collab_policy(app, session_id: Optional[str] = None) -> CollabPolicy:
 
 
 def _installed_mode_plugins(app) -> List["CollabModePlugin"]:
-    """已安装的协作模式插件（错误隔离：加载失败按空处理）。"""
+    """生效中的协作模式插件（本地已安装 > 内置，同名覆盖），错误隔离。"""
     try:
         return app.collab_modes()
     except Exception:
@@ -194,35 +173,29 @@ def _installed_mode_plugins(app) -> List["CollabModePlugin"]:
 
 
 def list_collab_modes(app) -> List[Dict[str, Any]]:
-    """模式选择器数据源：内置策略 + 已安装模式插件。
+    """模式选择器数据源。source: builtin=内置 / plugin=本地覆盖（社区更新）。"""
+    from ..tools.plugin_loader import builtin_plugins_root, find_plugin_icon
 
-    返回 [{name, display_name, description, source, version, icon_url}]，
-    name 即 config.collab_policy 的取值；icon_url 指向插件自带图标端点。
-    """
     modes: List[Dict[str, Any]] = [
-        {"name": "default", "display_name": "默认（内置 7 模式路由指引）",
-         "description": "按任务特征自动路由到编排-工人/流水线/头脑风暴/互批/辩论/会议/测试驱动接力",
+        {"name": "default", "display_name": "默认（自动路由）",
+         "description": "按任务特征自动路由（编排/流水线/头脑风暴/互批/辩论/会议/测试驱动接力）",
          "source": "builtin", "version": "", "icon_url": None},
         {"name": "review", "display_name": "审查门",
          "description": "有文件改动的子 Agent 交付后注入 review_code 审查提醒",
          "source": "builtin", "version": "", "icon_url": None},
     ]
+    local_root = os.path.join(getattr(app, "config_dir", "") or "", "plugins")
     for plugin in _installed_mode_plugins(app):
-        icon_url = None
-        try:
-            from ..tools.plugin_loader import find_plugin_icon
-
-            if find_plugin_icon(app.config_dir, plugin.name):
-                icon_url = f"/api/plugins/{plugin.name}/icon"
-        except Exception:
-            pass
+        is_local = getattr(plugin, "_is_local_override", False)
+        roots = (local_root, builtin_plugins_root()) if is_local else (builtin_plugins_root(),)
+        has_icon = find_plugin_icon(plugin.name, *roots) is not None
         modes.append({
             "name": plugin.mode_name,
             "display_name": getattr(plugin, "display_name", "") or plugin.mode_name,
             "description": (getattr(plugin, "description", "") or "")[:200],
-            "source": "plugin",
+            "source": "plugin" if is_local else "builtin",
             "version": getattr(plugin, "version", "") or "",
-            "icon_url": icon_url,
+            "icon_url": f"/api/collab/icon/{plugin.mode_name}" if has_icon else None,
         })
     return modes
 

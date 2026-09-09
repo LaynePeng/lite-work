@@ -2139,6 +2139,10 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 12px;
 }
 
+.agent-bar .collab-picker {
+  margin-left: auto;
+}
+
 .agent-bar-label {
   color: var(--text-secondary);
   margin-right: 4px;
@@ -2304,11 +2308,34 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-radius: 2px;
 }
 
+.composer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.composer-bottom-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .composer-hint {
-  text-align: center;
+  text-align: right;
   font-size: 11px;
   color: var(--text-2);
-  margin-top: 8px;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  max-width: 50%;
+  scrollbar-width: thin;
 }
 
 /* 拖拽文件悬停高亮 + 上传反馈提示（操作反馈类：随上传完成/2.5s 消失） */
@@ -3243,6 +3270,57 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-0);
 }
 
+/* Windows 盘符下拉选择器 */
+.picker-drives {
+  position: relative;
+}
+.picker-drives-toggle {
+  cursor: pointer;
+}
+.picker-drives-toggle.active {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+.picker-drives-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 120px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.picker-drive-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-0);
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  text-align: left;
+}
+.picker-drive-item:hover {
+  background: var(--bg-3);
+}
+.picker-drive-item.on {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+.picker-drive-item .picker-ico {
+  flex: none;
+  font-size: 14px;
+}
+
 .picker-breadcrumb {
   display: flex;
   align-items: center;
@@ -3877,6 +3955,16 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .collab-popover-group:first-of-type {
   border-top: none;
   margin-top: 0;
+}
+.collab-mode-src {
+  flex: none;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 14px;
 }
 
 .collab-option-desc {
@@ -5404,6 +5492,11 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .plugin-tag.new {
   background: color-mix(in srgb, var(--green) 14%, transparent);
   color: var(--green);
+}
+
+.plugin-tag.collab {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 /* 可更新提示 / 版本对比箭头 */

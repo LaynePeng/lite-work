@@ -3,9 +3,7 @@
 
 """FastAPI 服务：REST API + SSE 事件流 + 静态前端托管 + 可选 Bearer 鉴权。
 
-P0-1 重构：路由拆分至 routers/ 包（sessions / chat / llm / skills / agents /
-workspace / office / security / meta），本模块只保留应用工厂、CORS、
-lifespan 与静态前端托管。
+路由拆分至 routers/ 包，本模块只保留应用工厂、CORS、lifespan 与静态托管。
 """
 from __future__ import annotations
 
@@ -39,9 +37,7 @@ logger = logging.getLogger("litework.server")
 
 VERSION = __version__
 
-# CORS 白名单（P0-2）：生产前端由本服务同源托管（无跨域），白名单只覆盖
-# 开发态 vite dev server 与本机回环变体；额外来源经 LITEWORK_CORS_ORIGINS
-# 环境变量追加（逗号分隔）。不再使用 allow_origins=["*"]。
+# CORS 白名单：默认覆盖开发态 vite；额外来源经 LITEWORK_CORS_ORIGINS 追加
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

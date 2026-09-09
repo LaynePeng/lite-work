@@ -34,12 +34,8 @@ class TaskHandle:
         self.registry = registry
         self.loop = loop
         self.app = app
-        # SSE 订阅者模型（P1-5/P2-6）：每个 /events 连接一个独立队列。
-        # 此前单一队列 + 重连会形成两个 reader 竞争——已断连但尚未被取消的
-        # 旧 reader 会"偷走"事件乃至结束哨兵，新 reader 永久饥饿。
+        # 每个 SSE 连接独立队列；首个订阅者前的事件保留，重连不回放
         self._subscribers: List[asyncio.Queue] = []
-        # 首个订阅者连接前的事件保留（POST /api/chat 返回后任务即刻开跑，
-        # SSE 连接存在竞态窗口；重连订阅者不回放——前端 UI 无法去重）
         self._retained: List[Any] = []
         self._first_subscriber_seen = False
         self.abort_event = asyncio.Event()

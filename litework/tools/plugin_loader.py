@@ -376,25 +376,48 @@ def load_plugins(config_dir: str) -> List[Plugin]:
 
 # ---------------------------------------------------------------- 管理接口（Web/API 薄封装）
 
-# 插件图标约定：插件目录下的 icon.svg / icon.png / icon.jpg / icon.webp / icon.gif
 ICON_FILENAMES = ("icon.svg", "icon.png", "icon.jpg", "icon.webp", "icon.gif")
 
 
-def find_plugin_icon(config_dir: str, name: str) -> Optional[str]:
-    """查找已安装目录插件的图标文件路径（svg 优先），无图标返回 None。
+def builtin_plugins_root() -> str:
+    """内置插件目录（litework/builtin_plugins/，PyInstaller datas 同路径）。"""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "builtin_plugins")
 
-    name 经 _safe_plugin_name 校验（防路径穿越）；单文件插件（<name>.py）无图标。
-    """
+
+def load_collab_builtin() -> List[Any]:
+    """加载内置协作模式包（与社区包同格式，仅加载一次）。"""
+    global _collab_builtin_cache
+    if _collab_builtin_cache is not None:
+        return _collab_builtin_cache
+    root = builtin_plugins_root()
+    plugins: List[Any] = []
+    for desc in _discover_plugin_modules(root):
+        mod = _load_module(desc["spec_path"], f"litework_builtin_{desc['name']}")
+        if mod is None:
+            continue
+        for cls in _find_plugin_classes(mod):
+            try:
+                plugins.append(cls())
+            except Exception as exc:
+                logger.warning("[PluginLoader] 实例化内置插件 %s 失败: %s", desc["name"], exc)
+    _collab_builtin_cache = plugins
+    return plugins
+
+
+_collab_builtin_cache: Optional[List[Any]] = None
+
+
+def find_plugin_icon(name: str, *roots: str) -> Optional[str]:
+    """在给定插件根目录下查找 name/icon.*（svg 优先）。"""
     safe = _safe_plugin_name(name)
     if not safe:
         return None
-    plugin_dir = os.path.join(_plugin_root(config_dir), safe)
-    if not os.path.isdir(plugin_dir):
-        return None
-    for fname in ICON_FILENAMES:
-        candidate = os.path.join(plugin_dir, fname)
-        if os.path.isfile(candidate):
-            return candidate
+    for root in roots:
+        for fname in ICON_FILENAMES:
+            candidate = os.path.join(root, safe, fname)
+            if os.path.isfile(candidate):
+                return candidate
     return None
 
 
@@ -429,12 +452,19 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
         removed: List[str] = []
         description = ""
         version = ""
+        # 插件类别：collab=协作模式（进模式选择器，不注册工具）/ tool=工具插件。
+        # 类继承判定（isinstance），与安装入口无关——任何来源装的协作模式包
+        # 都会被正确分流到协作模式的处理路径。
+        kind = "tool"
         mod = _load_module(desc["spec_path"], f"litework_plugin_meta_{name}")
         if mod is not None:
             classes = _find_plugin_classes(mod)
             for cls in classes:
                 try:
                     instance = cls()
+                    from ..orchestration.collab_policy import CollabModePlugin
+                    if isinstance(instance, CollabModePlugin):
+                        kind = "collab"
                     if hasattr(instance, "get_tools"):
                         for t in instance.get_tools():
                             tools.append(getattr(t, "name", "?"))
@@ -462,6 +492,7 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
             "description": description,
             "version": version,
             "source": src,
+            "kind": kind,
         })
     return out
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -163,7 +164,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
             ctx.check_auth(request)
         from ...tools.plugin_loader import find_plugin_icon
 
-        icon_path = find_plugin_icon(app.config_dir, name)
+        icon_path = find_plugin_icon(name, os.path.join(app.config_dir, "plugins"))
         if icon_path is None:
             raise HTTPException(status_code=404, detail="插件无图标")
         import mimetypes

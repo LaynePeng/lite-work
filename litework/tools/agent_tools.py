@@ -3,9 +3,7 @@
 
 """多 Agent 协作工具（Phase 1）：spawn_agent / list_agents / close_agent / wait_agents。
 
-设计对齐 docs/multi-agent-design.md §3。协作模式（编排-工人 / 流水线 /
-头脑风暴 / 互批）是这组原语之上的提示词配方——配方与行为策略见
-orchestration/collab_policy.py（Tier 1 配方外置 + Tier 2 策略钩子）。
+设计对齐 docs/multi-agent-design.md §3。协作模式配方见 orchestration/collab_policy.py。
 spawn_sub_agent（同步语义）保留为兼容包装，逐步迁移到 spawn_agent。
 """
 from __future__ import annotations
@@ -283,7 +281,6 @@ class MultiAgentPlugin(ToolPlugin):
     def get_tools(self) -> List[ToolDefinition]:
         gate = _collab_gate(self._app)
         roles = _role_registry_hint(self._app)
-        # 配方经策略层解析（Tier 1：collab_recipe 可整体替换内置指引）
         from ..orchestration.collab_policy import get_collab_policy
 
         recipe = get_collab_policy(self._app).recipe()

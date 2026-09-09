@@ -3,8 +3,7 @@
 
 """路由共享上下文：AgentApp / TaskManager / 鉴权的传递与公共校验助手。
 
-路由拆分（P0-1）后各 APIRouter 模块不再闭包捕获 create_app 局部变量，
-统一经 ServerContext 注入，路由处理器因此可被单独实例化与测试。
+各 APIRouter 经 ServerContext 注入依赖，可独立实例化测试。
 """
 from __future__ import annotations
 

@@ -208,21 +208,22 @@ class AgentApp:
         )
 
     def collab_modes(self) -> List["Plugin"]:
-        """已安装的协作模式插件（CollabModePlugin 实例）。
+        """协作模式插件：litework/builtin_plugins/ 内置 v1.0.0，
+        ~/.lite-work/plugins/ 同名包覆盖（社区更新机制）。"""
+        from .tools.plugin_loader import load_plugins, load_collab_builtin
 
-        与工具插件共享 ~/.lite-work/plugins/ 发现机制与加载缓存；
-        安装/卸载后 _invalidate_plugin_cache 清缓存即热生效。
-        """
         if self._local_plugins is None:
-            from .tools.plugin_loader import load_plugins
-
             self._local_plugins = load_plugins(self.config_dir)
         from .orchestration.collab_policy import CollabModePlugin
 
-        return [
+        local = [
             p for p in self._local_plugins
             if isinstance(p, CollabModePlugin) and getattr(p, "mode_name", "")
         ]
+        for p in local:
+            p._is_local_override = True
+        local_names = {p.name for p in local}
+        return [m for m in load_collab_builtin() if m.name not in local_names] + local
 
     def _apply_env_api_key(self, cli_key: Optional[str] = None) -> None:
         """CLI 传入的 --api-key 回填到所有未配置的供应商。"""
@@ -921,6 +922,20 @@ class AgentApp:
                 "version": getattr(p, "version", "") or _app_version,
                 "overridden": p.name in local_names,
                 "builtin": True,
+                "kind": "tool",
+            })
+        # 内置协作模式：与工具插件同一社区更新机制，无注册工具
+        from .tools.plugin_loader import load_collab_builtin
+
+        for m in load_collab_builtin():
+            results.append({
+                "name": m.name,
+                "description": getattr(m, "description", ""),
+                "tools": [],
+                "version": getattr(m, "version", "") or "1.0.0",
+                "overridden": m.name in local_names,
+                "builtin": True,
+                "kind": "collab",
             })
         return results
 

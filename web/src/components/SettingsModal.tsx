@@ -164,11 +164,29 @@ export default function SettingsModal({
     return cp?.path ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cp.path}` : "";
   }, [community]);
 
-  // 社区协作模式清单（kind === "collab"）：安装进协作模式选择器
-  const communityCollabModes = useMemo(
-    () => (community?.plugins || []).filter((p) => p.kind === "collab"),
-    [community]
-  );
+  // 社区协作模式清单（kind === "collab"）：与其他插件同一版本对比语义
+  // —— 内置/本地已装同版本隐藏，社区新版显示「更新」，完全未装显示「安装」。
+  // （7 个协作模式已内置随主程序发布，社区包用于独立升级覆盖）
+  const communityCollabModes = useMemo(() => {
+    const updates: { cp: CommunityManifest["plugins"][number]; currentVer: string; isLocal: boolean }[] = [];
+    const fresh: CommunityManifest["plugins"][number][] = [];
+    if (community) {
+      for (const cp of community.plugins) {
+        if (cp.kind !== "collab") continue;
+        // 生效版本：本地覆盖版（/api/plugins）> 内置版（/api/plugins/builtin）
+        const pkgName = cp.name;
+        const local = plugins.find((p) => p.name === pkgName);
+        const builtin = builtinPlugins.find((b) => b.name === pkgName);
+        const currentVer = local?.version || builtin?.version || "";
+        if (!currentVer) {
+          fresh.push(cp);
+        } else if (verCompare(cp.version, currentVer) > 0) {
+          updates.push({ cp, currentVer, isLocal: !!local });
+        }
+      }
+    }
+    return { updates, fresh };
+  }, [community, plugins, builtinPlugins]);
 
   const installCollabMode = useCallback(async (name: string, version?: string) => {
     const src = communitySrc(name);
@@ -176,12 +194,11 @@ export default function SettingsModal({
     setCollabBusy(name);
     setCollabMsg(null);
     try {
-      const before = new Set(collabModes.map((m) => m.name));
       await api.importPlugin({ source: src, name: undefined, overwrite: true, version });
-      // 安装后立即拉取新模式列表并自动选中新装的模式
+      // 安装后立即拉取新模式列表并自动选中新装的模式（本地覆盖版 source=plugin）
       const r = await api.collabModes();
       setCollabModes(r.modes);
-      const freshMode = r.modes.find((m) => m.source === "plugin" && !before.has(m.name));
+      const freshMode = r.modes.find((m) => m.source === "plugin" && m.name === name.replace(/^collab-/, ""));
       if (freshMode) setCollabPolicy(freshMode.name);
       setCollabMsg({ ok: true, text: `已安装协作模式「${name}」${freshMode ? "并已选中（记得保存）" : ""}` });
       refreshPlugins();
@@ -190,7 +207,7 @@ export default function SettingsModal({
     } finally {
       setCollabBusy(null);
     }
-  }, [collabModes, communitySrc, refreshPlugins]);
+  }, [communitySrc, refreshPlugins]);
 
   // 社区技能过滤：只显示「未安装」和「已安装但社区有更新版」的
   // （更新检测依赖 SKILL.md frontmatter 的 version 字段，社区技能补上后自动生效）
@@ -226,6 +243,7 @@ export default function SettingsModal({
       source?: string;
       isLocal: boolean;
       updateTo?: string;
+      kind?: "tool" | "collab";
     }> = builtinPlugins.map((bp) => {
       const u = userByName.get(bp.name);
       return {
@@ -238,6 +256,7 @@ export default function SettingsModal({
         source: u?.source,
         isLocal: !!u,
         updateTo: updateByName.get(bp.name),
+        kind: u?.kind || bp.kind,
       };
     });
     // 纯本地插件（无内置对应）
@@ -252,6 +271,7 @@ export default function SettingsModal({
           source: p.source,
           isLocal: true,
           updateTo: updateByName.get(p.name),
+          kind: p.kind,
         });
       }
     }
@@ -1435,6 +1455,11 @@ export default function SettingsModal({
                         <span className={`plugin-tag ${item.isLocal ? "local" : "builtin"}`}>
                           {item.isLocal ? "本地" : "内置"}
                         </span>
+                        {item.kind === "collab" && (
+                          <span className="plugin-tag collab" title="协作模式插件：在对话框协作模式选择器中使用，不注册工具">
+                            🤝 协作模式
+                          </span>
+                        )}
                         <span className="plugin-version">v{item.effectiveVer}</span>
                         {item.isLocal && item.builtinVer && (
                           <span className="plugin-tag builtin" title="删除本地版后回退到此版本">
@@ -1947,13 +1972,10 @@ export default function SettingsModal({
                   {collabInstallOpen && (
                     <div className="skills-list" style={{ marginTop: 8 }}>
                       {communityBusy && <div className="mcp-empty-inline">正在拉取社区清单…</div>}
-                      {!communityBusy && communityCollabModes.length === 0 && (
-                        <div className="mcp-empty-inline">社区暂无可安装的协作模式（lite-work-plugins 仓库 kind=collab 包）</div>
+                      {!communityBusy && communityCollabModes.updates.length + communityCollabModes.fresh.length === 0 && (
+                        <div className="mcp-empty-inline">✔ 7 个协作模式已内置且均为最新（社区有新版本时在此显示更新）</div>
                       )}
-                      {communityCollabModes.map((cp) => {
-                        const installed = collabModes.some(
-                          (m) => m.source === "plugin" && cp.name === `collab-${m.name}`
-                        );
+                      {communityCollabModes.updates.map(({ cp, currentVer, isLocal }) => {
                         const iconSrc = cp.icon
                           ? `https://raw.githubusercontent.com/laynepeng/lite-work-plugins/main/${cp.icon}`
                           : "";
@@ -1967,9 +1989,40 @@ export default function SettingsModal({
                                     onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                                 )}
                                 <span className="skill-item-name">{cp.name}</span>
-                                <span className={`plugin-tag ${installed ? "local" : "new"}`}>
-                                  {installed ? "已安装" : "未安装"}
+                                <span className={`plugin-tag ${isLocal ? "local" : "builtin"}`}>
+                                  {isLocal ? "本地" : "内置"}
                                 </span>
+                                <span className="plugin-ver-diff">v{currentVer} → <b>v{cp.version}</b></span>
+                              </div>
+                              <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                            </div>
+                            <div className="skill-item-actions">
+                              <button
+                                className="btn-update"
+                                disabled={collabBusy === cp.name || !cp.path}
+                                onClick={() => void installCollabMode(cp.name, cp.version)}
+                              >
+                                {collabBusy === cp.name ? "更新中…" : "更新"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {communityCollabModes.fresh.map((cp) => {
+                        const iconSrc = cp.icon
+                          ? `https://raw.githubusercontent.com/laynepeng/lite-work-plugins/main/${cp.icon}`
+                          : "";
+                        return (
+                          <div className="skill-item plugin-item" key={cp.name}>
+                            <div className="plugin-item-body">
+                              <div className="plugin-title-row">
+                                {iconSrc && (
+                                  <img className="collab-mode-icon" src={iconSrc}
+                                    width={18} height={18} alt=""
+                                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                                )}
+                                <span className="skill-item-name">{cp.name}</span>
+                                <span className="plugin-tag new">未安装</span>
                                 {cp.version && <span className="plugin-version">v{cp.version}</span>}
                               </div>
                               <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
@@ -1980,7 +2033,7 @@ export default function SettingsModal({
                                 disabled={collabBusy === cp.name || !cp.path}
                                 onClick={() => void installCollabMode(cp.name, cp.version)}
                               >
-                                {collabBusy === cp.name ? "安装中…" : installed ? "重装/更新" : "安装"}
+                                {collabBusy === cp.name ? "安装中…" : "安装"}
                               </button>
                             </div>
                           </div>
