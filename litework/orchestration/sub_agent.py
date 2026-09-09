@@ -71,10 +71,10 @@ def sub_agent_excludes(depth: int, max_depth: int = 2) -> List[str]:
         excludes.append("spawn_agent")
     return excludes
 
-# 声明 allowed_dirs 的写域 agent：读全开 + 三个写文件工具（写受 IsolationPlugin 约束；
-# shell 命令无法静态判定写目标，P1 不授予，由父 Agent 执行）
+# 声明 allowed_dirs 的写域 agent：读全开 + 写文件工具（写/删受 IsolationPlugin 约束；
+# shell 命令无法静态判定写目标，不授予，由父 Agent 执行）
 WRITE_SCOPE_TOOLS = ROLE_TOOLS["explorer"] + [
-    "write_file", "apply_search_replace", "apply_unified_diff",
+    "write_file", "apply_search_replace", "apply_unified_diff", "delete_file",
 ]  # 共享任务工具已含于 explorer 白名单
 
 
@@ -273,10 +273,23 @@ class SubAgentRunner:
         sub_kernel.events.on("tool:before_execute", lambda p: _forward_progress("tool:before_execute", p))
         sub_kernel.events.on("tool:after_execute", lambda p: _forward_progress("tool:after_execute", p))
 
-        # 3a. 审批透传：子 Agent 的安全审批事件转发到父事件总线，用户可在主界面审批
+        # 3a. 审批透传：子 Agent 的审批以原生事件转发到父总线——
+        # 前端弹审批卡，/api/approve 经全局 approval_gate 解锁子 Agent 挂起的
+        # future（子 kernel 与主 kernel 共用同一 gate，approval_id 全局唯一）。
+        # 不能包装成 subagent:progress：那只是看板进度，前端不会弹卡。
         if parent_events is not None:
-            sub_kernel.events.on("approval:request", lambda p: _forward_progress("approval:request", p))
-            sub_kernel.events.on("approval:resolved", lambda p: _forward_progress("approval:resolved", p))
+            async def _forward_event(name: str, payload: Any) -> None:
+                try:
+                    await parent_events.emit(name, payload)
+                except Exception:
+                    logger.debug("[SubAgent] %s 转发失败", name, exc_info=True)
+
+            sub_kernel.events.on(
+                "approval:request",
+                lambda p: _forward_event("approval:request", p))
+            sub_kernel.events.on(
+                "approval:resolved",
+                lambda p: _forward_event("approval:resolved", p))
 
         # 3b. 流式文本实时显示：转发 llm:stream 事件（带节流，避免高频刷屏）
         _streaming_buf: List[str] = []

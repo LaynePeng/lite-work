@@ -84,7 +84,7 @@ class SharedTask:
 
 # 受目录隔离约束的写类工具（参数名统一 filePath）
 ISOLATED_WRITE_TOOLS = frozenset({
-    "write_file", "apply_search_replace", "apply_unified_diff",
+    "write_file", "apply_search_replace", "apply_unified_diff", "delete_file",
 })
 
 
@@ -459,6 +459,20 @@ class SessionAgentManager:
         record.finished_at = record.finished_at or time.time()
         record.loop = None
         return {"ok": True, "agent_id": agent_id, "previous_status": previous}
+
+    async def shutdown(self) -> int:
+        """停掉本会话全部子 Agent（会话删除/清理时调用，防泄漏）。返回停止数。"""
+        stopped = 0
+        for agent_id in list(self.agents.keys()):
+            record = self.agents.get(agent_id)
+            if record is None or record.status in ("closed", "completed", "errored"):
+                continue
+            try:
+                await self.close(agent_id)
+                stopped += 1
+            except Exception:
+                logger.debug("[AgentManager] shutdown %s 失败", agent_id, exc_info=True)
+        return stopped
 
     async def wait(self, agent_ids: List[str], timeout_ms: int = 120000) -> Dict[str, Any]:
         """阻塞门：等指定 agent 终态，返回状态与总结。"""

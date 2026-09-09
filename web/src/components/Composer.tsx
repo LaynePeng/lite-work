@@ -4,16 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo, SseConnState } from "../types";
-
-/** SSE 连接指示器文案 */
-const SSE_LABELS: Record<SseConnState, string> = {
-  idle: "",
-  connecting: "连接中…",
-  connected: "已连接",
-  reconnecting: "重连中…",
-  lost: "连接丢失（任务仍在后端运行）",
-};
+import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
 
 /** 协作模式图标：插件自带 logo（icon.svg 等），加载失败回退默认图。 */
 function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
@@ -33,7 +24,6 @@ function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
 export default function Composer({
   disabled = false,
   running,
-  sseState = "idle",
   agents,
   currentAgent,
   onSelectAgent,
@@ -52,8 +42,6 @@ export default function Composer({
 }: {
   disabled?: boolean;
   running: boolean;
-  /** SSE 连接状态：绿=已连接 / 黄=重连中 / 红=失联 */
-  sseState?: SseConnState;
   agents: AgentInfo[];
   currentAgent: string;
   onSelectAgent: (id: string) => void;
@@ -754,8 +742,6 @@ export default function Composer({
           )}
         </div>
         <div className="composer-hint">
-        {running && <span className={`sse-dot sse-${sseState}`} title={SSE_LABELS[sseState]} />}
-        {running && sseState !== "idle" && <span className={`sse-label sse-${sseState}`}>{SSE_LABELS[sseState]}</span>}
         {uploadToast && <span className="upload-toast">{uploadToast}</span>}
         {uploadToast ? " · " : ""}
         {running ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送" : "工具执行受安全策略保护，中危操作会请求你确认"}

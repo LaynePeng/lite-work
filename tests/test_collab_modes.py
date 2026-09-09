@@ -289,3 +289,73 @@ def test_task_prompt_includes_session_collab_mode(app_with_mode_plugin):
         assert system is not None
         assert "本会话协作模式" in system.content
         assert "轮流发言" in system.content
+        # 显式选定 = 强制指令：模式名 + 优先级声明 + 派生要求
+        assert "用户已为本会话选定" in system.content
+        assert "会议（群聊共识）" in system.content
+        assert "优先于工具描述中的默认治理策略" in system.content
+        assert "必须按上述流程派生子 Agent" in system.content
+
+
+async def test_subagent_approval_forwarded_as_native_event(tmp_path):
+    """子 Agent 的审批请求以原生 approval:request 转发到父总线。
+
+    回归：此前包装成 subagent:progress（kind=approval:request），前端只当
+    看板进度、不弹审批卡，用户无从授权，子 Agent 挂起直至超时。
+    """
+    import asyncio
+
+    from litework.core.kernel import Kernel
+    from litework.core.types import ToolCall
+    from litework.orchestration.sub_agent import SubAgentRunner
+
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+
+    class FakeGate:
+        def __init__(self):
+            self.pending = {}
+            self._n = 0
+
+        def request_approval(self, action, reason):
+            self._n += 1
+            fut = asyncio.get_running_loop().create_future()
+            self.pending[f"ap{self._n}"] = fut
+            return fut
+
+        def current_id(self, fut):
+            for aid, f in self.pending.items():
+                if f is fut:
+                    return aid
+            return ""
+
+    class MockLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def chat_stream(self, messages, tools, events=None):
+            self.calls += 1
+            if self.calls == 1:
+                return "", [ToolCall(id="t1", name="execute_command",
+                                     arguments='{"command": "rm /tmp/a.txt"}')], None
+            return "子任务完成", [], None
+
+    gate = FakeGate()
+    app.approval_gate = gate
+    app._mock_adapter = MockLLM()
+
+    parent_events = Kernel("parent").events
+    received = []
+    parent_events.on("approval:request", lambda p: received.append(p))
+
+    runner = SubAgentRunner(app)
+    task = asyncio.get_running_loop().create_task(
+        runner.run_task("清理文件", role="general", parent_events=parent_events))
+
+    for _ in range(100):
+        if received:
+            break
+        await asyncio.sleep(0.05)
+    assert received, "审批请求未透传为原生 approval:request"
+    gate.pending[received[0]["id"]].set_result(True)
+    result = await asyncio.wait_for(task, timeout=15)
+    assert result and result.get("summary") == "子任务完成"

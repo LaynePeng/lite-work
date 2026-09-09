@@ -123,7 +123,7 @@ class SubagentProgressPayload(TypedDict, total=False):
     subagentId: str
     role: str
     kind: str
-    callId: str
+    callId: Optional[str]  # 直接调用 run_task（非工具派生）时无 callId
     turn: int
     tool: str
     brief: str
@@ -169,7 +169,7 @@ class AgentSpawnedPayload(TypedDict):
     nickname: Optional[str]
     role: str
     task: str
-    allowedDirs: List[str]
+    allowedDirs: Optional[List[str]]  # 并行派发无目录隔离时为 None
     mode: str
     model: Optional[str]
 

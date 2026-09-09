@@ -49,6 +49,8 @@ function writeLog(level, ...messages) {
   }
 }
 let coreMode = "local"; // "local" | "remote" | "dev"
+// dev/remote 模式的入口 URL（activate 重建窗口用；local 模式由 createLocalWindow 重建）
+let remoteUrl = "";
 const localInstances = new Map(); // webContents.id -> { window, child, url, workspace }
 const terminals = new Map(); // webContents.id -> pty process
 // 全部后端子进程（含启动竞态：窗口在 spawn 完成前关闭也能回收，
@@ -340,7 +342,8 @@ ipcMain.handle("open-project", handleOpenProject);
 // 用系统默认应用打开工作区内的文件/目录（文件→默认应用；目录→系统文件管理器）
 ipcMain.handle("open-file", async (event, relPath) => {
   try {
-    if (typeof relPath !== "string" || !relPath) return { ok: false, error: "缺少路径" };
+    // relPath 为空字符串 = 工作区根（path.resolve(ws, "") 即 ws）
+    if (typeof relPath !== "string") return { ok: false, error: "缺少路径" };
     const instance = localInstances.get(event.sender.id);
     if (!instance?.workspace) return { ok: false, error: "未打开项目" };
     const abs = path.resolve(instance.workspace, relPath);
@@ -594,8 +597,8 @@ app.whenReady().then(async () => {
   // 开发模式：直接加载 Vite dev server
   if (process.env.LITEWORK_DEV_URL) {
     coreMode = "dev";
-    createWindow(process.env.LITEWORK_DEV_URL);
-    app.on("window-all-closed", () => app.quit());
+    remoteUrl = process.env.LITEWORK_DEV_URL;
+    createWindow(remoteUrl);
     return;
   }
 
@@ -604,10 +607,10 @@ app.whenReady().then(async () => {
   // 形态2：远程 Core
   if (config.coreUrl) {
     coreMode = "remote";
+    remoteUrl = config.coreUrl;
     injectRemoteToken(config.token);
     writeLog("log", `连接远程 Core: ${config.coreUrl}`);
     createWindow(config.coreUrl);
-    app.on("window-all-closed", () => app.quit());
     return;
   }
 
@@ -619,7 +622,20 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // macOS 习惯：关窗不退出（应用驻留 Dock）；其余平台关窗即退出
   if (process.platform !== "darwin") app.quit();
+});
+
+// macOS：点 Dock 图标重新打开窗口（关窗后 Core 已随窗口回收，本地模式重新拉起）
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length > 0) return;
+  if (coreMode === "local") {
+    writeLog("log", "activate：重新拉起本地 Core 与窗口");
+    void createLocalWindow();
+  } else if (remoteUrl) {
+    // dev / remote 模式：直接重开窗口
+    createWindow(remoteUrl);
+  }
 });
 
 // 统一退出清理：正常路径走窗口 closed 回调，这里兜底所有漏网情况

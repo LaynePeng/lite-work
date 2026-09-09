@@ -124,6 +124,19 @@ class SecurityPlugin(Plugin):
                             return await next(data)
                         args["_approved_external_access"] = "write" if write else "read"
 
+            # 删除文件：不可逆操作，一律审批（含子 Agent，事件透传到前端弹卡）
+            if tool_name == "delete_file":
+                path = args.get("filePath") or ""
+                approved = await self._request_approval(
+                    kernel,
+                    f'删除文件 "{path}"',
+                    "删除操作不可逆，需要确认。",
+                )
+                if not approved:
+                    data["cancel"] = True
+                    data["reason"] = "[User Rejected]: 删除操作被拒绝。"
+                    return await next(data)
+
             # Shell 指令过滤
             if tool_name == "execute_command":
                 command = args.get("command", "")

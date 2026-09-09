@@ -203,6 +203,8 @@ export default function App() {
   const [outputRevision, setOutputRevision] = useState(0);
   const [draftModels, setDraftModels] = useState<Record<string, SessionModel | null>>({});
   const [draftReasoning, setDraftReasoning] = useState<Record<string, string>>({});
+  // 新会话 tab（session 未创建）暂存的协作模式，首次发送创建 session 后写入
+  const [draftCollabModes, setDraftCollabModes] = useState<Record<string, string | null>>({});
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
   const [registeredTools, setRegisteredTools] = useState<{ name: string; description: string }[]>([]);
   // 已安装协作模式（对话框选择器数据源；设置里安装新插件后随 refreshAll 更新）
@@ -283,6 +285,17 @@ export default function App() {
   }, []);
 
   // ------------------------------------------------------------ 当前活跃 Tab
+
+  // 会话 tab 的 SSE 连接状态点（名字右侧红绿黄）：任务运行中才有值
+  const tabSseStates = useMemo(() => {
+    const map: Record<string, SseConnState> = {};
+    for (const [sid, chat] of Object.entries(chatStates)) {
+      if (chat.running && chat.sseState && chat.sseState !== "idle") {
+        map[sid] = chat.sseState;
+      }
+    }
+    return map;
+  }, [chatStates]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? null,
@@ -452,13 +465,19 @@ export default function App() {
   const setSessionCollabMode = useCallback(
     (mode: string | null) => {
       const sid = activeSessionId;
-      if (!sid) return;
+      if (!sid) {
+        // 新会话 tab：暂存到 draft，session 创建后随首条消息写入
+        if (activeTabId) {
+          setDraftCollabModes((prev) => ({ ...prev, [activeTabId]: mode }));
+        }
+        return;
+      }
       patchChat(sid, { collabMode: mode });
       void api.setSessionCollab(sid, mode).catch(() => {
         // 写回失败不回滚 UI：下次打开会话按服务端状态恢复
       });
     },
-    [activeSessionId, patchChat]
+    [activeSessionId, activeTabId, patchChat]
   );
 
   const setSessionModel = useCallback(async (model: SessionModel | null) => {
@@ -1653,6 +1672,16 @@ export default function App() {
           const resp = await api.setSessionModel(session_id, selectedModel);
           patchChat(session_id, { modelOverride: resp.override, effectiveModel: resp.effective });
         }
+        // 暂存的协作模式随 session 创建写入（首条消息即按该模式编排）
+        const draftCollab = draftCollabModes[activeTabId];
+        if (draftCollab) {
+          try {
+            await api.setSessionCollab(session_id, draftCollab);
+            patchChat(session_id, { collabMode: draftCollab });
+          } catch {
+            // 写入失败：不加 UI 状态，后端按默认模式执行
+          }
+        }
       }
       const base = getChat(sid);
       // SSE 连接（新任务提交与排队竞态续接共用，统一走 connectTaskStream：
@@ -1705,7 +1734,7 @@ export default function App() {
         pushLog(`✗ 提交失败: ${(e as Error).message}`);
       }
     },
-    [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, syncSessionAgents]
+    [activeTabId, activeSessionId, currentChat.modelOverride, draftCollabModes, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, syncSessionAgents]
   );
 
   // 发送队列中的单条指令到当前运行任务（queue_input 注入下一回合）
@@ -1912,6 +1941,7 @@ export default function App() {
           activeTabId={activeTabId}
           onSelect={(id) => setActiveTabId(id)}
           onClose={closeTab}
+          sseStates={tabSseStates}
         />
         {activeTab?.kind === "file" ? (
           <FileViewer tab={activeTab} />
@@ -1991,10 +2021,9 @@ export default function App() {
             )}
             <Composer
               running={currentChat.running}
-              sseState={currentChat.sseState}
               agents={agents}
               collabModes={collabModes}
-              sessionCollabMode={currentChat.collabMode ?? null}
+              sessionCollabMode={activeSessionId ? currentChat.collabMode ?? null : (activeTabId ? draftCollabModes[activeTabId] ?? null : null)}
               onSessionCollabMode={setSessionCollabMode}
               onCollabModesRefresh={refreshCollabModes}
               currentAgent={currentAgent}

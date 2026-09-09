@@ -82,6 +82,17 @@ class FileSystemTools:
                 },
             ),
             ToolDefinition(
+                name="delete_file",
+                description="删除工作区内的文件（不可逆，需用户审批确认）",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "filePath": {"type": "string", "description": "相对 workspace 的文件路径"},
+                    },
+                    "required": ["filePath"],
+                },
+            ),
+            ToolDefinition(
                 name="list_dir",
                 description="列出指定目录下的条目（一层，不递归）",
                 parameters={
@@ -111,6 +122,8 @@ class FileSystemTools:
             result = self._read_file(args, access)
         elif name == "write_file":
             result = self._write_file(args, access)
+        elif name == "delete_file":
+            result = self._delete_file(args, access)
         elif name == "list_dir":
             result = self._list_dir(args, access)
         elif name == "file_tree":
@@ -148,6 +161,16 @@ class FileSystemTools:
 
         note = f"\n... [输出截断，仅显示前 {TRUNCATE_LINES} 行]" if truncated else ""
         return f"File: {rel_path} (行 {start}-{min(end, start + TRUNCATE_LINES - 1)} / 共 {len(lines)} 行){note}\n{body}"
+
+    def _delete_file(self, args: Dict[str, Any], access: str = "") -> str:
+        rel_path = args.get("filePath", "")
+        target = self.resolve(rel_path, access)
+        if not os.path.exists(target):
+            return f"[Error]: 文件不存在: {rel_path}"
+        if os.path.isdir(target):
+            return f"[Error]: 这是目录不是文件（不支持删除目录）: {rel_path}"
+        os.remove(target)
+        return f"[Deleted]: 已删除文件 {rel_path}"
 
     def _write_file(self, args: Dict[str, Any], access: str = "") -> str:
         rel_path = args.get("filePath", "")

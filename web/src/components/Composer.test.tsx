@@ -30,30 +30,6 @@ const MODES: CollabMode[] = [
   { name: "debate", display_name: "辩论（对抗收敛）", description: "多轮对抗审查", source: "plugin", version: "1.1.0", icon_url: null },
 ];
 
-describe("Composer · SSE 连接状态指示器（P1-5）", () => {
-  it("非运行态不渲染指示器", () => {
-    render(<Composer {...baseProps} running={false} sseState="connected" />);
-    expect(screen.queryByText("已连接")).not.toBeInTheDocument();
-  });
-
-  it.each([
-    ["connected", "已连接"],
-    ["reconnecting", "重连中…"],
-    ["lost", "连接丢失（任务仍在后端运行）"],
-  ] as const)("运行中显示状态文案（%s → %s）", (state, label) => {
-    const { unmount } = render(<Composer {...baseProps} running sseState={state} />);
-    expect(screen.getByText(label)).toBeInTheDocument();
-    const dot = document.querySelector(".sse-dot");
-    expect(dot?.className).toContain(`sse-${state}`);
-    unmount();
-  });
-
-  it("运行中显示绿点（connected）", () => {
-    render(<Composer {...baseProps} running sseState="connected" />);
-    expect(document.querySelector(".sse-dot.sse-connected")).toBeInTheDocument();
-  });
-});
-
 describe("Composer · 协作模式选择器（方案 B 全插件化，会话级生效）", () => {
   it("协作模式在选择器中分组展示（内置 + 社区覆盖版，含说明）", async () => {
     const user = userEvent.setup();

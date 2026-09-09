@@ -39,6 +39,17 @@ class SessionCollabRequest(BaseModel):
     mode: Optional[str] = None
 
 
+async def _shutdown_session_agents(app, session_id: str) -> None:
+    """停止该会话全部后台子 Agent（会话删除时防泄漏）。"""
+    try:
+        manager = app.agent_manager(session_id, create=False)
+        if manager is not None:
+            await manager.shutdown()
+            app.agent_managers.pop(session_id, None)
+    except Exception:
+        pass
+
+
 def create_router(ctx: ServerContext) -> APIRouter:
     router = APIRouter()
     app, tasks = ctx.app, ctx.tasks
@@ -115,6 +126,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 sid = s.get("session_id", "")
                 if not sid:
                     continue
+                await _shutdown_session_agents(app, sid)
                 app.session_store.delete(sid)
                 deleted += 1
                 # 附带清理该会话的 TODO 看板（内存 + 磁盘）
@@ -130,6 +142,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ok = app.session_store.delete(session_id)
         if not ok:
             raise HTTPException(status_code=404, detail="会话不存在")
+        await _shutdown_session_agents(app, session_id)
         # 附带清理该会话的 TODO 看板（内存 + 磁盘）
         try:
             app.todo_plugin.delete_board(session_id)

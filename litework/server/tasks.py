@@ -212,13 +212,21 @@ class TaskHandle:
                 )
             # 会话协作模式（对话框选择器）：覆盖全局模式，注入该模式的编排配方
             if self._session_collab_mode():
-                from ..orchestration.collab_policy import get_collab_policy
+                from ..orchestration.collab_policy import get_collab_policy, list_collab_modes
 
+                mode_name = self._session_collab_mode()
+                display = next(
+                    (m["display_name"] for m in list_collab_modes(self.app)
+                     if m["name"] == mode_name), mode_name)
                 recipe = get_collab_policy(self.app, session_id=self.kernel.session_id).recipe()
                 system_prompt += (
-                    "\n\n## 本会话协作模式（用户选定）\n"
+                    "\n\n## 本会话协作模式（用户显式选定）\n"
+                    f"用户已为本会话选定「{display}」模式，必须按以下编排流程执行本任务：\n\n"
                     f"{recipe}\n\n"
-                    "本会话派生子 Agent 时按上述协作模式编排。"
+                    "重要：这是用户的显式指令，优先于工具描述中的默认治理策略——"
+                    "不要因任务看似简单或与配方开头描述的典型场景不完全一致而改用其他方式；"
+                    "除任务物理上无法拆分（纯问答、单步查询）外，"
+                    "必须按上述流程派生子 Agent 协作完成。"
                 )
             skill_extra_used = getattr(self, "skill_extra", None)
             if skill_extra_used:

@@ -190,7 +190,7 @@ def default_build_agent() -> AgentProfile:
         description="默认开发 Agent：代码开发、文件编辑、Git 操作、Shell 执行。",
         tools=[
             # 代码开发
-            "read_file", "write_file", "list_dir", "file_tree",
+            "read_file", "write_file", "delete_file", "list_dir", "file_tree",
             "search_code", "get_file_outline", "read_focused_symbol",
             "apply_search_replace", "apply_unified_diff",
             "execute_command",
