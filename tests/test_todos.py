@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from litework.core.types import Message
-from litework.tools.todos import TodoPlugin, current_session_id
+from litework.tools.todos import TodoPlugin, current_root_session_id, current_session_id
 
 
 class _EventBus:
@@ -85,6 +85,35 @@ def test_todo_write_full_replace_and_bound_events():
     assert "[Error]" not in r
     assert plugin.get("s4")[0]["content"] == "静默项"
     assert len(bus.events) == 2  # s3 的事件数不变
+
+
+def test_todo_write_subagent_merges_into_root_session():
+    """子 Agent 的 todo_write 合并进主会话看板（v1.0.1）：
+    current_root_session_id 指向主会话时，写入主会话并 emit 到主会话总线。"""
+    plugin = TodoPlugin()
+    main_bus = _EventBus()
+    plugin.bind("main-session", main_bus)
+
+    # 模拟子 Agent 语境：current_session_id = 子会话，root = 主会话
+    sid_token = current_session_id.set("sub_abc123")
+    root_token = current_root_session_id.set("main-session")
+    try:
+        result = asyncio.run(plugin.execute("todo_write", {
+            "todos": [
+                {"content": "子任务步骤1", "status": "completed"},
+                {"content": "子任务步骤2", "status": "pending"},
+            ],
+        }))
+    finally:
+        current_session_id.reset(sid_token)
+        current_root_session_id.reset(root_token)
+
+    assert "[Error]" not in result
+    # 看板写入主会话，而不是子会话
+    assert [t["content"] for t in plugin.get("main-session")] == ["子任务步骤1", "子任务步骤2"]
+    assert plugin.get("sub_abc123") == []
+    # 事件推送到主会话总线
+    assert main_bus.events == [("todo:updated", {"todos": plugin.get("main-session")})]
 
 
 def test_plan_agent_whitelist_contains_todo_write():

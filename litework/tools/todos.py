@@ -7,6 +7,10 @@ Agent 通过 `todo_write` 全量维护清单（对齐 Claude Code TodoWrite 模�
 每次调用提交完整列表并触发 `todo:updated` 事件实时推送到前端「TODOs」面板。
 TaskManager 在任务启动时把会话事件总线绑定到看板、结束时解绑。
 
+子 Agent 合并：子 Agent 的 kernel 带 root_session_id（指向主会话），agent_loop
+把该值转发到 current_root_session_id ContextVar；todo_write 以根会话为「目标会话」
+写看板 + 发事件，实现子 Agent 进度合并进主会话 TODO 面板（v1.0.1 修复）。
+
 看板持久化：每次 todo_write 同步落盘到 `<config_dir>/todo_boards/<session>.json`，
 页面刷新/服务重启后经 GET /api/todos 读取恢复（内存命中优先，未命中回退磁盘）。
 """
@@ -31,6 +35,13 @@ current_session_id: contextvars.ContextVar = contextvars.ContextVar(
     "current_session_id", default=""
 )
 
+# 当前任务归属的根会话：子 Agent 执行时 = 主会话 id（sub_agent 设置 kernel.root_session_id，
+# agent_loop.run_task 转发到此处）；主 Agent 执行时 = 自身会话 id。
+# todo_write 以此为目标写看板 + 发事件，实现子 Agent 进度合并进主会话 TODO 面板。
+current_root_session_id: contextvars.ContextVar = contextvars.ContextVar(
+    "current_root_session_id", default=""
+)
+
 VALID_STATUSES = ("pending", "in_progress", "completed")
 MAX_TODOS = 100
 
@@ -47,7 +58,7 @@ class TodoPlugin(ToolPlugin):
     """todo_write 工具：任务级 TODO 看板（校验 + 存储 + 事件推送 + 持久化）。"""
 
     name = "todo-plugin"
-    version = "1.0.0"
+    version = "1.0.1"
 
     def __init__(self, storage_dir: Optional[str] = None) -> None:
         self._items: Dict[str, List[Dict[str, Any]]] = {}
@@ -170,6 +181,9 @@ class TodoPlugin(ToolPlugin):
         session_id = current_session_id.get("")
         if not session_id:
             return "[Error] 当前没有活动会话，无法维护 TODO"
+        # 子 Agent 的 todo_write 合并进主会话看板（经 root_session_id），
+        # 事件也发往主会话总线 → 前端 TODOs 面板实时更新。
+        target = current_root_session_id.get("") or session_id
         todos = args.get("todos")
         if not isinstance(todos, list):
             return "[Error] todos 必须是数组，且每次提交完整清单（全量覆盖）"
@@ -188,9 +202,9 @@ class TodoPlugin(ToolPlugin):
                         f"（允许: {', '.join(VALID_STATUSES)}）")
             cleaned.append({"content": content, "status": status})
 
-        self._items[session_id] = cleaned
-        self._persist(session_id, cleaned)
-        events = self._events.get(session_id)
+        self._items[target] = cleaned
+        self._persist(target, cleaned)
+        events = self._events.get(target)
         if events is not None:
             try:
                 await events.emit("todo:updated", {"todos": list(cleaned)})

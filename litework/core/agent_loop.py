@@ -28,7 +28,7 @@ from .system_prompt import SystemPromptBuilder
 from .token_counter import TokenCounter
 from .truncator import truncate_tool_output
 from .types import Message, ToolCall, ToolDefinition, header_context
-from ..tools.todos import current_session_id
+from ..tools.todos import current_session_id, current_root_session_id
 
 logger = logging.getLogger("litework.agentloop")
 
@@ -145,6 +145,11 @@ class AgentLoop:
         tools = tools if tools is not None else self.registry.get_tools()
         # 工具处理器（todo_write 等）经 ContextVar 知道当前会话
         current_session_id.set(self.kernel.session_id)
+        # 子 Agent 的 root_session_id 指向主会话（sub_agent 装配），todo_write
+        # 以此为目标合并进主会话看板；主 Agent 时回退自身会话 id。
+        current_root_session_id.set(
+            getattr(self.kernel, "root_session_id", None) or self.kernel.session_id
+        )
         # custom_headers 模板展开上下文（适配器 _headers() 读取，见 llm/base.py）
         header_context.set(self._build_header_context())
         self.state = AgentStateTracker()

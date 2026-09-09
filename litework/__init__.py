@@ -4,4 +4,4 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 lite-work contributors
 """
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
