@@ -1,6 +1,6 @@
 {
   "name": "lite-work",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "lite-work：手写内核的 Code 开发 Agent 桌面工具（Electron + Python Core + Web UI）",
   "main": "electron/main.js",
   "author": "lite-work",
@@ -64,7 +64,9 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "perMachine": true,
+      "include": "scripts/defender-exclude.nsh"
     },
     "dmg": {
       "artifactName": "lite-work-${version}-${arch}.${ext}"

@@ -394,20 +394,28 @@ export default function ChatView({
   const turns = useMemo(() => buildTurns(messages), [messages]);
   // 提问条状态已移至独立的 QuestionBar 组件
 
+  // 流式内容并入 data 末尾，让 followOutput 能感知内容增长而自动滚动；
+  // 此前 StreamingTurn 渲染在 Footer 中，data 不变化导致 followOutput 从不触发
+  // （仅靠 useEffect + scrollToIndex 依赖易碎的 stickRef，上翻后即断）
+  const displayTurns = useMemo<RenderTurn[]>(() => {
+    if (!streaming) return turns;
+    return [...turns, { key: `streaming-${streaming.turn ?? 0}`, items: streaming.items }];
+  }, [turns, streaming]);
+
   // 用户手动上翻浏览历史时暂停自动跟随；滚回底部附近自动恢复
   // （Virtuoso atBottomStateChange 提供，替代手动 scroll 监听）
   const atBottomChanged = useCallback((atBottom: boolean) => {
     stickRef.current = atBottom;
   }, []);
 
-  // 流式期间瞬时定位（smooth 动画追不上高频内容增长会产生抖动）；
-  // followOutput 由 Virtuoso 只在 stick 时生效，上翻浏览不受打扰
+  // 仅在非流式时手动滚动：流式时 followOutput 已基于 displayTurns 自动跟随
   useEffect(() => {
+    if (streaming) return;
     if (!stickRef.current) return;
     virtuosoRef.current?.scrollToIndex({
       index: "LAST",
       align: "end",
-      behavior: streaming ? "auto" : "smooth",
+      behavior: "smooth",
     });
   }, [messages, streaming, turns.length]);
 
@@ -421,8 +429,8 @@ export default function ChatView({
         <Virtuoso
           ref={virtuosoRef}
           className="chat-scroll"
-          data={turns}
-          initialTopMostItemIndex={Math.max(0, turns.length - 1)}
+          data={displayTurns}
+          initialTopMostItemIndex={Math.max(0, displayTurns.length - 1)}
           followOutput={(isAtBottom) => (streaming ? "auto" : isAtBottom ? "smooth" : false)}
           atBottomStateChange={atBottomChanged}
           components={{
@@ -444,9 +452,6 @@ export default function ChatView({
             ),
             Footer: () => (
               <>
-                {streaming && (
-                  <StreamingTurn items={streaming.items} turn={streaming.turn} />
-                )}
                 {skillLoaded && skillLoaded.length > 0 && (
                   <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
                 )}
@@ -469,17 +474,23 @@ export default function ChatView({
           }}
           itemContent={(_index, t) => (
             <div key={t.key}>
-              {t.user && <MessageBubble message={t.user} />}
-              {t.items.length > 0 && (
-                <WorkItems items={t.items} />
-              )}
-              {t.assistant && t.assistant.content && (
-                <div className="msg-row assistant">
-                  <div className="assistant-avatar"><AppIcon size={26} /></div>
-                  <div className="bubble assistant-bubble">
-                    <Markdown text={t.assistant.content} />
-                  </div>
-                </div>
+              {t.key.startsWith("streaming-") ? (
+                <StreamingTurn items={t.items} turn={streaming?.turn} />
+              ) : (
+                <>
+                  {t.user && <MessageBubble message={t.user} />}
+                  {t.items.length > 0 && (
+                    <WorkItems items={t.items} />
+                  )}
+                  {t.assistant && t.assistant.content && (
+                    <div className="msg-row assistant">
+                      <div className="assistant-avatar"><AppIcon size={26} /></div>
+                      <div className="bubble assistant-bubble">
+                        <Markdown text={t.assistant.content} />
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
