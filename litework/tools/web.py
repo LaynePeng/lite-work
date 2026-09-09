@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Web 抓取工具（对标 OpenCode 的 webfetch 工具）。
 
 解决 Agent 缺少联网能力时凭记忆/臆测回答外部信息的问题：

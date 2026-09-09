@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """spawn_sub_agent 工具处理器（第9课（MCP协议）/ 第11课（多Agent协作）编排能力封装为可调用 Tool）。"""
 from __future__ import annotations
 

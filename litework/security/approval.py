@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """人机交互审批门（对应课程第18课（安全沙箱实战） HumanApprovalGate，Web 化）。
 
 原课程的 readline 控制台确认升级为 asyncio.Future 挂起：

@@ -245,12 +245,14 @@ function spawnLocalCore(workspace) {
       for (const line of text.split(/\r?\n/)) {
         if (line) writeLog("log", `Core: ${line}`);
       }
-      const m = text.match(/LITEWORK_CORE_READY port=(\d+)/);
+      // 就绪标记携带端口与鉴权令牌（P0-2：Core 默认自动生成 token）
+      const m = text.match(/LITEWORK_CORE_READY port=(\d+)(?:\s+workspace=(\S*))?(?:\s+token=(\S+))?/);
       if (m && !resolved) {
         resolved = true;
         clearTimeout(timer);
         const port = parseInt(m[1], 10);
-        resolve({ child, url: `http://127.0.0.1:${port}` });
+        const token = m[3] || "";
+        resolve({ child, url: `http://127.0.0.1:${port}`, token });
       }
     };
 
@@ -274,6 +276,11 @@ function injectRemoteToken(token) {
   });
 }
 
+// 主进程直连 Core（fetch/net.fetch 不经过 session 请求头注入）所需的鉴权头
+function coreHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // ------------------------------------------------------------ 打开项目
 
 // 热切换工作区：调用当前后端的 /api/workspace，进程不重启（快）
@@ -282,7 +289,7 @@ async function hotSwitchWorkspace(instance, workspace) {
   try {
     const resp = await fetch(`${instance.url}/api/workspace`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...coreHeaders(instance.token) },
       body: JSON.stringify({ path: workspace }),
     });
     if (!resp.ok) {
@@ -382,6 +389,9 @@ async function createLocalWindow(workspace = null) {
   const window = createWindow(loadingUrl);
   try {
     const instance = await spawnLocalCore(workspace);
+    // 本地 Core 默认开启鉴权（P0-2）：把就绪标记中的 token 注入渲染进程
+    // 的所有请求（fetch 与 EventSource 都经 session 请求头注入）
+    injectRemoteToken(instance.token);
     // 竞态防护：窗口在等待后端就绪期间被关闭（closed 已触发、instance
     // 尚未注册）→ 立即回收刚拉起的 backend，防止 uvicorn 孤儿
     if (window.isDestroyed()) {
@@ -394,7 +404,7 @@ async function createLocalWindow(workspace = null) {
     if (!effectiveWorkspace && instance.url) {
       try {
         const statusUrl = new URL("/api/status", instance.url).href;
-        const resp = await net.fetch(statusUrl);
+        const resp = await net.fetch(statusUrl, { headers: coreHeaders(instance.token) });
         if (resp.ok) {
           const status = await resp.json();
           if (status && typeof status.workspace === "string" && status.workspace) {
@@ -445,7 +455,9 @@ async function restartLocalCore(winId) {
   let workspace = record.workspace;
   let activeTasks = 0;
   try {
-    const resp = await fetch(new URL("/api/status", record.url).href);
+    const resp = await fetch(new URL("/api/status", record.url).href, {
+      headers: coreHeaders(record.token),
+    });
     if (resp.ok) {
       const s = await resp.json();
       activeTasks = Number(s.active_tasks) || 0;
@@ -462,9 +474,13 @@ async function restartLocalCore(winId) {
   killBackendTree(record.child);
   try {
     const instance = await spawnLocalCore(workspace);
+    // 重启后 Core 生成新 token：替换 session 注入（onBeforeSendHeaders 重复
+    // 注册同一 filter 会覆盖旧监听器），否则渲染进程仍带旧 token 被 401
+    injectRemoteToken(instance.token);
     // 原地更新 record：closed 回调与 before-quit 兜底读取的都是 record.child
     record.child = instance.child;
     record.url = instance.url;
+    record.token = instance.token;
     record.workspace = workspace;
     if (record.window && !record.window.isDestroyed()) {
       record.window.loadURL(instance.url);

@@ -1239,6 +1239,37 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-family: var(--font-mono);
 }
 
+/* 会话目标横幅（/goal 设置，/loop 开启时附循环进度徽标） */
+.goal-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: -14px auto 16px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 12px;
+  color: var(--text-1);
+}
+.goal-banner .goal-icon {
+  flex: none;
+}
+.goal-banner .goal-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-banner .goal-loop {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
 /* 待发送队列（固定在输入框上方，不随对话滚动） */
 .pending-queue {
   flex-shrink: 0;
@@ -2290,6 +2321,78 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--accent);
   font-weight: 500;
 }
+
+/* SSE 连接指示器（P1-5）：绿=已连接 / 黄=重连中（含原生重连）/ 红=重连耗尽 */
+.sse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+  background: var(--text-3);
+}
+.sse-dot.sse-connected {
+  background: #2ea043;
+  box-shadow: 0 0 4px rgba(46, 160, 67, 0.6);
+}
+.sse-dot.sse-connecting,
+.sse-dot.sse-reconnecting {
+  background: #d29922;
+  box-shadow: 0 0 4px rgba(210, 153, 34, 0.6);
+  animation: sse-pulse 1.2s ease-in-out infinite;
+}
+.sse-dot.sse-lost {
+  background: #f85149;
+  box-shadow: 0 0 4px rgba(248, 81, 73, 0.6);
+}
+.sse-label {
+  margin-right: 6px;
+}
+.sse-label.sse-lost {
+  color: #f85149;
+}
+.sse-label.sse-reconnecting,
+.sse-label.sse-connecting {
+  color: #d29922;
+}
+.sse-label.sse-connected {
+  color: #2ea043;
+}
+@keyframes sse-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 分层 ErrorBoundary 紧凑兜底（侧边栏/面板局部区域） */
+.boundary-fallback.compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.boundary-fallback .boundary-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.boundary-fallback .boundary-retry {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+}
+.boundary-fallback .boundary-retry:hover {
+  border-color: var(--accent);
+}
+
 
 /* ============================== 空状态 ============================== */
 
@@ -3741,10 +3844,39 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 12px;
   font-weight: 600;
   color: var(--text-0);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .collab-option.on .collab-option-label {
   color: var(--accent, #4f8cff);
+}
+
+/* 已安装协作模式（插件）：logo + 分组标题 */
+.collab-mode-icon {
+  flex: none;
+  border-radius: 4px;
+  display: inline-block;
+  vertical-align: -2px;
+}
+.collab-mode-fallback {
+  flex: none;
+  display: inline-block;
+  line-height: 1;
+}
+.collab-popover-group {
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  user-select: none;
+}
+.collab-popover-group:first-of-type {
+  border-top: none;
+  margin-top: 0;
 }
 
 .collab-option-desc {

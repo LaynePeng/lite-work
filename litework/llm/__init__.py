@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """LLM 模块。"""
 from .base import BaseLLMAdapter, LLMError
 from .openai_compat import OpenAICompatAdapter

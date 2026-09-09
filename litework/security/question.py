@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """用户提问门：Agent 向用户提问，等待回答（类似 ApprovalGate 但支持选项+自定义输入）。"""
 from __future__ import annotations
 

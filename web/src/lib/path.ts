@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 /**
  * 跨平台路径工具：兼容 Windows（\）与 POSIX（/）分隔符。
  *

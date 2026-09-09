@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useMemo, useRef, useEffect, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { DiffPre, DiffStats, isFileDiff } from "./FileDiff";
 import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
@@ -354,6 +359,8 @@ export default function ChatView({
   streaming,
   running,
   turn,
+  goal,
+  loop,
   pendingApprovals,
   subAgentRecords,
   skillLoaded,
@@ -368,6 +375,10 @@ export default function ChatView({
   streaming: { items: WorkItem[]; turn?: number } | null;
   running: boolean;
   turn: number;
+  /** 会话目标（/goal）：非空时展示目标横幅 */
+  goal?: string | null;
+  /** 目标循环（/loop）运行状态：null=未开启 */
+  loop: { count: number; max: number } | null;
   pendingApprovals: { id: string; action: string; reason: string }[];
   subAgentRecords: SubAgentProgress[];
   skillLoaded?: string[];
@@ -377,82 +388,103 @@ export default function ChatView({
   currentAgent: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const stickRef = useRef(true);
-
-  
 
   const turns = useMemo(() => buildTurns(messages), [messages]);
   // 提问条状态已移至独立的 QuestionBar 组件
 
   // 用户手动上翻浏览历史时暂停自动跟随；滚回底部附近自动恢复
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+  // （Virtuoso atBottomStateChange 提供，替代手动 scroll 监听）
+  const atBottomChanged = useCallback((atBottom: boolean) => {
+    stickRef.current = atBottom;
   }, []);
 
+  // 流式期间瞬时定位（smooth 动画追不上高频内容增长会产生抖动）；
+  // followOutput 由 Virtuoso 只在 stick 时生效，上翻浏览不受打扰
   useEffect(() => {
     if (!stickRef.current) return;
-    // 流式期间瞬时定位（smooth 动画追不上高频内容增长会产生抖动）
-    bottomRef.current?.scrollIntoView({
+    virtuosoRef.current?.scrollToIndex({
+      index: "LAST",
+      align: "end",
       behavior: streaming ? "auto" : "smooth",
-      block: "end",
     });
   }, [messages, streaming, turns.length]);
 
   return (
     <div className="chat-view">
-      <div className="chat-scroll" ref={scrollRef}>
-        {turns.length === 0 && !streaming ? (
+      {turns.length === 0 && !streaming ? (
+        <div className="chat-scroll">
           <EmptyState currentAgent={currentAgent} onSend={onSend} />
-        ) : (
-          <>
-            <div className="session-badge">{sessionTitle}</div>
-            {turns.map((t) => (
-              <div key={t.key}>
-                {t.user && <MessageBubble message={t.user} />}
-                {t.items.length > 0 && (
-                  <WorkItems items={t.items} />
-                )}
-                {t.assistant && t.assistant.content && (
-                  <div className="msg-row assistant">
-                    <div className="assistant-avatar"><AppIcon size={26} /></div>
-                    <div className="bubble assistant-bubble">
-                      <Markdown text={t.assistant.content} />
-                    </div>
+        </div>
+      ) : (
+        <Virtuoso
+          ref={virtuosoRef}
+          className="chat-scroll"
+          data={turns}
+          initialTopMostItemIndex={Math.max(0, turns.length - 1)}
+          followOutput={(isAtBottom) => (streaming ? "auto" : isAtBottom ? "smooth" : false)}
+          atBottomStateChange={atBottomChanged}
+          components={{
+            Header: () => (
+              <>
+                <div className="session-badge">{sessionTitle}</div>
+                {goal && (
+                  <div className="goal-banner" title={goal}>
+                    <span className="goal-icon">🎯</span>
+                    <span className="goal-text">{goal}</span>
+                    {loop && (
+                      <span className="goal-loop">
+                        🔁 自动推进 第 {Math.max(1, loop.count)}/{loop.max} 轮
+                      </span>
+                    )}
                   </div>
                 )}
-              </div>
-            ))}
-            {streaming && (
-              <StreamingTurn items={streaming.items} turn={streaming.turn} />
-            )}
-            {skillLoaded && skillLoaded.length > 0 && (
-              <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
-            )}
-            {subAgentRecords.length > 0 && (
-              <div className="subagent-records">
-                {subAgentRecords.map((r, i) => (
-                  <div className="subagent-record" key={`${r.subagentId}-${i}`}>
-                    <span className="subagent-record-role">◈ {r.role}</span>
-                    <span className={r.status === "error" ? "rec-error" : "rec-done"}>
-                      {r.status === "error" ? "✗ 异常" : "✓ 完成"}
-                    </span>
-                    {r.tokens != null && <span className="rec-tokens">{r.tokens} tokens</span>}
-                    <span className="subagent-record-task" title={r.task}>{r.task}</span>
+              </>
+            ),
+            Footer: () => (
+              <>
+                {streaming && (
+                  <StreamingTurn items={streaming.items} turn={streaming.turn} />
+                )}
+                {skillLoaded && skillLoaded.length > 0 && (
+                  <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
+                )}
+                {subAgentRecords.length > 0 && (
+                  <div className="subagent-records">
+                    {subAgentRecords.map((r, i) => (
+                      <div className="subagent-record" key={`${r.subagentId}-${i}`}>
+                        <span className="subagent-record-role">◈ {r.role}</span>
+                        <span className={r.status === "error" ? "rec-error" : "rec-done"}>
+                          {r.status === "error" ? "✗ 异常" : "✓ 完成"}
+                        </span>
+                        {r.tokens != null && <span className="rec-tokens">{r.tokens} tokens</span>}
+                        <span className="subagent-record-task" title={r.task}>{r.task}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-        <div ref={bottomRef} />
-      </div>
+                )}
+              </>
+            ),
+          }}
+          itemContent={(_index, t) => (
+            <div key={t.key}>
+              {t.user && <MessageBubble message={t.user} />}
+              {t.items.length > 0 && (
+                <WorkItems items={t.items} />
+              )}
+              {t.assistant && t.assistant.content && (
+                <div className="msg-row assistant">
+                  <div className="assistant-avatar"><AppIcon size={26} /></div>
+                  <div className="bubble assistant-bubble">
+                    <Markdown text={t.assistant.content} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        />
+      )}
 
       {pendingApprovals.map((pa) => (
         <div className="approval-overlay" key={pa.id}>

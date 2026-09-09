@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """代码审查工具（对应课程第14课（实战 Core）总结提出的增强插件：代码审查）。
 
 流程：收集未提交改动（git diff）→ 静态体检（AST 语法错误、常见反模式、

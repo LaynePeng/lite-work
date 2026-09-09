@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """任务 TODO 清单工具：超长/多步骤任务的规划与进度追踪。
 
 Agent 通过 `todo_write` 全量维护清单（对齐 Claude Code TodoWrite 模式），

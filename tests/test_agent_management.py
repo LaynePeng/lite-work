@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Agent 管理：保存/删除/内置覆盖合并（settings Agents Tab 后端）。"""
 from __future__ import annotations
 

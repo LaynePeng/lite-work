@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """工作区目录树与 Git 状态服务（侧边栏「文件」页签）。
 
 - 结构化返回目录/文件条目，前端按需懒加载子目录

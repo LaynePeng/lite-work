@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """成本估算定价测试：per-model 定价（models.dev）+ 缓存命中/未命中分段计价。"""
 import json
 

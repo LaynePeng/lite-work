@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """模型元数据服务（models.dev 同步 + 内置静态表兜底）。
 
 各厂商的 /models 接口不返回上下文长度（OpenAI 官方 issue #587 未实现），

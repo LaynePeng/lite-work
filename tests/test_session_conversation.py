@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """会话级 conversation_id 测试：按 (会话 × 供应商) 惰性生成、复用、跨重启稳定、隔离。"""
 from __future__ import annotations
 

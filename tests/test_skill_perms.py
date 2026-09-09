@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """技能权限控制测试：规则解析 / 索引过滤 / load_skill 拦截 / 任务启动审批。"""
 import asyncio
 import os

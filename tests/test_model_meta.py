@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """模型元数据：models.dev 缓存/降级 + 上下文窗口解析优先级。"""
 import json
 import os

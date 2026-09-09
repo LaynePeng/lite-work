@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """上下文滑动窗口裁剪（对应课程第3课 ContextManager，策略 B 增强）。
 
 关键约束（绝对不能违反）：

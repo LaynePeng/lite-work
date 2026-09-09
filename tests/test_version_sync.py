@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """版本号单一事实源守护：npm 侧文件版本必须与 litework/__version__ 一致。
 
 改版只改 litework/__init__.py；构建入口自动跑 scripts/sync-version.mjs，

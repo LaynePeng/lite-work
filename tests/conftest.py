@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """共享测试工具：Mock LLM 适配器。"""
 from __future__ import annotations
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """JSON 容错解析（对应课程第2课 safeJsonParse）。
 
 解析失败时绝不 crash，而是返回错误信息，由 AgentLoop 回填给 LLM 自愈。

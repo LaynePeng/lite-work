@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """工具调用原子对修复测试：不完整历史续聊不再触发 LLM HTTP 400。"""
 from __future__ import annotations
 

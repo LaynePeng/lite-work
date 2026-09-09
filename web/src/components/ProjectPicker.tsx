@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { isDriveRoot, pathSegments } from "../lib/path";

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """安全卫士（对应课程第18课（安全沙箱实战） SecurityGuard，增强：动态黑白名单热加载）。
 
 防御体系（Defense-in-Depth）：

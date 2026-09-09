@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """项目与用户技能发现、导入管理与按需加载工具。
 
 标准技能结构：目录内含 SKILL.md（YAML frontmatter + Markdown 正文）。

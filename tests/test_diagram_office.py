@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """图表转 Office 测试：docx/pptx 图片嵌入 + 渲染脚本逻辑。
 
 - docx_create 的 Markdown 图片语法 ![alt](path) 应嵌入图片；

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Office 工具单测：docx_append 迭代写作 + data_analyze 文件直读。"""
 from __future__ import annotations
 

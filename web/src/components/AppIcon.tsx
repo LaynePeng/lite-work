@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 /** 应用图标（与 scripts/app-icon.svg 同源：渐变底 + 闪电 ⚡ + 齿轮 ⚙） */
 export default function AppIcon({ size = 30 }: { size?: number }) {
   return (

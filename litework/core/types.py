@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """核心类型定义（对应课程第10课（插件架构） types.ts）。"""
 from __future__ import annotations
 

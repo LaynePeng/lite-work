@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """内核 Kernel（对应课程第10课（插件架构））。"""
 from __future__ import annotations
 

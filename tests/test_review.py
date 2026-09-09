@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """review_code 静态审查工具测试。
 
 覆盖两个历史误报回归：

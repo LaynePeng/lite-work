@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 import asyncio
 import io
 import json
-import os as _os
 import zipfile
-from pathlib import Path
 
 import pytest
 
@@ -317,25 +318,23 @@ def test_skill_extra_injected_into_system_prompt_only(tmp_path):
 def test_engine_preinstall_worker_invokes_install(tmp_path, monkeypatch):
     """启动时后台线程调用 ~/.agents 技能脚本的 --install；锁正确释放。
 
-    mock subprocess 防止真实 npm 安装；HOME 指向临时目录时脚本不存在，
-    worker 应静默跳过（不抛异常）。
+    全程隔离 HOME（tmp 目录）：AgentApp 启动会把内置技能同步到隔离 HOME，
+    预装 worker 读写同一隔离目录下的锁——不依赖也不污染真实用户环境
+    （真实 HOME 里残留的锁会让 worker 静默跳过，导致测试假失败）。
+    mock subprocess 防止真实 npm 安装。
     """
     import subprocess as _sp
     import time as _time
     from litework.app import AgentApp
 
-    real_home = _os.path.expanduser("~")
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
 
     # 本测试需要真实触发预装 worker（conftest 全局设了跳过，这里解除）
     monkeypatch.delenv("LITEWORK_SKIP_ENGINE_PREINSTALL", raising=False)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
 
-    # 场景 1：HOME 隔离 → 脚本不存在 → worker 静默返回
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    app = AgentApp(workspace=None, config_dir=str(tmp_path / ".cfg"))
-    _time.sleep(0.3)  # 等后台线程
-    # 不抛异常即通过
-    # 场景 2：mock subprocess，验证真实 HOME 下调用参数与锁生命周期
     calls = []
 
     class _FakeRun:
@@ -347,9 +346,8 @@ def test_engine_preinstall_worker_invokes_install(tmp_path, monkeypatch):
         calls.append(cmd)
         return _FakeRun()
 
-    monkeypatch.setenv("HOME", real_home)  # 恢复真实 HOME
     monkeypatch.setattr(_sp, "run", fake_run)
-    app2 = AgentApp(workspace=None, config_dir=str(tmp_path / ".cfg2"))
+    AgentApp(workspace=None, config_dir=str(tmp_path / ".cfg"))
     for _ in range(50):
         if calls:
             break
@@ -358,9 +356,10 @@ def test_engine_preinstall_worker_invokes_install(tmp_path, monkeypatch):
 
     assert calls, "预装 worker 未执行"
     cmd = calls[0]
-    assert "render_diagram.py" in cmd[1], f"应调用用户级技能脚本: {cmd}"
-    assert str(Path(real_home) / ".agents" / "skills" / "diagram-to-office") in cmd[1]
+    expected = str(fake_home / ".agents" / "skills" / "diagram-to-office"
+                   / "render_diagram.py")
+    assert cmd[1] == expected, f"应调用用户级技能脚本: {cmd}"
     assert "--install" in cmd, "应带 --install 参数"
     # 全局锁已释放
-    lock = _os.path.join(real_home, ".agents", "skills", AgentApp.ENGINE_PREINSTALL_LOCK)
-    assert not _os.path.exists(lock), "预装锁未清理"
+    lock = fake_home / ".agents" / "skills" / AgentApp.ENGINE_PREINSTALL_LOCK
+    assert not lock.exists(), "预装锁未清理"

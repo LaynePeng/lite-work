@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useState, useCallback } from "react";
 
 export default function PendingQueue({

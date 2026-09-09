@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """AgentLoop 主循环测试（第16课（实战 AgentLoop）+ 第2课增强：自愈/死循环/截断/停止/会话落盘）。"""
 import asyncio
 import os

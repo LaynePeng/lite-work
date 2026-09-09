@@ -1,7 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """多 Agent 协作工具（Phase 1）：spawn_agent / list_agents / close_agent / wait_agents。
 
 设计对齐 docs/multi-agent-design.md §3。协作模式（编排-工人 / 流水线 /
-头脑风暴 / 互批）是这组原语之上的提示词配方——见工具描述中的使用指引。
+头脑风暴 / 互批）是这组原语之上的提示词配方——配方与行为策略见
+orchestration/collab_policy.py（Tier 1 配方外置 + Tier 2 策略钩子）。
 spawn_sub_agent（同步语义）保留为兼容包装，逐步迁移到 spawn_agent。
 """
 from __future__ import annotations
@@ -13,24 +17,6 @@ from ..core.agent_loop import current_session_id
 from ..core.types import ToolDefinition
 from ..orchestration.agent_manager import current_agent_depth, extract_fork_messages
 from ..tools.plugin import ToolPlugin
-
-# 模式选择指引（写入工具描述：模型按任务特征自动路由，借鉴 Codex 委派策略 +
-# Magentic-One 进度账本 + AutoGen 群聊会议）
-DELEGATION_GUIDE = (
-    "模式选择（按任务特征路由）：\n"
-    "① 并行调研/互不依赖的子任务 → 编排-工人：spawn_agent 并行 + 继续自己的工作，结果自动送达；\n"
-    "② 顺序依赖的分工（设计→实现→审查） → 流水线：按序 spawn，把前序 agent 的产出写进后续任务描述；\n"
-    "③ 需要多样的方案/创意 → 头脑风暴：对同一问题 spawn 3+ 个不同视角/立场的 agent 并行提案，综合取舍；\n"
-    "④ 方案或代码需要把关 → 互批：spawn role=critic 的批判者审查，产出问题清单；\n"
-    "⑤ 高风险/争议决策 → 辩论：提案者与 critic 多轮对抗（send_message 传意见 + followup_task 唤醒修订）；\n"
-    "⑥ 需要集体讨论达成共识 → 会议（meeting）：多 agent 围绕议题轮流发言、互相看到彼此观点后收敛；\n"
-    "⑦ 软件开发任务 → 测试驱动接力：实现 agent 与测试 agent 配对（实现→测试→修复循环）。\n"
-    "进度账本（长程任务纪律）：派发后每隔几步用 list_agents 检查各 agent 状态——"
-    "卡住的 send_message 督促或 close 换人重派；全部完成后综合。\n"
-    "通用纪律：先区分关键路径（自己做）与 sidecar（可并行）；任务具体、有界、自包含；"
-    "并行写任务用 allowed_dirs 声明互不相交范围；wait_agents 仅在下一步被阻塞时使用；"
-    "子任务需要当前上下文才能理解时用 fork_turns 继承（'all' 或最近 N 条）。"
-)
 
 
 def _manager(app, kernel=None):
@@ -297,6 +283,10 @@ class MultiAgentPlugin(ToolPlugin):
     def get_tools(self) -> List[ToolDefinition]:
         gate = _collab_gate(self._app)
         roles = _role_registry_hint(self._app)
+        # 配方经策略层解析（Tier 1：collab_recipe 可整体替换内置指引）
+        from ..orchestration.collab_policy import get_collab_policy
+
+        recipe = get_collab_policy(self._app).recipe()
         return [
             ToolDefinition(
                 name="spawn_agent",
@@ -304,7 +294,7 @@ class MultiAgentPlugin(ToolPlugin):
                     f"{gate}\n"
                     "异步派生一个子 Agent 并行执行任务，立即返回（不等待完成）。"
                     "结果完成后以 [agent:completed] 通知自动送达，无需轮询。"
-                    f"{roles}\n{DELEGATION_GUIDE}"
+                    f"{roles}\n{recipe}"
                 ),
                 parameters={
                     "type": "object",

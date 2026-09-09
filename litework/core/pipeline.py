@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """洋葱模型中间件管道（对应课程第8课 Skills / 第10课插件架构）。"""
 from __future__ import annotations
 

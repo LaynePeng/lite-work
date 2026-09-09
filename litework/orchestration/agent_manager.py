@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """多智能体会话管理器（Phase 1：异步 spawn + 并行 + 目录硬隔离 + 完成通知）。
 
 设计对齐 docs/multi-agent-design.md：
@@ -371,6 +374,15 @@ class SessionAgentManager:
             "task": task, "allowedDirs": record.allowed_dirs, "mode": mode,
             "model": model,
         })
+        # 策略钩子（Tier 2）：派生成功后触发 on_agent_spawned（异常隔离）
+        try:
+            from .collab_policy import CollabContext, fire_collab_hook
+
+            fire_collab_hook(self.app, "on_agent_spawned",
+                             CollabContext(app=self.app, session_id=self.session_id,
+                                           record=record))
+        except Exception:
+            logger.debug("[AgentManager] 策略钩子触发失败", exc_info=True)
         return {"ok": True, "agent_id": agent_id, "nickname": nickname}
 
     # ------------------------------------------------------------ 通知
@@ -393,6 +405,15 @@ class SessionAgentManager:
                 f"已完成任务「{record.task[:80]}」：{record.summary}{files}"
             ),
         })
+        # 策略钩子（Tier 2）：终态后触发 on_agent_complete（异常隔离，不进内核栈）
+        try:
+            from .collab_policy import CollabContext, fire_collab_hook
+
+            fire_collab_hook(self.app, "on_agent_complete",
+                             CollabContext(app=self.app, session_id=self.session_id,
+                                           record=record))
+        except Exception:
+            logger.debug("[AgentManager] 策略钩子触发失败", exc_info=True)
 
     def drain_notifications(self) -> List[str]:
         """取走全部待投递通知文本（父 AgentLoop 注入用），取后清空。"""

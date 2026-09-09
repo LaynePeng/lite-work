@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Cordis 风格本地插件加载器：~/.lite-work/plugins/ 自动发现与安装。
 
 遵循与内置工具一致的 Cordis 插件模式（ToolPlugin → Plugin），
@@ -277,7 +280,12 @@ def _plugin_libs_dir(spec_path: str) -> Optional[str]:
 
 
 def _load_module(spec_path: str, module_name: str) -> Optional[object]:
-    """动态导入 Python 模块，返回模块对象或 None。"""
+    """动态导入 Python 模块，返回模块对象或 None。
+
+    按 importlib 推荐模式注册进 sys.modules（exec 前注册，失败回滚）——
+    inspect.getfile / 异常 traceback 等都依赖模块可查；协作模式插件的
+    recipe.md 定位（inspect.getfile(type(self))）同样依赖这一点。
+    """
     try:
         spec = importlib.util.spec_from_file_location(module_name, spec_path)
         if spec is None or spec.loader is None:
@@ -290,7 +298,12 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
             sys.path.insert(0, libs)
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
-        spec.loader.exec_module(mod)
+        sys.modules[module_name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except BaseException:
+            sys.modules.pop(module_name, None)  # 执行失败不留半成品
+            raise
         return mod
     except Exception as exc:
         logger.warning("[PluginLoader] 加载插件模块 %s 失败: %s", module_name, exc)
@@ -299,6 +312,7 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
 
 def _find_plugin_classes(module: object) -> List[type]:
     """从模块中找出 Plugin/ToolPlugin 子类（排除基类自身）。"""
+    from ..orchestration.collab_policy import CollabModePlugin
     from ..tools.plugin import ToolPlugin
 
     classes: List[type] = []
@@ -306,8 +320,10 @@ def _find_plugin_classes(module: object) -> List[type]:
         obj = getattr(module, name)
         if not isinstance(obj, type):
             continue
-        # 只要 Plugin 子类（ToolPlugin 也是 Plugin 子类）
-        if issubclass(obj, Plugin) and obj is not Plugin and obj is not ToolPlugin:
+        # 只要 Plugin 子类（ToolPlugin / CollabModePlugin 也是 Plugin 子类）；
+        # 基类自身排除——用户模块 import 基类时不实例化
+        if (issubclass(obj, Plugin) and obj is not Plugin
+                and obj is not ToolPlugin and obj is not CollabModePlugin):
             classes.append(obj)
     return classes
 
@@ -359,6 +375,28 @@ def load_plugins(config_dir: str) -> List[Plugin]:
 
 
 # ---------------------------------------------------------------- 管理接口（Web/API 薄封装）
+
+# 插件图标约定：插件目录下的 icon.svg / icon.png / icon.jpg / icon.webp / icon.gif
+ICON_FILENAMES = ("icon.svg", "icon.png", "icon.jpg", "icon.webp", "icon.gif")
+
+
+def find_plugin_icon(config_dir: str, name: str) -> Optional[str]:
+    """查找已安装目录插件的图标文件路径（svg 优先），无图标返回 None。
+
+    name 经 _safe_plugin_name 校验（防路径穿越）；单文件插件（<name>.py）无图标。
+    """
+    safe = _safe_plugin_name(name)
+    if not safe:
+        return None
+    plugin_dir = os.path.join(_plugin_root(config_dir), safe)
+    if not os.path.isdir(plugin_dir):
+        return None
+    for fname in ICON_FILENAMES:
+        candidate = os.path.join(plugin_dir, fname)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
 
 def _plugin_root(config_dir: str) -> str:
     return os.path.join(config_dir, "plugins")

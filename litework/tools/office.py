@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """办公/生产力工具集：文档、表格、演示、图表、数据分析。
 
 将 lite-work 从代码 Agent 扩展到通用办公场景，让 Agent 能直接产出

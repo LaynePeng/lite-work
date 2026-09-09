@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """LLM 供应商注册表：管理多供应商配置、构建适配器、测试连接。"""
 from __future__ import annotations
 

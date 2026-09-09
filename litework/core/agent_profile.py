@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Agent 类型与注册机制（对应课程第11课（多Agent协作）或第12课（Agent类型），参考 OpenCode Agent 设计）。
 
 OpenCode 内置两种 primary agent：

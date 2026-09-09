@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Git 自动化工具（对应课程第14课（实战 Core）总结提出的增强插件：Git 自动化）。
 
 只读操作直通；写操作（commit）需要显式 message；破坏性操作

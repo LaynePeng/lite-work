@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """lite-work CLI：无头 Core 服务启动入口。
 
 用法:
@@ -39,7 +42,9 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve = sub.add_parser("serve", help="启动 Core 服务")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8787)
-    serve.add_argument("--token", default=None, help="远程访问令牌（可选）")
+    serve.add_argument("--token", default=None, help="访问令牌；缺省时自动生成（P0-2 默认开启鉴权）")
+    serve.add_argument("--no-token", action="store_true",
+                       help="显式关闭鉴权（仅建议本机开发调试使用）")
     serve.add_argument("--workspace", default=None, help="工作区目录（默认不打开项目）")
     serve.add_argument("--config-dir", default=None, help="配置/会话目录（默认 ~/.lite-work）")
     serve.add_argument("--api-key", default=None, help="LLM API Key（默认读 DEEPSEEK_API_KEY）")
@@ -92,11 +97,22 @@ def main(argv: list = None) -> None:
         return
 
     if args.command != "serve":
-        print("用法: lite-work serve [--port N] [--token xxx] [--workspace /path]")
+        print("用法: lite-work serve [--port N] [--token xxx | --no-token] [--workspace /path]")
         sys.exit(1)
 
     log_path = _configure_logging(args.log_level, args.config_dir)
     logging.getLogger("litework.cli").info("日志文件: %s", log_path)
+
+    # P0-2 默认开启 Bearer 鉴权：未显式指定 token 时自动生成随机令牌，
+    # 经就绪标记（token=...）下发给 Electron 桌面外壳自动注入请求头。
+    # --no-token 显式关闭（本机开发调试），此时输出醒目告警。
+    if args.no_token and args.token:
+        print("错误: --token 与 --no-token 不能同时使用", file=sys.stderr)
+        sys.exit(1)
+    token = args.token
+    if token is None and not args.no_token:
+        import secrets
+        token = secrets.token_urlsafe(24)
 
     app = AgentApp(
         workspace=args.workspace,
@@ -105,7 +121,7 @@ def main(argv: list = None) -> None:
         base_url=args.base_url,
         model=args.model,
     )
-    fast_app = create_app(app, token=args.token)
+    fast_app = create_app(app, token=token)
 
     class _Server(uvicorn.Server):
         async def startup(self, sockets=None) -> None:
@@ -116,9 +132,14 @@ def main(argv: list = None) -> None:
                     port = self.servers[0].sockets[0].getsockname()[1]
             except Exception:
                 pass
-            # 机器可读就绪标记：Electron 主进程据此拿到实际端口
-            print(f"LITEWORK_CORE_READY port={port} workspace={app.workspace}", flush=True)
+            # 机器可读就绪标记：Electron 主进程据此拿到实际端口与鉴权令牌
+            token_part = f" token={token}" if token else ""
+            print(f"LITEWORK_CORE_READY port={port} workspace={app.workspace}{token_part}", flush=True)
             print(f"lite-work Core 已启动 → http://{args.host}:{port}", flush=True)
+            if token:
+                print(f"鉴权已开启，访问令牌: {token}", flush=True)
+            else:
+                print("⚠️  警告: 鉴权已关闭（--no-token），任何能访问该端口的进程均可控制本服务", flush=True)
 
     server = _Server(uvicorn.Config(fast_app, host=args.host, port=args.port, log_level=args.log_level))
     try:

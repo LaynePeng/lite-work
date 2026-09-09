@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 from litework.core.agent_loop import WRITE_TOOLS, AgentLoop, current_tool_call
 from litework.core.commands import build_command_list, parse_skill_command
 from litework.core.types import ToolCall
@@ -17,7 +20,7 @@ def test_parse_skill_command():
 def test_build_command_list_with_skills():
     cmds = build_command_list([{"name": "review", "description": "审查流程"}])
     names = [c["name"] for c in cmds]
-    assert names == ["skill", "compact", "help", "history", "review"]
+    assert names == ["skill", "compact", "goal", "loop", "help", "history", "review"]
     review = cmds[-1]
     assert review["kind"] == "skill"
     assert review["description"] == "审查流程"

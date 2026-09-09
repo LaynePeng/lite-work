@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """文件系统工具（对应课程第6课（代码理解） FileSystemPlugin 增强版）。
 
 增强：带行号范围读取、list_dir、gitignore 感知文件树（pathspec）。

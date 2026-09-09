@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """死循环 / 震荡检测（对应课程第2课 AgentStateTracker）。
 
 工具调用哈希追踪：若连续 3 次以完全相同的参数调用同一个工具，判定陷入死循环。

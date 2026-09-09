@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Cordis 风格工具插件（课程第 9/10 课「空间解耦」落地）。
 
 空间解耦：Kernel 只保留管道与服务容器，具体工具能力全部由插件提供。

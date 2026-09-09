@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """安全卫士测试（对应第18课（安全沙箱实战）：三级风险 + 动态黑白名单 + 路径拦截）。"""
 import pytest
 

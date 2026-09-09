@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """目录树 + Git 状态服务测试：结构化树 / A/M/D/U 状态字母 / 目录改动标记 / 路径越界。"""
 from __future__ import annotations
 

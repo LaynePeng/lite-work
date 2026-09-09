@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """受限本地 Shell 沙箱（对应课程第7课（安全代码操作） LocalProcessSandbox 增强版）。
 
 - asyncio subprocess + 硬超时（超时 SIGKILL）

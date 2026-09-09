@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """AgentApp 装配层：把内核 / LLM / 工具 / 安全 / 会话组装为可运行的 Agent 应用。"""
 from __future__ import annotations
 
@@ -189,6 +192,37 @@ class AgentApp:
             from .orchestration.agent_manager import SessionAgentManager
             m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
         return m
+
+    def background_agent_count(self) -> int:
+        """全部会话中仍在运行的后台子 Agent 数（MCP 热重载 / 工作区切换守卫用）。
+
+        后台子 Agent 生命周期超出主任务（spawn_agent 异步派生），其 registry
+        捕获了装配时的 MCPClient——reload 会 close 这些连接、切工作区会移走
+        其 worktree 基准，必须等它们结束。
+        """
+        return sum(
+            1
+            for manager in self.agent_managers.values()
+            for record in manager.agents.values()
+            if getattr(record, "status", "") == "running"
+        )
+
+    def collab_modes(self) -> List["Plugin"]:
+        """已安装的协作模式插件（CollabModePlugin 实例）。
+
+        与工具插件共享 ~/.lite-work/plugins/ 发现机制与加载缓存；
+        安装/卸载后 _invalidate_plugin_cache 清缓存即热生效。
+        """
+        if self._local_plugins is None:
+            from .tools.plugin_loader import load_plugins
+
+            self._local_plugins = load_plugins(self.config_dir)
+        from .orchestration.collab_policy import CollabModePlugin
+
+        return [
+            p for p in self._local_plugins
+            if isinstance(p, CollabModePlugin) and getattr(p, "mode_name", "")
+        ]
 
     def _apply_env_api_key(self, cli_key: Optional[str] = None) -> None:
         """CLI 传入的 --api-key 回填到所有未配置的供应商。"""

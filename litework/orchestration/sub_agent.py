@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """子 Agent 编排（对应课程第11课 SubAgentRunner 真实化）。
 
 上下文隔离：子 Agent 拥有独立 Kernel 与消息链；工具集按角色裁剪；

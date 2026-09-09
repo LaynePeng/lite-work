@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """DeepSeek 适配器（向后兼容，委托给 OpenAICompatAdapter）。"""
 from __future__ import annotations
 

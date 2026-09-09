@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """办公场景接口测试：产出物列表 / 预览 / 原始文件 / 下载 / 上传。
 
 依赖 office 主依赖（python-docx / openpyxl / python-pptx / reportlab / matplotlib）。

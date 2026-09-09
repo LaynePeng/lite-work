@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """多智能体 P1 测试：SessionAgentManager 生命周期 + IsolationPlugin 硬隔离 + 通知注入。
 
 设计对齐 docs/multi-agent-design.md §8 测试计划。

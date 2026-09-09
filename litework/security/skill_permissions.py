@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """技能权限规则（对齐 OpenCode permission.skill）。
 
 config.json 中的 `skill_permissions` 是 glob 模式 → 动作 的映射：

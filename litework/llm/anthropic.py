@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Anthropic Claude 适配器。
 
 与 OpenAI 兼容接口不同：使用 x-api-key 头、messages API、不同的 SSE 事件结构。

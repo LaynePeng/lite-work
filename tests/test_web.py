@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """webfetch 工具测试：HTML→Markdown / 协议与 SSRF 防护 / 截断 / Cordis 插件注册。"""
 from __future__ import annotations
 

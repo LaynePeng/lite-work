@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer from "./components/Composer";
+import ErrorBoundary from "./components/ErrorBoundary";
 import PendingQueue from "./components/PendingQueue";
 import FileViewer from "./components/FileViewer";
 import ProjectPicker from "./components/ProjectPicker";
@@ -11,7 +16,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, BackgroundTaskInfo, ChatSessionState, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 
 interface StreamingState {
@@ -48,6 +53,7 @@ const EMPTY_CHAT: ChatSessionState = {
   subAgentRecords: [],
   agentBoard: [],
   stalled: false,
+  sseState: "idle",
   todos: [],
   pendingQuestions: [],
   pendingQueue: [],
@@ -199,6 +205,11 @@ export default function App() {
   const [draftReasoning, setDraftReasoning] = useState<Record<string, string>>({});
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
   const [registeredTools, setRegisteredTools] = useState<{ name: string; description: string }[]>([]);
+  // 已安装协作模式（对话框选择器数据源；设置里安装新插件后随 refreshAll 更新）
+  const [collabModes, setCollabModes] = useState<CollabMode[]>([]);
+  const refreshCollabModes = useCallback(() => {
+    api.collabModes().then((r) => setCollabModes(r.modes)).catch(() => {});
+  }, []);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([]);
   // 面板折叠状态：默认展开（false=展开）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -234,6 +245,8 @@ export default function App() {
   const streamingRefs = useRef<Map<string, StreamingState>>(new Map());
   const lastEventTimesRef = useRef<Map<string, number>>(new Map());
   const flushTimersRef = useRef<Map<string, number>>(new Map());
+  // SSE 重连控制器（P1-5）：每会话一个 {taskId, attempts, timer}
+  const streamCtlRef = useRef<Map<string, { taskId: string; attempts: number; timer: number | null }>>(new Map());
   const chatStatesRef = useRef<Record<string, ChatSessionState>>({});
   const tabsRef = useRef<TabItem[]>([]);
   const sessionsRequestRef = useRef(0);
@@ -390,10 +403,11 @@ export default function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [st, ag, llm, providers, mcp, tools] = await Promise.all([
+      const [st, ag, llm, providers, mcp, tools, modes] = await Promise.all([
         api.status(), api.agents(), api.llmConfig(), api.llmProviders(), api.mcpStatus(),
         // 工具列表按当前 Agent 裁剪；workspace 未就绪时报 409，静默降级为空列表
         api.tools(currentAgent).catch(() => [] as { name: string; description: string }[]),
+        api.collabModes().catch(() => ({ modes: [] as CollabMode[] })),
       ]);
       setStatus(st);
       setAgents(ag);
@@ -401,6 +415,7 @@ export default function App() {
       setProviderMeta(providers);
       setMcpServers(mcp.servers || []);
       setRegisteredTools(tools);
+      setCollabModes(modes.modes || []);
       await refreshSessions(st.workspace ?? undefined); // 用刚取到的 workspace，避免 setState 异步时序
     } catch (e) {
       setErrorPublic((e as Error).message);
@@ -431,6 +446,20 @@ export default function App() {
       /* 浏览器模式无 bridge，忽略 */
     }
   }, []);
+
+  // 会话协作模式（对话框选择器）：写入后端 metadata + 本地状态；
+  // 本会话后续任务按该模式配方编排（TaskHandle 注入 system prompt）
+  const setSessionCollabMode = useCallback(
+    (mode: string | null) => {
+      const sid = activeSessionId;
+      if (!sid) return;
+      patchChat(sid, { collabMode: mode });
+      void api.setSessionCollab(sid, mode).catch(() => {
+        // 写回失败不回滚 UI：下次打开会话按服务端状态恢复
+      });
+    },
+    [activeSessionId, patchChat]
+  );
 
   const setSessionModel = useCallback(async (model: SessionModel | null) => {
     if (!activeSessionId) {
@@ -481,13 +510,18 @@ export default function App() {
   // ------------------------------------------------------------ Tab 操作
 
   const closeStream = useCallback((sid?: string) => {
+    const teardown = (s: string) => {
+      eventSourcesRef.current.get(s)?.close();
+      eventSourcesRef.current.delete(s);
+      const ctl = streamCtlRef.current.get(s);
+      if (ctl?.timer != null) window.clearTimeout(ctl.timer);
+      streamCtlRef.current.delete(s);
+    };
     if (sid) {
-      eventSourcesRef.current.get(sid)?.close();
-      eventSourcesRef.current.delete(sid);
+      teardown(sid);
       return;
     }
-    for (const source of eventSourcesRef.current.values()) source.close();
-    eventSourcesRef.current.clear();
+    for (const s of [...eventSourcesRef.current.keys()]) teardown(s);
   }, []);
 
   const openSessionTab = useCallback(
@@ -616,6 +650,14 @@ export default function App() {
       if (!chatStatesRef.current[sid]) {
         const snap = await api.getSession(sid);
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
+        // 会话目标（/goal）：从 metadata 恢复（跨刷新/重启持续生效）
+        if (typeof snap?.metadata?.goal === "string" && snap.metadata.goal) {
+          initial.goal = snap.metadata.goal;
+        }
+        // 会话协作模式（对话框选择器）：从 metadata 恢复
+        if (typeof snap?.metadata?.collab_mode === "string" && snap.metadata.collab_mode) {
+          initial.collabMode = snap.metadata.collab_mode;
+        }
         // 从会话 metadata 恢复子 Agent 归档卡片（跨页面刷新保留）
         if (snap?.metadata?.subagent_records) {
           const restored = (snap.metadata.subagent_records as any[]).map((r) => ({
@@ -1100,6 +1142,7 @@ export default function App() {
             streaming: null,
             running: false,
             turn: 0,
+            sseState: "idle",
             subAgentRecords: [...(getChat(sid).subAgentRecords ?? []), ...finished],
             skillLoaded: undefined,
           });
@@ -1139,12 +1182,42 @@ export default function App() {
             patchChat(sid, { pendingQueue: queue.slice(1) });
             pushLog(`📋 自动发送队列下一条（剩余 ${queue.length - 1} 条）`);
             taskLauncherRef.current(sid, next, done.reasoningEffort);
+            break;
           }
+          // 目标循环（/loop）：队列清空、目标未宣告完成且未达上限时自动续发推进指令
+          const goalDone = /\[GOAL[ _-]?COMPLETE\]/i.test(ev.data.content || "");
+          if (goalDone) pushLog("🎯 模型宣告目标完成");
+          const afterQueue = getChat(sid);
+          if (!afterQueue.loopEnabled) break;
+          const maxN = afterQueue.loopMax ?? 10;
+          if (goalDone || (afterQueue.loopCount ?? 0) >= maxN) {
+            patchChat(sid, { loopEnabled: false });
+            pushLog(goalDone ? "🔁 目标循环自动结束（目标已完成）" : `🔁 目标循环达到 ${maxN} 轮上限，已自动关闭`);
+            break;
+          }
+          const n = (afterQueue.loopCount ?? 0) + 1;
+          patchChat(sid, { loopCount: n });
+          pushLog(`🔁 目标循环：第 ${n}/${maxN} 轮自动推进`);
+          taskLauncherRef.current(
+            sid,
+            `[目标循环 第 ${n}/${maxN} 轮] 继续推进当前会话目标。基于已有进展继续工作；` +
+            "若目标已经完成，请直接输出最终总结并在回复中包含 [GOAL_COMPLETE] 标记，不要再调用工具。",
+            afterQueue.reasoningEffort,
+          );
           break;
         }
         case "task:error": {
           pushLog(`✗ 任务错误: ${ev.data.message}`);
-          patchChat(sid, { error: ev.data.message, running: false, skillLoaded: undefined });
+          const curChat = getChat(sid);
+          // 任务出错/被手动停止：目标循环一并终止（错误循环会烧 token）
+          if (curChat.loopEnabled) pushLog("🔁 任务终止，目标循环已自动关闭");
+          patchChat(sid, {
+            error: ev.data.message,
+            running: false,
+            sseState: "idle",
+            skillLoaded: undefined,
+            ...(curChat.loopEnabled ? { loopEnabled: false } : {}),
+          });
           cancelStreamFlush(sid);
           streamingRefs.current.delete(sid);
           closeStream(sid);
@@ -1295,11 +1368,213 @@ export default function App() {
         default:
           break;
       }
-    },
+     },
     [getChat, patchChat, pushLog, scheduleSubagentRecordExpiry, scheduleStreamFlush, cancelStreamFlush, closeStream, refreshSessions]
   );
 
+  // ------------------------------------------------------------ SSE 连接管理（P1-5）
+
+  const MAX_SSE_RECONNECT = 8;
+  const SSE_BACKOFF_CAP_MS = 15_000;
+
+  /** 探测任务是否仍存在：200=可重连 / 404=已被服务端清理（按正常结束收尾）。 */
+  const probeTaskAlive = useCallback((taskId: string) => new Promise<number>((resolve) => {
+    const ac = new AbortController();
+    const t = window.setTimeout(() => ac.abort(), 5000);
+    fetch(`/api/tasks/${taskId}/events`, { signal: ac.signal })
+      .then((r) => {
+        window.clearTimeout(t);
+        r.body?.cancel().catch(() => {});
+        resolve(r.status);
+      })
+      .catch(() => {
+        window.clearTimeout(t);
+        resolve(0);
+      });
+  }), []);
+
+  /** 统一的任务 SSE 生命周期：连接、断开自动重连（指数退避）、[DONE] 收尾。
+
+   * - 网络抖动：浏览器原生重连（readyState=CONNECTING），状态指示转黄；
+   * - 服务端拒绝/不可达（readyState=CLOSED）：手动重建连接，1s 起指数退避
+   *   （上限 15s，至多 8 次），重连前先探测任务存活（404 → 视作正常结束）；
+   * - 服务端断连期间事件保留在任务队列，重连后续读，不丢事件。
+   */
+  const connectTaskStream = useCallback(
+    (sid: string, taskId: string) => {
+      closeStream(sid);
+      const ctl: { taskId: string; attempts: number; timer: number | null } = {
+        taskId, attempts: 0, timer: null,
+      };
+      streamCtlRef.current.set(sid, ctl);
+      patchChat(sid, { sseState: "connecting" });
+
+      const scheduleReconnect = (targetSid: string) => {
+        const c = streamCtlRef.current.get(targetSid);
+        if (!c) return;
+        const chat = chatStatesRef.current[targetSid];
+        if (!chat?.running) {
+          patchChat(targetSid, { sseState: "idle" });
+          return;
+        }
+        if (c.attempts >= MAX_SSE_RECONNECT) {
+          patchChat(targetSid, { sseState: "lost" });
+          pushLog(`✗ SSE 重连失败（${MAX_SSE_RECONNECT} 次），任务仍在后端运行，可刷新页面恢复`);
+          return;
+        }
+        const delay = Math.min(1000 * 2 ** c.attempts, SSE_BACKOFF_CAP_MS);
+        c.attempts += 1;
+        patchChat(targetSid, { sseState: "reconnecting" });
+        pushLog(`⚠ 连接断开，${Math.round(delay / 1000)}s 后重连（第 ${c.attempts}/${MAX_SSE_RECONNECT} 次）`);
+        c.timer = window.setTimeout(() => {
+          c.timer = null;
+          void probeTaskAlive(c.taskId).then((status) => {
+            if (!streamCtlRef.current.get(targetSid)) return; // 连接已被正常收尾
+            if (status === 404) {
+              closeStream(targetSid);
+              patchChat(targetSid, { sseState: "idle" });
+              void syncSessionAgents(targetSid);
+              return;
+            }
+            open();
+          });
+        }, delay);
+      };
+
+      const open = () => {
+        const es = new EventSource(`/api/tasks/${taskId}/events`);
+        eventSourcesRef.current.set(sid, es);
+        es.onopen = () => {
+          ctl.attempts = 0;
+          lastEventTimesRef.current.set(sid, Date.now());
+          patchChat(sid, { sseState: "connected" });
+          pushLog(`🔗 已连接任务 ${taskId}`);
+        };
+        es.onmessage = (e) => {
+          if (e.data === "[DONE]") {
+            closeStream(sid);
+            patchChat(sid, { sseState: "idle" });
+            // 主任务结束：后台子 Agent 可能仍在运行或刚完成，SSE 已断。
+            // 调用 API 同步最终状态到 Agents 看板（否则卡片永久卡在 running）。
+            void syncSessionAgents(sid);
+            return;
+          }
+          try {
+            handleSSEEvent(sid, JSON.parse(e.data));
+          } catch {
+            /* ignore */
+          }
+        };
+        es.onerror = () => {
+          if (es.readyState === EventSource.CLOSED) {
+            // 服务端拒绝（404）或持续不可达：浏览器已放弃，手动接管重连
+            eventSourcesRef.current.delete(sid);
+            scheduleReconnect(sid);
+          } else {
+            // 网络抖动：浏览器原生自动重连中（约 3s）
+            patchChat(sid, { sseState: "reconnecting" });
+            pushLog("⚠ SSE 连接中断，等待重连…");
+          }
+        };
+      };
+
+      open();
+    },
+    [closeStream, handleSSEEvent, patchChat, probeTaskAlive, pushLog, syncSessionAgents]
+  );
+
+  // 30s stall 检测（P1-5）：任务运行中超过 30s 无任何 SSE 事件（含 keepalive
+  // 不触发 onmessage），提示用户可能卡住——长工具执行属正常场景，仅提示不阻断。
+  useEffect(() => {
+    const STALL_MS = 30_000;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      for (const [sid, chat] of Object.entries(chatStatesRef.current)) {
+        if (!chat.running || chat.stalled) continue;
+        const last = lastEventTimesRef.current.get(sid);
+        if (last && now - last > STALL_MS) {
+          patchChat(sid, { stalled: true });
+          pushLog(`⏳ 会话 ${sid.slice(0, 12)}… 已 ${Math.round((now - last) / 1000)}s 无事件`);
+        }
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [patchChat, pushLog]);
+
+  // ------------------------------------------------------------ 会话目标与目标循环（/goal · /loop）
+
+  /** /goal：<目标描述> 设置 · 无参查看 · clear 清除。目标持久化于会话 metadata，
+   *  后端在每个任务的 system prompt 注入（跨任务持续生效）。 */
+  const runGoalCommand = useCallback(
+    async (raw: string) => {
+      const sid = activeSessionId;
+      if (!sid) {
+        window.alert("当前没有会话，请先打开或新建会话。");
+        return;
+      }
+      const arg = raw.replace(/^\/goal\s*/i, "").trim();
+      const say = (content: string) => {
+        const cur = getChat(sid);
+        patchChat(sid, { messages: [...(cur.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+      };
+      if (!arg) {
+        const cur = getChat(sid).goal;
+        say(cur ? `🎯 当前会话目标：${cur}` : "当前未设置目标。用法：`/goal <目标描述>` 设置 · `/goal clear` 清除");
+        return;
+      }
+      if (arg.toLowerCase() === "clear" || arg === "清除") {
+        await api.setSessionGoal(sid, null).catch(() => {});
+        patchChat(sid, { goal: null, loopEnabled: false });
+        say("🎯 会话目标已清除（关联的自动循环一并关闭）。");
+        pushLog("🎯 会话目标已清除");
+        return;
+      }
+      try {
+        const r = await api.setSessionGoal(sid, arg);
+        patchChat(sid, { goal: r.goal ?? arg });
+        say(`🎯 会话目标已设置：${arg}\n\n之后每个任务都会带着该目标执行；配合 \`/loop\` 可自动循环推进直至完成。`);
+        pushLog("🎯 会话目标已设置");
+      } catch (e) {
+        patchChat(sid, { error: (e as Error).message });
+      }
+    },
+    [activeSessionId, getChat, patchChat, pushLog]
+  );
+
+  /** /loop：开启目标自动循环（任务结束→自动续发推进指令）。 */
+  const runLoopCommand = useCallback(
+    (raw: string) => {
+      const sid = activeSessionId;
+      if (!sid) {
+        window.alert("当前没有会话，请先打开或新建会话。");
+        return;
+      }
+      const arg = raw.replace(/^\/loop\s*/i, "").trim().toLowerCase();
+      const chat = getChat(sid);
+      const say = (content: string) => {
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+      };
+      if (arg === "off" || arg === "stop" || arg === "关闭") {
+        patchChat(sid, { loopEnabled: false, loopCount: 0 });
+        say("🔁 目标自动循环已关闭。");
+        pushLog("🔁 目标循环已关闭");
+        return;
+      }
+      if (!chat.goal) {
+        say("请先用 `/goal <目标描述>` 设置会话目标，再开启 `/loop` 自动推进。");
+        return;
+      }
+      let max = 10;
+      if (/^\d+$/.test(arg)) max = Math.max(1, Math.min(50, parseInt(arg, 10)));
+      patchChat(sid, { loopEnabled: true, loopMax: max, loopCount: 0 });
+      say(`🔁 目标自动循环已开启（最多 ${max} 轮）：当前任务结束后自动续发推进指令，模型宣告完成（[GOAL_COMPLETE]）、出错或达到上限时自动停止；\`/loop off\` 可随时手动停止。`);
+      pushLog(`🔁 目标循环开启（上限 ${max} 轮）`);
+    },
+    [activeSessionId, getChat, patchChat, pushLog]
+  );
+
   // ------------------------------------------------------------ 发送
+
 
   const runCompact = useCallback(
     async (raw: string) => {
@@ -1347,6 +1622,15 @@ export default function App() {
         await runCompact(prompt);
         return;
       }
+      const trimmedCmd = prompt.trim().toLowerCase();
+      if (trimmedCmd === "/goal" || trimmedCmd.startsWith("/goal ")) {
+        await runGoalCommand(prompt);
+        return;
+      }
+      if (trimmedCmd === "/loop" || trimmedCmd.startsWith("/loop ")) {
+        runLoopCommand(prompt);
+        return;
+      }
       let sid = activeTabId ? tabsRef.current.find((t) => t.id === activeTabId)?.sessionId : null;
       const selectedModel = activeSessionId
         ? currentChat.modelOverride ?? null
@@ -1372,33 +1656,9 @@ export default function App() {
         }
       }
       const base = getChat(sid);
-      // SSE 连接（新任务提交与排队竞态续接共用）
-      const connect = (taskId: string) => {
-        const es = new EventSource(`/api/tasks/${taskId}/events`);
-        eventSourcesRef.current.set(sid, es);
-        es.onopen = () => {
-          lastEventTimesRef.current.set(sid, Date.now());
-          pushLog(`🔗 已连接任务 ${taskId}`);
-        };
-        es.onmessage = (e) => {
-          if (e.data === "[DONE]") {
-            es.close();
-            eventSourcesRef.current.delete(sid);
-            // 主任务结束：后台子 Agent 可能仍在运行或刚完成，SSE 已断。
-            // 调用 API 同步最终状态到 Agents 看板（否则卡片永久卡在 running）。
-            void syncSessionAgents(sid);
-            return;
-          }
-          try {
-            handleSSEEvent(sid, JSON.parse(e.data));
-          } catch {
-            /* ignore */
-          }
-        };
-        es.onerror = () => {
-          pushLog("⚠ SSE 连接中断，等待重连…");
-        };
-      };
+      // SSE 连接（新任务提交与排队竞态续接共用，统一走 connectTaskStream：
+      // 含断线重连、连接状态指示与 [DONE] 收尾，见 P1-5）
+      const connect = (taskId: string) => connectTaskStream(sid, taskId);
 
       if (base.running) {
         // 任务运行中：只加入本地待发送队列（不调用后端），由用户点击队列项 ➤
@@ -1446,7 +1706,7 @@ export default function App() {
         pushLog(`✗ 提交失败: ${(e as Error).message}`);
       }
     },
-    [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact, syncSessionAgents]
+    [activeTabId, activeSessionId, currentChat.modelOverride, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, handleSSEEvent, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, syncSessionAgents]
   );
 
   // 发送队列中的单条指令到当前运行任务（queue_input 注入下一回合）
@@ -1473,33 +1733,12 @@ export default function App() {
         cancelStreamFlush(sid);
         streamingRefs.current.set(sid, { items: [] });
         taskIdsRef.current.set(sid, resp.task_id);
-        const es = new EventSource(`/api/tasks/${resp.task_id}/events`);
-        eventSourcesRef.current.set(sid, es);
-        es.onopen = () => {
-          lastEventTimesRef.current.set(sid, Date.now());
-          pushLog(`🔗 已连接任务 ${resp.task_id}`);
-        };
-        es.onmessage = (e) => {
-          if (e.data === "[DONE]") {
-            es.close();
-            eventSourcesRef.current.delete(sid);
-            void syncSessionAgents(sid);
-            return;
-          }
-          try {
-            handleSSEEvent(sid, JSON.parse(e.data));
-          } catch {
-            /* ignore */
-          }
-        };
-        es.onerror = () => {
-          pushLog("⚠ SSE 连接中断，等待重连…");
-        };
+        connectTaskStream(sid, resp.task_id);
       }
     }).catch(() => {
       pushLog("⚠ 补充指令提交失败，请重试");
     });
-  }, [cancelStreamFlush, currentAgent, getChat, handleSSEEvent, patchChat, pushLog]);
+  }, [cancelStreamFlush, connectTaskStream, currentAgent, getChat, handleSSEEvent, patchChat, pushLog]);
 
   // 更新 taskLauncherRef：供 handleSSEEvent 在 task:done 时自动发送下一条
   taskLauncherRef.current = (targetSid, prompt, effort) => {
@@ -1516,17 +1755,7 @@ export default function App() {
         const resp = await api.chat(targetSid, prompt, currentAgent, reasoning);
         const { task_id } = resp;
         taskIdsRef.current.set(targetSid, task_id);
-        const es = new EventSource(`/api/tasks/${task_id}/events`);
-        eventSourcesRef.current.set(targetSid, es);
-        es.onopen = () => {
-          lastEventTimesRef.current.set(targetSid, Date.now());
-          pushLog(`🔗 已连接任务 ${task_id}`);
-        };
-        es.onmessage = (e) => {
-          if (e.data === "[DONE]") { es.close(); eventSourcesRef.current.delete(targetSid); void syncSessionAgents(targetSid); return; }
-          try { handleSSEEvent(targetSid, JSON.parse(e.data)); } catch { /* ignore */ }
-        };
-        es.onerror = () => pushLog("⚠ SSE 连接中断，等待重连…");
+        connectTaskStream(targetSid, task_id);
       } catch (e) {
         patchChat(targetSid, { error: (e as Error).message, running: false, streaming: null });
         pushLog(`✗ 自动发送失败: ${(e as Error).message}`);
@@ -1633,6 +1862,7 @@ export default function App() {
         </button>
       )}
       {!sidebarCollapsed && (
+      <ErrorBoundary name="侧边栏" compact>
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -1666,6 +1896,7 @@ export default function App() {
         onFileOpen={(p) => void openFileTab(p)}
         onDirOpen={(p) => void openDirInSystem(p)}
       />
+      </ErrorBoundary>
       )}
       {!sidebarCollapsed && (
       <div
@@ -1676,6 +1907,7 @@ export default function App() {
       />
       )}
       <main className="main">
+        <ErrorBoundary name="聊天区">
         <TabBar
           tabs={tabs}
           activeTabId={activeTabId}
@@ -1713,6 +1945,12 @@ export default function App() {
               streaming={currentChat.streaming}
               running={currentChat.running}
               turn={currentChat.turn}
+              goal={currentChat.goal}
+              loop={
+                currentChat.loopEnabled
+                  ? { count: currentChat.loopCount ?? 0, max: currentChat.loopMax ?? 10 }
+                  : null
+              }
               pendingApprovals={currentChat.pendingApprovals}
               subAgentRecords={currentChat.subAgentRecords}
               skillLoaded={currentChat.skillLoaded}
@@ -1754,7 +1992,12 @@ export default function App() {
             )}
             <Composer
               running={currentChat.running}
+              sseState={currentChat.sseState}
               agents={agents}
+              collabModes={collabModes}
+              sessionCollabMode={currentChat.collabMode ?? null}
+              onSessionCollabMode={setSessionCollabMode}
+              onCollabModesRefresh={refreshCollabModes}
               currentAgent={currentAgent}
               onSelectAgent={setCurrentAgent}
               onSend={(p) => void send(p)}
@@ -1804,6 +2047,7 @@ export default function App() {
             </div>
           </div>
         )}
+        </ErrorBoundary>
       </main>
       {activeTab?.kind === "chat" && toolPanelCollapsed && (
         <button className="panel-restore-bar right" onClick={() => setToolPanelCollapsed(false)} title="展开工具面板">
@@ -1818,6 +2062,7 @@ export default function App() {
             onPointerDown={toolPanelResize.startDrag}
             onDoubleClick={toolPanelResize.reset}
           />
+          <ErrorBoundary name="工具面板" compact>
           <ToolPanel
             contextStats={currentChat.contextStats}
             mcpServers={mcpServers}
@@ -1834,6 +2079,7 @@ export default function App() {
               setBackgroundTasks((prev) => prev.filter((t) => t.task_id !== id));
             }).catch(() => {})}
           />
+          </ErrorBoundary>
         </>
       )}
       {showSettings && (

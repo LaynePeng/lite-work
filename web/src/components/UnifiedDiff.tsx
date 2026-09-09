@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 // 统一 diff 渲染（opencode / git 风格）：单列交错视图
 // 上下文行正常、删除行红底、插入行绿底，带新旧行号与 hunk 分隔条
 import { useMemo } from "react";

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """精确代码编辑工具（对应课程第7课（安全代码操作））：
 
 1. apply_search_replace - Search-and-Replace 块匹配器（精确匹配 → 模糊行匹配 + 缩进保持）

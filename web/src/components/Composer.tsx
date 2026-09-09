@@ -1,10 +1,39 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInfo, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
+import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo, SseConnState } from "../types";
+
+/** SSE 连接指示器文案（P1-5） */
+const SSE_LABELS: Record<SseConnState, string> = {
+  idle: "",
+  connecting: "连接中…",
+  connected: "已连接",
+  reconnecting: "重连中…",
+  lost: "连接丢失（任务仍在后端运行）",
+};
+
+/** 协作模式图标：插件自带 logo（icon.svg 等），加载失败回退默认图。 */
+function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  if (mode.icon_url && !failed) {
+    return (
+      <img
+        className="collab-mode-icon" src={mode.icon_url}
+        width={size} height={size} alt=""
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <span className="collab-mode-fallback" style={{ fontSize: size - 3 }}>🧩</span>;
+}
 
 export default function Composer({
   disabled = false,
   running,
+  sseState = "idle",
   agents,
   currentAgent,
   onSelectAgent,
@@ -13,12 +42,18 @@ export default function Composer({
   llmConfig,
   providerMeta,
   sessionModel,
+  collabModes = [],
+  sessionCollabMode = null,
+  onSessionCollabMode,
+  onCollabModesRefresh,
   onSessionModelChange,
   reasoningEffort = "",
   onReasoningEffortChange,
 }: {
   disabled?: boolean;
   running: boolean;
+  /** SSE 连接状态（P1-5）：运行中显示连接指示器（绿=已连接/黄=重连中/红=失联） */
+  sseState?: SseConnState;
   agents: AgentInfo[];
   currentAgent: string;
   onSelectAgent: (id: string) => void;
@@ -28,6 +63,13 @@ export default function Composer({
   llmConfig: LLMConfig | null;
   providerMeta?: LLMProviderMeta[];
   sessionModel: SessionModel | null;
+  /** 已安装协作模式（/api/collab/modes）：选择器展示 + 会话级启用 */
+  collabModes?: CollabMode[];
+  /** 当前会话选定的协作模式（null=自动，跟随全局设置） */
+  sessionCollabMode?: string | null;
+  onSessionCollabMode?: (mode: string | null) => void;
+  /** 打开选择器时请求刷新模式列表（安装新插件后即时可见） */
+  onCollabModesRefresh?: () => void;
   onSessionModelChange: (model: SessionModel | null) => void;
   reasoningEffort?: string;
   onReasoningEffortChange?: (v: string) => void;
@@ -69,6 +111,11 @@ export default function Composer({
   ];
   const [collabMode, setCollabMode] = useState("auto");
   const [collabOpen, setCollabOpen] = useState(false);
+  // 已安装协作模式（插件形态，可带 logo）
+  const pluginModes = useMemo(
+    () => collabModes.filter((m) => m.source === "plugin"),
+    [collabModes]
+  );
   // 点击外部关闭 popover
   const collabRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -414,20 +461,60 @@ export default function Composer({
               </button>
              );
            })}
-          {/* 协作模式：按钮显示当前模式 + popover 选择（自动=模型路由；选中显式模式，
-              发送后回落自动——一次性修饰语义） */}
+          {/* 协作模式：按钮显示当前模式 + popover 选择。
+              - 已安装协作模式（插件，带 logo）：会话级启用——写入会话 metadata，
+                本会话后续任务按该模式配方编排（由后端 system prompt 注入）；
+              - 技能模式：一次性修饰——下一条消息以 /技能 命令发送，发送后回落。 */}
           <div className="collab-picker" ref={collabRef}>
             <button
-              className={`collab-btn ${collabMode !== "auto" ? "active" : ""}`}
-              onClick={() => setCollabOpen((v) => !v)}
+              className={`collab-btn ${sessionCollabMode ? "active" : ""}`}
+              onClick={() => {
+                const next = !collabOpen;
+                setCollabOpen(next);
+                if (next) onCollabModesRefresh?.();
+              }}
               disabled={disabled || running}
-              title="多 Agent 协作模式：点击选择；自动=模型按任务特征路由"
+              title="多 Agent 协作模式：已安装模式对本会话持续生效；技能模式对下一条消息生效"
             >
-              {COLLAB_MODES.find((m) => m.id === collabMode)?.label ?? "🤝 自动"}
+              {(() => {
+                if (sessionCollabMode) {
+                  const m = pluginModes.find((p) => p.name === sessionCollabMode);
+                  if (m) return <><ModeIcon mode={m} size={14} /> {m.display_name}</>;
+                }
+                return "🤝 自动";
+              })()}
             </button>
             {collabOpen && (
               <div className="collab-popover">
-                {COLLAB_MODES.map((m) => (
+                <button
+                  className={`collab-option ${!sessionCollabMode ? "on" : ""}`}
+                  onClick={() => { onSessionCollabMode?.(null); setCollabOpen(false); }}
+                  title="跟随设置中的全局协作模式（默认：模型按任务特征路由）"
+                >
+                  <span className="collab-option-label">🤝 自动</span>
+                  <span className="collab-option-desc">跟随全局设置，模型按任务特征路由</span>
+                </button>
+                {pluginModes.length > 0 && (
+                  <>
+                    <div className="collab-popover-group">已安装协作模式（本会话生效）</div>
+                    {pluginModes.map((m) => (
+                      <button
+                        key={m.name}
+                        className={`collab-option with-icon ${sessionCollabMode === m.name ? "on" : ""}`}
+                        onClick={() => { onSessionCollabMode?.(m.name); setCollabOpen(false); }}
+                        title={m.description}
+                      >
+                        <span className="collab-option-label">
+                          <ModeIcon mode={m} size={16} />
+                          {m.display_name}
+                        </span>
+                        <span className="collab-option-desc">{m.description}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
+                <div className="collab-popover-group">技能触发（对下一条消息生效）</div>
+                {COLLAB_MODES.filter((m) => m.id !== "auto").map((m) => (
                   <button
                     key={m.id}
                     className={`collab-option ${collabMode === m.id ? "on" : ""}`}
@@ -693,6 +780,8 @@ export default function Composer({
         )}
       </div>
       <div className="composer-hint">
+        {running && <span className={`sse-dot sse-${sseState}`} title={SSE_LABELS[sseState]} />}
+        {running && sseState !== "idle" && <span className={`sse-label sse-${sseState}`}>{SSE_LABELS[sseState]}</span>}
         {uploadToast && <span className="upload-toast">{uploadToast}</span>}
         {uploadToast ? " · " : ""}
         {running ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送" : "工具执行受安全策略保护，中危操作会请求你确认"}

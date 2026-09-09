@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """工具注册表（Tool Registry）：统一注册 / 汇总 Schema / 分发执行。"""
 from __future__ import annotations
 

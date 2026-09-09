@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """OpenAI 兼容适配器（DeepSeek / OpenAI / Kimi / 通义千问 / GLM 等）。
 
 手写 SSE 流式解析 + tool_calls 按 index 增量拼接。

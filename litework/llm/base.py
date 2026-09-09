@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """LLM 适配器抽象基类。"""
 from __future__ import annotations
 

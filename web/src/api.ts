@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import type { AgentInfo, AppConfig, FileDiffResponse, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, OutputItem, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
 
 const TIMEOUT = 15000;
@@ -32,6 +36,8 @@ export const api = {
     req<{ ok: boolean }>("/api/config", { method: "POST", body: JSON.stringify({ updates }) }),
 
   agents: () => req<AgentInfo[]>("/api/agents"),
+  collabModes: () =>
+    req<{ modes: import("./types").CollabMode[] }>("/api/collab/modes"),
   agentsTools: () => req<{ tools: { name: string; description: string }[]; agents: Record<string, import("./types").AgentInfo> }>("/api/agents/tools"),
   saveAgent: (profile: Record<string, unknown>) =>
     req<Record<string, unknown>>("/api/agents/save", { method: "POST", body: JSON.stringify({ profile }) }),
@@ -52,6 +58,14 @@ export const api = {
     }),
   sessionAgents: (id: string) =>
     req<{ agents: import("./types").SubAgentStatus[] }>(`/api/sessions/${id}/agents`),
+  setSessionGoal: (id: string, goal: string | null) =>
+    req<{ ok: boolean; goal: string | null }>(`/api/sessions/${id}/goal`, {
+      method: "POST", body: JSON.stringify({ goal }),
+    }),
+  setSessionCollab: (id: string, mode: string | null) =>
+    req<{ ok: boolean; mode: string | null }>(`/api/sessions/${id}/collab`, {
+      method: "POST", body: JSON.stringify({ mode }),
+    }),
   deleteSession: (id: string) =>
     req<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   cleanupSessions: () =>

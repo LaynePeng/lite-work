@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { BuiltinPluginInfo, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
+import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
 
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
 // 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
@@ -59,6 +63,12 @@ export default function SettingsModal({
   const [maCollabMode, setMaCollabMode] = useState<"explicit" | "proactive">("explicit");
   const [maLedgerInterval, setMaLedgerInterval] = useState<number>(5);
   const [maSaved, setMaSaved] = useState(false);
+  // 协作模式（collab_policy）：内置策略 + 已安装模式插件；社区 kind=collab 包可安装
+  const [collabModes, setCollabModes] = useState<CollabMode[]>([]);
+  const [collabPolicy, setCollabPolicy] = useState("default");
+  const [collabInstallOpen, setCollabInstallOpen] = useState(false);
+  const [collabBusy, setCollabBusy] = useState<string | null>(null);
+  const [collabMsg, setCollabMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Skills triggers 匹配模式
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
@@ -153,6 +163,34 @@ export default function SettingsModal({
     const cp = community?.plugins.find((p) => p.name === name);
     return cp?.path ? `https://github.com/laynepeng/lite-work-plugins/tree/main/${cp.path}` : "";
   }, [community]);
+
+  // 社区协作模式清单（kind === "collab"）：安装进协作模式选择器
+  const communityCollabModes = useMemo(
+    () => (community?.plugins || []).filter((p) => p.kind === "collab"),
+    [community]
+  );
+
+  const installCollabMode = useCallback(async (name: string, version?: string) => {
+    const src = communitySrc(name);
+    if (!src) return;
+    setCollabBusy(name);
+    setCollabMsg(null);
+    try {
+      const before = new Set(collabModes.map((m) => m.name));
+      await api.importPlugin({ source: src, name: undefined, overwrite: true, version });
+      // 安装后立即拉取新模式列表并自动选中新装的模式
+      const r = await api.collabModes();
+      setCollabModes(r.modes);
+      const freshMode = r.modes.find((m) => m.source === "plugin" && !before.has(m.name));
+      if (freshMode) setCollabPolicy(freshMode.name);
+      setCollabMsg({ ok: true, text: `已安装协作模式「${name}」${freshMode ? "并已选中（记得保存）" : ""}` });
+      refreshPlugins();
+    } catch (e) {
+      setCollabMsg({ ok: false, text: `安装失败: ${(e as Error).message}` });
+    } finally {
+      setCollabBusy(null);
+    }
+  }, [collabModes, communitySrc, refreshPlugins]);
 
   // 社区技能过滤：只显示「未安装」和「已安装但社区有更新版」的
   // （更新检测依赖 SKILL.md frontmatter 的 version 字段，社区技能补上后自动生效）
@@ -273,8 +311,15 @@ export default function SettingsModal({
       if (typeof c.agent_meeting_rounds === "number" && c.agent_meeting_rounds > 0) setMaMeetingRounds(c.agent_meeting_rounds);
       if (c.agent_collab_mode === "proactive") setMaCollabMode("proactive");
       if (typeof c.agent_ledger_interval === "number" && c.agent_ledger_interval > 0) setMaLedgerInterval(c.agent_ledger_interval);
+      if (typeof c.collab_policy === "string" && c.collab_policy) setCollabPolicy(c.collab_policy);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
+
+  const refreshCollabModes = useCallback(() => {
+    api.collabModes().then((r) => setCollabModes(r.modes)).catch(() => setCollabModes([]));
+  }, []);
+
+  useEffect(() => { refreshCollabModes(); }, [refreshCollabModes]);
 
   const savePermRules = useCallback(async () => {
     const rules: Record<string, "allow" | "deny" | "ask"> = {};
@@ -781,6 +826,7 @@ export default function SettingsModal({
         agent_meeting_rounds: maMeetingRounds,
         agent_collab_mode: maCollabMode,
         agent_ledger_interval: maLedgerInterval,
+        collab_policy: collabPolicy,
       });
       setMaSaved(true);
       setTimeout(() => setMaSaved(false), 2000);
@@ -789,7 +835,7 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds,
-      maCollabMode, maLedgerInterval, onSaved]);
+      maCollabMode, maLedgerInterval, collabPolicy, onSaved]);
 
   return (
       <div className="modal-overlay">
@@ -1868,6 +1914,86 @@ export default function SettingsModal({
                     <option value="explicit">显式（默认，明确要求才派生）</option>
                     <option value="proactive">主动（能并行就并行）</option>
                   </select>
+                </div>
+                <div className="form-group" style={{ gridColumn: "1 / -1" }}>
+                  <label>协作模式</label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      className="form-input" style={{ flex: "1 1 220px" }}
+                      value={collabPolicy}
+                      onChange={(e) => setCollabPolicy(e.target.value)}
+                      title="协作模式决定 spawn_agent 的派生指引与行为钩子：内置为通用路由；安装的模式插件提供专项配方（会议/头脑风暴/流水线等）"
+                    >
+                      {collabModes.map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.display_name}{m.source === "plugin" ? "（已安装插件）" : ""}
+                        </option>
+                      ))}
+                      {!collabModes.some((m) => m.name === collabPolicy) && (
+                        <option value={collabPolicy}>{collabPolicy}（模式未安装，保存后回退默认）</option>
+                      )}
+                    </select>
+                    <button
+                      className="btn-test" type="button"
+                      onClick={() => {
+                        const next = !collabInstallOpen;
+                        setCollabInstallOpen(next);
+                        if (next && !community) void fetchCommunity();
+                      }}
+                    >
+                      ＋ 安装协作模式
+                    </button>
+                  </div>
+                  {collabInstallOpen && (
+                    <div className="skills-list" style={{ marginTop: 8 }}>
+                      {communityBusy && <div className="mcp-empty-inline">正在拉取社区清单…</div>}
+                      {!communityBusy && communityCollabModes.length === 0 && (
+                        <div className="mcp-empty-inline">社区暂无可安装的协作模式（lite-work-plugins 仓库 kind=collab 包）</div>
+                      )}
+                      {communityCollabModes.map((cp) => {
+                        const installed = collabModes.some(
+                          (m) => m.source === "plugin" && cp.name === `collab-${m.name}`
+                        );
+                        const iconSrc = cp.icon
+                          ? `https://raw.githubusercontent.com/laynepeng/lite-work-plugins/main/${cp.icon}`
+                          : "";
+                        return (
+                          <div className="skill-item plugin-item" key={cp.name}>
+                            <div className="plugin-item-body">
+                              <div className="plugin-title-row">
+                                {iconSrc && (
+                                  <img className="collab-mode-icon" src={iconSrc}
+                                    width={18} height={18} alt=""
+                                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                                )}
+                                <span className="skill-item-name">{cp.name}</span>
+                                <span className={`plugin-tag ${installed ? "local" : "new"}`}>
+                                  {installed ? "已安装" : "未安装"}
+                                </span>
+                                {cp.version && <span className="plugin-version">v{cp.version}</span>}
+                              </div>
+                              <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                            </div>
+                            <div className="skill-item-actions">
+                              <button
+                                className="btn-test"
+                                disabled={collabBusy === cp.name || !cp.path}
+                                onClick={() => void installCollabMode(cp.name, cp.version)}
+                              >
+                                {collabBusy === cp.name ? "安装中…" : installed ? "重装/更新" : "安装"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {collabMsg && (
+                        <div className={`mcp-empty-inline ${collabMsg.ok ? "" : "mcp-error"}`}
+                          style={{ color: collabMsg.ok ? undefined : "#f85149" }}>
+                          {collabMsg.ok ? "✔ " : "✗ "}{collabMsg.text}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>进度账本间隔（轮）</label>

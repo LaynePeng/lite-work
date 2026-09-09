@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 // 文件修改 diff 展示（opencode 风格）：文件路径 + 增删行数徽标 + 行级 patch 着色
 import UnifiedDiff, { isUnifiedDiff } from "./UnifiedDiff";
 

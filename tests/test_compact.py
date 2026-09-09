@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """/compact 手动压缩测试：强制折叠 / 摘要落盘 / focus 透传 / 统计回写 / 拒绝场景。"""
 import asyncio
 

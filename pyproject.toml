@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lite-work"
 dynamic = ["version"]
+license = { text = "Apache-2.0" }
 description = "lite-work - 手写内核的通用 AI Agent 桌面应用"
 requires-python = ">=3.11"
 dependencies = [

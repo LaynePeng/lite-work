@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """AgentLoop 主循环状态机（对应课程第16课（实战 AgentLoop）+ 第2/3课全部增强）。
 
 完整 Think-Act-Observe 闭环：
@@ -123,6 +126,13 @@ class AgentLoop:
 
     # ------------------------------------------------------------------ 主循环
 
+    class _LLMCallFailure(Exception):
+        """LLM 调用终局失败（重试耗尽或不可重试），由 run_task 捕获后收尾。"""
+
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.message = message
+
     async def run_task(
         self,
         prompt: str,
@@ -130,6 +140,11 @@ class AgentLoop:
         tools: Optional[List[ToolDefinition]] = None,
         store_snapshot: bool = True,
     ) -> Tuple[str, Dict[str, Any]]:
+        """Think-Act-Observe 主循环（P1-4 拆分为三阶段，可独立测试）：
+
+        初始化（消息链/system prompt/落盘）→ 每轮 [LLM 调用（含重试）
+        → 状态更新（usage/消息链）→ 工具批次执行] 循环，直至收敛或超限。
+        """
         messages: List[Message] = self.kernel.ctx.messages
         tools = tools if tools is not None else self.registry.get_tools()
         # 工具处理器（todo_write 等）经 ContextVar 知道当前会话
@@ -149,32 +164,8 @@ class AgentLoop:
             "cache_miss_tokens": 0,
         }
 
-        # 1. System Prompt 初始化（每任务一次：静态骨架，保证缓存前缀稳定）
-        if system_prompt is None:
-            system_prompt = SystemPromptBuilder.build(
-                self.workspace, tools, skill_index=self._filtered_skill_index())
-        if not messages or messages[0].role != "system":
-            messages.insert(0, Message(role="system", content=system_prompt))
-        else:
-            messages[0].content = system_prompt
-
-        # 1.5 修复历史中可能不完整的工具调用链（任务被停止时落盘的不完整历史）
-        messages[:] = repair_tool_call_pairs(messages)
-
-        # 2. 用户消息入链
-        user_message = Message(role="user", content=prompt)
-        messages.append(user_message)
-        await self.kernel.events.emit("message:added", {"message": user_message.to_dict()})
-
-        # 2.5 上一任务遗留的子 Agent 完成通知先行注入（父已结束场景，
-        #     通知滞留 manager 队列，本任务首轮 LLM 调用前投递）
-        await self._inject_agent_notifications(messages)
-
-        # 首条消息立即落盘，避免 session 创建后、首轮 LLM 完成前刷新列表时消失。
-        if store_snapshot:
-            self._save_session()
-
-        await self.kernel.events.emit("task:start", {"session_id": self.kernel.session_id})
+        # 阶段〇：初始化（system prompt、用户消息入链、首次落盘、task:start）
+        await self._initialize_task(messages, prompt, system_prompt, tools, store_snapshot)
 
         current_step = 0
         empty_reply_retries = 0
@@ -194,22 +185,7 @@ class AgentLoop:
                 await self._inject_agent_notifications(messages)
 
                 # A. 上下文裁剪（保护 system 与 assistant/tool 原子对）
-                #    有效上限 = max(预算下限, 90% × 模型窗口)，到阈值先尝试 LLM 摘要压缩
-                cap = self._effective_cap()
-                if TokenCounter.count_messages_tokens(messages) > cap:
-                    compacted = await self._try_compact(messages, cap)
-                    if compacted is not None:
-                        messages[:] = compacted
-                        payload = messages
-                    else:
-                        payload = self.context_manager.prune_messages(messages, hard_cap=cap)
-                        if self.context_manager.last_prune.get("compressed"):
-                            self._compression_count += 1
-                            self._compressed_tokens += int(
-                                self.context_manager.last_prune.get("removed_tokens", 0)
-                            )
-                else:
-                    payload = messages
+                payload = await self._trim_context(messages, stats)
 
                 # B. beforeLLM 管道（插件可修改消息）
                 processed = await self.kernel.before_llm.run(self.kernel.ctx, payload)
@@ -218,62 +194,16 @@ class AgentLoop:
                 if not self._last_usage:
                     stats["input_tokens"] += TokenCounter.count_messages_tokens(processed)
 
-                # D. 调用 LLM（流式，内部 emit llm:stream）。
-                #    瞬时故障（单次超时 / 网络抖动 / 限流 / 5xx）自动指数退避重试，
-                #    避免长思考模型或网络波动直接杀死整个任务；重试过程 emit
-                #    "llm:retry" 事件供 UI 展示。不可重试错误（鉴权/参数等）立即失败。
-                attempt = 0
-                while True:
-                    try:
-                        content, tool_calls, usage = await asyncio.wait_for(
-                            self.adapter.chat_stream(processed, tools, self.kernel.events),
-                            timeout=self.llm_timeout,
-                        )
-                        break
-                    except asyncio.TimeoutError:
-                        last_err: BaseException = TimeoutError(
-                            f"LLM 请求超过 {self.llm_timeout}s（模型可能正在长时间思考或网络拥堵）"
-                        )
-                        retryable = True
-                    except Exception as exc:
-                        last_err = exc
-                        # LLMError 携带 retryable 标记（超时/网络/限流/5xx 为 True）
-                        retryable = bool(getattr(exc, "retryable", False))
-                    if not retryable or attempt >= self.llm_retries:
-                        logger.warning("[AgentLoop] LLM 调用失败: %s", last_err)
-                        messages.append(Message(role="assistant", content=f"[LLM Error]: {last_err}"))
-                        return await self._finish(f"[LLM Error]: {last_err}", messages, stats, store_snapshot)
-                    attempt += 1
-                    wait_s = min(2 ** attempt, 8)
-                    logger.warning(
-                        "[AgentLoop] LLM 调用失败（%s），%ds 后进行第 %d/%d 次重试",
-                        last_err, wait_s, attempt, self.llm_retries,
-                    )
-                    await self.kernel.events.emit("llm:retry", {
-                        "attempt": attempt,
-                        "max_retries": self.llm_retries,
-                        "reason": str(last_err)[:200],
-                        "wait": wait_s,
-                    })
-                    await asyncio.sleep(wait_s)
+                # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
+                try:
+                    content, tool_calls, usage = await self._call_llm_with_retry(processed, tools)
+                except AgentLoop._LLMCallFailure as failure:
+                    logger.warning("[AgentLoop] LLM 调用失败: %s", failure.message)
+                    messages.append(Message(role="assistant", content=f"[LLM Error]: {failure.message}"))
+                    return await self._finish(f"[LLM Error]: {failure.message}", messages, stats, store_snapshot)
 
-                # D2. 用模型返回的 usage 累加（准确值），无 usage 时回退估算
-                self._last_usage = usage or self._last_usage
-                if usage:
-                    stats["input_tokens"] += usage.get("prompt_tokens", 0)
-                    stats["output_tokens"] += usage.get("completion_tokens", 0)
-                    hit = usage.get("prompt_cache_hit_tokens", 0)
-                    prompt = usage.get("prompt_tokens", 0)
-                    stats["cache_hit_tokens"] += hit
-                    if getattr(self.adapter, "name", "") == "anthropic":
-                        # Anthropic: input_tokens 不含 cache_read，miss = input_tokens
-                        stats["cache_miss_tokens"] += prompt
-                    else:
-                        # OpenAI 兼容（DeepSeek 等）: prompt_tokens 已含命中部分
-                        stats["cache_miss_tokens"] += max(0, prompt - hit)
-                else:
-                    stats["output_tokens"] += TokenCounter.count_text_tokens(content or "")
-
+                # 阶段三：状态更新（usage 累加 + 上下文水位推送）
+                self._record_usage(usage, content, stats)
                 await self._emit_context_stats(stats)
 
                 if not content and not tool_calls:
@@ -305,69 +235,17 @@ class AgentLoop:
                     self.state.status = AgentStatus.SUCCESS
                     return await self._finish(content or "(空回复)", messages, stats, store_snapshot)
 
-                # G. 派发执行工具（精细并行化：写类串行、只读并行；结果按原序回填）
+                # 阶段二：工具批次执行（精细并行化：写类串行、只读并行；结果按原序回填）。
                 #    批次执行期间到达的排队输入：中断剩余工具（占位结果保持
                 #    assistant tool_calls ↔ tool 结果的原子对），全部结果回填后
                 #    再统一注入——user 消息不能插在工具调用与结果之间。
-                INTERRUPTED = "[Interrupted]: 用户插入了新指令，本批剩余工具未执行。"
-                interrupted_by_input = False
-                if self.parallel_tool_calls == "never" or len(tool_calls) <= 1:
-                    # 全串行：逐个执行，每步可中止；每步后窥探排队输入
-                    results = []
-                    for call in tool_calls:
-                        if self._check_abort():
-                            return await self._finish(
-                                "[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot
-                            )
-                        if interrupted_by_input:
-                            results.append(INTERRUPTED)
-                            continue
-                        results.append(await self._execute_tool_call(call, stats))
-                        if self.injected_inputs:
-                            interrupted_by_input = True
-                elif self.parallel_tool_calls == "always":
-                    # 全并行（无法中断，完成后注入）
-                    results = list(await asyncio.gather(
-                        *[self._execute_tool_call(c, stats) for c in tool_calls]
-                    ))
-                else:
-                    # auto 精细并行：写类工具串行（可被输入中断）+ 只读工具并行
-                    write_indices = [i for i, c in enumerate(tool_calls) if c.name in WRITE_TOOLS]
-                    read_indices = [i for i, c in enumerate(tool_calls) if c.name not in WRITE_TOOLS]
-                    results: List[Optional[str]] = [None] * len(tool_calls)
-                    for i in write_indices:
-                        if self._check_abort():
-                            return await self._finish(
-                                "[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot
-                            )
-                        if interrupted_by_input:
-                            results[i] = INTERRUPTED
-                            continue
-                        results[i] = await self._execute_tool_call(tool_calls[i], stats)
-                        if self.injected_inputs:
-                            interrupted_by_input = True
-                    if read_indices and not interrupted_by_input:
-                        read_results = await asyncio.gather(
-                            *[self._execute_tool_call(tool_calls[i], stats) for i in read_indices]
-                        )
-                        for i, r in zip(read_indices, read_results):
-                            results[i] = r
-                    # 兜底：中断/跳过的未执行项填占位（防 None 进入消息链）
-                    for i in range(len(results)):
-                        if results[i] is None:
-                            results[i] = INTERRUPTED
+                results = await self._execute_tool_batch(tool_calls, stats)
+                if results is None:  # 批次中途被停止
+                    return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
                 if self._check_abort():
                     return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
 
-                for call, result_text in zip(tool_calls, results):
-                    tool_result = Message(
-                        role="tool",
-                        name=call.name,
-                        tool_call_id=call.id,
-                        content=result_text,
-                    )
-                    messages.append(tool_result)
-                    await self.kernel.events.emit("message:added", {"message": tool_result.to_dict()})
+                await self._append_tool_results(tool_calls, results, messages)
 
                 # G2. 工具结果回填完成后注入排队输入（消息链合法位置），
                 #     下一轮 LLM 调用立即可见（OpenCode system-reminder 模式）
@@ -392,6 +270,188 @@ class AgentLoop:
             logger.exception("[AgentLoop] 未捕获异常")
             self._save_session()
             raise
+
+    # ------------------------------------------------------------------ 阶段实现
+
+    async def _initialize_task(
+        self, messages: List[Message], prompt: str, system_prompt: Optional[str],
+        tools: List[ToolDefinition], store_snapshot: bool,
+    ) -> None:
+        """任务初始化：System Prompt 装配、历史修复、用户消息入链、首次落盘。"""
+        # 1. System Prompt 初始化（每任务一次：静态骨架，保证缓存前缀稳定）
+        if system_prompt is None:
+            system_prompt = SystemPromptBuilder.build(
+                self.workspace, tools, skill_index=self._filtered_skill_index())
+        if not messages or messages[0].role != "system":
+            messages.insert(0, Message(role="system", content=system_prompt))
+        else:
+            messages[0].content = system_prompt
+
+        # 1.5 修复历史中可能不完整的工具调用链（任务被停止时落盘的不完整历史）
+        messages[:] = repair_tool_call_pairs(messages)
+
+        # 2. 用户消息入链
+        user_message = Message(role="user", content=prompt)
+        messages.append(user_message)
+        await self.kernel.events.emit("message:added", {"message": user_message.to_dict()})
+
+        # 2.5 上一任务遗留的子 Agent 完成通知先行注入（父已结束场景，
+        #     通知滞留 manager 队列，本任务首轮 LLM 调用前投递）
+        await self._inject_agent_notifications(messages)
+
+        # 首条消息立即落盘，避免 session 创建后、首轮 LLM 完成前刷新列表时消失。
+        if store_snapshot:
+            self._save_session()
+
+        await self.kernel.events.emit("task:start", {"session_id": self.kernel.session_id})
+
+    async def _trim_context(self, messages: List[Message], stats: Dict[str, Any]) -> List[Message]:
+        """上下文裁剪：有效上限 = max(预算下限, 90% × 模型窗口)，到阈值先尝试 LLM 摘要压缩。"""
+        cap = self._effective_cap()
+        if TokenCounter.count_messages_tokens(messages) <= cap:
+            return messages
+        compacted = await self._try_compact(messages, cap)
+        if compacted is not None:
+            messages[:] = compacted
+            return messages
+        payload = self.context_manager.prune_messages(messages, hard_cap=cap)
+        if self.context_manager.last_prune.get("compressed"):
+            self._compression_count += 1
+            self._compressed_tokens += int(
+                self.context_manager.last_prune.get("removed_tokens", 0)
+            )
+        return payload
+
+    async def _call_llm_with_retry(
+        self, processed: List[Message], tools: List[ToolDefinition],
+    ) -> Tuple[str, List[ToolCall], Optional[Dict[str, int]]]:
+        """阶段一：调用 LLM（流式，内部 emit llm:stream）。
+
+        瞬时故障（单次超时 / 网络抖动 / 限流 / 5xx）自动指数退避重试，
+        避免长思考模型或网络波动直接杀死整个任务；重试过程 emit
+        "llm:retry" 事件供 UI 展示。不可重试错误（鉴权/参数等）立即失败，
+        抛出 _LLMCallFailure 由 run_task 统一收尾。
+        """
+        attempt = 0
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    self.adapter.chat_stream(processed, tools, self.kernel.events),
+                    timeout=self.llm_timeout,
+                )
+            except asyncio.TimeoutError:
+                last_err: BaseException = TimeoutError(
+                    f"LLM 请求超过 {self.llm_timeout}s（模型可能正在长时间思考或网络拥堵）"
+                )
+                retryable = True
+            except Exception as exc:
+                last_err = exc
+                # LLMError 携带 retryable 标记（超时/网络/限流/5xx 为 True）
+                retryable = bool(getattr(exc, "retryable", False))
+            if not retryable or attempt >= self.llm_retries:
+                raise AgentLoop._LLMCallFailure(str(last_err))
+            attempt += 1
+            wait_s = min(2 ** attempt, 8)
+            logger.warning(
+                "[AgentLoop] LLM 调用失败（%s），%ds 后进行第 %d/%d 次重试",
+                last_err, wait_s, attempt, self.llm_retries,
+            )
+            await self.kernel.events.emit("llm:retry", {
+                "attempt": attempt,
+                "max_retries": self.llm_retries,
+                "reason": str(last_err)[:200],
+                "wait": wait_s,
+            })
+            await asyncio.sleep(wait_s)
+
+    def _record_usage(
+        self, usage: Optional[Dict[str, int]], content: Optional[str], stats: Dict[str, Any],
+    ) -> None:
+        """阶段三（a）：用模型返回的 usage 累加（准确值），无 usage 时回退估算。"""
+        self._last_usage = usage or self._last_usage
+        if usage:
+            stats["input_tokens"] += usage.get("prompt_tokens", 0)
+            stats["output_tokens"] += usage.get("completion_tokens", 0)
+            hit = usage.get("prompt_cache_hit_tokens", 0)
+            prompt = usage.get("prompt_tokens", 0)
+            stats["cache_hit_tokens"] += hit
+            if getattr(self.adapter, "name", "") == "anthropic":
+                # Anthropic: input_tokens 不含 cache_read，miss = input_tokens
+                stats["cache_miss_tokens"] += prompt
+            else:
+                # OpenAI 兼容（DeepSeek 等）: prompt_tokens 已含命中部分
+                stats["cache_miss_tokens"] += max(0, prompt - hit)
+        else:
+            stats["output_tokens"] += TokenCounter.count_text_tokens(content or "")
+
+    async def _execute_tool_batch(
+        self, tool_calls: List[ToolCall], stats: Dict[str, Any],
+    ) -> Optional[List[str]]:
+        """阶段二：派发执行一批工具调用，返回与 tool_calls 同序的结果文本。
+
+        - 写类工具串行执行（每步可中止、可被排队输入中断）；
+        - 只读工具按 parallel_tool_calls 模式并行；
+        - 中断/跳过的未执行项填 [Interrupted] 占位（保持消息链原子对）；
+        - 批次中途检测到停止信号返回 None（由 run_task 统一收尾）。
+        """
+        INTERRUPTED = "[Interrupted]: 用户插入了新指令，本批剩余工具未执行。"
+        interrupted_by_input = False
+        if self.parallel_tool_calls == "never" or len(tool_calls) <= 1:
+            # 全串行：逐个执行，每步可中止；每步后窥探排队输入
+            results = []
+            for call in tool_calls:
+                if self._check_abort():
+                    return None
+                if interrupted_by_input:
+                    results.append(INTERRUPTED)
+                    continue
+                results.append(await self._execute_tool_call(call, stats))
+                if self.injected_inputs:
+                    interrupted_by_input = True
+        elif self.parallel_tool_calls == "always":
+            # 全并行（无法中断，完成后注入）
+            results = list(await asyncio.gather(
+                *[self._execute_tool_call(c, stats) for c in tool_calls]
+            ))
+        else:
+            # auto 精细并行：写类工具串行（可被输入中断）+ 只读工具并行
+            write_indices = [i for i, c in enumerate(tool_calls) if c.name in WRITE_TOOLS]
+            read_indices = [i for i, c in enumerate(tool_calls) if c.name not in WRITE_TOOLS]
+            results: List[Optional[str]] = [None] * len(tool_calls)
+            for i in write_indices:
+                if self._check_abort():
+                    return None
+                if interrupted_by_input:
+                    results[i] = INTERRUPTED
+                    continue
+                results[i] = await self._execute_tool_call(tool_calls[i], stats)
+                if self.injected_inputs:
+                    interrupted_by_input = True
+            if read_indices and not interrupted_by_input:
+                read_results = await asyncio.gather(
+                    *[self._execute_tool_call(tool_calls[i], stats) for i in read_indices]
+                )
+                for i, r in zip(read_indices, read_results):
+                    results[i] = r
+            # 兜底：中断/跳过的未执行项填占位（防 None 进入消息链）
+            for i in range(len(results)):
+                if results[i] is None:
+                    results[i] = INTERRUPTED
+        return results
+
+    async def _append_tool_results(
+        self, tool_calls: List[ToolCall], results: List[str], messages: List[Message],
+    ) -> None:
+        """阶段三（b）：工具结果按调用序回填消息链（assistant tool_calls ↔ tool 原子对）。"""
+        for call, result_text in zip(tool_calls, results):
+            tool_result = Message(
+                role="tool",
+                name=call.name,
+                tool_call_id=call.id,
+                content=result_text,
+            )
+            messages.append(tool_result)
+            await self.kernel.events.emit("message:added", {"message": tool_result.to_dict()})
 
     # ------------------------------------------------------------------ 工具执行
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """任务运行器：管理并发任务、SSE 事件队列、审批挂起。"""
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from ..core.types import Message
 logger = logging.getLogger("litework.tasks")
 
 EVENT_FORWARD = {
-    "llm:stream", "llm:turn_start", "message:added", "tool:before_execute",
+    "llm:stream", "llm:turn_start", "llm:retry", "message:added", "tool:before_execute",
     "tool:after_execute", "approval:request", "approval:resolved", "task:start",
     "task:done", "task:error", "stats:update", "subagent:completed",
     "context:stats", "subagent:started", "subagent:progress", "skill:loaded",
@@ -31,7 +34,14 @@ class TaskHandle:
         self.registry = registry
         self.loop = loop
         self.app = app
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+        # SSE 订阅者模型（P1-5/P2-6）：每个 /events 连接一个独立队列。
+        # 此前单一队列 + 重连会形成两个 reader 竞争——已断连但尚未被取消的
+        # 旧 reader 会"偷走"事件乃至结束哨兵，新 reader 永久饥饿。
+        self._subscribers: List[asyncio.Queue] = []
+        # 首个订阅者连接前的事件保留（POST /api/chat 返回后任务即刻开跑，
+        # SSE 连接存在竞态窗口；重连订阅者不回放——前端 UI 无法去重）
+        self._retained: List[Any] = []
+        self._first_subscriber_seen = False
         self.abort_event = asyncio.Event()
         self.loop.abort_event = self.abort_event
         # 用户补充指令队列：与 loop 共享同一 deque，回合开始时注入对话
@@ -43,6 +53,60 @@ class TaskHandle:
         self.done = False
         self.subscription = None
 
+    # ------------------------------------------------------------ SSE 订阅
+
+    def subscribe(self) -> asyncio.Queue:
+        """注册一个 SSE 订阅者，返回其专属事件队列。
+
+        - 首个订阅者：回放连接前保留的全部事件（任务先于 SSE 启动的竞态）；
+        - 重连订阅者：只接收订阅后的实时事件（回放会让 UI 重复渲染）；
+        - 任务已结束时立即投递结束哨兵（迟到的订阅者直接收到 [DONE]，
+          不会挂死在 keepalive 上）。
+        """
+        q: asyncio.Queue = asyncio.Queue(maxsize=512)
+        if not self._first_subscriber_seen:
+            self._first_subscriber_seen = True
+            for ev in self._retained:
+                self._put(q, ev)
+            self._retained.clear()
+        if self.done:
+            q.put_nowait(None)
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        try:
+            self._subscribers.remove(q)
+        except ValueError:
+            pass
+
+    @property
+    def subscribers_drained(self) -> bool:
+        """全部订阅者队列已排空（任务收尾清理的判定条件）。"""
+        return all(q.empty() for q in self._subscribers)
+
+    @staticmethod
+    def _put(q: asyncio.Queue, data: Any) -> None:
+        """单订阅者投递：溢出时高频中间事件丢旧，终止事件必须送达。"""
+        terminal = isinstance(data, dict) and data.get("type") in {"task:done", "task:error"}
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            try:
+                if terminal:
+                    while True:
+                        q.get_nowait()
+                        try:
+                            q.put_nowait(data)
+                            break
+                        except asyncio.QueueFull:
+                            continue
+                else:
+                    q.get_nowait()
+                    q.put_nowait(data)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                logger.warning("[Task %s] SSE 队列溢出，丢弃事件", data)
+
     def queue_input(self, text: str) -> int:
         """任务运行中追加用户补充指令，Agent 在下一回合开始前注入对话。"""
         self.pending_inputs.append(text)
@@ -52,26 +116,13 @@ class TaskHandle:
         return count
 
     def _forward_event(self, data: Any) -> None:
-        event_type = data.get("type") if isinstance(data, dict) else ""
-        terminal = event_type in {"task:done", "task:error"}
-        try:
-            self.queue.put_nowait(data)
-        except asyncio.QueueFull:
-            # 高频中间事件可以丢弃旧事件，但终止事件必须进入队列。
-            try:
-                if terminal:
-                    while True:
-                        self.queue.get_nowait()
-                        try:
-                            self.queue.put_nowait(data)
-                            break
-                        except asyncio.QueueFull:
-                            continue
-                else:
-                    self.queue.get_nowait()
-                    self.queue.put_nowait(data)
-            except (asyncio.QueueEmpty, asyncio.QueueFull):
-                logger.warning("[Task %s] SSE 队列溢出，丢弃事件", self.task_id)
+        # 首个订阅者未连接：保留事件（终止事件不因截断丢失——保留列表足够长）
+        if not self._first_subscriber_seen:
+            self._retained.append(data)
+            if len(self._retained) > 512:
+                self._retained = self._retained[-512:]
+        for q in list(self._subscribers):
+            self._put(q, data)
 
     def _subscribe_events(self) -> None:
         async def _listener(event_name: str, payload: Any) -> None:
@@ -154,6 +205,25 @@ class TaskHandle:
                 skill_extra=getattr(self, "skill_extra", None),
                 skill_index=self._filtered_skill_index(),
             )
+            # 会话目标（/goal）：注入每个任务的系统提示——长程目标跨任务持续生效
+            goal = self._session_goal()
+            if goal:
+                system_prompt += (
+                    "\n\n## 当前会话目标\n"
+                    f"{goal}\n\n"
+                    "本会话的所有工作都应服务于该目标的推进；每轮汇报进展时先简述"
+                    "距离目标的剩余工作。目标完成时在最终回复中明确说明。"
+                )
+            # 会话协作模式（对话框选择器）：覆盖全局模式，注入该模式的编排配方
+            if self._session_collab_mode():
+                from ..orchestration.collab_policy import get_collab_policy
+
+                recipe = get_collab_policy(self.app, session_id=self.kernel.session_id).recipe()
+                system_prompt += (
+                    "\n\n## 本会话协作模式（用户选定）\n"
+                    f"{recipe}\n\n"
+                    "本会话派生子 Agent 时按上述协作模式编排。"
+                )
             skill_extra_used = getattr(self, "skill_extra", None)
             if skill_extra_used:
                 # 轻量提示：告知用户本任务注入了哪些技能（不进会话历史）
@@ -173,16 +243,17 @@ class TaskHandle:
                 todo_plugin.unbind(self.kernel.session_id)
             # 任务结束：清差分基线，下个任务的统计从 0 重新起算
             self.app._last_task_snapshot.pop(self.kernel.session_id, None)
-            # 结束哨兵必须送达，否则客户端会一直处于运行状态。
-            while True:
-                try:
-                    self.queue.put_nowait(None)
-                    break
-                except asyncio.QueueFull:
+            # 结束哨兵必须送达所有订阅者，否则客户端会一直处于运行状态。
+            for q in list(self._subscribers):
+                while True:
                     try:
-                        self.queue.get_nowait()
-                    except asyncio.QueueEmpty:
+                        q.put_nowait(None)
                         break
+                    except asyncio.QueueFull:
+                        try:
+                            q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
 
     def stop(self) -> None:
         """先置协作式中止信号，再强杀挂起的 asyncio 任务（LLM 流卡住时靠它解套）。"""
@@ -208,6 +279,24 @@ class TaskHandle:
         try:
             from ..tools.skills import SkillsTools
             return SkillsTools(self.app.workspace).read_skill(name)
+        except Exception:
+            return None
+
+    def _session_goal(self) -> Optional[str]:
+        """会话目标（/goal 设置，存于 session metadata）。"""
+        try:
+            snapshot = self.app.session_store.load(self.kernel.session_id)
+            goal = (snapshot.metadata or {}).get("goal") if snapshot else None
+            return str(goal).strip() or None if goal else None
+        except Exception:
+            return None
+
+    def _session_collab_mode(self) -> Optional[str]:
+        """会话协作模式（对话框选择器写入，存于 session metadata）。"""
+        try:
+            snapshot = self.app.session_store.load(self.kernel.session_id)
+            mode = (snapshot.metadata or {}).get("collab_mode") if snapshot else None
+            return str(mode).strip() or None if mode else None
         except Exception:
             return None
 

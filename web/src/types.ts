@@ -1,4 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 // 与后端对齐的类型定义
+
+/** 协作模式（/api/collab/modes）：内置策略 + 已安装模式插件 */
+export interface CollabMode {
+  name: string;
+  display_name: string;
+  description: string;
+  source: "builtin" | "plugin";
+  version: string;
+  /** 插件自带图标（icon.svg 等）；null 时前端用内建图标回退 */
+  icon_url?: string | null;
+}
+
+/** 社区清单中的协作模式条目（kind === "collab"） */
+export interface CommunityCollabEntry {
+  name: string;
+  version?: string;
+  description?: string;
+  path?: string;
+  kind?: string;
+}
 
 export interface AgentInfo {
   id: string;
@@ -134,6 +158,9 @@ export interface AppConfig {
   agent_persist_max?: number;
   /** 治理档位：explicit（默认，明确要求才派生）| proactive（主动并行委派） */
   agent_collab_mode?: "explicit" | "proactive";
+  /** 协作模式（default/review/已安装模式插件的 mode_name）与自定义配方文本 */
+  collab_policy?: string;
+  collab_recipe?: string;
 }
 
 export interface ContextTaskStats {
@@ -203,6 +230,10 @@ export interface LLMConfig {
   active: string;
   providers: Record<string, LLMProviderSettings>;
 }
+
+/** SSE 连接状态：idle=无任务 / connecting=连接中 / connected=已连接（绿） /
+ *  reconnecting=断线重连中（黄，原生或指数退避） / lost=重连耗尽（红，任务仍在后端） */
+export type SseConnState = "idle" | "connecting" | "connected" | "reconnecting" | "lost";
 
 export type SSEEvent =
   | { type: "message:added"; data: { message: Msg } }
@@ -422,6 +453,8 @@ export interface ChatSessionState {
   /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */
   agentBoard: SubAgentProgress[];
   stalled: boolean;
+  /** SSE 连接状态（P1-5）：连接指示器（绿/黄/红）与重连策略的数据源 */
+  sseState?: SseConnState;
   modelOverride?: SessionModel | null;
   effectiveModel?: SessionModel;
   skillLoaded?: string[];
@@ -432,6 +465,14 @@ export interface ChatSessionState {
   /** 当前会话的推理强度（""=关闭 / "low" / "medium" / "high" / "max"） */
   reasoningEffort?: string;
   /** 待发送队列：任务运行中追加的消息，任务完成后逐一发送（类似 Codex） */
+  /** 会话目标（/goal 设置）：持久化于会话 metadata，注入每个任务 system prompt */
+  goal?: string | null;
+  /** 会话协作模式（对话框选择器）：持久化于会话 metadata，覆盖全局 collab_policy */
+  collabMode?: string | null;
+  /** 目标循环（/loop）：任务结束后自动续发推进指令，直至 [GOAL_COMPLETE] 或达上限 */
+  loopEnabled?: boolean;
+  loopMax?: number;
+  loopCount?: number;
   pendingQueue: string[];
 }
 
@@ -532,7 +573,7 @@ export interface BuiltinPluginInfo {
 export interface CommunityManifest {
   version: string;
   min_app_version: string;
-  /** path 为插件目录（相对仓库根），如 "plugins/office-plugin" */
-  plugins: { name: string; version: string; description: string; path: string; tools?: string[] }[];
+  /** path 为插件目录（相对仓库根），如 "plugins/office-plugin"；kind=collab 为协作模式包，icon 为仓库内图标路径 */
+  plugins: { name: string; version: string; description: string; path: string; tools?: string[]; kind?: string; icon?: string }[];
   skills: { name: string; version: string; description: string; path: string }[];
 }

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useMemo } from "react";
 import type { TabItem } from "../types";
 import UnifiedDiff, { parseUnifiedDiff } from "./UnifiedDiff";

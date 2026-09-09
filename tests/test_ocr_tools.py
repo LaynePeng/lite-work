@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """OCR 工具冒烟测试：真实引擎识别渲染出的文字图片。"""
 from __future__ import annotations
 

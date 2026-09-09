@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """安全中间件插件（对应课程第18课（安全沙箱实战） SecurityPlugin，Web 审批版）。
 
 挂载到 Kernel.beforeTool 管道：

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """LLM 供应商自定义 Header 测试：合并/覆盖/清洗 + 端到端请求头 + 配置 round-trip。"""
 from __future__ import annotations
 

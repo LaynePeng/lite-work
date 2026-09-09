@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 lite-work contributors
+//
+
 import { useEffect } from "react";
 import AppIcon from "./AppIcon";
 
@@ -43,7 +47,7 @@ export default function AboutModal({ onClose, serverVersion }: { onClose: () => 
 
           <div className="about-meta">
             <span>Electron · React 18 · FastAPI · Python 3.11+</span>
-            <span>MIT License · © 2026 LaynePeng</span>
+            <span>Apache-2.0 License · © 2026 LaynePeng</span>
           </div>
         </div>
       </div>

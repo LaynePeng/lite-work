@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """ask_user 工具：Agent 向用户提问，支持选项选择与自定义输入。"""
 from __future__ import annotations
 

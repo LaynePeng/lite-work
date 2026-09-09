@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Token 计数 / 上下文裁剪 / JSON 容错 / 截断器单元测试（对应第2/3课增强）。"""
 import os
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """OCR 工具：把图片 / PDF 页面 / PPT 内嵌图片中的文字提取出来。
 
 - ocr_image   : 直接识别单张图片（png/jpg/bmp/tiff/webp 等）

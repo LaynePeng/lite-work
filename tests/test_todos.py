@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """todo_write 工具测试：校验 / 存储 / 事件推送 / Agent 裁剪 / 持久化。"""
 import asyncio
 
@@ -87,8 +90,11 @@ def test_todo_write_full_replace_and_bound_events():
 def test_plan_agent_whitelist_contains_todo_write():
     from litework.core.agent_profile import default_plan_agent, default_build_agent
     assert "todo_write" in default_plan_agent().tools
-    # build 无白名单（全量），todo_write 经插件注册自然可用
-    assert default_build_agent().tools is None
+    # build 为显式全量清单（含写类/流程工具），todo_write 自然可用
+    build_tools = default_build_agent().tools
+    assert "todo_write" in build_tools
+    assert "execute_command" in build_tools
+    assert "ask_user" in build_tools
 
 
 def test_build_registry_exposes_todo_write(tmp_path):

@@ -74,9 +74,20 @@ npm start      # 生产模式：构建前端 → 自动拉起 Core → 窗口
 
 > 办公工具依赖（python-docx / openpyxl / python-pptx / reportlab / pandas / matplotlib）已包含在主依赖中，`pip install -e .` 时自动安装。
 
+**测试**（后端 pytest / 前端 vitest）：
+
+```bash
+LITEWORK_STRICT_EVENTS=1 .venv/bin/python -m pytest tests/    # 后端（strict=事件负载校验 fail-fast）
+cd web && npm test                                            # 前端组件测试（vitest + Testing Library）
+```
+
 -   **API Key**：首次启动后在设置界面选择供应商并填写（存储于 `~/.lite-work/config.json`），也支持 `DEEPSEEK_API_KEY` 等环境变量兜底
 -   **纯浏览器形态**：`python -m litework serve` 后访问 `http://127.0.0.1:8787`
 -   **远程 Core**：`~/.lite-work/client.json` 配置 `coreUrl` 与 Token，窗口直连远程后端
+-   **鉴权（默认开启）**：`lite-work serve` 未显式指定 token 时自动生成随机令牌，
+    经就绪标记（`LITEWORK_CORE_READY ... token=...`）下发给 Electron 桌面外壳自动注入；
+    本机开发调试可用 `--no-token` 显式关闭（会输出告警）。Web 前端开发联调时用
+    `LITEWORK_CORE_TOKEN=<token> npm run dev` 让 Vite 代理注入请求头
 
 > 国内网络受限时 pip 可加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；Electron 二进制下载失败时执行 `node node_modules/electron/install.js`（已默认走 npmmirror 镜像）。
 
@@ -221,4 +232,4 @@ triggers: 关键词1,关键词2
 
 ## License
 
-MIT
+Apache-2.0

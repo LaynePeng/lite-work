@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """服务层 API 测试：会话管理 / 聊天 SSE 流 / 审批流程 / 安全规则热更新。
 
 注意：httpx ASGITransport 会缓冲完整响应体才返回，无法交互式消费 SSE 长连接，

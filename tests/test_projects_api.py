@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """项目概念 API 测试：最近项目列表 / 打开切换 / 移除 / 新建即记录。"""
 from __future__ import annotations
 

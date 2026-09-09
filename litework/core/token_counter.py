@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """Token 估算器（对应课程第3课 TokenCounter，中文加权启发式）。"""
 from __future__ import annotations
 

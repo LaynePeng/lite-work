@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+
 """工具输出截断器（对应课程第2课 + 第4/5课，参考 OpenCode 实现）。
 
 第一版的做法是「头尾各保留一半字符」。它有两个硬伤：
