@@ -332,6 +332,13 @@ function EmptyState({ currentAgent, onSend }: { currentAgent: string; onSend: (p
 /** 贴底判定阈值（px）：距底部小于该值视为"在底部" */
 const STICK_THRESHOLD_PX = 48;
 
+/** 超长会话折叠（P1）：超过该轮次开始折叠中间历史（数据不删，仅 UI 折叠） */
+const FOLD_THRESHOLD = 500;
+/** 折叠时始终渲染的最近轮次数 */
+const KEEP_RECENT = 300;
+/** 点击占位条每次展开的轮次数 */
+const EXPAND_STEP = 300;
+
 export default function ChatView({
   sessionId,
   sessionTitle,
@@ -391,6 +398,19 @@ export default function ChatView({
     }];
   }, [turns, streaming]);
 
+  // ------------------------------------------------------------ 超长会话折叠（P1）
+  // 数据不删，仅 UI 折叠：超过 FOLD_THRESHOLD 轮时，只渲染最近
+  // KEEP_RECENT(+expanded) 轮，更早的折叠为占位条（点击 +EXPAND_STEP）。
+  // 折叠发生在追加消息跨过阈值的时刻，贴底逻辑（scrollTop = scrollHeight）
+  // 自动适配变小的总高度；用户上翻浏览的多在保留区内，不受打扰。
+  const [foldExpanded, setFoldExpanded] = useState(0);
+  useEffect(() => { setFoldExpanded(0); }, [sessionId]); // 切换会话重置展开状态
+  const totalTurns = displayTurns.length;
+  const foldFrom = totalTurns > FOLD_THRESHOLD
+    ? Math.max(0, totalTurns - KEEP_RECENT - foldExpanded)
+    : 0;
+  const renderTurns = foldFrom > 0 ? displayTurns.slice(foldFrom) : displayTurns;
+
   // 贴底状态只由真实用户滚动事件改变。此前用 Virtuoso 的
   // atBottomStateChange 时，流式内容快速长高会让"距底部距离"瞬间
   // 超过阈值而被误判为用户上翻 → stickRef 永久 false → 跟随断开。
@@ -437,7 +457,16 @@ export default function ChatView({
               )}
             </div>
           )}
-          {displayTurns.map((t) => (
+          {foldFrom > 0 && (
+            <button
+              className="folded-divider"
+              onClick={() => setFoldExpanded((e) => e + EXPAND_STEP)}
+              title="展开更早的对话（每次 300 轮）"
+            >
+              ▲ 查看更早的 {foldFrom} 轮对话
+            </button>
+          )}
+          {renderTurns.map((t) => (
             <TurnItem key={t.key} turn={t} />
           ))}
           {skillLoaded && skillLoaded.length > 0 && (

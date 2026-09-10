@@ -157,6 +157,55 @@ describe("ChatView 滚动跟随", () => {
   });
 });
 
+// 生成 n 轮（user+assistant 各一条）的长会话消息
+function makeLongMessages(turns: number): Msg[] {
+  const msgs: Msg[] = [];
+  for (let i = 0; i < turns; i++) {
+    msgs.push({ role: "user", content: `问题 ${i}` } as Msg);
+    msgs.push({ role: "assistant", content: `回答 ${i}` } as Msg);
+  }
+  return msgs;
+}
+
+describe("ChatView 超长会话折叠（P1）", () => {
+  it("超过 500 turn：折叠更早历史 + 占位条", () => {
+    // 320 对问答 = 640 个 RenderTurn（user 和纯 assistant 各成一个 turn）
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(320)} streaming={null} />
+    );
+    // 640 - 300 = 340 个 turn 被折叠
+    expect(screen.getByRole("button", { name: /查看更早的 340 轮对话/ })).toBeInTheDocument();
+    // 保留区从 turn 340 开始 = 「问题 170」（每对问答占 2 个 turn）
+    expect(screen.getByText("问题 170")).toBeInTheDocument();
+    expect(screen.queryByText("问题 169")).not.toBeInTheDocument();
+    // 最近的轮次可见
+    expect(screen.getByText("问题 319")).toBeInTheDocument();
+  });
+
+  it("点击占位条：展开 300 个 turn，剩余折叠数递减", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(320)} streaming={null} />
+    );
+    await user.click(screen.getByRole("button", { name: /查看更早的 340 轮对话/ }));
+    // 340 - 300 = 40 仍折叠
+    expect(screen.getByRole("button", { name: /查看更早的 40 轮对话/ })).toBeInTheDocument();
+    // 展开区已包含更早内容（turn 40 对应「问题 20」）
+    expect(screen.getByText("问题 20")).toBeInTheDocument();
+    expect(screen.queryByText("问题 19")).not.toBeInTheDocument();
+  });
+
+  it("500 turn 以内：不折叠，无占位条", () => {
+    // 250 对问答 = 500 turn，恰好不超过阈值
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(250)} streaming={null} />
+    );
+    expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
+    expect(screen.getByText("问题 0")).toBeInTheDocument();
+    expect(screen.getByText("问题 249")).toBeInTheDocument();
+  });
+});
+
 describe("ChatView", () => {
   it("空会话渲染欢迎态（无消息气泡）", () => {
     render(
