@@ -204,6 +204,37 @@ describe("ChatView 超长会话折叠（P1）", () => {
     expect(screen.getByText("问题 0")).toBeInTheDocument();
     expect(screen.getByText("问题 249")).toBeInTheDocument();
   });
+
+  it("1000 turn：首屏折叠 700 轮，逐级展开（300/轮）直到全部可见", async () => {
+    // 500 对问答 = 1000 turn（对应 ~/.lite-work/sessions/session_demo_fold_1000turns.json）
+    const user = userEvent.setup();
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(500)} streaming={null} />
+    );
+    // 首屏：折叠 1000 - 300 = 700 轮，仅保留最近 300 轮（turn 700 起 = 问题 350）
+    expect(screen.getByRole("button", { name: /查看更早的 700 轮对话/ })).toBeInTheDocument();
+    expect(screen.getByText("问题 350")).toBeInTheDocument();
+    expect(screen.queryByText("问题 349")).not.toBeInTheDocument();
+    expect(screen.getByText("问题 499")).toBeInTheDocument();
+
+    // 第 1 次展开：+300 → 折叠 400 轮（turn 400 起 = 问题 200）
+    await user.click(screen.getByRole("button", { name: /查看更早的 700 轮对话/ }));
+    expect(screen.getByRole("button", { name: /查看更早的 400 轮对话/ })).toBeInTheDocument();
+    expect(screen.getByText("问题 200")).toBeInTheDocument();
+    expect(screen.queryByText("问题 199")).not.toBeInTheDocument();
+
+    // 第 2 次展开：+300 → 折叠 100 轮（turn 100 起 = 问题 50）
+    await user.click(screen.getByRole("button", { name: /查看更早的 400 轮对话/ }));
+    expect(screen.getByRole("button", { name: /查看更早的 100 轮对话/ })).toBeInTheDocument();
+    expect(screen.getByText("问题 50")).toBeInTheDocument();
+    expect(screen.queryByText("问题 49")).not.toBeInTheDocument();
+
+    // 第 3 次展开：+300 → 全部可见（问题 0 出现，占位条消失）
+    await user.click(screen.getByRole("button", { name: /查看更早的 100 轮对话/ }));
+    expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
+    expect(screen.getByText("问题 0")).toBeInTheDocument();
+    expect(screen.getByText("问题 499")).toBeInTheDocument();
+  });
 });
 
 describe("ChatView", () => {
