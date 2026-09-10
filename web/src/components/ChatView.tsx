@@ -10,6 +10,7 @@ import rehypeHighlight from "rehype-highlight";
 import { DiffPre, DiffStats, isFileDiff } from "./FileDiff";
 import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
+import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
 
 // ---------------------------------------------------------------- 渲染助手
 
@@ -230,65 +231,10 @@ function StreamingTurn({ items, turn }: { items: WorkItem[]; turn?: number }) {
 
 // ---------------------------------------------------------------- 历史消息分组
 
-interface RenderTurn {
-  key: string;
-  user?: Msg;
-  items: WorkItem[];
-  assistant?: Msg;
-  /** 流式轮次的回合号（仅 key 以 streaming- 开头的轮次有值） */
-  streamTurn?: number;
-}
-
-function parseToolArgs(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-}
-
-function buildTurns(messages: Msg[]): RenderTurn[] {
-  const turns: RenderTurn[] = [];
-  let current: RenderTurn | null = null;
-  const pending = new Map<string, ToolCardInfo>();
-
-  for (const m of messages) {
-    if (m.role === "user") {
-      current = null;
-      turns.push({ key: `u-${turns.length}`, user: m, items: [] });
-    } else if (m.role === "assistant") {
-      const hasTools = (m.tool_calls ?? []).length > 0;
-      if (!hasTools) {
-        current = null;
-        turns.push({ key: `a-${turns.length}`, items: [], assistant: m });
-        continue;
-      }
-      if (!current) {
-        current = { key: `t-${turns.length}`, items: [] };
-        turns.push(current);
-      }
-      if (m.content) current.items.push({ type: "text", id: `text-${turns.length}-${current.items.length}`, content: m.content });
-      for (const tc of m.tool_calls ?? []) {
-        const card: ToolCardInfo = {
-          id: tc.id || `h-${current.items.length}-${Math.random().toString(36).slice(2, 6)}`,
-          name: tc.function.name,
-          args: parseToolArgs(tc.function.arguments),
-          status: "done",
-        };
-        pending.set(card.id, card);
-        current.items.push({ type: "tool", id: card.id, card });
-      }
-    } else if (m.role === "tool") {
-      const target = m.tool_call_id ? pending.get(m.tool_call_id) : undefined;
-      if (!target) continue;
-      target.result = m.content ?? "";
-      const content = m.content ?? "";
-      if (content.startsWith("[Tool Execution Cancelled]") || content.startsWith("[Blocked")) target.status = "cancelled";
-      else if (content.startsWith("[Execution Exception]") || content.startsWith("[Error]")) target.status = "error";
-    }
-  }
-  return turns;
-}
+// buildTurns/RenderTurn 已抽出为 lib/turnsBuilder.ts 的增量构建器
+// （P0 性能防御）：纯追加时历史 turn 对象引用复用 → memo 跳过重渲染；
+// 跨批次 tool 回填以不可变替换生成新 turn 对象，仅该轮重渲；
+// 前缀指纹校验失败（编辑/删除）时自动全量重建。
 
 // ---------------------------------------------------------------- 轮次渲染（memo）
 
@@ -424,8 +370,16 @@ export default function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const prevUserSeqRef = useRef(0);
+  const turnsCacheRef = useRef<TurnsCache | null>(null);
 
-  const turns = useMemo(() => buildTurns(messages), [messages]);
+  // 增量构建：纯追加只构建新 turn、历史对象引用复用（memo 生效）；
+  // 无新增时返回同一引用（StrictMode 双调用安全）；
+  // 前缀指纹校验失败（编辑/删除）自动全量重建
+  const turns = useMemo(() => {
+    const built = buildTurnsCached(turnsCacheRef.current, messages);
+    turnsCacheRef.current = built.cache;
+    return built.turns;
+  }, [messages]);
 
   // 流式内容并入末尾轮次：与历史轮次同一渲染通道，滚动逻辑统一处理
   const displayTurns = useMemo<RenderTurn[]>(() => {
