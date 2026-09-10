@@ -197,3 +197,64 @@ def test_trusted_skill_path_read_allowed(tmp_path):
             os.environ["HOME"] = orig_home
         else:
             os.environ.pop("HOME", None)
+
+
+# ---------------------------------------------------------------- MCP 工具审批
+
+async def test_mcp_tool_call_always_requires_approval():
+    """MCP 工具（mcp_*）注册进 Agent 注册表后，每次调用必须经人工审批。
+
+    回归锁：register_tools 不再被静态白名单过滤（见 test_mcp.py），
+    安全边界完全依赖本审批门——拒绝时 cancel、工具不执行。
+    （SecurityPlugin._request_approval 不传 auto_approve，
+    故 auto_approve 配置无法旁路 MCP 审批，见 approval.py:36。）
+    """
+    from litework.core.kernel import Kernel
+    from litework.security.approval import ApprovalGate
+    from litework.security.plugin import SecurityPlugin
+
+    kernel = Kernel(session_id="test-mcp-approval")
+    plugin = SecurityPlugin(SecurityGuard(), ApprovalGate(timeout_seconds=5), workspace="/tmp")
+    plugin.install(kernel)
+
+    # 用户点「拒绝」→ _request_approval 返回 False
+    # （实例属性替换：不自动绑定 self，签名 = (kernel, action, reason)）
+    requested: list[str] = []
+
+    async def _deny(kernel, action: str, reason: str) -> bool:
+        requested.append(action)
+        return False
+
+    orig = plugin._request_approval
+    plugin._request_approval = _deny
+    try:
+        hook_data = {"toolName": "mcp_server_x_navigate_page",
+                     "args": {"url": "http://example.com"}, "cancel": False, "reason": ""}
+        result = await kernel.before_tool.run(kernel.ctx, hook_data)
+    finally:
+        plugin._request_approval = orig
+
+    # 审批确实被请求，且调用被取消
+    assert any("mcp_server_x_navigate_page" in a for a in requested), "MCP 调用未触发审批"
+    assert result["cancel"] is True
+    assert "MCP" in result["reason"] or "拒绝" in result["reason"]
+
+
+async def test_mcp_tool_call_approved_passes_through():
+    """用户点「允许」→ MCP 调用放行（cancel=False），正常执行。"""
+    from litework.core.kernel import Kernel
+    from litework.security.approval import ApprovalGate
+    from litework.security.plugin import SecurityPlugin
+
+    kernel = Kernel(session_id="test-mcp-allow")
+    plugin = SecurityPlugin(SecurityGuard(), ApprovalGate(timeout_seconds=5), workspace="/tmp")
+    plugin.install(kernel)
+
+    async def _allow(kernel, action: str, reason: str) -> bool:
+        return True
+
+    plugin._request_approval = _allow
+    hook_data = {"toolName": "mcp_server_x_click",
+                 "args": {"selector": "#btn"}, "cancel": False, "reason": ""}
+    result = await kernel.before_tool.run(kernel.ctx, hook_data)
+    assert result["cancel"] is False

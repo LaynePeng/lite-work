@@ -1229,6 +1229,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex: 1;
   overflow-y: auto;
   padding: 28px 0 20px;
+  /* 禁用浏览器原生滚动锚定：贴底由 useLayoutEffect 同步控制（scrollTop =
+     scrollHeight），原生锚定会在内容插入时补偿 scrollTop，两者互相干扰产生抖动 */
+  overflow-anchor: none;
 }
 
 .session-badge {

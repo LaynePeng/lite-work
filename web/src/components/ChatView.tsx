@@ -2,12 +2,11 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useMemo, useRef, useEffect, useState, useCallback } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { DiffPre, DiffStats, isFileDiff } from "./FileDiff";
 import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
@@ -236,6 +235,8 @@ interface RenderTurn {
   user?: Msg;
   items: WorkItem[];
   assistant?: Msg;
+  /** 流式轮次的回合号（仅 key 以 streaming- 开头的轮次有值） */
+  streamTurn?: number;
 }
 
 function parseToolArgs(raw: string): unknown {
@@ -288,6 +289,36 @@ function buildTurns(messages: Msg[]): RenderTurn[] {
   }
   return turns;
 }
+
+// ---------------------------------------------------------------- 轮次渲染（memo）
+
+// 单轮渲染组件：props 只有 turn 对象本身。流式刷新（~80ms/次）时
+// 历史 turns 引用不变（useMemo 缓存），memo 直接跳过重渲染，
+// 只有正在增长的流式轮次重新渲染——长会话也不怕
+const TurnItem = memo(function TurnItem({ turn }: { turn: RenderTurn }) {
+  return (
+    <div>
+      {turn.key.startsWith("streaming-") ? (
+        <StreamingTurn items={turn.items} turn={turn.streamTurn} />
+      ) : (
+        <>
+          {turn.user && <MessageBubble message={turn.user} />}
+          {turn.items.length > 0 && (
+            <WorkItems items={turn.items} />
+          )}
+          {turn.assistant && turn.assistant.content && (
+            <div className="msg-row assistant">
+              <div className="assistant-avatar"><AppIcon size={26} /></div>
+              <div className="bubble assistant-bubble">
+                <Markdown text={turn.assistant.content} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------- 主组件
 
@@ -352,6 +383,9 @@ function EmptyState({ currentAgent, onSend }: { currentAgent: string; onSend: (p
   );
 }
 
+/** 贴底判定阈值（px）：距底部小于该值视为"在底部" */
+const STICK_THRESHOLD_PX = 48;
+
 export default function ChatView({
   sessionId,
   sessionTitle,
@@ -388,36 +422,46 @@ export default function ChatView({
   currentAgent: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const stickRef = useRef(true);
+  const prevUserSeqRef = useRef(0);
 
   const turns = useMemo(() => buildTurns(messages), [messages]);
-  // 提问条状态已移至独立的 QuestionBar 组件
 
-  // 流式内容并入 data 末尾，让 followOutput 能感知内容增长而自动滚动；
-  // 此前 StreamingTurn 渲染在 Footer 中，data 不变化导致 followOutput 从不触发
-  // （仅靠 useEffect + scrollToIndex 依赖易碎的 stickRef，上翻后即断）
+  // 流式内容并入末尾轮次：与历史轮次同一渲染通道，滚动逻辑统一处理
   const displayTurns = useMemo<RenderTurn[]>(() => {
     if (!streaming) return turns;
-    return [...turns, { key: `streaming-${streaming.turn ?? 0}`, items: streaming.items }];
+    return [...turns, {
+      key: `streaming-${streaming.turn ?? 0}`,
+      items: streaming.items,
+      streamTurn: streaming.turn,
+    }];
   }, [turns, streaming]);
 
-  // 用户手动上翻浏览历史时暂停自动跟随；滚回底部附近自动恢复
-  // （Virtuoso atBottomStateChange 提供，替代手动 scroll 监听）
-  const atBottomChanged = useCallback((atBottom: boolean) => {
-    stickRef.current = atBottom;
+  // 贴底状态只由真实用户滚动事件改变。此前用 Virtuoso 的
+  // atBottomStateChange 时，流式内容快速长高会让"距底部距离"瞬间
+  // 超过阈值而被误判为用户上翻 → stickRef 永久 false → 跟随断开。
+  // 这是"随着对话变多就不跟随"的直接根因之一。
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
   }, []);
 
-  // 仅在非流式时手动滚动：流式时 followOutput 已基于 displayTurns 自动跟随
-  useEffect(() => {
-    if (streaming) return;
-    if (!stickRef.current) return;
-    virtuosoRef.current?.scrollToIndex({
-      index: "LAST",
-      align: "end",
-      behavior: "smooth",
-    });
-  }, [messages, streaming, turns.length]);
+  // 用户新发消息（含运行中排队的补充指令）时强制回到底部：
+  // 上翻浏览历史时发送新内容，也应立即跟随到最新
+  const lastMsg = messages[messages.length - 1];
+  const userSeq = lastMsg?.role === "user" ? messages.length : 0;
+  if (userSeq > prevUserSeqRef.current) stickRef.current = true;
+  prevUserSeqRef.current = userSeq;
+
+  // 内容变化后同步贴底。useLayoutEffect 在 DOM 更新后、浏览器绘制前
+  // 同步执行：读取 scrollHeight 触发同步 layout，随后设置 scrollTop，
+  // 一次绘制内完成——没有虚拟列表"异步测量 vs 滚动"的竞态，
+  // 流式气泡持续增高也能逐帧稳定跟随（这是弃用 Virtuoso 的原因）。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages, streaming, displayTurns]);
 
   return (
     <div className="chat-view">
@@ -426,75 +470,40 @@ export default function ChatView({
           <EmptyState currentAgent={currentAgent} onSend={onSend} />
         </div>
       ) : (
-        <Virtuoso
-          ref={virtuosoRef}
-          className="chat-scroll"
-          data={displayTurns}
-          initialTopMostItemIndex={Math.max(0, displayTurns.length - 1)}
-          followOutput={(isAtBottom) => (streaming ? "auto" : isAtBottom ? "smooth" : false)}
-          atBottomStateChange={atBottomChanged}
-          components={{
-            Header: () => (
-              <>
-                <div className="session-badge">{sessionTitle}</div>
-                {goal && (
-                  <div className="goal-banner" title={goal}>
-                    <span className="goal-icon">🎯</span>
-                    <span className="goal-text">{goal}</span>
-                    {loop && (
-                      <span className="goal-loop">
-                        🔁 自动推进 第 {Math.max(1, loop.count)}/{loop.max} 轮
-                      </span>
-                    )}
-                  </div>
-                )}
-              </>
-            ),
-            Footer: () => (
-              <>
-                {skillLoaded && skillLoaded.length > 0 && (
-                  <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
-                )}
-                {subAgentRecords.length > 0 && (
-                  <div className="subagent-records">
-                    {subAgentRecords.map((r, i) => (
-                      <div className="subagent-record" key={`${r.subagentId}-${i}`}>
-                        <span className="subagent-record-role">◈ {r.role}</span>
-                        <span className={r.status === "error" ? "rec-error" : "rec-done"}>
-                          {r.status === "error" ? "✗ 异常" : "✓ 完成"}
-                        </span>
-                        {r.tokens != null && <span className="rec-tokens">{r.tokens} tokens</span>}
-                        <span className="subagent-record-task" title={r.task}>{r.task}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ),
-          }}
-          itemContent={(_index, t) => (
-            <div key={t.key}>
-              {t.key.startsWith("streaming-") ? (
-                <StreamingTurn items={t.items} turn={streaming?.turn} />
-              ) : (
-                <>
-                  {t.user && <MessageBubble message={t.user} />}
-                  {t.items.length > 0 && (
-                    <WorkItems items={t.items} />
-                  )}
-                  {t.assistant && t.assistant.content && (
-                    <div className="msg-row assistant">
-                      <div className="assistant-avatar"><AppIcon size={26} /></div>
-                      <div className="bubble assistant-bubble">
-                        <Markdown text={t.assistant.content} />
-                      </div>
-                    </div>
-                  )}
-                </>
+        <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
+          <div className="session-badge">{sessionTitle}</div>
+          {goal && (
+            <div className="goal-banner" title={goal}>
+              <span className="goal-icon">🎯</span>
+              <span className="goal-text">{goal}</span>
+              {loop && (
+                <span className="goal-loop">
+                  🔁 自动推进 第 {Math.max(1, loop.count)}/{loop.max} 轮
+                </span>
               )}
             </div>
           )}
-        />
+          {displayTurns.map((t) => (
+            <TurnItem key={t.key} turn={t} />
+          ))}
+          {skillLoaded && skillLoaded.length > 0 && (
+            <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
+          )}
+          {subAgentRecords.length > 0 && (
+            <div className="subagent-records">
+              {subAgentRecords.map((r, i) => (
+                <div className="subagent-record" key={`${r.subagentId}-${i}`}>
+                  <span className="subagent-record-role">◈ {r.role}</span>
+                  <span className={r.status === "error" ? "rec-error" : "rec-done"}>
+                    {r.status === "error" ? "✗ 异常" : "✓ 完成"}
+                  </span>
+                  {r.tokens != null && <span className="rec-tokens">{r.tokens} tokens</span>}
+                  <span className="subagent-record-task" title={r.task}>{r.task}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {pendingApprovals.map((pa) => (

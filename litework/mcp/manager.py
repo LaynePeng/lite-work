@@ -75,9 +75,14 @@ class MCPManager:
                 await client.close()
 
     def register_tools(self, registry, allowed=None, exclude=None) -> None:
+        """注册 MCP 工具到注册表。
+
+        MCP 工具名在连接前不可知（由 server 动态下发），Agent 的静态
+        tools 白名单无法预先枚举，因此不受 allowed 裁剪——可用性由各
+        server 的 enabled 配置控制；调用时仍经安全审批（mcp_* 默认需
+        用户确认）。exclude 显式排除仍然生效。
+        """
         for exposed, (client, raw_name) in self.routes.items():
-            if allowed is not None and exposed not in allowed:
-                continue
             if exclude and exposed in exclude:
                 continue
             meta = self.tool_defs.get(exposed, {})

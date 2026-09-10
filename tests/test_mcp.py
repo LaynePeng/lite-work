@@ -10,6 +10,8 @@ import sys
 import pytest
 
 from litework.mcp.client import MCPClient
+from litework.mcp.manager import MCPManager
+from litework.tools.registry import ToolRegistry
 
 MOCK_SERVER_SOURCE = '''import json, sys
 for line in sys.stdin:
@@ -83,3 +85,31 @@ async def test_start_command_not_found_friendly_error(tmp_path):
     message = str(exc_info.value)
     assert "ghost" in message and "definitely-not-a-real-command-xyz" in message
     await client.close()
+
+
+def test_register_tools_bypasses_static_whitelist():
+    """回归：MCP 工具名连接前不可知，Agent 静态 tools 白名单不得将其过滤。
+
+    场景：build agent 白名单（不含任何 mcp_* 名字）+ 已连接的 mock server
+    → mcp_mock_hello 仍必须注册进 Agent 注册表；exclude 显式排除仍生效。
+    """
+    class _FakeClient:
+        name = "mock"
+
+    manager = MCPManager({})
+    manager.routes["mcp_mock_hello"] = (_FakeClient(), "hello")
+    manager.tool_defs["mcp_mock_hello"] = {
+        "name": "hello",
+        "description": "hello tool",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}},
+    }
+
+    # 修复前：allowed 非空且不含 mcp_mock_hello → 被跳过，Agent 看不到任何 MCP 工具
+    registry = ToolRegistry()
+    manager.register_tools(registry, allowed=["read_file", "write_file", "execute_command"])
+    assert registry.has("mcp_mock_hello")
+
+    # exclude 显式排除仍然生效
+    registry_excluded = ToolRegistry()
+    manager.register_tools(registry_excluded, allowed=None, exclude=["mcp_mock_hello"])
+    assert not registry_excluded.has("mcp_mock_hello")

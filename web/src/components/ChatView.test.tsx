@@ -2,27 +2,11 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ChatView, { QuestionBar } from "./ChatView";
 import type { Msg } from "../types";
-
-// jsdom 无真实布局，Virtuoso 无法测量视口——mock 为普通列表渲染。
-// （虚拟化本身在真实浏览器验证；组件测试验证分组/渲染逻辑）
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, components, className }: {
-    data: unknown[]; itemContent: (index: number, item: never) => React.ReactNode;
-    components?: { Header?: React.ComponentType; Footer?: React.ComponentType };
-    className?: string;
-  }) => (
-    <div className={className}>
-      {components?.Header ? <components.Header /> : null}
-      {data.map((item, i) => itemContent(i, item as never))}
-      {components?.Footer ? <components.Footer /> : null}
-    </div>
-  ),
-}));
 
 const baseProps = {
   sessionId: "session_test",
@@ -57,6 +41,121 @@ function makeMsgs(): Msg[] {
     { role: "assistant", content: "读取完成，共 20 行。" },
   ] as unknown as Msg[];
 }
+
+// ---------------------------------------------------------------- 滚动行为
+
+// jsdom 无真实布局（scrollHeight/clientHeight 恒为 0）：
+// 在容器实例上劫持三个滚动属性，驱动贴底判定与 scrollTop 断言
+function hijackScrollMetrics(el: HTMLElement, scrollHeight = 1000, clientHeight = 400) {
+  let top = 0;
+  Object.defineProperty(el, "scrollTop", {
+    get: () => top,
+    set: (v: number) => { top = v; },
+    configurable: true,
+  });
+  Object.defineProperty(el, "scrollHeight", { get: () => scrollHeight, configurable: true });
+  Object.defineProperty(el, "clientHeight", { get: () => clientHeight, configurable: true });
+  return {
+    get top() { return top; },
+    set top(v: number) { top = v; },
+  };
+}
+
+function getScrollEl() {
+  return document.querySelector(".chat-scroll") as HTMLElement;
+}
+
+describe("ChatView 滚动跟随", () => {
+  it("流式内容增长时持续贴底，用户上翻后暂停，滚回底部恢复", () => {
+    const messages = [{ role: "user", content: "请持续输出" }] as Msg[];
+    const chunk = (text: string) => ({
+      items: [{ type: "text" as const, id: "stream", content: text }],
+    });
+
+    const { rerender } = render(
+      <ChatView {...baseProps} messages={messages} streaming={chunk("第一段")} />
+    );
+    const el = getScrollEl();
+    const scroll = hijackScrollMetrics(el);
+
+    // 流式刷新 → 贴底（scrollTop = scrollHeight）
+    rerender(
+      <ChatView {...baseProps} messages={messages} streaming={chunk("第一段\n第二段")} />
+    );
+    expect(scroll.top).toBe(1000);
+
+    // 用户上翻（距底部 300px > 阈值 48px）→ 暂停跟随
+    scroll.top = 300;
+    fireEvent.scroll(el);
+    rerender(
+      <ChatView {...baseProps} messages={messages} streaming={chunk("第一段\n第二段\n第三段")} />
+    );
+    expect(scroll.top).toBe(300);
+
+    // 滚回底部（距底部 0px）→ 恢复跟随
+    scroll.top = 600;
+    fireEvent.scroll(el);
+    rerender(
+      <ChatView {...baseProps} messages={messages} streaming={chunk("第一段\n第二段\n第三段\n第四段")} />
+    );
+    expect(scroll.top).toBe(1000);
+  });
+
+  it("上翻浏览历史时发送新消息，强制回到底部", () => {
+    const { rerender } = render(
+      <ChatView {...baseProps} messages={[{ role: "user", content: "第一条" }] as Msg[]} streaming={null} />
+    );
+    const el = getScrollEl();
+    const scroll = hijackScrollMetrics(el);
+
+    // 用户上翻 → stick=false
+    scroll.top = 200;
+    fireEvent.scroll(el);
+
+    // 发送新消息（messages 追加 user 消息）→ 强制贴底
+    rerender(
+      <ChatView
+        {...baseProps}
+        messages={[
+          { role: "user", content: "第一条" },
+          { role: "user", content: "第二条" },
+        ] as Msg[]}
+        streaming={null}
+      />
+    );
+    expect(scroll.top).toBe(1000);
+  });
+
+  it("上翻后流式结束落定，不强制拉回底部", () => {
+    const { rerender } = render(
+      <ChatView
+        {...baseProps}
+        messages={[{ role: "user", content: "请输出" }] as Msg[]}
+        streaming={{ items: [{ type: "text", id: "stream", content: "流式中" }] }}
+      />
+    );
+    const el = getScrollEl();
+    const scroll = hijackScrollMetrics(el);
+
+    // 用户上翻
+    scroll.top = 250;
+    fireEvent.scroll(el);
+
+    // 任务结束：streaming → null，finalMsg 落入 messages
+    rerender(
+      <ChatView
+        {...baseProps}
+        messages={[
+          { role: "user", content: "请输出" },
+          { role: "assistant", content: "最终回复，很长很长。" },
+        ] as Msg[]}
+        streaming={null}
+      />
+    );
+    // 上翻浏览历史不被打扰
+    expect(scroll.top).toBe(250);
+  });
+});
 
 describe("ChatView", () => {
   it("空会话渲染欢迎态（无消息气泡）", () => {
