@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
 import re
@@ -25,13 +26,24 @@ _ANTI_PATTERNS = [
     (r"\bpassword\s*=\s*['\"][^'\"]+['\"]", "疑似硬编码密码"),
     (r"\bapi[_ ]?key\s*=\s*['\"][^'\"]+['\"]", "疑似硬编码 API Key"),
     (r"\beval\s*\(", "使用 eval（代码注入风险）"),
-    (r"\bexec\s*\(", "使用 exec"),
+    # 光靠 \b 挡不住正则字面量的方法调用：/re/.exec( 的 "." 也是非词字符，
+    # 会误命中「使用 exec」（同理 create_subprocess_exec 靠 \b 已能挡住）
+    (r"(?<![\w.])exec\s*\(", "使用 exec"),
     (r"shell=True", "subprocess shell=True（注入风险）"),
     (r"git\s+push\s+.*--force", "强制推送"),
     (r"\brm\s+-rf\b", "rm -rf"),
     (r"\bsudo\b", "sudo 提权"),
     (r"while\s+True\s*:", "while True 无限循环（注意退出条件）"),
 ]
+
+# 语法检查相关阈值。tree-sitter 是「容错解析器」：遇到它不认识的语法会恢复出一个
+# ERROR 节点，该节点可能横跨整个文件（起点还停在第 1 行），内部再嵌套若干 ERROR。
+# 若把每个 ERROR 节点都逐条上报，就会出现「报在第 1 行」+「同一行重复 N 条」的
+# 假象（实测 SettingsModal.tsx 因内联 import("...") 类型被报 84 条）。
+_TS_LIKE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_MAX_PARSE_FINDINGS = 5      # 每文件最多列出的解析问题条数，其余折叠为汇总
+_RECOVERY_MIN_LINES = 20     # 跨度小于此值不视为「恢复节点」
+_RECOVERY_SPAN_RATIO = 0.5   # 且需覆盖文件一半以上行数
 
 
 class ReviewTools:
@@ -107,23 +119,8 @@ class ReviewTools:
 
         ext = os.path.splitext(full_path)[1].lower()
 
-        # 1. AST 语法错误检测（tree-sitter 容错解析）
-        tree = self._analyzer.parse(code, ext)
-        if tree is not None:
-            error_count = 0
-            cursor = tree.walk()
-
-            def count_errors(node) -> None:
-                nonlocal error_count
-                if node.is_error or node.type == "ERROR":
-                    error_count += 1
-                    line = node.start_point[0] + 1
-                    snippet = code.split("\n")[line - 1][:120] if line <= len(code.split("\n")) else ""
-                    findings.append(f"语法错误(行 {line}): {snippet}")
-                for child in node.children:
-                    count_errors(child)
-
-            count_errors(tree.root_node)
+        # 1. 语法检查（Python 走标准库 ast；TS/JS/Java/Go 走 tree-sitter 容错解析）
+        findings.extend(self._check_syntax(code, ext))
 
         # 2. 反模式扫描
         for pattern, label in _ANTI_PATTERNS:
@@ -137,4 +134,64 @@ class ReviewTools:
         if total_lines > 600:
             findings.append(f"文件过大（{total_lines} 行），建议拆分模块")
 
+        return findings
+
+    def _check_syntax(self, code: str, ext: str) -> List[str]:
+        """语法检查：Python 走标准库 ast，TS/JS/Java/Go 走 tree-sitter 容错解析。
+
+        设计要点都来自真实误报：
+        · tree-sitter 遇到它不认识的语法会恢复出一个横跨整个文件的 ERROR 节点
+          （起点常停在第 1 行），内部再嵌套若干 ERROR——逐节点上报就变成「报第 1
+          行」+「同一行重复多条」，故跳过恢复节点并按行去重；
+        · 每文件最多列 _MAX_PARSE_FINDINGS 条，其余折叠成一行汇总，避免刷屏；
+        · TS/TSX 用「解析告警」措辞并附「以 tsc 为准」提示：tree-sitter 的
+          typescript 语法（PyPI 最新 0.23.2）对内联 import("...") 类型等较新语法
+          存在误判，tsc 才是权威（实测合法文件被报过 84 处「语法错误」）。
+        """
+        lines = code.split("\n")
+
+        if ext == ".py":
+            try:
+                ast.parse(code)
+            except SyntaxError as exc:
+                snippet = (exc.text or "").strip()[:120]
+                tail = f": {snippet}" if snippet else ""
+                return [f"语法错误(行 {exc.lineno}){tail}"]
+            return []
+
+        tree = self._analyzer.parse(code, ext)
+        if tree is None:
+            return []
+
+        total = max(1, len(lines))
+        label = "解析告警" if ext in _TS_LIKE_EXTS else "语法错误"
+        seen: set = set()
+        found: List[tuple] = []
+        recovery = False
+
+        stack = [tree.root_node]
+        while stack:
+            node = stack.pop()
+            if node.is_error or node.type == "ERROR":
+                start = node.start_point[0] + 1
+                span = node.end_point[0] - node.start_point[0] + 1
+                if span >= _RECOVERY_MIN_LINES and span / total >= _RECOVERY_SPAN_RATIO:
+                    recovery = True          # 恢复节点：定位不到具体行，不上报
+                elif start not in seen:
+                    seen.add(start)
+                    snippet = lines[start - 1][:120] if start <= len(lines) else ""
+                    found.append((start, f"{label}(行 {start}): {snippet}"))
+            stack.extend(node.children)
+
+        found.sort(key=lambda item: item[0])
+        findings = [text for _, text in found[:_MAX_PARSE_FINDINGS]]
+        hidden = len(found) - _MAX_PARSE_FINDINGS
+        if hidden > 0:
+            findings.append(f"…另有 {hidden} 处{label}未列出")
+        if recovery and not findings:
+            findings.append(f"{label}：存在无法定位的解析失败（可能是新语法或严重语法错误）")
+        if findings and ext in _TS_LIKE_EXTS:
+            findings.append(
+                "提示：TS/TSX 的解析告警可能来自 tree-sitter 对较新语法的误判，请以 tsc / eslint 结果为准"
+            )
         return findings
