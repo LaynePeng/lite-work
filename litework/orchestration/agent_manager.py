@@ -184,8 +184,10 @@ class IsolationPlugin(Plugin):
                     "请在授权范围内工作；需要改动其他目录时在最终报告中说明，由主 Agent 决定。"
                 )
                 return await next(data)
-            # 记录交付文件（相对 workspace 展示）
+            # 记录交付文件（相对 workspace 展示；统一 / 分隔——changed_files
+            # 会进事件/看板/提示词，Windows 反斜杠会跨平台不一致）
             rel = os.path.relpath(target, self.workspace) if self.workspace else target
+            rel = rel.replace(os.sep, "/")
             if rel not in self.record.changed_files:
                 self.record.changed_files.append(rel)
             return await next(data)

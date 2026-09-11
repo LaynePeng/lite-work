@@ -118,9 +118,11 @@ class DicePlugin(ToolPlugin):
 3. 遵循工具描述约定（明确的 name、简洁准确的 description、
    完整的 JSON Schema），模型才能正确调用。
 
-### 3.3 在插件里访问内核服务
+### 3.3 在插件里访问内核能力
 
-`install(kernel)` 时可通过依赖注入拿服务：
+注意：事件总线与中间件管道是 **Kernel 的属性**，不是可注入服务；
+`get_service()` 真正能拿到的服务只有 `tools` / `tool_filter` / `app` /
+`security_guard` / `question_gate` 等。拦截工具执行 + 监听事件的正确写法：
 
 ```python
 from litework.core.types import Plugin
@@ -129,22 +131,24 @@ class MyGuardPlugin(Plugin):
     name = "my-guard"
 
     def install(self, kernel) -> None:
-        bus = kernel.get_service("events")        # TypedEventBus 强类型事件总线
-        pipeline = kernel.get_service("tool_pipeline")
+        # ① 事件总线：kernel.events 属性（TypedEventBus）
+        kernel.events.on("tool:after_execute",
+                         lambda p: print("tool done:", p["toolName"]))
 
-        @pipeline.use
+        # ② 洋葱中间件：挂在 kernel.before_tool / after_tool / before_llm 管道上
+        @kernel.before_tool.use
         async def block_rm(ctx, data, next):
-            # 洋葱中间件：拦截危险命令
-            if getattr(data, "name", "") == "execute_command" and "rm -rf" in data.arguments:
-                raise PermissionError("blocked by MyGuardPlugin")
+            # before_tool 的 data 是 {"toolName", "args", "cancel", "reason"}
+            if data.get("toolName") == "execute_command" and "rm -rf" in str(data.get("args", {})):
+                data["cancel"] = True
+                data["reason"] = "[MyGuardPlugin]: 危险命令已拦截"
             return await next(data)
-
-        bus.on("tool:after_execute", lambda p: print("tool done:", p["tool"]))
 ```
 
-内核可用的服务与事件清单见 `litework/core/kernel.py` 与
-`litework/core/events.py`（`LITEWORK_STRICT_EVENTS=1` 时事件负载校验
-fail-fast，测试全量开启——自己 emit 的事件务必带正确负载）。
+取消执行用 `data["cancel"] = True` + `reason`（不要抛异常），与 SecurityPlugin
+同一约定。事件负载字段以 `core/events.py` 的 TypedDict 为准（如
+`tool:after_execute` 是 `toolName` / `durationMs` / `callId` / `status`）。
+
 `kernel.get_service("app")` 可拿到 `AgentApp` 装配层（工作区、配置、会话存储等）。
 
 ## 4. 写一个协作模式插件

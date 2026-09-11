@@ -53,6 +53,9 @@ class Message:
     name: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
+    # 产生该消息的 Agent id（仅 assistant 消息由 AgentLoop 打标；None = 旧快照/无标记）。
+    # 用于会话内 Agent 切换检测：新 Agent 接手时知道历史操作是谁做的。
+    agent: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"role": self.role, "content": self.content}
@@ -62,6 +65,8 @@ class Message:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
+        if self.agent:
+            d["agent"] = self.agent
         return d
 
     @classmethod
@@ -73,6 +78,7 @@ class Message:
             name=data.get("name"),
             tool_calls=[ToolCall.from_dict(t) for t in tcs] if tcs else None,
             tool_call_id=data.get("tool_call_id"),
+            agent=data.get("agent"),
         )
 
 

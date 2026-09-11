@@ -336,6 +336,8 @@ class AgentLoop:
                     role="assistant",
                     content=content or None,
                     tool_calls=tool_calls if tool_calls else None,
+                    # 打上产生该消息的 Agent 身份（Agent 切换检测的数据基础）
+                    agent=getattr(self.kernel, "orchestrator_agent_id", None),
                 )
                 messages.append(assistant_message)
                 await self.kernel.events.emit("message:added", {"message": assistant_message.to_dict()})
@@ -971,6 +973,11 @@ class AgentLoop:
                 existing = self.session_store.load(self.kernel.session_id)
                 meta = dict(existing.metadata) if existing is not None else {}
                 meta["updated_by"] = "agent_loop"
+                # 本任务的 Agent 身份随快照落盘：下个任务据此（消息无 agent
+                # 标记的旧快照时）判定会话内是否发生了 Agent 切换
+                agent_id = getattr(self.kernel, "orchestrator_agent_id", None)
+                if agent_id:
+                    meta["last_agent_id"] = agent_id
                 self.session_store.save(
                     self.kernel.session_id, self.kernel.ctx.messages, meta,
                 )

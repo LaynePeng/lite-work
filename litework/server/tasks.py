@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
@@ -229,6 +230,20 @@ class TaskHandle:
                     "除任务物理上无法拆分（纯问答、单步查询）外，"
                     "必须按上述流程派生子 Agent 协作完成。"
                 )
+            # Agent 角色切换检测：上一轮历史属于别的 Agent（build/plan/office/
+            # research/自定义）时注入交接提示——新 Agent 必须知道历史操作是谁做的、
+            # 自己的能力边界（对齐 OpenCode SessionReminders，泛化到全部 Agent）
+            handover = self._role_handover_note()
+            if handover:
+                system_prompt += handover
+            # 计划文件指引：plan 任务每次注入（对齐 OpenCode plan reminder 每轮注入）——
+            # 切换场景已含于交接提示，这里覆盖「plan 连续多任务」的场景
+            elif self.agent_id == "plan":
+                try:
+                    profile = self.app.get_agent("plan")
+                    system_prompt += self._plan_file_handover("plan", profile)
+                except KeyError:
+                    pass
             skill_extra_used = getattr(self, "skill_extra", None)
             if skill_extra_used:
                 # 轻量提示：告知用户本任务注入了哪些技能（不进会话历史）
@@ -304,6 +319,126 @@ class TaskHandle:
             return str(mode).strip() or None if mode else None
         except Exception:
             return None
+
+    # ------------------------------------------------------------ Agent 角色切换检测
+
+    # 具备写能力的工具集合：接手 Agent 的白名单与之有交集（且未被 deny）
+    # 即视为「可写型」，切换文案据此选择方向指引（对齐 sub_agent.WRITE_SCOPE_TOOLS）
+    _WRITE_TOOLS = frozenset({
+        "write_file", "apply_search_replace", "apply_unified_diff",
+        "delete_file", "execute_command",
+    })
+
+    def _last_history_agent(self) -> Optional[str]:
+        """历史中最后一条带 agent 标记的 assistant 消息的 agent id。
+
+        消息级 agent 标记由 AgentLoop 写入（Message.agent）；旧快照无标记
+        时回退 metadata.last_agent_id；两者都无 → None（不触发切换提示）。
+        """
+        for msg in reversed(self.kernel.ctx.messages):
+            if msg.role == "assistant" and getattr(msg, "agent", None):
+                return str(msg.agent)
+        try:
+            snapshot = self.app.session_store.load(self.kernel.session_id)
+            last = (snapshot.metadata or {}).get("last_agent_id") if snapshot else None
+            return str(last).strip() or None if last else None
+        except Exception:
+            return None
+
+    def _can_write(self, profile) -> bool:
+        """从 profile.tools + permissions 推导该 Agent 是否具备写能力。"""
+        if profile is None:
+            return False
+        tools = profile.tools  # None = 全量
+        denied = {k for k, v in (profile.permissions or {}).items() if v == "deny"}
+        if tools is None:
+            return not (self._WRITE_TOOLS & denied)
+        allowed = set(tools) - denied
+        return bool(self._WRITE_TOOLS & allowed)
+
+    def _profile_capability(self, profile) -> str:
+        """从 profile.tools + permissions 推导能力措辞（可写型 / 只读型）。"""
+        if self._can_write(profile):
+            return ("你具备文件修改与命令执行能力——此前 Agent 产出的分析结论、"
+                    "计划或未完成的工作，经你判断后可以直接落地执行")
+        return ("你仅具备只读能力（读文件 / 搜索 / git 查看），"
+                "不得执行、继续或撤销此前的任何修改操作——只做观察、分析与规划")
+
+    def _role_handover_note(self) -> Optional[str]:
+        """会话内 Agent 切换检测：上一轮历史属于别的 Agent 时生成交接提示。
+
+        对齐 OpenCode 的 SessionReminders（plan.txt / build-switch.txt）机制，
+        但泛化到全部主 Agent 与自定义 Agent：身份/能力边界从 AgentProfile
+        动态推导，不写死任何 id 组合。
+        """
+        current = self.agent_id
+        try:
+            profile = self.app.get_agent(current)
+        except KeyError:
+            return None
+        prev = self._last_history_agent()
+        if not prev or prev == current:
+            return None
+        try:
+            prev_profile = self.app.get_agent(prev)
+            prev_display = (prev_profile.description or prev_profile.id).strip() or prev
+        except KeyError:
+            prev_display = prev
+        cur_display = (profile.description or profile.id).strip() or current
+        note = (
+            "\n\n## 角色切换提示\n"
+            f"本会话此前的任务由「{prev_display}」（agent_id={prev}）执行，"
+            "历史消息中的工具调用、文件改动与提交均为该 Agent 所为，"
+            "**不是你的操作**——不要把历史当成自己的工作，也不要试图“继续”或"
+            "“撤销”它们，请基于当前仓库 / 文件的实际状态开展工作。\n"
+            f"你现在是「{cur_display}」（agent_id={current}）。"
+            f"{self._profile_capability(profile)}。"
+        )
+        # 计划文件交接（对齐 OpenCode：plan 会话留下的计划文件，接手方续用）
+        note += self._plan_file_handover(prev, profile)
+        return note
+
+    def _plan_file_path(self) -> Optional[str]:
+        """本会话的计划文件路径（.lite-work/plans/<session>.md，gitignore 内不污染仓库）。
+
+        仅当当前工作区就绪时返回；路径跨平台安全（session_id 已由 _safe_filename 同源
+        规则约束，这里再做一层字符清理）。
+        """
+        workspace = self.app.workspace
+        if not workspace:
+            return None
+        safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in self.kernel.session_id)[:80]
+        if not safe or safe in (".", ".."):
+            return None
+        return os.path.join(workspace, ".lite-work", "plans", f"{safe}.md")
+
+    def _plan_file_handover(self, prev_agent_id: str, current_profile) -> str:
+        """计划文件交接提示（对齐 OpenCode：plan 留下的计划文件，接手方续用）。
+
+        - 接手方可写 且 上一轮是 plan 且计划文件存在 →「执行其中定义的计划」；
+        - 接手方是 plan（含首次进入该会话的 plan）：告知计划文件路径——
+          已存在则提示可增量编辑，不存在则提示把规划产出写入该文件。
+        """
+        try:
+            plan_path = self._plan_file_path()
+            if not plan_path:
+                return ""
+            exists = os.path.isfile(plan_path)
+            prev_is_plan = prev_agent_id == "plan"
+            cur_is_plan = getattr(current_profile, "id", "") == "plan"
+            if self._can_write(current_profile) and prev_is_plan and exists:
+                return (f"\n\n计划文件：此前 Plan Agent 已将计划写入 `{plan_path}`，"
+                        "你应当先读取该文件，并执行其中定义的计划。")
+            if cur_is_plan:
+                if exists:
+                    return (f"\n\n计划文件：本会话已有计划文件 `{plan_path}`，"
+                            "你可以在其基础上增量更新（该文件在工作区内，plan 会话可写）")
+                return (f"\n\n计划文件：请把本会话的规划产出写入 `{plan_path}`"
+                        "（Markdown 格式，含可执行步骤），供后续切换到执行型 Agent 时直接落地。")
+            return ""
+        except Exception:
+            logger.debug("[Task %s] 计划文件交接提示生成失败", self.task_id, exc_info=True)
+            return ""
 
     def _filtered_skill_index(self) -> Optional[str]:
         """技能索引（过滤 deny 的技能），供 System Prompt 技能段使用。"""

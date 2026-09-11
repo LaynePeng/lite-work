@@ -123,3 +123,185 @@ async def test_create_kernel_without_registry_installs_full_tools(tmp_path):
     assert isinstance(registry, ToolRegistry)
     assert registry.has("write_file")
     assert registry.has("webfetch")
+
+
+# ---------------------------------------------------------------- Agent 角色切换检测
+
+from litework.core.types import Message  # noqa: E402
+
+
+async def test_agent_switch_build_to_plan_injects_handover(tmp_path):
+    """build 历史会话切到 plan：注入角色切换提示（历史是 build 做的 + 只读边界）。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（plan 完成）", [])])
+    # 预置 build 历史快照（assistant 消息带 agent="build" 标记）
+    app.session_store.save("sw-session", [
+        Message(role="user", content="帮我写个文件"),
+        Message(role="assistant", content="已写入 x.txt", agent="build"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("sw-session", "现在帮我做规划", agent_id="plan")
+    await handle.task
+
+    system = app._mock_adapter.seen_systems[0]
+    assert "角色切换提示" in system
+    assert "agent_id=build" in system
+    assert "不是你的操作" in system
+    assert "只读能力" in system          # plan 是只读型 → 只读措辞
+    assert "不得执行、继续或撤销" in system
+
+
+async def test_agent_switch_plan_to_build_injects_handover(tmp_path):
+    """plan 历史会话切回 build：注入提示且为可写型措辞。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（build 完成）", [])])
+    app.session_store.save("sw-plan-session", [
+        Message(role="user", content="帮我规划"),
+        Message(role="assistant", content="计划如下…", agent="plan"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("sw-plan-session", "按计划执行", agent_id="build")
+    await handle.task
+
+    system = app._mock_adapter.seen_systems[0]
+    assert "角色切换提示" in system
+    assert "agent_id=plan" in system
+    assert "可以直接落地执行" in system   # build 是可写型 → 可写措辞
+
+
+async def test_agent_switch_to_office_and_custom_agent(tmp_path):
+    """泛化：build→office 与 切换到自定义 agent 均触发，展示名取 profile 描述。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（office 完成）", [])])
+    app.session_store.save("sw-office-session", [
+        Message(role="assistant", content="已生成周报.docx", agent="build"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("sw-office-session", "做个周报", agent_id="office")
+    await handle.task
+
+    system = app._mock_adapter.seen_systems[0]
+    assert "角色切换提示" in system
+    assert "agent_id=build" in system
+    # office 是可写型（白名单含写类工具）
+    assert "可以直接落地执行" in system
+
+
+async def test_agent_switch_metadata_fallback(tmp_path):
+    """消息无 agent 标记（旧快照）时回退 metadata.last_agent_id。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（plan 完成）", [])])
+    app.session_store.save("sw-legacy-session", [
+        Message(role="assistant", content="旧版本的任务输出"),  # 无 agent 字段
+    ], metadata={"last_agent_id": "build"})
+    tm = TaskManager(app)
+    handle = tm.start("sw-legacy-session", "做规划", agent_id="plan")
+    await handle.task
+
+    assert "角色切换提示" in app._mock_adapter.seen_systems[0]
+
+
+async def test_no_switch_same_agent_no_injection(tmp_path):
+    """同一 agent 连续任务：不注入；全新会话（无历史无 metadata）：不注入。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("done", [])])
+    app.session_store.save("sw-same-session", [
+        Message(role="assistant", content="上轮输出", agent="plan"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("sw-same-session", "继续", agent_id="plan")
+    await handle.task
+    assert "角色切换提示" not in app._mock_adapter.seen_systems[0]
+
+    handle = tm.start("sw-brand-new", "新会话", agent_id="build")
+    await handle.task
+    assert "角色切换提示" not in app._mock_adapter.seen_systems[-1]
+
+
+async def test_task_persists_last_agent_id(tmp_path):
+    """任务启动后 last_agent_id 写入 metadata（旧快照兼容的兜底依据）。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("done", [])])
+    tm = TaskManager(app)
+    handle = tm.start("sw-persist-session", "干活", agent_id="office")
+    await handle.task
+
+    snapshot = app.session_store.load("sw-persist-session")
+    assert snapshot.metadata.get("last_agent_id") == "office"
+
+
+# ---------------------------------------------------------------- 计划文件交接
+
+async def test_plan_file_handover_execute_on_switch(tmp_path):
+    """plan 留下计划文件 → 切到可写型 agent：提示读取并执行计划。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（build 完成）", [])])
+    app.session_store.save("pf-session", [
+        Message(role="assistant", content="计划已写入", agent="plan"),
+    ])
+    plans_dir = tmp_path / ".lite-work" / "plans"
+    plans_dir.mkdir(parents=True)
+    (plans_dir / "pf-session.md").write_text("# 计划\n1. 做 A\n2. 做 B", encoding="utf-8")
+
+    tm = TaskManager(app)
+    handle = tm.start("pf-session", "开始执行", agent_id="build")
+    await handle.task
+
+    system = app._mock_adapter.seen_systems[0]
+    assert "计划文件" in system
+    assert "执行其中定义的计划" in system
+    assert "pf-session.md" in system
+
+
+async def test_plan_file_no_file_no_execute_hint(tmp_path):
+    """prev=plan 但没有计划文件：正常切换提示，不出现「执行计划」文案。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("（build 完成）", [])])
+    app.session_store.save("pf-empty-session", [
+        Message(role="assistant", content="计划在对话里", agent="plan"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("pf-empty-session", "执行吧", agent_id="build")
+    await handle.task
+
+    system = app._mock_adapter.seen_systems[0]
+    assert "角色切换提示" in system
+    assert "执行其中定义的计划" not in system
+
+
+async def test_plan_agent_gets_plan_file_guidance(tmp_path):
+    """plan 任务（无切换）也注入计划文件指引：无文件 → 引导写入；有文件 → 引导增量更新。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    plans_dir = tmp_path / ".lite-work" / "plans"
+    plans_dir.mkdir(parents=True)
+    (plans_dir / "pf-guide-session.md").write_text("# 旧计划", encoding="utf-8")
+    app._mock_adapter = RecAdapter([("（plan 完成）", [])])
+
+    # 无文件会话：引导创建
+    tm = TaskManager(app)
+    handle = tm.start("pf-new-session", "帮我规划", agent_id="plan")
+    await handle.task
+    system = app._mock_adapter.seen_systems[0]
+    assert "请把本会话的规划产出写入" in system
+    assert "pf-new-session.md" in system
+
+    # 已有计划文件的会话：引导增量更新
+    handle = tm.start("pf-guide-session", "继续规划", agent_id="plan")
+    await handle.task
+    system = app._mock_adapter.seen_systems[-1]
+    assert "已有计划文件" in system
+    assert "增量更新" in system
+
+
+async def test_non_plan_agent_without_switch_no_plan_hint(tmp_path):
+    """build 连续任务（无切换、非 plan）：不注入计划文件文案。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = RecAdapter([("done", [])])
+    app.session_store.save("pf-build-session", [
+        Message(role="assistant", content="上轮输出", agent="build"),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("pf-build-session", "继续干活", agent_id="build")
+    await handle.task
+
+    assert "计划文件" not in app._mock_adapter.seen_systems[0]
