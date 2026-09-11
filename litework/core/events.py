@@ -109,6 +109,8 @@ class ContextStatsPayload(TypedDict):
     task: Dict[str, Any]
     # 实际计费单价（每 M token，美元）：面板展示成本依据（models.dev 或配置回退价）
     pricing: Dict[str, float]
+    # 效率机制节省台账：观察打包 / 证据收据 / 压缩决策理由（v1.6.0）
+    mechanisms: Dict[str, Any]
 
 
 class SubagentStartedPayload(TypedDict):

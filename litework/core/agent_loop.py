@@ -19,8 +19,12 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from .compaction_economics import cache_write_read_ratio, decide_compaction
 from .context_manager import ContextManager, repair_tool_call_pairs
 from .json_repair import safe_json_parse
+from .observation_pack import (
+    observations_dir, project_observations, read_recall_chunk,
+)
 from .kernel import Kernel
 from .session_store import SessionStore
 from .state_tracker import AgentStateTracker, AgentStatus
@@ -43,6 +47,11 @@ WRITE_TOOLS = frozenset({
     "write_file", "apply_search_replace", "apply_unified_diff",
     "execute_command", "git_commit", "git_push",
 })
+
+
+def _count_result_bytes(text: str) -> int:
+    """工具结果字节数（与 truncator/observation_pack 的口径一致）。"""
+    return len(text.encode("utf-8", errors="replace"))
 
 
 def cache_price_of(pricing: Dict[str, float]) -> float:
@@ -82,6 +91,10 @@ class AgentLoop:
         pricing: Optional[Dict[str, float]] = None,
         auto_approve: bool = False,
         context_window: Optional[int] = None,
+        truncation_dir: Optional[str] = None,
+        reducer_adapter=None,
+        enable_observation_pack: bool = True,
+        enable_compaction_economics: bool = True,
     ) -> None:
         self.kernel = kernel
         self.adapter = adapter
@@ -100,7 +113,8 @@ class AgentLoop:
         self.abort_event: Optional[asyncio.Event] = None
         self.workspace: str = "."
         # 截断落盘目录（第4/5课：超限工具输出保存到磁盘，上下文只放句柄）
-        self.truncation_dir: Optional[str] = None
+        # 观察打包的归档也放在其 observations/ 子目录（须在 _register_obs_recall_tool 之前赋值）
+        self.truncation_dir: Optional[str] = truncation_dir
         # 上下文压缩/缓存统计（供「上下文情况」面板）
         self._compression_count = 0
         self._compressed_tokens = 0
@@ -116,6 +130,60 @@ class AgentLoop:
         # agent 间消息队列（P2 合作）：其他 agent 经 send_message 发来的消息，
         # turn 边界注入本 agent 上下文（与用户补充指令同一合法注入点）
         self.agent_inbox: deque = deque()
+        # ---- 效率机制（v1.6.0，SoL-Pi 存活机制的 lite-work 适配）----
+        # 观察打包：大工具结果「先全文后占位符」，原文归档 + obs_recall 分页召回
+        self._obs_root = observations_dir(self.truncation_dir) if enable_observation_pack else None
+        self._mech_obs_saved_tokens = 0
+        self._mech_obs_packed = 0
+        self._mech_reducer_saved_tokens = 0
+        # 证据收据 reducer（opt-in：传入小模型适配器才启用）
+        self.reducer_adapter = reducer_adapter
+        # 压缩经济学开关（关闭则回到旧「超阈值即摘要」行为）
+        self._enable_compaction_economics = enable_compaction_economics
+        # 最近一次压缩决策理由（面板可解释性）
+        self._compaction_reason: Optional[str] = None
+        self._register_obs_recall_tool()
+
+    def _register_obs_recall_tool(self) -> None:
+        """注册 obs_recall：按字节分页召回已归档的大工具结果。
+
+        registry 可能在多个 loop 间共享，幂等注册；无归档目录时整体停用。
+        """
+        if not self._obs_root or self.registry is None or self.registry.has("obs_recall"):
+            return
+        root = self._obs_root
+
+        async def _recall(args: Dict[str, Any]) -> str:
+            obs_id = str(args.get("id", ""))
+            if not obs_id.startswith("obs_") or len(obs_id) > 40 or "/" in obs_id or ".." in obs_id:
+                return f"[Error]: 非法的观察 id: {obs_id}"
+            offset = max(0, int(args.get("offset") or 0))
+            try:
+                chunk = read_recall_chunk(root, obs_id, offset)
+            except FileNotFoundError:
+                return f"[Error]: 未知的观察 id: {obs_id}"
+            header = (
+                f"[obs_recall id={obs_id} offset={offset} "
+                f"next_offset={chunk.next_offset} eof={chunk.eof}]\n"
+                f"[本页 {chunk.bytes:,} bytes / {chunk.lines} 行；未读完时用 next_offset 续读]\n"
+            )
+            return header + chunk.text
+
+        self.registry.register(
+            "obs_recall",
+            "按 id 与字节偏移分页读取已归档的大工具结果原文（上下文中只保留占位符的大结果）",
+            {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "占位符里的观察 id（obs_xxxxxxxx）"},
+                    "offset": {"type": "integer", "minimum": 0,
+                               "description": "字节偏移，默认 0；按返回的 next_offset 续读"},
+                },
+                "required": ["id"],
+            },
+            _recall,
+        )
+        logger.info("[AgentLoop] 已注册 obs_recall（观察打包归档目录: %s）", root)
 
     def request_stop(self) -> None:
         if self.abort_event:
@@ -217,11 +285,23 @@ class AgentLoop:
                 processed = await self.kernel.before_llm.run(self.kernel.ctx, payload)
                 # B2. 兜底修复：确保发给 LLM 的消息链满足原子对约束（压缩/裁剪兜底）
                 processed = repair_tool_call_pairs(processed)
-                # 每轮估算本轮 prompt 规模，供「本次调用」在无 usage 时兜底展示/计费。
-                # 注意：这里不再把估算值累进 stats——输入是否计入由 _record_usage 按
-                # 「该轮最终有无 usage」决定，否则首轮会「估算 + 真实 usage」双计
-                # （实测 3 轮 × 10k 的任务被报成 71k），而「第 1 轮有 usage、后续没有」
-                # 时又会整轮漏计。
+
+                # B3. 观察打包（投影层）：大工具结果「先全文后占位符」，session 存档不动。
+                # fail-open：任何失败都保留原文，绝不为省 token 丢证据。
+                if self._obs_root:
+                    try:
+                        processed, obs_saved, obs_packed = project_observations(processed, self._obs_root)
+                        if obs_saved > 0:
+                            self._mech_obs_saved_tokens += obs_saved
+                            self._mech_obs_packed += obs_packed
+                    except Exception:
+                        logger.debug("[AgentLoop] 观察打包失败，本轮回退原文", exc_info=True)
+
+                # 每轮估算本轮 prompt 规模（按投影后的实际请求计），供「本次调用」在
+                # 无 usage 时兜底展示/计费。注意：这里不再把估算值累进 stats——输入是否
+                # 计入由 _record_usage 按「该轮最终有无 usage」决定，否则首轮会「估算 +
+                # 真实 usage」双计（实测 3 轮 × 10k 的任务被报成 71k），而「第 1 轮有
+                # usage、后续没有」时又会整轮漏计。
                 self._last_prompt_estimate = TokenCounter.count_messages_tokens(processed)
 
                 # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
@@ -274,6 +354,11 @@ class AgentLoop:
                     return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
                 if self._check_abort():
                     return await self._finish("[Stopped]: 已由用户手动停止。", messages, stats, store_snapshot)
+
+                # G-. 动作融合（SoL-Pi T5）：edit/write 的 then 验证命令在同一轮内
+                #     执行——一次工具调用完成「改 + 验」，省去下一轮的完整请求。
+                #     走与普通工具完全相同的审批/守卫/截断链路，不绕过安全边界。
+                results = await self._apply_action_fusion(tool_calls, results, stats)
 
                 await self._append_tool_results(tool_calls, results, messages)
 
@@ -336,20 +421,52 @@ class AgentLoop:
         await self.kernel.events.emit("task:start", {"session_id": self.kernel.session_id})
 
     async def _trim_context(self, messages: List[Message], stats: Dict[str, Any]) -> List[Message]:
-        """上下文裁剪：有效上限 = max(预算下限, 90% × 模型窗口)，到阈值先尝试 LLM 摘要压缩。"""
+        """上下文裁剪：有效上限 = max(预算下限, 90% × 模型窗口)。
+
+        超阈值后不再无脑 LLM 摘要：先过压缩经济学决策（摘要写入成本 + 缓存债
+        vs 剩余预期轮数的收益，见 compaction_economics），划算才摘要，否则推迟
+        并用免费裁剪兜底；决策理由随 context:stats 下发（面板可解释）。
+        """
         cap = self._effective_cap()
-        if TokenCounter.count_messages_tokens(messages) <= cap:
+        count = TokenCounter.count_messages_tokens(messages)
+        if count <= cap:
             return messages
-        compacted = await self._try_compact(messages, cap)
-        if compacted is not None:
-            messages[:] = compacted
-            return messages
+
+        plan = self.context_manager.split_for_compaction(messages, hard_cap=cap)
+        decision = None
+        if plan is not None and self._enable_compaction_economics:
+            head, _tail, head_tokens = plan
+            decision = decide_compaction(
+                head_tokens=head_tokens,
+                summary_tokens=max(1, head_tokens // 10),   # 摘要长度预估：head 的 10%
+                context_tokens=count,
+                context_window=self.context_window,
+                current_turn=int(stats.get("turns", 0) or 0),
+                max_turns=self.max_steps,
+                pricing=self.pricing,
+            )
+            self._compaction_reason = decision.reason
+            if decision.compact:
+                compacted = await self._try_compact(messages, cap, plan=plan)
+                if compacted is not None:
+                    messages[:] = compacted
+                    return messages
+                self._compaction_reason = "summary_failed"   # 摘要失败 → 免费裁剪兜底
+        elif not self._enable_compaction_economics:
+            self._compaction_reason = "economics_disabled"
+            compacted = await self._try_compact(messages, cap)
+            if compacted is not None:
+                messages[:] = compacted
+                return messages
+
         payload = self.context_manager.prune_messages(messages, hard_cap=cap)
         if self.context_manager.last_prune.get("compressed"):
             self._compression_count += 1
             self._compressed_tokens += int(
                 self.context_manager.last_prune.get("removed_tokens", 0)
             )
+            if decision is None and self._compaction_reason is None:
+                self._compaction_reason = "pruned"
         return payload
 
     async def _call_llm_with_retry(
@@ -492,16 +609,125 @@ class AgentLoop:
     async def _append_tool_results(
         self, tool_calls: List[ToolCall], results: List[str], messages: List[Message],
     ) -> None:
-        """阶段三（b）：工具结果按调用序回填消息链（assistant tool_calls ↔ tool 原子对）。"""
+        """阶段三（b）：工具结果按调用序回填消息链（assistant tool_calls ↔ tool 原子对）。
+
+        配置了 reducer 模型时（opt-in），大体积诊断类结果会先被压缩成「证据收据」：
+        收据里的逐字引用必须能在原文中找到，校验失败或压缩失败一律回退原文
+        （SoL-Pi C11/D1 思路：宁可不省，也不能丢证据）。
+        """
         for call, result_text in zip(tool_calls, results):
+            content = result_text
+            if self.reducer_adapter is not None:
+                try:
+                    content = await self._reduce_to_receipt(call.name, result_text)
+                except Exception:
+                    logger.debug("[AgentLoop] 证据收据生成失败，回退原文", exc_info=True)
             tool_result = Message(
                 role="tool",
                 name=call.name,
                 tool_call_id=call.id,
-                content=result_text,
+                content=content,
             )
             messages.append(tool_result)
             await self.kernel.events.emit("message:added", {"message": tool_result.to_dict()})
+
+    async def _reduce_to_receipt(self, tool_name: str, text: str) -> str:
+        """大诊断结果 → 证据收据。校验不过就原样返回（fail-open）。"""
+        from .observation_pack import REDUCE_THRESHOLD_BYTES, estimate_tokens
+
+        if _count_result_bytes(text) < REDUCE_THRESHOLD_BYTES:
+            return text
+        original_tokens = estimate_tokens(text)
+        prompt = (
+            "你是日志压缩器。把下面的工具输出压缩成一份「证据收据」，要求：\n"
+            "1. 保留关键结论、错误信息与重要数字；\n"
+            f"2. 用「> 」前缀逐字引用原文中最关键的 1-3 段（每段 20~200 字符，"
+            "必须与原文逐字一致，不得改写）；\n"
+            f"3. 收据总长度不超过原文的 1/8；\n"
+            "4. 不要编造原文没有的信息。\n\n工具输出：\n"
+        )
+        receipt, _calls, _usage = await asyncio.wait_for(
+            self.reducer_adapter.chat_stream(
+                [Message(role="user", content=prompt + text)], [], None
+            ),
+            timeout=max(30.0, self.llm_timeout / 2),
+        )
+        receipt = (receipt or "").strip()
+        if not receipt:
+            return text
+        # 逐字引用校验：至少 1 段 ≥24 字符的引用能 在原文中找到（忽略空白差异）
+        quotes = [ln[2:].strip() for ln in receipt.split("\n") if ln.startswith("> ")]
+        import re as _re
+
+        def _norm(s: str) -> str:
+            return _re.sub(r"\s+", "", s)
+
+        normalized_original = _norm(text)
+        valid = [q for q in quotes if len(_norm(q)) >= 24 and _norm(q) in normalized_original]
+        if len(valid) < 1:
+            logger.info("[AgentLoop] 收据引用校验失败（%d 条引用），回退原文", len(quotes))
+            return text
+        receipt_tokens = estimate_tokens(receipt)
+        saved = original_tokens - receipt_tokens
+        if saved <= 0 or receipt_tokens > original_tokens // 4:
+            return text   # 压缩收益不足 → 不如放原文
+        # 原文归档，收据里保留召回入口（证据永不丢失）
+        from .observation_pack import archive_text, observation_id
+
+        obs_id = observation_id(text)
+        archive_text(self._obs_root or "", text, tool_name)
+        self._mech_reducer_saved_tokens += saved
+        logger.info("[AgentLoop] 证据收据: %s → %d tokens（省 %d）", tool_name,
+                    receipt_tokens, saved)
+        return (
+            f"[receipt id={obs_id}] 以下为工具 {tool_name} 输出的证据收据"
+            f"（原文 {original_tokens:,} tokens 已归档，可 obs_recall(id=\"{obs_id}\") 召回）：\n"
+            f"{receipt}"
+        )
+
+    _FUSION_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff"}
+    _FUSION_MAX_COMMANDS = 4
+    _FUSION_OUTPUT_LIMIT = 2_000   # 单条 then 命令输出的截断长度
+
+    async def _apply_action_fusion(
+        self, tool_calls: List[ToolCall], results: List[str], stats: Dict[str, Any],
+    ) -> List[str]:
+        """动作融合：edit/write 调用里的 then 验证命令立即执行（同轮完成「改+验」）。
+
+        then 命令以 execute_command 工具调用走 _execute_tool_call——与普通工具
+        完全相同的审批/守卫/截断链路，不绕过任何安全边界。命令失败不影响
+        主操作结果（改动已落盘），输出如实附回，由模型决定下一步。
+        """
+        import json as _json
+
+        for i, call in enumerate(tool_calls):
+            if call.name not in self._FUSION_TOOLS or not results[i]:
+                continue
+            ok, parsed, _err = safe_json_parse(call.arguments or "{}")
+            args = parsed if ok and isinstance(parsed, dict) else None
+            try:
+                then_cmds = args.get("then") if args else None
+            except Exception:
+                continue
+            if not isinstance(then_cmds, list) or not then_cmds:
+                continue
+            outputs: List[str] = []
+            for j, cmd in enumerate(then_cmds[: self._FUSION_MAX_COMMANDS]):
+                if not isinstance(cmd, str) or not cmd.strip():
+                    continue
+                fusion_call = ToolCall(
+                    id=f"{call.id}#then{j}",
+                    name="execute_command",
+                    arguments=_json.dumps({"command": cmd, "timeout": 120}),
+                )
+                out = await self._execute_tool_call(fusion_call, stats)
+                outputs.append(f"--- then[{j}] $ {cmd} ---\n{out[: self._FUSION_OUTPUT_LIMIT]}")
+            if outputs:
+                results[i] = (
+                    f"{results[i]}\n\n[then 验证结果（动作融合，同轮执行）]\n"
+                    + "\n".join(outputs)
+                )
+        return results
 
     # ------------------------------------------------------------------ 工具执行
 
@@ -658,14 +884,15 @@ class AgentLoop:
     # ------------------------------------------------------------------ 上下文压缩
 
     async def _try_compact(
-        self, messages: List[Message], cap: int
+        self, messages: List[Message], cap: int, plan=None
     ) -> Optional[List[Message]]:
         """opencode 风格压缩：旧轮次 LLM 摘要化，最近轮次原样保留。
 
         摘要替换只发生一次（前缀失效一次），此后前缀逐字节稳定 → 缓存命中延续；
-        摘要失败时回退旧裁剪策略（prune_messages）。
+        摘要失败时回退旧裁剪策略（prune_messages）。plan 可传入已计算的拆分结果
+        （_trim_context 做经济学决策时已经算过，避免重复计算）。
         """
-        plan = self.context_manager.split_for_compaction(messages, hard_cap=cap)
+        plan = plan or self.context_manager.split_for_compaction(messages, hard_cap=cap)
         if plan is None:
             return None
         head, tail, head_tokens = plan
@@ -821,6 +1048,13 @@ class AgentLoop:
             "context_window": self.context_window,
             # 实际计费单价（每 M token，美元）：面板直接展示，避免"钱不对"无从对账
             "pricing": pricing_payload(self.pricing),
+            # 效率机制节省台账（本任务累计）：观察打包 / 证据收据 / 压缩决策理由
+            "mechanisms": {
+                "obs_saved_tokens": self._mech_obs_saved_tokens,
+                "obs_packed": self._mech_obs_packed,
+                "reducer_saved_tokens": self._mech_reducer_saved_tokens,
+                "compaction_reason": self._compaction_reason,
+            },
             "task": {
                 # 注意：以下 *_tokens / cost_estimate 均为「本任务累计」；
                 # 「本次调用」请看 last 段（每轮都会把整段上下文重发，累计值 ≈ 轮数 × 上下文）

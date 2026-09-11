@@ -210,6 +210,18 @@ export interface ContextPricing {
   cache_hit_per_mtok: number;
 }
 
+/** 效率机制节省台账（本任务累计） */
+export interface ContextMechanisms {
+  /** 观察打包：占位符替换省下的 tokens */
+  obs_saved_tokens: number;
+  /** 被打包的结果条数 */
+  obs_packed: number;
+  /** 证据收据：压缩省下的 tokens */
+  reducer_saved_tokens: number;
+  /** 最近一次压缩决策理由（economics/window_protection/deferred_economic…） */
+  compaction_reason: string | null;
+}
+
 /** 上下文水位历史点（前端在每轮 context:stats 时追加，供趋势图用） */
 export interface ContextHistoryPoint {
   /** 该轮实际发出的 prompt tokens（≈ 当前上下文水位） */
@@ -236,6 +248,8 @@ export interface ContextStats {
   session: ContextSessionStats;
   /** 预估成本使用的单价（models.dev per-model 或配置回退价） */
   pricing?: ContextPricing;
+  /** 效率机制节省台账（v1.6.0：观察打包 / 证据收据 / 压缩决策） */
+  mechanisms?: ContextMechanisms;
 }
 
 export interface LLMProviderMeta {

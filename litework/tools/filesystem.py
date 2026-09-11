@@ -77,6 +77,10 @@ class FileSystemTools:
                     "properties": {
                         "filePath": {"type": "string", "description": "相对 workspace 的文件路径"},
                         "content": {"type": "string", "description": "要写入的文本内容"},
+                        "then": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "可选：写入成功后立即执行的验证命令（最多 4 条，如跑测试/lint），结果附在本次输出里，省一轮请求",
+                        },
                     },
                     "required": ["filePath", "content"],
                 },

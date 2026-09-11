@@ -4,8 +4,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  BackgroundTaskInfo, ContextHistoryPoint, ContextStats, ContextTaskStats,
-  MCPServerStatus, SubAgentProgress, TodoItem,
+  BackgroundTaskInfo, ContextHistoryPoint, ContextMechanisms, ContextStats,
+  ContextTaskStats, MCPServerStatus, SubAgentProgress, TodoItem,
 } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
@@ -47,6 +47,28 @@ function sparkPoints(values: number[]): { line: string; lastX: number; lastY: nu
   const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   const [lastX, lastY] = coords[coords.length - 1] ?? [w, h / 2];
   return { line, lastX, lastY };
+}
+
+/** 效率机制节省台账（v1.6.0）：观察打包 / 证据收据 / 压缩决策理由。 */
+function MechanismRows({ mechanisms }: { mechanisms?: ContextMechanisms }) {
+  if (!mechanisms) return null;
+  const { obs_saved_tokens, obs_packed, reducer_saved_tokens, compaction_reason } = mechanisms;
+  const has = obs_saved_tokens > 0 || reducer_saved_tokens > 0 || obs_packed > 0
+    || (compaction_reason && compaction_reason !== "pruned");
+  if (!has) return null;
+  return (
+    <>
+      <div className="ctx2-ghead" title="SoL-Pi 式效率机制（v1.6.0）：大结果占位符 / 证据收据 / 压缩经济学">
+        机制节省（本任务）
+      </div>
+      <span>观察打包 / 收据</span>
+      <b>{obs_saved_tokens > 0 ? `${fmt(obs_saved_tokens)}（${obs_packed} 条）` : "—"} / {reducer_saved_tokens > 0 ? fmt(reducer_saved_tokens) : "—"}</b>
+      {compaction_reason && (
+        <span>压缩决策</span>
+      )}
+      {compaction_reason && <b>{compaction_reason}</b>}
+    </>
+  );
 }
 
 function ContextPanel({ stats, history, running }: {
@@ -187,6 +209,7 @@ function ContextPanel({ stats, history, running }: {
         <span>输入 / 输出</span><b>{fmt(session.prompt_tokens)} / {fmt(session.output_tokens)}</b>
         <span>上下文压缩 / 节省</span><b>{session.compression_count ?? 0} 次 / {fmt(session.compressed_tokens)}</b>
         <span>工具调用 / 安全拦截</span><b>{session.tool_calls ?? 0} 次 / {session.blocked ?? 0} 次</b>
+        <MechanismRows mechanisms={stats.mechanisms} />
         {pricing && (
           <>
             <div className="ctx2-ghead">计费单价（每 M tokens）</div>

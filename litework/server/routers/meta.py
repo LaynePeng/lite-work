@@ -50,6 +50,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "max_steps", "token_budget", "tool_timeout",
                 "auto_approve", "pricing", "context_full_turns", "llm_timeout",
                 "llm_retries", "skill_permissions", "subagent_timeout",
+                # 效率机制（v1.6.0）：观察打包 / 压缩经济学 / 证据收据小模型
+                "observation_pack", "compaction_economics", "reducer_model", "reducer_provider",
                 # 多智能体（docs/multi-agent-design.md §3 配置面）
                 "max_parallel_agents", "agent_total_limit", "agent_max_steps",
                 "agent_max_steps_cap", "agent_spawn_depth", "agent_message_max_chars",

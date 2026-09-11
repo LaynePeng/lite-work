@@ -85,6 +85,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 的 per-model 数据（同步成功后自动生效）。cache_hit 缺省按 input 的 10% 折算
     # （Anthropic 0.1x 惯例），显式给出则不再折算。
     "pricing": {"input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006},
+    # 效率机制（v1.6.0，SoL-Pi 存活机制的适配）：
+    # observation_pack      大工具结果「先全文后占位符」，obs_recall 分页召回
+    # compaction_economics  压缩经济学决策（写入成本+缓存债 vs 剩余轮数收益）
+    # reducer_model/provider 证据收据的小模型（opt-in，留空停用）
+    "observation_pack": True,
+    "compaction_economics": True,
+    "reducer_model": "",
+    "reducer_provider": "",
 }
 
 # 历史默认回退定价（对齐 OpenAI 档，远高于默认供应商 DeepSeek 的真实价：
@@ -1294,6 +1302,17 @@ class AgentApp:
             getattr(adapter, "provider_id", None) or self.llm_registry.active,
             getattr(adapter, "model", None) or "",
         )
+        # 证据收据 reducer（opt-in）：配置 reducer_model 才启用（通常配小模型省成本）
+        reducer_adapter = None
+        reducer_model = self.config.get("reducer_model")
+        if reducer_model:
+            try:
+                reducer_adapter = self.llm_registry.build_adapter(
+                    provider_id=self.config.get("reducer_provider") or None,
+                    overrides={"model": reducer_model},
+                )
+            except Exception:
+                logger.warning("[App] reducer 适配器构建失败，证据收据机制停用", exc_info=True)
         loop = AgentLoop(
             kernel=kernel,
             adapter=adapter,
@@ -1308,9 +1327,12 @@ class AgentApp:
             pricing=pricing,
             auto_approve=bool(self.config.get("auto_approve", False)),
             context_window=context_window,
+            truncation_dir=os.path.join(self.config_dir, "truncations"),
+            reducer_adapter=reducer_adapter,
+            enable_observation_pack=bool(self.config.get("observation_pack", True)),
+            enable_compaction_economics=bool(self.config.get("compaction_economics", True)),
         )
         loop.workspace = self.workspace
-        loop.truncation_dir = os.path.join(self.config_dir, "truncations")
         # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
         loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)
         return loop

@@ -133,6 +133,10 @@ class EditorTools:
                         "filePath": {"type": "string", "description": "文件相对路径"},
                         "searchBlock": {"type": "string", "description": "被替换的完整原始代码片段（含原缩进）"},
                         "replaceBlock": {"type": "string", "description": "写入的新代码片段"},
+                        "then": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "可选：主操作成功后立即执行的验证命令（最多 4 条，如跑测试/lint），结果附在本次输出里，省一轮请求",
+                        },
                     },
                     "required": ["filePath", "searchBlock", "replaceBlock"],
                 },
@@ -145,6 +149,10 @@ class EditorTools:
                     "properties": {
                         "filePath": {"type": "string", "description": "文件相对路径"},
                         "diff": {"type": "string", "description": "Unified Diff 补丁文本"},
+                        "then": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "可选：主操作成功后立即执行的验证命令（最多 4 条，如跑测试/lint），结果附在本次输出里，省一轮请求",
+                        },
                     },
                     "required": ["filePath", "diff"],
                 },
