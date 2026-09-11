@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import Composer from "./Composer";
-import type { CollabMode } from "../types";
+import type { CollabMode, LLMConfig } from "../types";
 
 const baseProps = {
   running: false,
@@ -114,5 +114,73 @@ describe("Composer · 协作模式选择器（方案 B 全插件化，会话级�
     );
     await user.click(screen.getByTitle(/多 Agent 协作模式/));
     expect(onCollabModesRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 模型下拉：全局默认模型不应与供应商模型列表项重复出现
+const LLM_WITH_KEY: LLMConfig = {
+  active: "deepseek",
+  providers: {
+    deepseek: {
+      api_key: "", has_key: true, base_url: "", model: "deepseek-chat",
+      models: ["deepseek-chat", "deepseek-reasoner"], temperature: 0.7,
+    },
+    openai: {
+      api_key: "", has_key: true, base_url: "", model: "gpt-4o",
+      models: ["gpt-4o"], temperature: 0.7,
+    },
+  },
+};
+
+const LLM_NO_KEY: LLMConfig = {
+  active: "deepseek",
+  providers: {
+    deepseek: {
+      api_key: "", has_key: false, base_url: "", model: "deepseek-chat",
+      models: ["deepseek-chat"], temperature: 0.7,
+    },
+  },
+};
+
+describe("Composer · 模型选择器（全局默认去重）", () => {
+  const modelSelect = (container: HTMLElement) =>
+    container.querySelector<HTMLSelectElement>("select.model-select")!;
+
+  it("全局默认已被供应商列表覆盖时，默认模型只出现一次（带「（默认）」）", () => {
+    const { container } = render(<Composer {...baseProps} llmConfig={LLM_WITH_KEY} />);
+    const select = modelSelect(container);
+    const labels = Array.from(select.options).map((o) => o.textContent ?? "");
+    // 默认模型仅出现一次，且带「（默认）」标记
+    expect(labels.filter((t) => t.includes("deepseek-chat")).length).toBe(1);
+    expect(labels.find((t) => t.includes("deepseek-chat"))).toContain("（默认）");
+    // 不存在裸名字的重复项，也不存在 __global__ 占位项
+    expect(labels.filter((t) => t === "DeepSeek / deepseek-chat").length).toBe(0);
+    expect(Array.from(select.options).some((o) => o.value === "__global__")).toBe(false);
+    // 选中值指向供应商项（而非内部占位）
+    expect(select.value).toBe("deepseek\ndeepseek-chat");
+  });
+
+  it("全局默认未被覆盖（供应商无 Key）时，回退渲染唯一「全局默认」项", () => {
+    const { container } = render(<Composer {...baseProps} llmConfig={LLM_NO_KEY} />);
+    const select = modelSelect(container);
+    const options = Array.from(select.options);
+    expect(options.filter((o) => o.value === "__global__").length).toBe(1);
+    expect(select.options[0].textContent).toContain("（默认）");
+    expect(select.value).toBe("__global__");
+  });
+
+  it("选中带「（默认）」的供应商项 → 清除会话 override", async () => {
+    const user = userEvent.setup();
+    const onSessionModelChange = vi.fn();
+    const { container } = render(
+      <Composer
+        {...baseProps}
+        llmConfig={LLM_WITH_KEY}
+        sessionModel={{ provider: "openai", model: "gpt-4o" }}
+        onSessionModelChange={onSessionModelChange}
+      />
+    );
+    await user.selectOptions(modelSelect(container), "deepseek\ndeepseek-chat");
+    expect(onSessionModelChange).toHaveBeenCalledWith(null);
   });
 });

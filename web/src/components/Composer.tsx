@@ -285,7 +285,13 @@ export default function Composer({
   // 生效模型：override 或全局 provider 默认
   const effModel = sessionModel?.model ?? globalModel;
   const effSelectValue = `${effProviderId}\n${effModel}`;
-  const globalSelectValue = `${llmConfig?.active ?? ""}\n${globalModel}`;
+  // 全局（active provider）配置的默认模型：注意 globalModel 是「生效 provider」的默认模型
+  // （会话 override 换了供应商时二者不同），全局默认项必须用 active provider 的模型，否则
+  // 「选中带（默认）标记的项 → 清除会话 override」的比较会失配。
+  const activeProviderModel = llmConfig?.active
+    ? (llmConfig.providers[llmConfig.active]?.model ?? "")
+    : "";
+  const globalSelectValue = `${llmConfig?.active ?? ""}\n${activeProviderModel}`;
   const isDefaultModel = !sessionModel;
   // 会话 override 的 (provider, model) 是否已被下方「已配置 Key 的供应商模型列表」覆盖：
   // 已覆盖 → 不需要兜底项（否则与正常 option value 重复且排在前面，浏览器会选中兜底项，
@@ -294,11 +300,15 @@ export default function Composer({
   const hasProviderOption = (pid: string, mid: string) =>
     allProviders.some((p) => p.id === pid && p.has_key && (p.models ?? []).includes(mid));
   const showFallbackOption = !isDefaultModel && !!sessionModel &&
-    !(sessionModel.model === globalModel && sessionModel.provider === llmConfig?.active) &&
+    !(sessionModel.provider === llmConfig?.active && sessionModel.model === activeProviderModel) &&
     !hasProviderOption(sessionModel.provider, sessionModel.model);
   // 兜底项文案优先使用供应商显示名（自定义供应商配置的 name），查不到才退化为内部 ID
   const fallbackProviderName =
     allProviders.find((p) => p.id === sessionModel?.provider)?.name || sessionModel?.provider || "";
+  // 全局默认模型是否已被下方「供应商模型列表」覆盖（active provider 有 Key 且模型在列表中）。
+  // 是 → 不再单独渲染「全局默认」option，否则同一模型会重复出现两次
+  //      （一次是裸名字的全局默认项，一次是带「（默认）」标记的供应商项）。
+  const globalCovered = hasProviderOption(llmConfig?.active ?? "", activeProviderModel);
 
   // 打开面板时懒加载命令与技能列表
   useEffect(() => {
@@ -653,7 +663,7 @@ export default function Composer({
           <span className="agent-bar-label">模型:</span>
           <select
             className="model-select"
-            value={isDefaultModel ? "__global__" : effSelectValue}
+            value={isDefaultModel && !globalCovered ? "__global__" : effSelectValue}
             onChange={(e) => {
               const v = e.target.value;
               if (!v) return;
@@ -668,11 +678,15 @@ export default function Composer({
             disabled={disabled || running}
             title={isDefaultModel ? `当前使用全局默认模型（${effProviderName} / ${effModel}），选择可切换为会话专用` : `当前会话模型：${effProviderName} / ${effModel}；选中“全局默认”可恢复`}
           >
-            {/* 始终提供「全局默认」入口：显示实际生效的默认模型名，不再是抽象占位 */}
-            <option value="__global__">
-              {llmConfig?.active ? `${allProviders.find((p) => p.id === llmConfig.active)?.name || llmConfig.active} / ${llmConfig.providers[llmConfig.active]?.model || "未配置"}` : "未配置全局模型"}
-              {isDefaultModel ? "" : "（默认）"}
-            </option>
+            {/* 「全局默认」入口：仅当全局默认模型未被下方供应商列表覆盖时才渲染，
+                否则会与列表项重复（同一模型出现两次：一次裸名字、一次带「（默认）」）。
+                被覆盖时，列表项自带的「（默认）」即代表全局默认，选中它同样会清除会话 override。 */}
+            {!globalCovered && (
+              <option value="__global__">
+                {llmConfig?.active ? `${allProviders.find((p) => p.id === llmConfig.active)?.name || llmConfig.active} / ${llmConfig.providers[llmConfig.active]?.model || "未配置"}` : "未配置全局模型"}
+                {llmConfig?.active ? "（默认）" : ""}
+              </option>
+            )}
             {showFallbackOption && sessionModel && (
               // 会话 override 确实不在任何已配置的 provider 模型列表里（供应商被删/模型列表变更）
               // 才补这一项避免 select 空白；文案用供应商显示名而非内部 ID（如 custom_xxx）
@@ -684,7 +698,7 @@ export default function Composer({
               provider.has_key && (provider.models ?? []).map((model) => (
                 <option key={`${provider.id}:${model}`} value={`${provider.id}\n${model}`}>
                   {provider.name || provider.id} / {model}
-                  {model === globalModel && provider.id === llmConfig?.active ? "（默认）" : ""}
+                  {provider.id === llmConfig?.active && model === activeProviderModel ? "（默认）" : ""}
                 </option>
               ))
             )}
