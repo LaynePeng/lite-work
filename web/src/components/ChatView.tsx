@@ -334,6 +334,9 @@ const STICK_THRESHOLD_PX = 48;
 
 /** 超长会话折叠（P1）：超过该轮次开始折叠中间历史（数据不删，仅 UI 折叠） */
 const FOLD_THRESHOLD = 500;
+/** 折叠的消息数阈值：高工具密度会话里 1 轮可含几十张工具卡片，只按轮数
+ *  阈值会形同虚设（实测 973 条消息仅折算 71 轮），故补充消息数维度（v1.6.0） */
+const FOLD_MESSAGES = 600;
 /** 折叠时始终渲染的最近轮次数 */
 const KEEP_RECENT = 300;
 /** 点击占位条每次展开的轮次数 */
@@ -355,6 +358,8 @@ export default function ChatView({
   onStop,
   onApprove,
   currentAgent,
+  foldTurns = FOLD_THRESHOLD,
+  foldMessages = FOLD_MESSAGES,
 }: {
   sessionId: string;
   sessionTitle: string;
@@ -373,6 +378,11 @@ export default function ChatView({
   onStop: () => void;
   onApprove: (approvalId: string, approved: boolean) => void;
   currentAgent: string;
+  /** 展示折叠阈值（轮数）——可在设置中配置 */
+  foldTurns?: number;
+  /** 展示折叠阈值（消息条数）：高工具密度会话里 1 轮可含几十张工具卡片，
+   *  只按轮数阈值会形同虚设，故补充消息数维度（v1.6.0） */
+  foldMessages?: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -406,9 +416,29 @@ export default function ChatView({
   const [foldExpanded, setFoldExpanded] = useState(0);
   useEffect(() => { setFoldExpanded(0); }, [sessionId]); // 切换会话重置展开状态
   const totalTurns = displayTurns.length;
-  const foldFrom = totalTurns > FOLD_THRESHOLD
+  // 折叠条件：轮数或消息数任一超限（v1.6.0 起支持消息数维度，可在设置中配置）。
+  // 高工具密度会话里 1 轮可含几十张工具卡片：973 条消息只折算出 71 轮，
+  // 只按轮数阈值会形同虚设——因此消息数超限时按「每轮消息权重」保留尾部。
+  const messagesOver = foldMessages > 0 && messages.length > foldMessages;
+  const foldFrom = totalTurns > foldTurns
+    // 轮数超限：维持原有口径（保留最近 KEEP_RECENT+expanded 轮）
     ? Math.max(0, totalTurns - KEEP_RECENT - foldExpanded)
-    : 0;
+    : messagesOver
+      ? (() => {
+          // 消息数超限：从尾部累计「每轮权重」（1 + 工具卡片×2 ≈ 该轮的消息数），
+          // 保留约 40% 阈值量的消息，其余折叠；点击占位条仍可逐级展开
+          const keepWeight = Math.max(50, Math.floor(foldMessages * 0.4)) + foldExpanded * 2;
+          let acc = 0;
+          let idx = 0;
+          for (let i = displayTurns.length - 1; i >= 0; i--) {
+            const weight = 1 + (displayTurns[i].items?.length ?? 0) * 2;
+            if (acc + weight > keepWeight) { idx = i + 1; break; }
+            acc += weight;
+            idx = i;
+          }
+          return idx;
+        })()
+      : 0;
   const renderTurns = foldFrom > 0 ? displayTurns.slice(foldFrom) : displayTurns;
 
   // 贴底状态只由真实用户滚动事件改变。此前用 Virtuoso 的

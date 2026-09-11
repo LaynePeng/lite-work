@@ -93,6 +93,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "compaction_economics": True,
     "reducer_model": "",
     "reducer_provider": "",
+    # 聊天区展示折叠阈值（数据不删，仅 UI 折叠）：轮数或消息数任一超限即折叠。
+    # 高工具密度会话里 1 轮可含几十个工具卡片，只按轮数阈值会形同虚设，
+    # 因此补充消息数维度（v1.6.0）。
+    "chat_fold_turns": 500,
+    "chat_fold_messages": 600,
 }
 
 # 历史默认回退定价（对齐 OpenAI 档，远高于默认供应商 DeepSeek 的真实价：

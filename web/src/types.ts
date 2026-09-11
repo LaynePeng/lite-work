@@ -156,6 +156,9 @@ export interface AppConfig {
   max_zip_size_mb?: number;
   /** triggers 匹配模式：substring | advanced */
   skill_trigger_mode?: "substring" | "advanced";
+  /** 聊天区展示折叠阈值（轮数/消息数任一超限即折叠；数据不删，仅 UI 折叠） */
+  chat_fold_turns?: number;
+  chat_fold_messages?: number;
   // 多智能体配置（docs/multi-agent-design.md §3）
   max_parallel_agents?: number;
   agent_total_limit?: number;

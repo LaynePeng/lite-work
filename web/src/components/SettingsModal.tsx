@@ -63,6 +63,10 @@ export default function SettingsModal({
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
   const [timeoutSaved, setTimeoutSaved] = useState(false);
+  // 综合设置：聊天区展示折叠阈值（轮数/消息数任一超限即折叠，数据不删仅 UI 折叠）
+  const [foldTurns, setFoldTurns] = useState<number>(500);
+  const [foldMessages, setFoldMessages] = useState<number>(600);
+  const [foldSaved, setFoldSaved] = useState(false);
   // 综合设置：models.dev 模型元数据（上下文窗口 / 计费单价的来源）
   const [metaStatus, setMetaStatus] = useState<ModelMetaStatus | null>(null);
   const [metaBusy, setMetaBusy] = useState(false);
@@ -338,6 +342,9 @@ export default function SettingsModal({
       if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
       if (typeof c.subagent_timeout === "number" && c.subagent_timeout > 0) setSubagentTimeout(c.subagent_timeout);
       if (typeof c.max_steps === "number" && c.max_steps > 0) setMaxSteps(c.max_steps);
+      // 聊天区折叠阈值
+      if (typeof c.chat_fold_turns === "number" && c.chat_fold_turns > 0) setFoldTurns(c.chat_fold_turns);
+      if (typeof c.chat_fold_messages === "number" && c.chat_fold_messages > 0) setFoldMessages(c.chat_fold_messages);
       // 多智能体配置
       if (typeof c.max_parallel_agents === "number" && c.max_parallel_agents > 0) setMaParallel(c.max_parallel_agents);
       if (typeof c.agent_total_limit === "number" && c.agent_total_limit > 0) setMaTotal(c.agent_total_limit);
@@ -854,6 +861,22 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [triggerMode, onSaved]);
+
+  // 保存聊天区折叠阈值
+  const saveFoldConfig = useCallback(async () => {
+    setFoldSaved(false);
+    try {
+      await api.updateConfig({
+        chat_fold_turns: Math.max(50, foldTurns),
+        chat_fold_messages: Math.max(100, foldMessages),
+      });
+      setFoldSaved(true);
+      setTimeout(() => setFoldSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [foldTurns, foldMessages, onSaved]);
 
   const saveTimeoutConfig = useCallback(async () => {
     setTimeoutSaved(false);
@@ -1920,6 +1943,36 @@ export default function SettingsModal({
                     type="number" className="form-input" min={1} max={500}
                     value={maxSteps}
                     onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 100))}
+                  />
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>聊天区折叠阈值</span>
+                <button className="btn-test" onClick={() => void saveFoldConfig()}>
+                  {foldSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                超长会话的展示折叠（数据不删，仅 UI 折叠为占位条，点击可展开）：
+                轮数或消息数任一超限即折叠，只渲染最近的轮次。高工具密度会话里
+                1 轮可含几十张工具卡片，若折叠迟迟不生效，可调低消息数阈值。
+              </p>
+              <div className="timeout-grid">
+                <div className="form-group">
+                  <label>轮数阈值</label>
+                  <input
+                    type="number" className="form-input" min={50} max={5000}
+                    value={foldTurns}
+                    onChange={(e) => setFoldTurns(Math.max(50, parseInt(e.target.value, 10) || 500))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>消息数阈值</label>
+                  <input
+                    type="number" className="form-input" min={100} max={20000}
+                    value={foldMessages}
+                    onChange={(e) => setFoldMessages(Math.max(100, parseInt(e.target.value, 10) || 600))}
                   />
                 </div>
               </div>

@@ -16,7 +16,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 
 interface StreamingState {
@@ -210,6 +210,8 @@ export default function App() {
   const [registeredTools, setRegisteredTools] = useState<{ name: string; description: string }[]>([]);
   // 已安装协作模式（对话框选择器数据源；设置里安装新插件后随 refreshAll 更新）
   const [collabModes, setCollabModes] = useState<CollabMode[]>([]);
+  // 综合设置（AppConfig 子集）：聊天区折叠阈值等 UI 行为，保存设置后随 refreshAll 生效
+  const [uiConfig, setUiConfig] = useState<AppConfig | null>(null);
   const refreshCollabModes = useCallback(() => {
     api.collabModes().then((r) => setCollabModes(r.modes)).catch(() => {});
   }, []);
@@ -417,12 +419,15 @@ export default function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [st, ag, llm, providers, mcp, tools, modes] = await Promise.all([
+      const [st, ag, llm, providers, mcp, tools, modes, cfg] = await Promise.all([
         api.status(), api.agents(), api.llmConfig(), api.llmProviders(), api.mcpStatus(),
         // 工具列表按当前 Agent 裁剪；workspace 未就绪时报 409，静默降级为空列表
         api.tools(currentAgent).catch(() => [] as { name: string; description: string }[]),
         api.collabModes().catch(() => ({ modes: [] as CollabMode[] })),
+        // 综合设置（聊天区折叠阈值等 UI 行为）：保存设置后经 refreshAll 立即生效
+        api.config().catch(() => null),
       ]);
+      if (cfg) setUiConfig(cfg);
       setStatus(st);
       setAgents(ag);
       setLlmConfig(llm);
@@ -1993,6 +1998,8 @@ export default function App() {
               onStop={stop}
               onApprove={(id, a) => void approve(id, a)}
               currentAgent={currentAgent}
+              foldTurns={uiConfig?.chat_fold_turns}
+              foldMessages={uiConfig?.chat_fold_messages}
             />
             <QuestionBar
               pendingQuestions={currentChat.pendingQuestions ?? []}

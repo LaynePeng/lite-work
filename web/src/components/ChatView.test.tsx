@@ -205,6 +205,39 @@ describe("ChatView 超长会话折叠（P1）", () => {
     expect(screen.getByText("问题 249")).toBeInTheDocument();
   });
 
+  it("消息数阈值：轮数不多但消息数超限也折叠（高工具密度场景，v1.6.0）", () => {
+    // 71 轮远低于轮数阈值，但 1 轮内塞入大量工具调用 → 消息数超限
+    const msgs: Msg[] = [{ role: "user", content: "问题 0" } as Msg];
+    for (let i = 0; i < 60; i++) {
+      msgs.push({
+        role: "assistant", content: null,
+        tool_calls: [{ id: `c${i}`, type: "function", function: { name: "t", arguments: "{}" } }],
+      } as unknown as Msg);
+      msgs.push({ role: "tool", tool_call_id: `c${i}`, content: `结果 ${i}` } as unknown as Msg);
+    }
+    msgs.push({ role: "assistant", content: "回答" } as Msg);
+    // 120 条 tool 结果消息 + 若干 → 约 61 轮；消息总数 124 > 600? 不足 → 显式传小阈值
+    render(
+      <ChatView
+        {...baseProps} messages={msgs} streaming={null}
+        foldTurns={500} foldMessages={100}
+      />
+    );
+    expect(screen.getByRole("button", { name: /查看更早的/ })).toBeInTheDocument();
+    // 数据不删：展开后内容仍在（这里只验证占位条存在与首条内容被折叠）
+    expect(screen.queryByText("结果 0")).not.toBeInTheDocument();
+  });
+
+  it("默认消息数阈值（600）：未超限则不折叠", () => {
+    // 299 对问答 = 598 条消息 ≤ 600，598 turn 也 ≤ 500? 598 > 500 会按轮数折叠——
+    // 因此用 250 对（500 turn / 500 条）恰好双双不超
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(250)} streaming={null}
+        foldTurns={500} foldMessages={600} />
+    );
+    expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
+  });
+
   it("1000 turn：首屏折叠 700 轮，逐级展开（300/轮）直到全部可见", async () => {
     // 500 对问答 = 1000 turn（对应 ~/.lite-work/sessions/session_demo_fold_1000turns.json）
     const user = userEvent.setup();
