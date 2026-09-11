@@ -26,3 +26,6 @@ web/tsconfig.tsbuildinfo
 # 系统
 .DS_Store
 *.png
+
+# 本地文档（不发 GitHub）
+docs/
