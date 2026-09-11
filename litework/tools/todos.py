@@ -202,6 +202,14 @@ class TodoPlugin(ToolPlugin):
                         f"（允许: {', '.join(VALID_STATUSES)}）")
             cleaned.append({"content": content, "status": status})
 
+        # updated_at：按 content 匹配旧看板——同项且状态未变 → 保留原时间戳；
+        # 状态变化或新项 → 记当前时间（面板 hover 显示「何时更新」）。
+        prev = {(t.get("content"), t.get("status")): t.get("updated_at")
+                for t in (self._items.get(target) or [])}
+        now = round(time.time(), 3)
+        for item in cleaned:
+            item["updated_at"] = prev.get((item["content"], item["status"]), now)
+
         self._items[target] = cleaned
         self._persist(target, cleaned)
         events = self._events.get(target)

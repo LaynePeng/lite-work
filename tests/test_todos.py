@@ -232,3 +232,30 @@ def test_todo_persistence_endpoint_roundtrip(tmp_path):
             assert client3.delete("/api/sessions/s-web").status_code == 200
             r3 = client3.get("/api/todos", params={"session_id": "s-web"})
             assert r3.json()["todos"] == []
+
+
+def test_todo_updated_at_tracked_per_item():
+    """updated_at：同项同状态保留原时间戳；状态变化或新项 → 记新时间。"""
+    plugin = TodoPlugin()
+    plugin.bind("s1", _EventBus())
+    current_session_id.set("s1")
+
+    asyncio.run(plugin.execute("todo_write", {"todos": [
+        {"content": "任务A", "status": "in_progress"},
+        {"content": "任务B", "status": "pending"},
+    ]}))
+    first = {t["content"]: t["updated_at"] for t in plugin.get("s1")}
+    assert first["任务A"] > 0 and first["任务B"] > 0
+
+    # 状态变化：任务A → completed（时间戳刷新）；任务B 未变（保留）
+    import time as _time
+    _time.sleep(0.002)   # 时间戳为毫秒粒度，隔开两次写入以便比较
+    asyncio.run(plugin.execute("todo_write", {"todos": [
+        {"content": "任务A", "status": "completed"},
+        {"content": "任务B", "status": "pending"},
+        {"content": "任务C", "status": "pending"},
+    ]}))
+    second = {t["content"]: t["updated_at"] for t in plugin.get("s1")}
+    assert second["任务A"] > first["任务A"]              # 状态变化 → 刷新
+    assert second["任务B"] == first["任务B"]             # 未变 → 保留
+    assert second["任务C"] > 0                           # 新项 → 新时间

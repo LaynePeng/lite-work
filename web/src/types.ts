@@ -54,6 +54,8 @@ export interface Msg {
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
+  /** 最近一次状态/内容变化的时间戳（秒）；面板 hover 展示 */
+  updated_at?: number;
 }
 
 export interface SessionInfo {

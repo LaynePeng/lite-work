@@ -278,26 +278,48 @@ const TODO_MARKS: Record<TodoItem["status"], string> = {
   completed: "✔",
 };
 
+/** TODOs 面板（ctx2 风格）：渐变进度条 + 平铺排序（进行中置顶、完成沉底）。 */
 function TodosPanel({ todos }: { todos: TodoItem[] }) {
   if (!todos || todos.length === 0) {
     return <div className="tool-panel-empty">暂无 TODO（Agent 规划多步骤任务时自动生成）</div>;
   }
   const done = todos.filter((t) => t.status === "completed").length;
-  const doing = todos.find((t) => t.status === "in_progress");
+  const doing = todos.filter((t) => t.status === "in_progress").length;
+  const ratio = todos.length > 0 ? done / todos.length : 0;
+  const allDone = done === todos.length;
+  // 平铺但有序：进行中置顶 → 待办 → 完成沉底；组内保持提交顺序（sort 稳定）
+  const order: Record<TodoItem["status"], number> = { in_progress: 0, pending: 1, completed: 2 };
+  const sorted = [...todos].sort((a, b) => order[a.status] - order[b.status]);
+
   return (
     <div className="todos-panel">
-      <div className="tools-panel-count">
-        任务进度 {done}/{todos.length}
-        {doing ? ` · 当前：${doing.content}` : ""}
+      <div className="todo2-progress">
+        <div className="ctx2-meterrow">
+          <span className="todo2-title">
+            {allDone ? "✅ 全部完成" : `任务进度 ${done}/${todos.length}`}
+            {doing > 0 ? ` · 进行中 ${doing}` : ""}
+          </span>
+          <b>{Math.round(ratio * 100)}%</b>
+        </div>
+        <div className="ctx2-meter">
+          <i style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+        </div>
       </div>
       <ul className="todos-list">
-        {todos.map((t, i) => (
-          <li key={i} className={`todo-item todo-${t.status}`}>
-            <span className="todo-mark" aria-hidden>{TODO_MARKS[t.status]}</span>
+        {sorted.map((t, i) => (
+          <li
+            key={i}
+            className={`todo-item todo-${t.status}`}
+            title={t.updated_at ? `更新于 ${new Date(t.updated_at * 1000).toLocaleString()}` : undefined}
+          >
+            <span className={t.status === "in_progress" ? "todo-mark todo-spin" : "todo-mark"} aria-hidden>
+              {TODO_MARKS[t.status]}
+            </span>
             <span className="todo-content">{t.content}</span>
           </li>
         ))}
       </ul>
+      {allDone && <div className="todo2-alldone">本组任务已全部完成，Agent 可以开始下一个任务</div>}
     </div>
   );
 }

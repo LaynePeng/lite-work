@@ -916,7 +916,20 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .todos-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+/* 进度头（ctx2 同款渐变进度条） */
+.todo2-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo2-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-1);
 }
 
 .todos-list {
@@ -937,14 +950,19 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-1);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  transition: border-color .2s ease, background .2s ease, opacity .2s ease;
 }
 
 .todo-mark {
   flex: none;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.todo-item.todo-completed {
+  opacity: .55;
 }
 
 .todo-item.todo-completed .todo-content {
@@ -959,6 +977,25 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .todo-item.todo-in_progress .todo-mark {
   color: var(--accent, #4c8dff);
+}
+
+/* 进行中标记的呼吸动画（同 ctx2 状态点） */
+.todo-spin {
+  animation: todo2-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes todo2-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+.todo2-alldone {
+  font-size: 11px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--border));
+  border-radius: 8px;
+  padding: 6px 9px;
 }
 
 /* 消息气泡：补充指令"已入队"标记 */
