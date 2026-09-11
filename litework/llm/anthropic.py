@@ -47,6 +47,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         enable_cache: bool = True,
         custom_headers: Optional[Dict[str, str]] = None,
         reasoning_effort: str = "",
+        idle_timeout: float = 120.0,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -56,6 +57,8 @@ class AnthropicAdapter(BaseLLMAdapter):
         self.max_tokens = max_tokens
         self.provider_id = provider_id
         self.enable_cache = enable_cache
+        # 流式空闲看门狗：连续 N 秒未收到任何 chunk 视为连接卡死，中止并抛可重试错误
+        self.idle_timeout = max(30.0, float(idle_timeout))
         # 自定义请求头：清洗后叠加在默认头之上（可覆盖 x-api-key / anthropic-version）
         self.custom_headers = clean_custom_headers(custom_headers)
         # 推理强度（"low"/"medium"/"high"）：映射为 thinking budget_tokens；
@@ -234,7 +237,18 @@ class AnthropicAdapter(BaseLLMAdapter):
         buffer = ""
         byte_buffer = b""
 
-        async for chunk in response.aiter_bytes():
+        # 空闲看门狗：逐 chunk 限时，卡死连接可见中断（而非等 llm_timeout 静默超时）
+        aiter = response.aiter_bytes()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(aiter.__anext__(), timeout=self.idle_timeout)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError as exc:
+                raise LLMError(
+                    f"[LLM Error] 流式响应空闲超过 {int(self.idle_timeout)}s，连接可能已卡死",
+                    retryable=True,
+                ) from exc
             text, byte_buffer = decode_utf8_incremental(byte_buffer, chunk)
             buffer += text
             lines = buffer.split("\n")

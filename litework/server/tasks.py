@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..app import AgentApp
 from ..core.agent_loop import AgentLoop
+from ..core.context_manager import patch_dangling_tool_calls
 from ..core.system_prompt import SystemPromptBuilder
 from ..core.types import Message
 
@@ -336,7 +337,9 @@ class TaskManager:
         # 避免每轮新建 kernel 时从空上下文开始、落盘覆盖上一轮对话
         snapshot = self.app.session_store.load(session_id)
         if snapshot and snapshot.messages:
-            kernel.ctx.messages = list(snapshot.messages)
+            # 顺手治愈历史中的悬空 tool_calls（旧版本/中断遗留）：补占位结果，
+            # 否则每轮 repair 都丢弃该消息（丢上下文 + 反复击穿 prompt cache）
+            kernel.ctx.messages = patch_dangling_tool_calls(list(snapshot.messages))
         model_override = (snapshot.metadata.get("model") if snapshot else None) or None
         if not isinstance(model_override, dict):
             model_override = None

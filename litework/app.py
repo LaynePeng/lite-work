@@ -50,6 +50,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "token_budget": 48000,
     "tool_timeout": 120,
     "llm_timeout": 300,
+    # 流式空闲看门狗：连续 N 秒无任何 chunk 视为连接卡死，可重试（可见反馈）
+    "llm_idle_timeout": 120,
     "subagent_timeout": 600,
     # LLM 瞬时故障（超时/网络/限流/5xx）自动重试次数
     "llm_retries": 2,
@@ -1337,6 +1339,11 @@ class AgentApp:
             enable_observation_pack=bool(self.config.get("observation_pack", True)),
             enable_compaction_economics=bool(self.config.get("compaction_economics", True)),
         )
+        # 流式空闲看门狗透传（主/证据收据适配器；子 Agent 走适配器默认值）
+        _idle = float(self.config.get("llm_idle_timeout", 120))
+        for _ad in (adapter, reducer_adapter):
+            if _ad is not None and hasattr(_ad, "idle_timeout"):
+                _ad.idle_timeout = _idle
         loop.workspace = self.workspace
         # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
         loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)

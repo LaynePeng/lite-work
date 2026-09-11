@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +14,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .context import ServerContext
+
+logger = logging.getLogger("litework.server.chat")
 
 
 class ChatRequest(BaseModel):
@@ -123,9 +126,23 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def approve(payload: ApproveRequest, request: Request):
         ctx.check_auth(request)
         ok = app.approval_gate.resolve(payload.approval_id, payload.approved, by="user")
+        # 无论审批是否存在/是否已处理，都广播 resolved 事件：
+        # 卡片能否关闭不应依赖「等待审批的协程恢复后自己发事件」——
+        # 任务卡死/被取消时那条路径永远走不到，审批卡就会一直挂着。
+        await _broadcast_approval_resolved(payload.approval_id, payload.approved)
         if not ok:
             raise HTTPException(status_code=404, detail="审批请求不存在或已处理")
         return {"ok": True, "approved": payload.approved}
+
+    async def _broadcast_approval_resolved(approval_id: str, approved: bool) -> None:
+        """向所有活跃任务的 kernel 广播审批结果（UI 按 id 匹配关闭卡片）。"""
+        for handle in list(tasks.tasks.values()):
+            try:
+                await handle.kernel.events.emit("approval:resolved", {
+                    "id": approval_id, "approved": approved,
+                })
+            except Exception:
+                logger.debug("[Approve] 广播 approval:resolved 失败", exc_info=True)
 
     @router.post("/api/question")
     async def answer_question(payload: QuestionAnswerRequest, request: Request):

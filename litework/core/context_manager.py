@@ -26,6 +26,39 @@ from .types import Message
 logger = logging.getLogger("litework.context")
 
 
+def patch_dangling_tool_calls(messages: List[Message]) -> List[Message]:
+    """为悬空的 tool_calls 补占位 tool 结果（就地修复，返回原列表）。
+
+    与 repair_tool_call_pairs（丢弃策略）互补：
+    - repair 面向「发给 LLM 的 payload」，无法配对的消息整条丢弃；
+    - patch 面向「要落盘的历史」，为缺结果的 tool_call 补 [Interrupted] 占位，
+      保持消息链完整——否则历史永久带着悬空对，每个任务加载时都触发
+      repair 丢弃（丢上下文 + 改写前缀击穿 prompt cache）。
+
+    典型场景：任务在审批/工具执行中途被停止或取消。
+    """
+    by_id: Dict[str, Message] = {}
+    for m in messages:
+        if m.role == "tool" and m.tool_call_id:
+            by_id.setdefault(m.tool_call_id, m)
+    for i, m in enumerate(messages):
+        if m.role != "assistant" or not m.tool_calls:
+            continue
+        placeholders = [
+            call for call in m.tool_calls
+            if call.id and call.id not in by_id
+        ]
+        for call in placeholders:
+            messages.insert(i + 1, Message(
+                role="tool",
+                name=call.name,
+                tool_call_id=call.id,
+                content="[Interrupted]: 任务在此处被中止，该工具调用未执行或结果未知。",
+            ))
+            by_id[call.id] = messages[i + 1]
+    return messages
+
+
 def repair_tool_call_pairs(messages: List[Message]) -> List[Message]:
     """修复消息链中的工具调用原子对（OpenAI 兼容 API 硬约束）。
 

@@ -30,8 +30,12 @@ class ApprovalGate:
         self, action: str, risk_reason: str, auto_approve: bool = False
     ) -> "asyncio.Future":
         """挂起等待 Web UI 的人工确认，返回 future（await 后得到 bool）。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # 兜底：非运行中的 loop（老式调用方）
+            loop = asyncio.get_event_loop()
         approval_id = f"apv_{next(self._ids)}"
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = loop.create_future()
 
         if auto_approve:
             logger.info("[Approval] 自动放行(auto_approve): %s", action[:120])
@@ -45,6 +49,7 @@ class ApprovalGate:
             "created_at": int(time.time() * 1000),
             "future": future,
         }
+        logger.info("[Approval] %s 等待人工确认: %s", approval_id, action[:120])
 
         # 超时保护：超过时限未确认，自动拒绝
         async def _timeout_guard() -> None:
@@ -69,8 +74,20 @@ class ApprovalGate:
             return False
         entry["resolved_by"] = by
         entry["approved"] = approved
-        if not entry["future"].done():
-            entry["future"].set_result(approved)
+        future = entry["future"]
+        if not future.done():
+            # call_soon_threadsafe：无论 resolve 来自哪个线程/loop 都能正确唤醒
+            # 等待中的协程（直接 set_result 在跨线程场景下回调不会被执行，
+            # 表现为「用户点了允许但 Agent 永远卡住」）
+            def _set(f: asyncio.Future = future, v: bool = approved) -> None:
+                if not f.done():
+                    f.set_result(v)
+            try:
+                future.get_loop().call_soon_threadsafe(_set)
+            except RuntimeError:
+                logger.warning("[Approval] %s 所在 loop 已关闭，无法唤醒等待方", approval_id)
+        logger.info("[Approval] %s 已%s（by=%s）", approval_id,
+                    "批准" if approved else "拒绝", by)
         return True
 
     def get_pending_info(self, approval_id: str) -> Optional[Dict[str, Any]]:

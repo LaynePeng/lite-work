@@ -20,7 +20,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from .compaction_economics import cache_write_read_ratio, decide_compaction
-from .context_manager import ContextManager, repair_tool_call_pairs
+from .context_manager import ContextManager, patch_dangling_tool_calls, repair_tool_call_pairs
 from .json_repair import safe_json_parse
 from .observation_pack import (
     observations_dir, project_observations, read_recall_chunk,
@@ -379,6 +379,9 @@ class AgentLoop:
             )
         except asyncio.CancelledError:
             self.state.status = AgentStatus.STOPPED
+            # 取消时给未执行的 tool_calls 补占位结果再落盘：否则历史永久带着
+            # 悬空对，下个任务被 repair 整条丢弃（丢上下文 + 击穿 prompt cache）
+            patch_dangling_tool_calls(messages)
             self._save_session()
             raise
         except Exception:
