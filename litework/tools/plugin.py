@@ -229,9 +229,12 @@ class OfficePlugin(ToolPlugin):
     name = "office-plugin"
     # 独立功能版本（与社区仓库对齐比较，不借用应用版本号——否则应用升版会
     # 与社区版本撞车，隐藏「检查社区更新」的更新入口）。
-    # 1.3.0：产出物/素材改为工作区内可见目录（v1.6.0，与社区 office-plugin 同步）
+    # 上游事实源是 lite-work-plugins 的 office-plugin（MIT）：版本以其为准，
+    # 内置 litework/tools/office.py 是社区原样同步副本（无许可证头，保持 MIT）。
+    # 1.3.0：与社区 v1.3.0 同源——产出物/素材工作区可见目录 + 格式化编辑
+    #        （docx/xlsx/pptx_format）与查找替换（docx/xlsx_replace）
     version = "1.3.0"
-    description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、数据分析、图表"
+    description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
         self._tools = OfficeTools(workspace)

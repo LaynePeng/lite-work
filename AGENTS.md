@@ -63,10 +63,33 @@ cd web && npm test
 
 ## 5\. 项目结构速查
 
--   `litework/core/` 内核（AgentLoop / 事件总线 / 上下文管理），详见 `docs/architecture.md`  
-    与 `docs/core-api.md`；
+-   `litework/core/` 内核（AgentLoop / 事件总线 / 上下文管理），详见 `docs/architecture.md`、  
+    `docs/plugin-guide.md` 与 `docs/web-api.md`；
 -   `litework/server/` FastAPI（REST + SSE）；`litework/llm/` 手写流式适配器；
 -   `litework/security/` 审批门（ApprovalGate，asyncio.Future + 600s 超时）；
 -   `litework/security/approval.py` 的 resolve 用 `call_soon_threadsafe` 唤醒，改这里要  
     同时看 `server/routers/chat.py` 的 `/api/approve`（它负责广播 `approval:resolved`  
     关审批卡）；
+
+## 6\. 插件许可与同步治理（lite-work-plugins 为上游）
+
+社区插件仓库 [laynepeng/lite-work-plugins](https://github.com/laynepeng/lite-work-plugins)  
+是 office-plugin / ocr-plugin / webfetch-plugin / collab-\* 等插件的**上游事实源**。
+
+1.  **许可红线**：lite-work-plugins 整体为 **MIT**。凡来自（或同步自）该仓库的  
+    插件/技能代码，**严禁添加 Apache 头**（`# SPDX-License-Identifier: Apache-2.0`  
+    等一律不得出现）——同步副本保持社区原样，许可信息不得改写、不得污染；  
+    主仓库自有代码（core/server/web 等）仍为 Apache-2.0，两者并存互不覆盖；
+2.  **版本以社区为主**：插件功能版本号独立于主应用（如 office-plugin v1.3.0），  
+    以社区 manifest 为准，「检查社区更新」的对比基准就是它；
+3.  **修改流程（顺序不可反）**：发现插件问题 → 先在 lite-work-plugins 修复并  
+    更新版本号 → 再把社区新版同步内置。**禁止只改主仓库内置副本**——  
+    那会造成与上游分叉，且会被用户的社区更新覆盖丢失；
+4.  **「同步内置」＝等价于用户在设置里点升级**：把社区包代码**原样**引入内置  
+    （office-plugin → `litework/tools/office.py`，collab-\* → `litework/builtin_plugins/`），  
+    只允许承载所必需的机械适配（截掉社区分发包装类等），**不夹带**主仓库侧的  
+    额外改动（TOOL_NAMES、Agent 工具白名单、提示词、前端行为等——用户手动  
+    升级社区插件时这些都不会变，同步也不应变）；
+5.  **已知边界**：内置 `litework/tools/office.py` 已按本原则与社区 v1.3.0 同源  
+    （MIT、无许可证头）；`ocr.py` / `web.py` 仍是主仓库原生文件，待社区对齐时  
+    再按同一原则处理，不要顺手「统一」它们。
