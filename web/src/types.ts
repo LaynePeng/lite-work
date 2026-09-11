@@ -194,6 +194,8 @@ export interface ContextTaskStats {
   usage_ratio: number | null;
   /** 当前上下文水位（最近一次调用实际发出的 prompt tokens） */
   last_prompt_tokens?: number;
+  /** 本任务已执行的 LLM 轮数 */
+  turns?: number;
   tool_calls?: number;
   blocked?: number;
   cost_estimate?: number;
@@ -206,6 +208,12 @@ export interface ContextPricing {
   input_per_mtok: number;
   output_per_mtok: number;
   cache_hit_per_mtok: number;
+}
+
+/** 上下文水位历史点（前端在每轮 context:stats 时追加，供趋势图用） */
+export interface ContextHistoryPoint {
+  /** 该轮实际发出的 prompt tokens（≈ 当前上下文水位） */
+  p: number;
 }
 
 export interface ContextSessionStats {
@@ -477,6 +485,8 @@ export interface ChatSessionState {
   turn: number;
   stats: Stats | null;
   contextStats: ContextStats | null;
+  /** 每轮 context:stats 的水位轨迹（最近 60 点，供面板趋势图） */
+  contextHistory: ContextHistoryPoint[];
   error: string | null;
   // 审批队列：并行工具可同时挂起多个审批请求
   pendingApprovals: { id: string; action: string; reason: string }[];

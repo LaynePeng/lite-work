@@ -4354,89 +4354,313 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex-shrink: 0;
 }
 
-/* 上下文情况面板 */
-.ctx-panel {
+/* 上下文情况面板（ctx2）：仪表 + 账单卡 + 平铺明细 */
+.ctx2 {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   padding: 2px;
 }
 
-.ctx-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-1);
-  padding: 2px 0 4px;
-  border-bottom: 1px dashed var(--border);
-}
-
-.ctx-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 0 8px;
-}
-
-.ctx-progress-track {
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--bg-2);
-  overflow: hidden;
-}
-
-.ctx-progress-track.danger {
-  box-shadow: 0 0 0 1px var(--red);
-}
-
-.ctx-progress-fill {
-  height: 100%;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--green), #4aa3ff);
-  transition: width 0.3s ease;
-}
-
-.ctx-progress-track.danger .ctx-progress-fill {
-  background: var(--red);
-}
-
-.ctx-progress-meta {
+.ctx2-head {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-3);
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.ctx-danger {
+.ctx2-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.ctx2-chip small {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+.ctx2-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-2);
+  flex-shrink: 0;
+}
+
+.ctx2-dot.on {
+  background: var(--accent);
+}
+
+.ctx2-dot.run {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: ctx2-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ctx2-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+.ctx2-gaugerow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.ctx2-gauge {
+  position: relative;
+  width: 74px;
+  height: 74px;
+  flex-shrink: 0;
+}
+
+.ctx2-gauge svg {
+  transform: rotate(-90deg);
+}
+
+.ctx2-arc {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset .4s ease;
+}
+
+.ctx2-arc.danger {
+  stroke: var(--red);
+}
+
+.ctx2-gv {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ctx2-gv b {
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--text-0);
+}
+
+.ctx2-gv i {
+  font-style: normal;
+  font-size: 9px;
+  color: var(--text-2);
+}
+
+.ctx2-gside {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ctx2-lab {
+  font-size: 10px;
+  color: var(--text-2);
+}
+
+.ctx2-big {
+  font-size: 17px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: -.3px;
+  color: var(--text-0);
+}
+
+.ctx2-big small {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.ctx2-warn {
+  font-size: 10px;
   color: var(--red);
   font-weight: 600;
 }
 
-.ctx-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  margin-top: 6px;
+.ctx2-sparkwrap {
+  margin-top: 3px;
 }
 
-.ctx-row {
+.ctx2-spark {
+  width: 100%;
+  height: 34px;
+  display: block;
+}
+
+.ctx2-sparkline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: .9;
+}
+
+.ctx2-sparkfill {
+  fill: var(--accent);
+  opacity: .12;
+}
+
+.ctx2-sparkdot {
+  fill: var(--accent);
+}
+
+.ctx2-sparkcap {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 3px 2px;
-  font-size: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 9px;
+  color: var(--text-2);
+  margin-top: 1px;
 }
 
-.ctx-row-label {
+.ctx2-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ctx2-cardhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ctx2-cardtitle {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-2);
+  letter-spacing: .5px;
+}
+
+.ctx2-price {
+  font-size: 10px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  cursor: help;
+}
+
+.ctx2-cost {
+  font-size: 26px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  letter-spacing: -1px;
+  line-height: 1.1;
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ctx2-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.ctx2-mini {
+  flex: 1;
+  background: var(--bg-3);
+  border-radius: 8px;
+  padding: 5px 8px;
+  min-width: 0;
+}
+
+.ctx2-mini i {
+  display: block;
+  font-style: normal;
+  font-size: 9px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctx2-mini b {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.ctx2-cachewrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ctx2-meter {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.ctx2-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--green), #2ea043);
+  transition: width .3s ease;
+}
+
+.ctx2-meterrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
   color: var(--text-2);
 }
 
-.ctx-row-value {
+.ctx2-meterrow b {
   color: var(--text-1);
+  font-family: var(--font-mono);
+}
+
+.ctx2-detail {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+  font-size: 11px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.ctx2-detail span {
+  color: var(--text-2);
+}
+
+.ctx2-detail b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-1);
+  text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.ctx2-ghead {
+  grid-column: 1 / -1;
+  color: var(--text-2);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: .4px;
+  margin-top: 2px;
 }
 
 /* 工具结果 diff 展示（文件修改 + 增删行数，opencode 风格） */

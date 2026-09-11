@@ -833,6 +833,7 @@ class AgentLoop:
                 "compressed_tokens": self._compressed_tokens,
                 "usage_ratio": usage_ratio,
                 "last_prompt_tokens": prompt_tokens,
+                "turns": stats.get("turns", 0),
                 "tool_calls": stats.get("tool_calls", 0),
                 "blocked": stats.get("blocked", 0),
                 "cost_estimate": round(cost, 4),

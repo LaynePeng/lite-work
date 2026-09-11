@@ -48,6 +48,7 @@ const EMPTY_CHAT: ChatSessionState = {
   turn: 0,
   stats: null,
   contextStats: null,
+  contextHistory: [],
   error: null,
   pendingApprovals: [],
   subAgentRecords: [],
@@ -1116,7 +1117,11 @@ export default function App() {
           break;
         }
         case "context:stats": {
-          patchChat(sid, { contextStats: ev.data });
+          // 追加水位轨迹（最近 60 点）：面板趋势图的数据源；替换式更新当前统计
+          const cur = getChat(sid);
+          const point = { p: ev.data?.task?.last_prompt_tokens ?? 0 };
+          const history = [...(cur.contextHistory ?? []), point].slice(-60);
+          patchChat(sid, { contextStats: ev.data, contextHistory: history });
           break;
         }
         case "chat:queued": {
@@ -2094,6 +2099,8 @@ export default function App() {
           <ErrorBoundary name="工具面板" compact>
           <ToolPanel
             contextStats={currentChat.contextStats}
+            contextHistory={currentChat.contextHistory}
+            running={currentChat.running}
             mcpServers={mcpServers}
             tools={registeredTools}
             todos={currentChat.todos}

@@ -3,9 +3,17 @@
 //
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BackgroundTaskInfo, ContextStats, ContextTaskStats, MCPServerStatus, SubAgentProgress, TodoItem } from "../types";
+import type {
+  BackgroundTaskInfo, ContextHistoryPoint, ContextStats, ContextTaskStats,
+  MCPServerStatus, SubAgentProgress, TodoItem,
+} from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
+//
+// 三层信息架构（替代旧「账本式」label:value 罗列）：
+//   ① 实时仪表：模型/状态 chip + 环形水位表 + 近 N 轮水位趋势
+//   ② 账单卡  ：会话累计成本大字 + 本任务/本次调用 chip + 缓存命中率与省钱提示
+//   ③ 平铺明细：紧凑 kv 网格（本任务/会话累计 + 计费单价），不做折叠
 
 function fmt(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : n.toLocaleString();
@@ -16,27 +24,47 @@ function pct(n: number | null | undefined): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
-function ContextBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="ctx-row">
-      <span className="ctx-row-label">{label}</span>
-      <b className="ctx-row-value">{value}</b>
-    </div>
-  );
+/** 大数压缩展示：1,234,567 → 1.23M（横向空间有限时的辅助刻度） */
+function compactTokens(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`;
+  return n.toLocaleString();
 }
 
-function ContextPanel({ stats }: { stats: ContextStats | null }) {
+/** 水位 sparkline 的 SVG 点串（viewBox 190×34，末点高亮） */
+function sparkPoints(values: number[]): { line: string; lastX: number; lastY: number } {
+  const w = 190;
+  const h = 34;
+  const pad = 3;
+  const max = Math.max(...values, 1);
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const coords = values.map((v, i) => {
+    const x = i * step;
+    const y = h - pad - (v / max) * (h - pad * 2);
+    return [x, y] as const;
+  });
+  const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const [lastX, lastY] = coords[coords.length - 1] ?? [w, h / 2];
+  return { line, lastX, lastY };
+}
+
+function ContextPanel({ stats, history, running }: {
+  stats: ContextStats | null;
+  history?: ContextHistoryPoint[];
+  running?: boolean;
+}) {
   if (!stats) {
     return <div className="tool-panel-empty">暂无上下文数据（发起对话后显示）</div>;
   }
   const window = stats.context_window || 0;
-  // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）
-  const prompt = stats.task?.last_prompt_tokens ?? stats.task?.prompt_tokens ?? 0;
-  const ratio = window > 0 ? prompt / window : 0;
-  const pctWidth = Math.min(100, Math.max(0, ratio * 100));
-  const danger = ratio >= 0.9;
   const task = stats.task ?? ({} as ContextTaskStats);
   const session = stats.session ?? {};
+  const pricing = stats.pricing;
+  // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）
+  const prompt = task.last_prompt_tokens ?? task.prompt_tokens ?? 0;
+  const ratio = window > 0 ? Math.min(1, Math.max(0, prompt / window)) : 0;
+  const danger = ratio >= 0.9;
   // 「本次调用」：优先取 last 段；旧载荷无该字段时退化为累计值（保持可用）
   const call = task.last ?? {
     prompt_tokens: task.prompt_tokens ?? 0,
@@ -45,68 +73,128 @@ function ContextPanel({ stats }: { stats: ContextStats | null }) {
     cache_miss_tokens: task.cache_miss_tokens ?? 0,
     cost_estimate: task.cost_estimate,
   };
-  const pricing = stats.pricing;
+  const turns = task.turns ?? 0;
+
+  // 水位趋势：前端在每轮 context:stats 时追加（App.tsx），仅 ≥2 点才画
+  const levels = (history ?? []).map((h) => h.p).filter((v) => v > 0);
+  const showSpark = levels.length >= 2;
+  const spark = showSpark ? sparkPoints(levels) : null;
+  const first = levels[0] ?? 0;
+  const last = levels[levels.length - 1] ?? 0;
+  const trendText = !showSpark ? ""
+    : last > first * 1.03 ? "缓升 ↗"
+    : last < first * 0.97 ? "回落 ↘"
+    : "平稳 →";
+
+  // 缓存帮本次任务省下多少钱：命中部分按「未命中全价 − 命中折扣价」的差额
+  const saved = pricing && (task.cache_hit_tokens ?? 0) > 0
+    ? (task.cache_hit_tokens * (pricing.input_per_mtok - pricing.cache_hit_per_mtok)) / 1_000_000
+    : null;
+
+  // 环形仪表：r=32 → 周长 ≈ 201.06，dashoffset 控制进度
+  const CIRC = 2 * Math.PI * 32;
 
   return (
-    <div className="ctx-panel">
-      <div className="ctx-title" title="模型上下文窗口（models.dev 同步/内置表/手动覆盖）">
-        {stats.model || "模型"} · 窗口 {window ? window.toLocaleString() : "?"} tokens
+    <div className="ctx2">
+      <div className="ctx2-head">
+        <span className="ctx2-chip" title="模型上下文窗口（models.dev 同步/内置表/手动覆盖）">
+          <i className="ctx2-dot on" />{stats.model || "模型"} <small>{compactTokens(window)}</small>
+        </span>
+        <span className="ctx2-chip" title={running ? "本任务已执行的 LLM 轮数" : "当前无任务在运行"}>
+          <i className={running ? "ctx2-dot run" : "ctx2-dot"} />
+          {running ? `任务进行中 · 第 ${turns || "…"} 轮` : "空闲"}
+        </span>
       </div>
 
-      <div className="ctx-progress">
-        <div className={`ctx-progress-track ${danger ? "danger" : ""}`}>
-          <div
-            className="ctx-progress-fill"
-            style={{ width: `${pctWidth}%` }}
-          />
+      <div className="ctx2-gaugerow">
+        <div className="ctx2-gauge">
+          <svg width="74" height="74" viewBox="0 0 74 74">
+            <circle cx="37" cy="37" r="32" fill="none" stroke="var(--bg-3)" strokeWidth="7" />
+            <circle
+              cx="37" cy="37" r="32" fill="none"
+              className={danger ? "ctx2-arc danger" : "ctx2-arc"}
+              strokeDasharray={CIRC}
+              strokeDashoffset={CIRC * (1 - ratio)}
+            />
+          </svg>
+          <div className="ctx2-gv"><b>{pct(ratio)}</b><i>已用</i></div>
         </div>
-        <div className="ctx-progress-meta">
-          <span>
-            当前上下文 {fmt(prompt)} · {pct(ratio)}
-          </span>
-          {danger && <span className="ctx-danger">≥90%，已自动压缩</span>}
+        <div className="ctx2-gside">
+          <div className="ctx2-lab">当前上下文</div>
+          <div className="ctx2-big">{fmt(prompt)}<small> / {compactTokens(window)}</small></div>
+          {danger && <div className="ctx2-warn">≥90%，将触发自动压缩</div>}
+          {spark && (
+            <div className="ctx2-sparkwrap">
+              <svg className="ctx2-spark" viewBox="0 0 190 34" preserveAspectRatio="none">
+                <polygon className="ctx2-sparkfill" points={`${spark.line} 190,34 0,34`} />
+                <polyline className="ctx2-sparkline" points={spark.line} />
+                <circle className="ctx2-sparkdot" cx={spark.lastX} cy={spark.lastY} r="2.4" />
+              </svg>
+              <div className="ctx2-sparkcap">
+                <span>近 {levels.length} 轮水位</span><span>{trendText}</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 口径区分：每轮都会把「系统提示 + 全部历史 + 工具结果」整段重发，
-          累计值 ≈ 轮数 × 上下文，因此不能当作当前上下文看 */}
-      <div className="ctx-section-label">本次调用（模型准确返回）</div>
-      <ContextBlock label="Prompt tokens" value={fmt(call.prompt_tokens)} />
-      <ContextBlock label="输出 tokens" value={fmt(call.output_tokens)} />
-      <ContextBlock label="Cache 命中 / 未命中" value={`${fmt(call.cache_hit_tokens)} / ${fmt(call.cache_miss_tokens)}`} />
-      <ContextBlock label="本次成本" value={call.cost_estimate != null ? `$${call.cost_estimate.toFixed(4)}` : "—"} />
-
-      <div className="ctx-section-label">本任务累计（每轮重发上下文）</div>
-      <ContextBlock label="Prompt tokens" value={fmt(task.prompt_tokens)} />
-      <ContextBlock label="输出 tokens" value={fmt(task.output_tokens)} />
-      <ContextBlock label="Cache 命中率" value={pct(task.cache_hit_rate)} />
-      <ContextBlock label="上下文压缩" value={`${task.compression_count ?? 0} 次`} />
-      <ContextBlock label="累计节省 tokens" value={fmt(task.compressed_tokens)} />
-      <ContextBlock label="工具调用" value={`${task.tool_calls ?? 0} 次`} />
-      <ContextBlock label="安全拦截" value={`${task.blocked ?? 0} 次`} />
-      <ContextBlock label="预估成本" value={task.cost_estimate != null ? `$${task.cost_estimate.toFixed(4)}` : "—"} />
-
-      <div className="ctx-section-label">会话累计</div>
-      <ContextBlock label="Prompt tokens" value={fmt(session.prompt_tokens)} />
-      <ContextBlock label="输出 tokens" value={fmt(session.output_tokens)} />
-      <ContextBlock label="Cache 命中率" value={pct(session.cache_hit_rate)} />
-      <ContextBlock label="压缩次数 / 节省" value={`${session.compression_count ?? 0} 次 / ${fmt(session.compressed_tokens)}`} />
-      <ContextBlock label="工具调用" value={`${session.tool_calls ?? 0} 次`} />
-      <ContextBlock label="安全拦截" value={`${session.blocked ?? 0} 次`} />
-      <ContextBlock label="预估成本" value={session.cost_estimate != null ? `$${session.cost_estimate.toFixed(4)}` : "—"} />
-
-      {/* 计费单价：成本估算的唯一依据，直接展示便于与供应商账单对账 */}
-      {pricing && (
-        <>
-          <div className="ctx-section-label" title="models.dev 同步成功后按该模型真实价计费；未收录模型用配置回退价（设置 → 定价）">
-            计费单价（每 M tokens）
+      <div className="ctx2-card">
+        <div className="ctx2-cardhead">
+          <span className="ctx2-cardtitle">本会话累计成本</span>
+          {pricing && (
+            <span
+              className="ctx2-price"
+              title={`计费单价（每 M tokens）：输入 $${pricing.input_per_mtok} / 输出 $${pricing.output_per_mtok} / 缓存命中 $${pricing.cache_hit_per_mtok}`}
+            >
+              ${pricing.input_per_mtok}/${pricing.output_per_mtok} 每M
+            </span>
+          )}
+        </div>
+        <div className="ctx2-cost">
+          {session.cost_estimate != null ? `$${session.cost_estimate.toFixed(4)}` : "—"}
+        </div>
+        <div className="ctx2-chips">
+          <div className="ctx2-mini">
+            <i>本任务{turns ? `（${turns} 轮）` : ""}</i>
+            <b>{task.cost_estimate != null ? `$${task.cost_estimate.toFixed(4)}` : "—"}</b>
           </div>
-          <ContextBlock
-            label="输入 / 输出 / 缓存命中"
-            value={`$${pricing.input_per_mtok} / $${pricing.output_per_mtok} / $${pricing.cache_hit_per_mtok}`}
-          />
-        </>
-      )}
+          <div className="ctx2-mini"><i>本次调用</i>
+            <b>{call.cost_estimate != null ? `$${call.cost_estimate.toFixed(4)}` : "—"}</b>
+          </div>
+        </div>
+        {(task.cache_hit_rate != null || saved != null) && (
+          <div className="ctx2-cachewrap">
+            <div className="ctx2-meterrow"><span>缓存命中率（本任务）</span><b>{pct(task.cache_hit_rate)}</b></div>
+            <div className="ctx2-meter">
+              <i style={{ width: `${Math.min(100, Math.max(0, (task.cache_hit_rate ?? 0) * 100))}%` }} />
+            </div>
+            {saved != null && saved > 0 && (
+              <div className="ctx2-meterrow" title="这些命中部分若全按未命中价计费需多花多少">
+                <span>缓存帮你省下</span><b>≈ ${saved.toFixed(4)}</b>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 口径提示：本任务累计 ≈ 轮数 × 上下文（每轮整段重发），不能当当前水位看 */}
+      <div className="ctx2-detail" title="本任务累计 ≈ 轮数 × 上下文：Agent 每轮都把整段历史重发给模型">
+        <div className="ctx2-ghead">本任务累计</div>
+        <span>输入 / 输出</span><b>{fmt(task.prompt_tokens)} / {fmt(task.output_tokens)}</b>
+        <span>缓存命中 / 未命中</span><b>{fmt(task.cache_hit_tokens)} / {fmt(task.cache_miss_tokens)}</b>
+        <span>工具调用 / 安全拦截</span><b>{task.tool_calls ?? 0} 次 / {task.blocked ?? 0} 次</b>
+        <div className="ctx2-ghead">会话累计</div>
+        <span>输入 / 输出</span><b>{fmt(session.prompt_tokens)} / {fmt(session.output_tokens)}</b>
+        <span>上下文压缩 / 节省</span><b>{session.compression_count ?? 0} 次 / {fmt(session.compressed_tokens)}</b>
+        <span>工具调用 / 安全拦截</span><b>{session.tool_calls ?? 0} 次 / {session.blocked ?? 0} 次</b>
+        {pricing && (
+          <>
+            <div className="ctx2-ghead">计费单价（每 M tokens）</div>
+            <span>输入 / 输出 / 缓存命中</span>
+            <b>${pricing.input_per_mtok} / ${pricing.output_per_mtok} / ${pricing.cache_hit_per_mtok}</b>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -629,10 +717,15 @@ function useTabStripDrag() {
 }
 
 export default function ToolPanel({
-  contextStats, mcpServers, tools, todos, agentBoard, orchestrator, backgroundTasks,
-  collapsed, onToggleCollapsed, onKillBackground, activeTab, onTabChange,
+  contextStats, contextHistory, running, mcpServers, tools, todos, agentBoard,
+  orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  activeTab, onTabChange,
 }: {
   contextStats: ContextStats | null;
+  /** 每轮水位轨迹（面板趋势图数据源） */
+  contextHistory?: ContextHistoryPoint[];
+  /** 主任务是否运行中（状态 chip） */
+  running?: boolean;
   mcpServers: MCPServerStatus[];
   tools: { name: string; description: string }[];
   todos: TodoItem[];
@@ -694,7 +787,7 @@ export default function ToolPanel({
       </div>
       <div className="tool-panel-body tool-panel-context">
         {panelTab === "context"
-          ? <ContextPanel stats={contextStats} />
+          ? <ContextPanel stats={contextStats} history={contextHistory} running={running} />
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />
             : panelTab === "agents"
