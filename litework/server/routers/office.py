@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from ...tools.office import OUTPUT_DIR_NAME, UPLOADS_DIR_NAME
 from .context import ServerContext
 
 
@@ -22,7 +23,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.post("/api/upload")
     async def upload_file(request: Request):
-        """接收 multipart 文件上传，保存到工作区 .uploads/ 目录。
+        """接收 multipart 文件上传，保存到工作区 素材/ 目录。
 
         办公场景入口：用户把 CSV/Excel/文档等素材丢给 Agent 处理。
         返回 {path: 工作区相对路径, size, name}，Agent 可直接用 read_file /
@@ -51,7 +52,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if not data:
             raise HTTPException(status_code=400, detail="空文件")
 
-        uploads_dir = _os.path.join(workspace, ".uploads")
+        uploads_dir = _os.path.join(workspace, UPLOADS_DIR_NAME)
         _os.makedirs(uploads_dir, exist_ok=True)
         # 同名冲突：追加序号
         base, ext = _os.path.splitext(filename)
@@ -89,7 +90,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/outputs")
     async def list_outputs(request: Request = None):
-        """列出工作区 .outputs/（Agent 产出物）与 .uploads/（用户上传素材）下的文件。
+        """列出工作区 产出物/（Agent 交付物）与 素材/（用户上传素材）下的文件。
 
         供侧边栏「产出物」Tab 展示：文件名/相对路径/大小/修改时间/来源。
         """
@@ -100,7 +101,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
         workspace = ctx.require_workspace()
         items = []
-        for source, rel_dir in (("outputs", ".outputs"), ("uploads", ".uploads")):
+        for source, rel_dir in (("outputs", OUTPUT_DIR_NAME), ("uploads", UPLOADS_DIR_NAME)):
             base = _os.path.join(workspace, rel_dir)
             if not _os.path.isdir(base):
                 continue
@@ -129,7 +130,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/outputs/zip")
     async def download_outputs_zip(include_uploads: bool = False, request: Request = None):
-        """把 .outputs/（可选含 .uploads/）打包为 zip 一键下载。"""
+        """把 产出物/（可选含 素材/）打包为 zip 一键下载。"""
         if request:
             ctx.check_auth(request)
         import io as _io
@@ -137,7 +138,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         import zipfile as _zipfile
 
         workspace = ctx.require_workspace()
-        sources = [".outputs"] + ([".uploads"] if include_uploads else [])
+        sources = [OUTPUT_DIR_NAME] + ([UPLOADS_DIR_NAME] if include_uploads else [])
         # 只收顶层常规文件（与 /api/outputs 列表口径一致）
         collected = []
         total = 0
@@ -182,7 +183,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def clear_outputs(scope: str = "outputs", request: Request = None):
         """清空产出目录：scope = outputs（默认）/ uploads / all。
 
-        只删除 .outputs/.uploads 下的顶层文件，不影响代码与其他数据。
+        只删除 产出物/素材 下的顶层文件，不影响代码与其他数据。
         """
         if request:
             ctx.check_auth(request)
@@ -191,7 +192,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if scope not in ("outputs", "uploads", "all"):
             raise HTTPException(status_code=400, detail="scope 仅支持 outputs / uploads / all")
         workspace = ctx.require_workspace()
-        dirs = [".outputs", ".uploads"] if scope == "all" else [f".{scope}"]
+        dirs = [OUTPUT_DIR_NAME, UPLOADS_DIR_NAME] if scope == "all" else [(OUTPUT_DIR_NAME if scope == "outputs" else UPLOADS_DIR_NAME)]
         deleted = 0
         for rel_dir in dirs:
             base = _os.path.join(workspace, rel_dir)
@@ -210,17 +211,17 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.delete("/api/files")
     async def delete_file(path: str, request: Request = None):
-        """删除单个产出物/素材文件（仅限 .outputs/.uploads 内，防误删代码）。"""
+        """删除单个产出物/素材文件（仅限 产出物/素材 内，防误删代码）。"""
         if request:
             ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
         rel = (path or "").strip().lstrip("/\\").replace("\\", "/")
-        if not rel.split("/")[0] in (".outputs", ".uploads"):
-            raise HTTPException(status_code=403, detail="仅支持删除 .outputs/.uploads 内的文件")
+        if not rel.split("/")[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME):
+            raise HTTPException(status_code=403, detail="仅支持删除 产出物/素材 内的文件")
         target = _os.path.abspath(_os.path.join(workspace, rel))
-        if not (target.startswith(workspace + _os.path.sep) and rel.split("/")[0] in (".outputs", ".uploads")):
+        if not (target.startswith(workspace + _os.path.sep) and rel.split("/")[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)):
             raise HTTPException(status_code=403, detail="路径越界")
         if not _os.path.isfile(target):
             raise HTTPException(status_code=404, detail=f"文件不存在: {path}")

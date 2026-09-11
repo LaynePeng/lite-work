@@ -30,11 +30,11 @@ def _render_text_png(path: str, text: str) -> str:
 
 async def test_ocr_image_recognizes_text(tmp_path):
     png = _render_text_png(str(tmp_path / "hello.png"), "HELLO OCR 123")
-    (tmp_path / ".uploads").mkdir(exist_ok=True)
-    os.replace(png, str(tmp_path / ".uploads" / "hello.png"))
+    (tmp_path / "素材").mkdir(exist_ok=True)
+    os.replace(png, str(tmp_path / "素材" / "hello.png"))
 
     tools = OCRTools(str(tmp_path))
-    r = await tools.execute("ocr_image", {"path": ".uploads/hello.png"})
+    r = await tools.execute("ocr_image", {"path": "素材/hello.png"})
 
     assert "[OCR OK]" in r
     # 大写字母 + 数字易识别（去空格比较，容错小写化）
@@ -45,16 +45,16 @@ async def test_ocr_image_recognizes_text(tmp_path):
 async def test_ocr_image_errors(tmp_path):
     tools = OCRTools(str(tmp_path))
     # 文件不存在
-    r = await tools.execute("ocr_image", {"path": ".uploads/nope.png"})
+    r = await tools.execute("ocr_image", {"path": "素材/nope.png"})
     assert "不存在" in r
     # 路径越界
     r2 = await tools.execute("ocr_image", {"path": "../../etc/hosts"})
     assert "越界" in r2 or "不存在" in r2
     # 不支持的扩展名
-    f = tmp_path / ".uploads" / "f.txt"
+    f = tmp_path / "素材" / "f.txt"
     f.parent.mkdir(exist_ok=True)
     f.write_text("x", encoding="utf-8")
-    r3 = await tools.execute("ocr_image", {"path": ".uploads/f.txt"})
+    r3 = await tools.execute("ocr_image", {"path": "素材/f.txt"})
     assert "不支持" in r3
 
 
@@ -66,7 +66,7 @@ async def test_ocr_document_pdf(tmp_path):
 
     import pymupdf
 
-    uploads = tmp_path / ".uploads"
+    uploads = tmp_path / "素材"
     uploads.mkdir(exist_ok=True)
     pdf_path = str(uploads / "doc.pdf")
     doc = pymupdf.open()
@@ -76,7 +76,7 @@ async def test_ocr_document_pdf(tmp_path):
     doc.close()
 
     tools = OCRTools(str(tmp_path))
-    r = await tools.execute("ocr_document", {"path": ".uploads/doc.pdf", "max_pages": 1})
+    r = await tools.execute("ocr_document", {"path": "素材/doc.pdf", "max_pages": 1})
     assert "第 1 页" in r
     text = r.replace(" ", "").upper()
     assert "PDF" in text and "456" in text, f"识别结果: {r[:300]}"

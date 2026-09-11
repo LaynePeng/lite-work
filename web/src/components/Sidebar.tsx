@@ -234,11 +234,11 @@ function OutputPreview({ revision }: { revision: number }) {
         <div className="files-header-actions">
           <button
             className="btn-ghost-sm"
-            title="在系统文件管理器中打开产出物目录（.outputs）"
+            title="在系统文件管理器中打开产出物目录（产出物/）"
             onClick={() => {
               const bridge = window.liteWork;
               if (bridge?.openFile) {
-                void bridge.openFile(".outputs").then((r) => {
+                void bridge.openFile("产出物").then((r) => {
                   if (!r.ok) window.alert(`无法打开目录：${r.error ?? ""}`);
                 });
               } else {
@@ -264,7 +264,7 @@ function OutputPreview({ revision }: { revision: number }) {
                 .then(() => void refresh())
                 .catch((err) => window.alert(`清空失败：${err instanceof Error ? err.message : err}`));
             }}
-            title="清空 .outputs 与 .uploads（不影响代码）"
+            title="清空 产出物/ 与 素材/（不影响代码）"
           >
             🧹 清空
           </button>

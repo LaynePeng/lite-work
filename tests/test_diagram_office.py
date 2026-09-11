@@ -67,7 +67,7 @@ def test_docx_create_embeds_markdown_image(tmp_path):
     assert "图文.docx" in result
 
     from docx import Document
-    doc = Document(str(tmp_path / ".outputs" / "图文.docx"))
+    doc = Document(str(tmp_path / "产出物" / "图文.docx"))
     assert len(doc.inline_shapes) == 1, "docx 应嵌入 1 张图片"
     # 图注文字应存在
     texts = [p.text for p in doc.paragraphs]
@@ -89,7 +89,7 @@ def test_docx_create_image_missing_is_graceful(tmp_path):
     assert "缺图.docx" in result
 
     from docx import Document
-    doc = Document(str(tmp_path / ".outputs" / "缺图.docx"))
+    doc = Document(str(tmp_path / "产出物" / "缺图.docx"))
     texts = "\n".join(p.text for p in doc.paragraphs)
     assert "图片未找到" in texts
 
@@ -113,7 +113,7 @@ def test_pptx_create_embeds_slide_image(tmp_path):
     assert "图文.pptx" in result
 
     from pptx import Presentation
-    prs = Presentation(str(tmp_path / ".outputs" / "图文.pptx"))
+    prs = Presentation(str(tmp_path / "产出物" / "图文.pptx"))
     pics = [sh for sh in prs.slides[0].shapes if sh.shape_type == 13]  # PICTURE
     assert len(pics) == 1, "第一页应嵌入 1 张图片"
     # 第二页无图

@@ -76,7 +76,8 @@ class ToolPlugin(Plugin):
 
 class FileSystemPlugin(ToolPlugin):
     name = "filesystem-plugin"
-    version = "1.0.0"
+    # 1.1.0：write_file 新增 then 验证命令参数（动作融合）
+    version = "1.1.0"
     description = "文件系统：读写文件、目录浏览、文件树"
 
     def __init__(self, workspace: str) -> None:
@@ -121,7 +122,8 @@ class ASTPlugin(ToolPlugin):
 
 class EditorPlugin(ToolPlugin):
     name = "editor-plugin"
-    version = "1.0.0"
+    # 1.1.0：apply_search_replace / apply_unified_diff 新增 then 验证命令参数（动作融合）
+    version = "1.1.0"
     description = "代码编辑：Search-Replace、Unified Diff 精确编辑"
 
     def __init__(self, workspace: str) -> None:
@@ -226,8 +228,9 @@ class OcrPlugin(ToolPlugin):
 class OfficePlugin(ToolPlugin):
     name = "office-plugin"
     # 独立功能版本（与社区仓库对齐比较，不借用应用版本号——否则应用升版会
-    # 与社区版本撞车，隐藏「检查社区更新」的更新入口）
-    version = "1.0.5"
+    # 与社区版本撞车，隐藏「检查社区更新」的更新入口）。
+    # 1.3.0：产出物/素材改为工作区内可见目录（v1.6.0，与社区 office-plugin 同步）
+    version = "1.3.0"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
