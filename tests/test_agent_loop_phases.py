@@ -218,20 +218,68 @@ async def test_context_stats_separates_last_call_from_task_total(tmp_path):
 
 
 async def test_context_stats_uses_estimate_not_total_without_usage(tmp_path):
-    """无 usage 时（供应商不回传），本次调用的 prompt 也必须是本轮估算值。"""
+    """无 usage 时（供应商不回传），输入按「各轮估算值」累加，本次调用 = 本轮估算。"""
     loop, kernel, _ = _make_loop(tmp_path, MockLLMAdapter([]), context_window=1_000_000)
     events: list = []
     kernel.events.on("context:stats", lambda d: events.append(d))
-    # 模拟 run_task 无 usage 时的累计（input_tokens 已累加到 12,000）
-    stats = {"input_tokens": 12_000, "output_tokens": 0,
+    stats = {"input_tokens": 0, "output_tokens": 0,
              "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+    # 两轮都没有 usage：第 1 轮估算 5,000、第 2 轮估算 7,000（run_task 在调用前估算）
+    loop._last_prompt_estimate = 5_000
+    loop._record_usage(None, "回复1", stats)
+    await loop._emit_context_stats(stats)
     loop._last_prompt_estimate = 7_000
-    loop._record_usage(None, "回复", stats)
+    loop._record_usage(None, "回复2", stats)
     await loop._emit_context_stats(stats)
     task = events[-1]["task"]
-    assert task["prompt_tokens"] == 12_000          # 累计口径
+    assert task["prompt_tokens"] == 12_000          # 累计 = 两轮估算之和（不漏计）
     assert task["last"]["prompt_tokens"] == 7_000   # 本次调用 = 本轮估算，而非累计
     assert task["last_prompt_tokens"] == 7_000
+
+
+async def test_first_turn_estimate_not_double_counted_with_usage(tmp_path):
+    """历史 bug 回归：首轮「调用前估算 + 真实 usage」双计。
+
+    3 轮 × 真实 prompt 10,000 曾被报成 71,613（多算的 41,613 正是首轮对
+    3.2 万字符 system prompt 的估算值）。
+    """
+    big_system = "系统提示" * 8000          # ≈ 4 万 tokens 的估算分量
+    adapter = _UsageAdapter(turns=3, prompt_tokens=10_000)
+    registry = ToolRegistry()
+
+    async def _noop(args):
+        return "ok"
+
+    registry.register("noop", "noop", [], _noop)
+    loop, kernel, _ = _make_loop(tmp_path, adapter, registry, context_window=1_000_000)
+    events: list = []
+    kernel.events.on("context:stats", lambda d: events.append(d))
+    await loop.run_task("测试", system_prompt=big_system)
+    task = events[-1]["task"]
+    assert task["prompt_tokens"] == 30_000          # 3 轮 × 真实 10,000，无估算叠加
+    assert task["last"]["prompt_tokens"] == 10_000
+
+
+class _UsageAdapter:
+    """每轮返回固定 usage 的假适配器（模拟 DeepSeek include_usage）。"""
+
+    name = "openai-compat"
+    provider_id = "deepseek"
+    model = "deepseek-flash"
+
+    def __init__(self, turns: int, prompt_tokens: int) -> None:
+        self.n = 0
+        self.turns = turns
+        self.prompt_tokens = prompt_tokens
+
+    async def chat_stream(self, messages, tools, events=None):
+        self.n += 1
+        usage = {"prompt_tokens": self.prompt_tokens, "completion_tokens": 5,
+                 "prompt_cache_hit_tokens": 0}
+        if self.n >= self.turns:
+            return "完成", [], usage
+        return "", [ToolCall(id=f"c{self.n}", name="noop",
+                             arguments=f'{{"i": {self.n}}}')], usage
 
 
 async def test_append_tool_results_preserves_pairing(tmp_path):

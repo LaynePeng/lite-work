@@ -217,10 +217,12 @@ class AgentLoop:
                 processed = await self.kernel.before_llm.run(self.kernel.ctx, payload)
                 # B2. 兜底修复：确保发给 LLM 的消息链满足原子对约束（压缩/裁剪兜底）
                 processed = repair_tool_call_pairs(processed)
-                if not self._last_usage:
-                    estimate = TokenCounter.count_messages_tokens(processed)
-                    stats["input_tokens"] += estimate
-                    self._last_prompt_estimate = estimate
+                # 每轮估算本轮 prompt 规模，供「本次调用」在无 usage 时兜底展示/计费。
+                # 注意：这里不再把估算值累进 stats——输入是否计入由 _record_usage 按
+                # 「该轮最终有无 usage」决定，否则首轮会「估算 + 真实 usage」双计
+                # （实测 3 轮 × 10k 的任务被报成 71k），而「第 1 轮有 usage、后续没有」
+                # 时又会整轮漏计。
+                self._last_prompt_estimate = TokenCounter.count_messages_tokens(processed)
 
                 # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
                 try:
@@ -423,8 +425,10 @@ class AgentLoop:
         else:
             output = TokenCounter.count_text_tokens(content or "")
             stats["output_tokens"] += output
-            # 无 usage：本轮的 prompt 规模用裁剪后的估算值（而非任务累计值）
+            # 无 usage：本轮的 prompt 规模用调用前的估算值（而非任务累计值），
+            # 且只有在这条分支里才把输入计入统计（有 usage 时由上面按真实值计）
             estimate = self._last_prompt_estimate
+            stats["input_tokens"] += estimate
             self._last_call = {
                 "prompt_tokens": estimate, "output_tokens": output,
                 "cache_hit_tokens": 0, "cache_miss_tokens": estimate,
