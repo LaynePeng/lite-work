@@ -714,12 +714,13 @@ export default function App() {
             patchChat(sid, { modelOverride: model.override, effectiveModel: model.effective });
           }
           if (ctx && (ctx.model || (ctx.session && Object.keys(ctx.session).length > 0))) {
-            // 端点现携带会话生效模型与窗口，重开会话即可正确显示，不再置空等待 SSE
+            // 端点现携带会话生效模型、窗口与计费单价，重开会话即可正确显示，不再置空等待 SSE
             patchChat(sid, {
               contextStats: {
                 model: ctx.model || "",
                 context_window: ctx.context_window || 0,
                 session: ctx.session ?? {},
+                pricing: ctx.pricing,
               },
             });
           }

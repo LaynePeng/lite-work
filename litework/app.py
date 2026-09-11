@@ -79,10 +79,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "skill_trigger_mode": "substring",
     # 并行工具执行："auto"（只读轮并行/含写类整轮串行）| "always" | "never"
     "parallel_tool_calls": "auto",
-    # 定价（每 M token，美元）：仅作 models.dev 无该模型数据时的回退；
-    # cache_hit 缺省按 input 的 10% 折算（Anthropic 0.1x 惯例），真实价格优先取 models.dev
-    "pricing": {"input_per_mtok": 1.6, "output_per_mtok": 4.8},
+    # 定价（每 M token，美元）：仅作 models.dev 无该模型数据时的回退。
+    # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash 峰值价：缓存未命中输入
+    # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页）。真实价格优先取 models.dev
+    # 的 per-model 数据（同步成功后自动生效）。cache_hit 缺省按 input 的 10% 折算
+    # （Anthropic 0.1x 惯例），显式给出则不再折算。
+    "pricing": {"input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006},
 }
+
+# 历史默认回退定价（对齐 OpenAI 档，远高于默认供应商 DeepSeek 的真实价：
+# 未命中输入约 10 倍、输出约 4 倍、缓存命中约 27 倍）——配置里恰好等于该值
+# 时说明用户从未自定义，按新默认迁移，否则「预估成本」会一直偏高一个数量级。
+LEGACY_DEFAULT_PRICING: Dict[str, Any] = {"input_per_mtok": 1.6, "output_per_mtok": 4.8}
 
 TOOL_NAMES = [
     "read_file", "write_file", "list_dir", "file_tree",
@@ -245,6 +253,9 @@ class AgentApp:
                 self.config.update({k: v for k, v in loaded.items() if v is not None})
                 if self.config.get("max_steps") == 25:
                     self.config["max_steps"] = 100
+                # 兼容旧配置：历史默认定价（1.6/4.8）会把预估成本放大一个数量级
+                if self.config.get("pricing") == LEGACY_DEFAULT_PRICING:
+                    self.config["pricing"] = dict(DEFAULT_CONFIG["pricing"])
                 security_cfg = loaded.get("security")
                 if isinstance(security_cfg, dict):
                     self.guard.apply_config(security_cfg)
@@ -609,6 +620,18 @@ class AgentApp:
 
     def llm_provider_meta(self) -> List[Dict[str, Any]]:
         return self.llm_registry.provider_meta()
+
+    def resolve_pricing(self, provider_id: str, model: str) -> Dict[str, float]:
+        """解析计费单价（每 M token，美元）：models.dev per-model 优先，回退 config 定价。
+
+        回退价（设置 → 定价）是全局标量，对未收录模型/自定义实例只能给粗略估计；
+        统一在此解析，保证面板展示的单价与实际成本估算用的是同一份。
+        """
+        pricing = dict(self.config.get("pricing") or DEFAULT_CONFIG["pricing"])
+        model_pricing = self.llm_registry.get_model_pricing(provider_id, model)
+        if model_pricing:
+            pricing.update(model_pricing)
+        return pricing
 
     def refresh_model_meta(self) -> bool:
         """同步 models.dev 模型元数据（启动时调用，失败静默降级）。"""
@@ -1213,13 +1236,10 @@ class AgentApp:
         )
         # 定价：models.dev per-model（input/output/cache_read 每百万 token）
         # 优先；无该模型数据时回退 config 静态价（pricing 段可配置）
-        pricing = dict(self.config.get("pricing") or DEFAULT_CONFIG["pricing"])
-        model_pricing = self.llm_registry.get_model_pricing(
+        pricing = self.resolve_pricing(
             getattr(adapter, "provider_id", None) or self.llm_registry.active,
-            getattr(adapter, "model", None),
+            getattr(adapter, "model", None) or "",
         )
-        if model_pricing:
-            pricing.update(model_pricing)
         loop = AgentLoop(
             kernel=kernel,
             adapter=adapter,

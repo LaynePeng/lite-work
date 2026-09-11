@@ -30,12 +30,22 @@ function ContextPanel({ stats }: { stats: ContextStats | null }) {
     return <div className="tool-panel-empty">暂无上下文数据（发起对话后显示）</div>;
   }
   const window = stats.context_window || 0;
+  // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）
   const prompt = stats.task?.last_prompt_tokens ?? stats.task?.prompt_tokens ?? 0;
   const ratio = window > 0 ? prompt / window : 0;
   const pctWidth = Math.min(100, Math.max(0, ratio * 100));
   const danger = ratio >= 0.9;
   const task = stats.task ?? ({} as ContextTaskStats);
   const session = stats.session ?? {};
+  // 「本次调用」：优先取 last 段；旧载荷无该字段时退化为累计值（保持可用）
+  const call = task.last ?? {
+    prompt_tokens: task.prompt_tokens ?? 0,
+    output_tokens: task.output_tokens ?? 0,
+    cache_hit_tokens: task.cache_hit_tokens ?? 0,
+    cache_miss_tokens: task.cache_miss_tokens ?? 0,
+    cost_estimate: task.cost_estimate,
+  };
+  const pricing = stats.pricing;
 
   return (
     <div className="ctx-panel">
@@ -52,16 +62,23 @@ function ContextPanel({ stats }: { stats: ContextStats | null }) {
         </div>
         <div className="ctx-progress-meta">
           <span>
-            本次 {fmt(prompt)} · {pct(ratio)}
+            当前上下文 {fmt(prompt)} · {pct(ratio)}
           </span>
           {danger && <span className="ctx-danger">≥90%，已自动压缩</span>}
         </div>
       </div>
 
+      {/* 口径区分：每轮都会把「系统提示 + 全部历史 + 工具结果」整段重发，
+          累计值 ≈ 轮数 × 上下文，因此不能当作当前上下文看 */}
       <div className="ctx-section-label">本次调用（模型准确返回）</div>
+      <ContextBlock label="Prompt tokens" value={fmt(call.prompt_tokens)} />
+      <ContextBlock label="输出 tokens" value={fmt(call.output_tokens)} />
+      <ContextBlock label="Cache 命中 / 未命中" value={`${fmt(call.cache_hit_tokens)} / ${fmt(call.cache_miss_tokens)}`} />
+      <ContextBlock label="本次成本" value={call.cost_estimate != null ? `$${call.cost_estimate.toFixed(4)}` : "—"} />
+
+      <div className="ctx-section-label">本任务累计（每轮重发上下文）</div>
       <ContextBlock label="Prompt tokens" value={fmt(task.prompt_tokens)} />
       <ContextBlock label="输出 tokens" value={fmt(task.output_tokens)} />
-      <ContextBlock label="Cache 命中 / 未命中" value={`${fmt(task.cache_hit_tokens)} / ${fmt(task.cache_miss_tokens)}`} />
       <ContextBlock label="Cache 命中率" value={pct(task.cache_hit_rate)} />
       <ContextBlock label="上下文压缩" value={`${task.compression_count ?? 0} 次`} />
       <ContextBlock label="累计节省 tokens" value={fmt(task.compressed_tokens)} />
@@ -77,6 +94,19 @@ function ContextPanel({ stats }: { stats: ContextStats | null }) {
       <ContextBlock label="工具调用" value={`${session.tool_calls ?? 0} 次`} />
       <ContextBlock label="安全拦截" value={`${session.blocked ?? 0} 次`} />
       <ContextBlock label="预估成本" value={session.cost_estimate != null ? `$${session.cost_estimate.toFixed(4)}` : "—"} />
+
+      {/* 计费单价：成本估算的唯一依据，直接展示便于与供应商账单对账 */}
+      {pricing && (
+        <>
+          <div className="ctx-section-label" title="models.dev 同步成功后按该模型真实价计费；未收录模型用配置回退价（设置 → 定价）">
+            计费单价（每 M tokens）
+          </div>
+          <ContextBlock
+            label="输入 / 输出 / 缓存命中"
+            value={`$${pricing.input_per_mtok} / $${pricing.output_per_mtok} / $${pricing.cache_hit_per_mtok}`}
+          />
+        </>
+      )}
     </div>
   );
 }

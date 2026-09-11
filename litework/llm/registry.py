@@ -295,9 +295,9 @@ class LLMRegistry:
         manual = p.get("context_window")
         if isinstance(manual, int) and manual > 0:
             return manual
-        # ② models.dev 缓存（按模型 ID 精确匹配）
+        # ② models.dev 缓存（按 provider + 模型 ID 精确匹配）
         if self.meta_service is not None and model:
-            remote = self.meta_service.get_context_window(model)
+            remote = self.meta_service.get_context_window(model, provider_id=pid)
             if remote:
                 return remote
         # ③ 内置静态表（per-model → provider 默认）

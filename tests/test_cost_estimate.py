@@ -51,6 +51,35 @@ def test_zero_pricing_is_zero():
     assert loop._estimate_cost(stats) == 0.0
 
 
+def test_legacy_default_pricing_is_migrated(tmp_path):
+    """旧配置里恰好是历史默认定价（input 1.6 / output 4.8）→ 迁移为新默认价。
+
+    该历史值比内置默认供应商 DeepSeek 的真实价高约 10 倍（缓存命中价约 27 倍），
+    会让「预估成本」虚高一个数量级。
+    """
+    from litework.app import DEFAULT_CONFIG, AgentApp
+
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "config.json").write_text(json.dumps({
+        "pricing": {"input_per_mtok": 1.6, "output_per_mtok": 4.8}}), encoding="utf-8")
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(cfg))
+    assert app.config["pricing"] == DEFAULT_CONFIG["pricing"]
+    assert app.config["pricing"]["cache_hit_per_mtok"] > 0  # 缓存价显式给出，不再靠 0.1x 折算
+
+
+def test_user_pricing_is_preserved(tmp_path):
+    """用户自定义过定价 → 不做迁移。"""
+    from litework.app import AgentApp
+
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    mine = {"input_per_mtok": 9.9, "output_per_mtok": 9.9}
+    (cfg / "config.json").write_text(json.dumps({"pricing": mine}), encoding="utf-8")
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(cfg))
+    assert app.config["pricing"] == mine
+
+
 def test_models_dev_pricing_per_model(tmp_path):
     """定价来自 models.dev 的 per-model 真实数据（三级 ID 匹配）。"""
     svc = _meta_service(tmp_path, {

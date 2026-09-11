@@ -45,6 +45,27 @@ WRITE_TOOLS = frozenset({
 })
 
 
+def cache_price_of(pricing: Dict[str, float]) -> float:
+    """缓存命中单价：显式配置优先，否则按 input 的 10% 折算（0.1x 惯例）。"""
+    configured = pricing.get("cache_hit_per_mtok")
+    if configured is None:
+        configured = float(pricing.get("input_per_mtok", 0) or 0) * 0.1
+    return float(configured or 0)
+
+
+def pricing_payload(pricing: Optional[Dict[str, float]]) -> Dict[str, float]:
+    """面板/接口统一口径的计费单价（每 M token，美元）。
+
+    成本估算完全由这三个单价决定，因此随统计一起下发，供前端直接展示对账。
+    """
+    p = pricing or {}
+    return {
+        "input_per_mtok": float(p.get("input_per_mtok", 0) or 0),
+        "output_per_mtok": float(p.get("output_per_mtok", 0) or 0),
+        "cache_hit_per_mtok": cache_price_of(p),
+    }
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -84,6 +105,10 @@ class AgentLoop:
         self._compression_count = 0
         self._compressed_tokens = 0
         self._last_usage: Optional[Dict[str, int]] = None
+        # 最近一次 LLM 调用的用量（「本次调用」口径，与 stats 里的任务累计区分）
+        self._last_call: Optional[Dict[str, int]] = None
+        # 无 usage 时每轮估算的 prompt 规模（用于「本次调用」的兜底口径）
+        self._last_prompt_estimate: int = 0
         # 并行工具执行模式："auto"（只读轮并行/含写串行）| "always" | "never"
         self.parallel_tool_calls: str = "auto"
         # 任务运行期间用户补充的输入队列（TaskHandle 持有同一个 deque，跨回合注入）
@@ -193,7 +218,9 @@ class AgentLoop:
                 # B2. 兜底修复：确保发给 LLM 的消息链满足原子对约束（压缩/裁剪兜底）
                 processed = repair_tool_call_pairs(processed)
                 if not self._last_usage:
-                    stats["input_tokens"] += TokenCounter.count_messages_tokens(processed)
+                    estimate = TokenCounter.count_messages_tokens(processed)
+                    stats["input_tokens"] += estimate
+                    self._last_prompt_estimate = estimate
 
                 # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
                 try:
@@ -368,22 +395,40 @@ class AgentLoop:
     def _record_usage(
         self, usage: Optional[Dict[str, int]], content: Optional[str], stats: Dict[str, Any],
     ) -> None:
-        """阶段三（a）：用模型返回的 usage 累加（准确值），无 usage 时回退估算。"""
+        """阶段三（a）：用模型返回的 usage 累加（准确值），无 usage 时回退估算。
+
+        stats 是「本任务累计」（每轮把整段上下文重发，逐轮线性累加），
+        而 self._last_call 记录「最近一次调用」的用量——两者口径不同，
+        面板必须分开显示，否则单轮 1 万 token 的任务在几十轮后看起来像上百万。
+        """
         self._last_usage = usage or self._last_usage
         if usage:
-            stats["input_tokens"] += usage.get("prompt_tokens", 0)
-            stats["output_tokens"] += usage.get("completion_tokens", 0)
-            hit = usage.get("prompt_cache_hit_tokens", 0)
             prompt = usage.get("prompt_tokens", 0)
+            output = usage.get("completion_tokens", 0)
+            hit = usage.get("prompt_cache_hit_tokens", 0)
+            stats["input_tokens"] += prompt
+            stats["output_tokens"] += output
             stats["cache_hit_tokens"] += hit
             if getattr(self.adapter, "name", "") == "anthropic":
                 # Anthropic: input_tokens 不含 cache_read，miss = input_tokens
-                stats["cache_miss_tokens"] += prompt
+                miss = prompt
             else:
                 # OpenAI 兼容（DeepSeek 等）: prompt_tokens 已含命中部分
-                stats["cache_miss_tokens"] += max(0, prompt - hit)
+                miss = max(0, prompt - hit)
+            stats["cache_miss_tokens"] += miss
+            self._last_call = {
+                "prompt_tokens": prompt, "output_tokens": output,
+                "cache_hit_tokens": hit, "cache_miss_tokens": miss,
+            }
         else:
-            stats["output_tokens"] += TokenCounter.count_text_tokens(content or "")
+            output = TokenCounter.count_text_tokens(content or "")
+            stats["output_tokens"] += output
+            # 无 usage：本轮的 prompt 规模用裁剪后的估算值（而非任务累计值）
+            estimate = self._last_prompt_estimate
+            self._last_call = {
+                "prompt_tokens": estimate, "output_tokens": output,
+                "cache_hit_tokens": 0, "cache_miss_tokens": estimate,
+            }
 
     async def _execute_tool_batch(
         self, tool_calls: List[ToolCall], stats: Dict[str, Any],
@@ -698,8 +743,17 @@ class AgentLoop:
             except Exception:
                 logger.exception("[AgentLoop] 会话落盘失败")
 
+    def _cache_price(self) -> float:
+        return cache_price_of(self.pricing)
+
+    def _cost_of(self, miss: int, hit: int, output_tokens: int) -> float:
+        """按「未命中输入 / 命中输入 / 输出」三段计价（每 M token 单价）。"""
+        return (miss / 1_000_000 * float(self.pricing.get("input_per_mtok", 0) or 0)
+                + hit / 1_000_000 * self._cache_price()
+                + output_tokens / 1_000_000 * float(self.pricing.get("output_per_mtok", 0) or 0))
+
     def _estimate_cost(self, stats: Dict[str, Any]) -> float:
-        """缓存感知的成本估算。
+        """缓存感知的成本估算（本任务累计口径）。
 
         输入按命中/未命中分开计价：未命中按 input_per_mtok 全价，命中按
         cache_hit_per_mtok（默认 input 的 10%，对齐 Anthropic 0.1x /
@@ -713,15 +767,16 @@ class AgentLoop:
         miss = int(stats.get("cache_miss_tokens", 0) or 0)
         if hit + miss <= 0:
             miss = int(stats.get("input_tokens", 0) or 0)
-        output_t = int(stats.get("output_tokens", 0) or 0)
-        input_price = float(self.pricing.get("input_per_mtok", 0) or 0)
-        cache_price = float(self.pricing.get("cache_hit_per_mtok")
-                            if self.pricing.get("cache_hit_per_mtok") is not None
-                            else input_price * 0.1)
-        output_price = float(self.pricing.get("output_per_mtok", 0) or 0)
-        return (miss / 1_000_000 * input_price
-                + hit / 1_000_000 * cache_price
-                + output_t / 1_000_000 * output_price)
+        return self._cost_of(miss, hit, int(stats.get("output_tokens", 0) or 0))
+
+    def _last_call_cost(self) -> float:
+        """最近一次调用的成本（「本次调用」口径）。"""
+        call = self._last_call or {}
+        return self._cost_of(
+            int(call.get("cache_miss_tokens", 0) or 0),
+            int(call.get("cache_hit_tokens", 0) or 0),
+            int(call.get("output_tokens", 0) or 0),
+        )
 
     def _stats_payload(self, stats: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -747,16 +802,24 @@ class AgentLoop:
         hit = stats.get("cache_hit_tokens", 0)
         miss = stats.get("cache_miss_tokens", 0)
         hit_rate = round(hit / (hit + miss), 4) if (hit + miss) > 0 else None
-        last_usage = self._last_usage or {}
-        prompt_tokens = last_usage.get("prompt_tokens") or stats.get("input_tokens", 0)
+        last_call = dict(self._last_call or {})
+        # 当前上下文水位 = 最近一次调用真正发出去的 prompt（不是任务累计值）
+        prompt_tokens = (last_call.get("prompt_tokens")
+                         or self._last_prompt_estimate
+                         or stats.get("input_tokens", 0))
         usage_ratio = round(prompt_tokens / self.context_window, 4) if self.context_window else None
         model = getattr(self.adapter, "model", None) or ""
         # 成本：缓存感知（命中按折扣价，见 _estimate_cost），随任务内累计实时更新
         cost = self._estimate_cost(stats)
+        last_call["cost_estimate"] = round(self._last_call_cost(), 4)
         await self.kernel.events.emit("context:stats", {
             "model": model,
             "context_window": self.context_window,
+            # 实际计费单价（每 M token，美元）：面板直接展示，避免"钱不对"无从对账
+            "pricing": pricing_payload(self.pricing),
             "task": {
+                # 注意：以下 *_tokens / cost_estimate 均为「本任务累计」；
+                # 「本次调用」请看 last 段（每轮都会把整段上下文重发，累计值 ≈ 轮数 × 上下文）
                 "prompt_tokens": stats.get("input_tokens", 0),
                 "output_tokens": stats.get("output_tokens", 0),
                 "cache_hit_tokens": hit,
@@ -769,5 +832,6 @@ class AgentLoop:
                 "tool_calls": stats.get("tool_calls", 0),
                 "blocked": stats.get("blocked", 0),
                 "cost_estimate": round(cost, 4),
+                "last": last_call,
             },
         })

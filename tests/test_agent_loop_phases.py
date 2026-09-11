@@ -178,6 +178,62 @@ def test_record_usage_fallback_estimation(tmp_path):
     assert stats["output_tokens"] > 0
 
 
+async def test_context_stats_separates_last_call_from_task_total(tmp_path):
+    """「本次调用」与「本任务累计」必须分开下发。
+
+    Agent 每轮都把「系统提示 + 全部历史 + 工具结果」整段重发，累计输入 ≈ 轮数 ×
+    上下文——若把它当成「本次调用」展示，单轮 1.2 万 token 的任务在几十轮后
+    看起来像上百万（历史 bug：面板显示 "本次调用 Prompt tokens: 1,000,000+"）。
+    """
+    loop, kernel, _ = _make_loop(
+        tmp_path, MockLLMAdapter([]),
+        pricing={"input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006},
+        context_window=1_000_000,
+    )
+    events: list = []
+    kernel.events.on("context:stats", lambda d: events.append(d))
+    stats = {"input_tokens": 0, "output_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+    usage = {"prompt_tokens": 12_000, "completion_tokens": 50, "prompt_cache_hit_tokens": 9_000}
+    for _ in range(3):
+        loop._record_usage(usage, "x", stats)
+        await loop._emit_context_stats(stats)
+
+    task = events[-1]["task"]
+    # 累计口径：3 轮 × 12,000
+    assert task["prompt_tokens"] == 36_000
+    # 本次调用口径：最后一轮的真实用量
+    assert task["last"]["prompt_tokens"] == 12_000
+    assert task["last"]["cache_hit_tokens"] == 9_000
+    assert task["last"]["cache_miss_tokens"] == 3_000
+    # 当前上下文水位 = 最近一次调用的 prompt（而不是累计值）
+    assert task["last_prompt_tokens"] == 12_000
+    assert task["usage_ratio"] == 0.012
+    # 成本同样分口径：本次 = 单轮，累计 = 3 轮
+    single = 3_000 / 1e6 * 0.3 + 9_000 / 1e6 * 0.006 + 50 / 1e6 * 1.2
+    assert abs(task["last"]["cost_estimate"] - round(single, 4)) < 1e-9
+    assert abs(task["cost_estimate"] - round(single * 3, 4)) < 1e-9
+    # 计费单价随统计下发（面板展示成本依据）
+    assert events[-1]["pricing"] == {
+        "input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006}
+
+
+async def test_context_stats_uses_estimate_not_total_without_usage(tmp_path):
+    """无 usage 时（供应商不回传），本次调用的 prompt 也必须是本轮估算值。"""
+    loop, kernel, _ = _make_loop(tmp_path, MockLLMAdapter([]), context_window=1_000_000)
+    events: list = []
+    kernel.events.on("context:stats", lambda d: events.append(d))
+    # 模拟 run_task 无 usage 时的累计（input_tokens 已累加到 12,000）
+    stats = {"input_tokens": 12_000, "output_tokens": 0,
+             "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+    loop._last_prompt_estimate = 7_000
+    loop._record_usage(None, "回复", stats)
+    await loop._emit_context_stats(stats)
+    task = events[-1]["task"]
+    assert task["prompt_tokens"] == 12_000          # 累计口径
+    assert task["last"]["prompt_tokens"] == 7_000   # 本次调用 = 本轮估算，而非累计
+    assert task["last_prompt_tokens"] == 7_000
+
+
 async def test_append_tool_results_preserves_pairing(tmp_path):
     """结果回填保持 assistant tool_calls ↔ tool 消息原子对（id 对应）。"""
     loop, kernel, _ = _make_loop(tmp_path, MockLLMAdapter([]))

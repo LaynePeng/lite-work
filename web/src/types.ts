@@ -163,7 +163,17 @@ export interface AppConfig {
   collab_recipe?: string;
 }
 
+/** 最近一次 LLM 调用的用量（与「本任务累计」区分：每轮都会把整段上下文重发）。 */
+export interface ContextCallStats {
+  prompt_tokens: number;
+  output_tokens: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
+  cost_estimate?: number;
+}
+
 export interface ContextTaskStats {
+  /** 以下均为「本任务累计」（跨轮累加，≈ 轮数 × 单轮上下文） */
   prompt_tokens: number;
   output_tokens: number;
   cache_hit_tokens: number;
@@ -172,10 +182,20 @@ export interface ContextTaskStats {
   compression_count: number;
   compressed_tokens: number;
   usage_ratio: number | null;
+  /** 当前上下文水位（最近一次调用实际发出的 prompt tokens） */
   last_prompt_tokens?: number;
   tool_calls?: number;
   blocked?: number;
   cost_estimate?: number;
+  /** 最近一次调用的用量与成本 */
+  last?: ContextCallStats;
+}
+
+/** 实际计费单价（每 M token，美元） */
+export interface ContextPricing {
+  input_per_mtok: number;
+  output_per_mtok: number;
+  cache_hit_per_mtok: number;
 }
 
 export interface ContextSessionStats {
@@ -196,6 +216,8 @@ export interface ContextStats {
   context_window: number;
   task?: ContextTaskStats;
   session: ContextSessionStats;
+  /** 预估成本使用的单价（models.dev per-model 或配置回退价） */
+  pricing?: ContextPricing;
 }
 
 export interface LLMProviderMeta {

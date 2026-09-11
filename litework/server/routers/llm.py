@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from ...core.agent_loop import pricing_payload
 from .context import ServerContext
 
 
@@ -73,6 +74,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {
             "model": model_name,
             "context_window": app.llm_registry.get_context_window(provider_id, model_name),
+            # 计费单价随统计一并返回，重开会话即可看到成本依据（而非等下一轮 SSE）
+            "pricing": pricing_payload(app.resolve_pricing(provider_id, model_name)),
             "session": app.get_context_session_stats(session_id),
         }
 

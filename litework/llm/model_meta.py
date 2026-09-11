@@ -7,11 +7,12 @@
 业界标准做法（OpenCode 同款）是使用社区模型元数据库 models.dev：
   https://models.dev/api.json
 数据结构为 provider → models → model_id → {limit: {context, output}, ...}，
-本模块会将其拍平成 model_id → entry 的索引。
+本模块会将其拍平成 "provider/model_id" → entry 的索引（同一模型在不同
+供应商下价格差异极大，必须按供应商区分）。
 
 本模块：
 1. 启动时尝试拉取 models.dev 数据并缓存到配置目录；
-2. 查询时按模型 ID 精确匹配缓存；命中失败再回退内置静态表；
+2. 查询时按 provider + 模型 ID 精确匹配缓存；命中失败再回退内置静态表；
 3. 网络失败静默降级，离线可用。
 """
 from __future__ import annotations
@@ -29,7 +30,17 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600  # 缓存 7 天
 
 
 def _flatten(data: Dict[str, dict]) -> Dict[str, dict]:
-    """把 models.dev 的 provider→models→model_id 结构拍平成 model_id → entry。"""
+    """把 models.dev 的 provider→models→model_id 结构拍平成 "provider/model_id" → entry。
+
+    必须以「供应商 + 模型」为键：同一个模型 ID 在 models.dev 里往往有几十家
+    供应商在售且价格差异极大（如 deepseek-v4-flash 有 30+ 家，单价从 0 到 0.3
+    不等）。早期实现只存裸 model_id，后遍历到的供应商会覆盖前面的，结果定价
+    随机取到某个转售商的价（缓存命中价甚至差 20 倍）。
+
+    同时保留裸 model_id 兜底键（首个命中者，顺序稳定）：上下文窗口是「模型级」
+    属性（各家一致），未知供应商（自定义中转）也应当能查到；定价则仅在
+    provider 精确匹配缺失时退化使用，属粗略参考。
+    """
     flat: Dict[str, dict] = {}
     for provider, meta in (data or {}).items():
         if not isinstance(meta, dict):
@@ -39,8 +50,28 @@ def _flatten(data: Dict[str, dict]) -> Dict[str, dict]:
             continue
         for model_id, entry in models.items():
             if isinstance(entry, dict):
-                flat[model_id] = entry
+                flat.setdefault(f"{provider}/{model_id}", entry)
+                flat.setdefault(model_id, entry)
     return flat
+
+
+def _candidates(model_id: str, provider_id: str = "") -> list:
+    """查找候选键：provider 限定名优先，裸模型名兜底（兼容手写/历史缓存文件）。"""
+    if provider_id and "/" not in model_id:
+        return [f"{provider_id}/{model_id}", model_id]
+    return [model_id]
+
+
+def _to_index(data: Dict[str, dict]) -> Dict[str, dict]:
+    """缓存文件既可能是「已拍平索引」，也可能是 models.dev 原始结构（provider → models）。
+
+    原始结构先拍平；已拍平索引原样返回（历史/手写缓存可能直接用裸模型名作键，保持兼容）。
+    """
+    nested = any(
+        isinstance(v, dict) and isinstance(v.get("models"), dict)
+        for v in (data or {}).values()
+    )
+    return _flatten(data) if nested else data
 
 
 class ModelMetaService:
@@ -106,39 +137,44 @@ class ModelMetaService:
                 return None
             if not isinstance(data, dict):
                 return None
-            self._index = _flatten(data) if "models" in data else data
+            self._index = _to_index(data)
             return self._index
         except Exception:
             return None
 
     # ------------------------------------------------------------ 查询
 
-    def get_context_window(self, model_id: str) -> Optional[int]:
-        """按模型 ID 查上下文长度（缓存优先，None 表示未知）。"""
+    def get_context_window(self, model_id: str, provider_id: str = "") -> Optional[int]:
+        """按模型 ID 查上下文长度（缓存优先，None 表示未知）。
+
+        先按 "provider/model_id" 精确匹配，再退化到裸模型名（历史缓存兼容）。
+        """
         index = self._load_cache()
         if index:
-            entry = index.get(model_id)
-            if isinstance(entry, dict):
-                limit = entry.get("limit") or {}
-                context = limit.get("context") or limit.get("input")
-                if isinstance(context, int) and context > 0:
-                    return context
+            for key in _candidates(model_id, provider_id):
+                entry = index.get(key)
+                if isinstance(entry, dict):
+                    limit = entry.get("limit") or {}
+                    context = limit.get("context") or limit.get("input")
+                    if isinstance(context, int) and context > 0:
+                        return context
         return None
 
     def get_pricing(self, model_id: str, provider_id: str = "") -> Optional[Dict[str, float]]:
         """按模型查定价（每百万 token 美元）：{input, output, cache_read}。
 
         models.dev 索引键为 "provider/model"（如 "deepseek/deepseek-v4-flash"），
-        而本地配置的模型名通常是裸名——按 全名 → provider/model → 裸名 三级匹配。
+        而本地配置的模型名通常是裸名——拼成 provider/model 精确匹配。
         无数据（自定义实例/未知模型）返回 None，调用方回退静态配置价。
         """
         index = self._load_cache()
         if not index or not model_id:
             return None
-        candidates = [model_id]
-        if provider_id and "/" not in model_id:
-            candidates.append(f"{provider_id}/{model_id}")
-        for key in candidates:
+        for key in _candidates(model_id, provider_id):
+            # 裸模型名（不含 "/"）不作为定价依据：models.dev 里同名模型有几十家在售，
+            # 取到哪家完全任意（单价 0 ~ 0.3 不等）→ 宁可让调用方用配置回退价。
+            if "/" not in key:
+                continue
             entry = index.get(key)
             if not isinstance(entry, dict):
                 continue
