@@ -40,7 +40,7 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com",
-        model: str = "deepseek-v4-flash",
+        model: str = "deepseek-flash",
         timeout: float = 120.0,
         temperature: float = 0.2,
         provider_id: str = "deepseek",

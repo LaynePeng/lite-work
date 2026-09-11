@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, SkillInfo } from "../types";
+import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, ModelMetaStatus, PluginInfo, SkillInfo } from "../types";
 
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
 // 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
@@ -24,6 +24,17 @@ function verCompare(a: string, b: string): number {
   if (!pa[3]) return 1;
   if (!pb[3]) return -1;
   return pa[3] < pb[3] ? -1 : 1;
+}
+
+/** models.dev 缓存年龄的可读文案（设置页展示上次同步时间）。 */
+function fmtAge(seconds: number | null): string {
+  if (seconds === null || seconds === undefined) return "";
+  if (seconds < 90) return "刚刚同步";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
 }
 
 export default function SettingsModal({
@@ -52,6 +63,10 @@ export default function SettingsModal({
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
   const [timeoutSaved, setTimeoutSaved] = useState(false);
+  // 综合设置：models.dev 模型元数据（上下文窗口 / 计费单价的来源）
+  const [metaStatus, setMetaStatus] = useState<ModelMetaStatus | null>(null);
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaMsg, setMetaMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // 综合设置：多智能体限额与行为（docs/multi-agent-design.md §3）
   const [maParallel, setMaParallel] = useState<number>(4);
   const [maTotal, setMaTotal] = useState<number>(16);
@@ -304,6 +319,8 @@ export default function SettingsModal({
     refreshSkills();
     refreshPlugins();
     refreshAgents();
+    // models.dev 元数据缓存状态（上下文窗口 / 计费单价的来源）
+    api.modelMeta().then(setMetaStatus).catch(() => setMetaStatus(null));
     // 拉取技能权限规则（config.json 的 skill_permissions）与综合设置项
     api.config().then((c) => {
       const rules = c.skill_permissions || {};
@@ -786,6 +803,29 @@ export default function SettingsModal({
       setCleanResult({ ok: false, text: `清理失败: ${(err as Error).message}` });
     } finally {
       setCleaning(false);
+    }
+  }, [onSaved]);
+
+  // 手动同步 models.dev 元数据（启动时离线的话，这里可以立刻补上；
+  // 同步成功后上下文窗口与计费单价都会切到该模型的真实数据）
+  const syncModelMeta = useCallback(async () => {
+    setMetaBusy(true);
+    setMetaMsg(null);
+    try {
+      const res = await api.refreshModelMeta();
+      setMetaStatus({ cached: res.cached, models: res.models, age_seconds: res.age_seconds });
+      if (res.ok) {
+        const price = `$${res.pricing.input_per_mtok} / $${res.pricing.output_per_mtok}`
+          + ` / 缓存命中 $${res.pricing.cache_hit_per_mtok}`;
+        setMetaMsg({ ok: true, text: `同步完成：已索引 ${res.models} 个模型；当前计费单价 ${price}（每 M tokens）` });
+        onSaved();
+      } else {
+        setMetaMsg({ ok: false, text: "同步失败（网络不可用或被拦截）——成本仍按回退定价估算，可稍后重试" });
+      }
+    } catch (err) {
+      setMetaMsg({ ok: false, text: `同步失败: ${(err as Error).message}` });
+    } finally {
+      setMetaBusy(false);
     }
   }, [onSaved]);
 
@@ -1772,6 +1812,30 @@ export default function SettingsModal({
             <div className={`settings-section settings-tabpanel ${activeTab === "general" ? "active" : ""}`}>
               <h3>综合设置</h3>
               <div className="mcp-section-head">
+                <span>模型元数据（models.dev）</span>
+              </div>
+              <p className="mcp-hint">
+                上下文窗口与「预估成本」的计费单价来自 models.dev 模型元数据库；
+                同步失败时回退到内置表与配置里的回退定价（成本可能偏差一个数量级）。
+                应用启动会自动同步一次，若当时离线（或想立即刷新价格），可在此手动重试。
+              </p>
+              <div className="form-actions">
+                <button className="btn-test" onClick={() => void syncModelMeta()} disabled={metaBusy}>
+                  {metaBusy ? "同步中…" : "🔄 立即同步模型元数据"}
+                </button>
+                <span className="mcp-hint" style={{ marginLeft: 12 }}>
+                  {metaStatus
+                    ? (metaStatus.cached
+                      ? `已缓存 ${metaStatus.models} 个模型 · ${fmtAge(metaStatus.age_seconds)}`
+                      : "暂无缓存：成本按回退定价估算")
+                    : "状态读取中…"}
+                </span>
+              </div>
+              {metaMsg && (
+                <div className={`test-result ${metaMsg.ok ? "ok" : "error"}`}>{metaMsg.text}</div>
+              )}
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
                 <span>会话缓存清理</span>
               </div>
               <p className="mcp-hint">

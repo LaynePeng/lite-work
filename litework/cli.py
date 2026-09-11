@@ -49,7 +49,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve.add_argument("--config-dir", default=None, help="配置/会话目录（默认 ~/.lite-work）")
     serve.add_argument("--api-key", default=None, help="LLM API Key（默认读 DEEPSEEK_API_KEY）")
     serve.add_argument("--base-url", default=None, help="OpenAI 兼容 base_url（默认 DeepSeek）")
-    serve.add_argument("--model", default=None, help="模型名（默认 deepseek-v4-flash）")
+    serve.add_argument("--model", default=None, help="模型名（默认 deepseek-flash）")
     serve.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
     parser.add_argument("--version", action="store_true", help="显示版本")

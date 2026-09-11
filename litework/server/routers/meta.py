@@ -4,12 +4,14 @@
 """服务元信息与全局配置：/api/status、/api/config。"""
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from ... import __version__
+from ...core.agent_loop import pricing_payload
 from .context import ServerContext
 
 VERSION = __version__
@@ -63,5 +65,30 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         app.save_config(payload.updates)
         return {"ok": True}
+
+    # ------------------------------------------------------------ 模型元数据
+
+    @router.get("/api/model-meta")
+    async def model_meta(request: Request):
+        """models.dev 元数据缓存状态（设置页展示同步情况）。"""
+        ctx.check_auth(request)
+        return app.model_meta_status()
+
+    @router.post("/api/model-meta/refresh")
+    async def refresh_model_meta(request: Request):
+        """手动同步 models.dev 元数据（离线启动后无缓存时的兜底入口）。
+
+        拉取是阻塞 IO → 丢到线程执行避免卡住事件循环；返回同步后的缓存状态
+        与当前会话生效模型的计费单价，便于直接和账单对账。
+        """
+        ctx.check_auth(request)
+        ok = await asyncio.to_thread(app.refresh_model_meta)
+        active = app.llm_registry.active
+        model = app.llm_registry.get_active_provider_settings().get("model", "")
+        return {
+            "ok": bool(ok),
+            **app.model_meta_status(),
+            "pricing": pricing_payload(app.resolve_pricing(active, model)),
+        }
 
     return router

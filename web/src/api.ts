@@ -128,6 +128,13 @@ export const api = {
       method: "POST", body: JSON.stringify({ provider_id: providerId, overrides }),
     }),
 
+  // models.dev 元数据：缓存状态 + 手动同步（离线启动后无缓存时的兜底入口）
+  modelMeta: () => req<import("./types").ModelMetaStatus>("/api/model-meta"),
+  refreshModelMeta: () =>
+    req<import("./types").ModelMetaStatus & { ok: boolean; pricing: import("./types").ContextPricing }>(
+      "/api/model-meta/refresh", { method: "POST" }
+    ),
+
   contextStats: (sessionId: string) =>
     req<import("./types").ContextStats>(
       `/api/context/stats?session_id=${encodeURIComponent(sessionId)}`

@@ -9,7 +9,7 @@ import type { ContextStats } from "../types";
 
 // 单轮 12,000 prompt、跑了 30 轮的任务：累计 360,017 ≠ 当前上下文 12,000
 const STATS: ContextStats = {
-  model: "deepseek-v4-flash",
+  model: "deepseek-flash",
   context_window: 1_000_000,
   pricing: { input_per_mtok: 0.15, output_per_mtok: 0.6, cache_hit_per_mtok: 0.003 },
   task: {
@@ -90,7 +90,7 @@ describe("ToolPanel · 上下文面板口径（本次调用 vs 任务累计）",
 
   it("旧载荷（无 last / pricing 字段）仍可渲染，退化为累计值", () => {
     const legacy: ContextStats = {
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       context_window: 1_000_000,
       // 旧载荷：没有 last / last_prompt_tokens / pricing
       task: {

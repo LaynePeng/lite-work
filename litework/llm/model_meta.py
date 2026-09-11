@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("litework.modelmeta")
 
@@ -40,6 +40,11 @@ def _flatten(data: Dict[str, dict]) -> Dict[str, dict]:
     同时保留裸 model_id 兜底键（首个命中者，顺序稳定）：上下文窗口是「模型级」
     属性（各家一致），未知供应商（自定义中转）也应当能查到；定价则仅在
     provider 精确匹配缺失时退化使用，属粗略参考。
+
+    裸名键只在模型名不含 "/" 时写入：不少供应商用「厂商/模型」形式的 id
+    （如 tokengo 的 "deepseek/deepseek-v4-flash"），该 id 本身就是合法裸键，
+    会与官方 "deepseek" 供应商的限定键同名——先到先得（setdefault）会把
+    官方价/窗口顶掉。
     """
     flat: Dict[str, dict] = {}
     for provider, meta in (data or {}).items():
@@ -51,7 +56,8 @@ def _flatten(data: Dict[str, dict]) -> Dict[str, dict]:
         for model_id, entry in models.items():
             if isinstance(entry, dict):
                 flat.setdefault(f"{provider}/{model_id}", entry)
-                flat.setdefault(model_id, entry)
+                if "/" not in model_id:
+                    flat.setdefault(model_id, entry)
     return flat
 
 
@@ -191,3 +197,14 @@ class ModelMetaService:
             if "input_per_mtok" in pricing and "output_per_mtok" in pricing:
                 return pricing
         return None
+
+    def status(self) -> Dict[str, Any]:
+        """缓存状态（设置页展示同步情况用；只读盘，不发网络请求）。"""
+        index = self._load_cache()
+        age: Optional[float] = None
+        if self.cache_path and os.path.exists(self.cache_path):
+            try:
+                age = max(0.0, time.time() - os.path.getmtime(self.cache_path))
+            except OSError:
+                age = None
+        return {"cached": bool(index), "models": len(index or {}), "age_seconds": age}

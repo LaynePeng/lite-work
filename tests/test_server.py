@@ -330,3 +330,97 @@ async def test_security_hot_reload(live_client):
     }})
     assert r.status_code == 200
     assert app.guard.check_shell_command("custom-block xyz").level.value == "HIGH"
+
+
+# ---------------------------------------------------------------- 模型元数据同步
+
+async def test_model_meta_endpoints(live_client):
+    """状态查询与手动同步接口（fixture 把同步短路成失败，模拟离线）。"""
+    c, _app, _server = live_client
+    r = await c.get("/api/model-meta")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) >= {"cached", "models", "age_seconds"}
+    assert body["cached"] is False      # 测试环境无缓存文件
+    assert body["models"] == 0
+    assert body["age_seconds"] is None
+
+    r = await c.post("/api/model-meta/refresh")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False          # 离线：同步失败但不报错，前端可提示重试
+    assert "input_per_mtok" in body["pricing"]
+
+
+async def test_model_meta_refresh_returns_pricing(live_client):
+    """同步成功时返回索引条数与当前生效单价（成本对账用）。"""
+    c, app, _server = live_client
+    app.refresh_model_meta = lambda: True
+    r = await c.post("/api/model-meta/refresh")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["pricing"]["input_per_mtok"] > 0
+    assert body["pricing"]["cache_hit_per_mtok"] >= 0
+
+
+def test_refresh_model_meta_with_retry_succeeds_after_failures():
+    """启动同步失败要退避重试（否则整个进程周期都用回退价算成本）。"""
+    from litework.server.app import _refresh_model_meta_with_retry
+    import threading
+
+    calls: list = []
+
+    class FlakyApp:
+        def refresh_model_meta(self) -> bool:
+            calls.append(1)
+            return len(calls) >= 3
+
+    assert _refresh_model_meta_with_retry(FlakyApp(), threading.Event(), delays=(0.0, 0.0, 0.0))
+    assert len(calls) == 3
+
+
+def test_refresh_model_meta_with_retry_gives_up_and_stops_early():
+    import threading
+
+    from litework.server.app import _refresh_model_meta_with_retry
+
+    class NeverApp:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def refresh_model_meta(self) -> bool:
+            self.calls += 1
+            return False
+
+    app = NeverApp()
+    assert _refresh_model_meta_with_retry(app, threading.Event(), delays=(0.0, 0.0)) is False
+    assert app.calls == 2          # 尝试次数 = len(delays)
+
+    # 关闭时 stop 置位 → 退避等待立即返回，不再占用线程时间
+    stopping = threading.Event()
+    stopping.set()
+    app2 = NeverApp()
+    assert _refresh_model_meta_with_retry(app2, stopping, delays=(0.0, 30.0)) is False
+    assert app2.calls == 1
+
+
+def test_refresh_model_meta_with_retry_tolerates_errors():
+    """同步抛异常不应终止进程，按退避继续重试。"""
+    import threading
+
+    from litework.server.app import _refresh_model_meta_with_retry
+
+    class BoomApp:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def refresh_model_meta(self) -> bool:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("network boom")
+            return True
+
+    app = BoomApp()
+    assert _refresh_model_meta_with_retry(app, threading.Event(), delays=(0.0, 0.0))
+    assert app.calls == 2

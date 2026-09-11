@@ -110,6 +110,58 @@ def test_models_dev_index_keeps_provider_dimension(tmp_path):
     assert r.get_context_window("custom_x", "deepseek-v4-flash") == 1_000_000
 
 
+def test_vendored_model_id_does_not_shadow_official_price(tmp_path):
+    """供应商用「厂商/模型」形式的 id 时，不得顶掉官方供应商的限定键。
+
+    models.dev 里 tokengo 把 id 写成 "deepseek/deepseek-v4-flash"，与官方 deepseek
+    供应商的限定键同名；写裸名兜底键时若不加约束会抢先占据该键（setdefault 先到
+    先得，且 tokengo 在 api.json 中排序靠前），把官方价/窗口顶掉。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        # 顺序在前：使用 vendored id 的转售商
+        "tokengo": {"models": {"deepseek/deepseek-v4-flash": {
+            "cost": {"input": 0.098, "output": 0.196, "cache_read": 0.028},
+            "limit": {"context": 1_000_000}}}},
+        "deepseek": {"models": {"deepseek-v4-flash": {
+            "cost": {"input": 0.15, "output": 0.6, "cache_read": 0.003},
+            "limit": {"context": 1_000_000}}}},
+    }), encoding="utf-8")
+    svc = ModelMetaService(str(cache))
+    # 官方限定键未被 vendored 裸键顶掉
+    assert svc.get_pricing("deepseek-v4-flash", provider_id="deepseek")["input_per_mtok"] == 0.15
+    assert svc.get_pricing("deepseek-v4-flash", provider_id="deepseek")["cache_hit_per_mtok"] == 0.003
+    # 用 vendored 全名配置的客户端也能拿到官方数据（同名键）
+    assert svc.get_pricing("deepseek/deepseek-v4-flash")["input_per_mtok"] == 0.15
+
+
+def test_model_meta_status_reports_cache(tmp_path):
+    """设置页要能看出「有没有缓存 / 索引了多少模型 / 多久前同步」。"""
+    empty = ModelMetaService(str(tmp_path / "missing.json"))
+    assert empty.status() == {"cached": False, "models": 0, "age_seconds": None}
+
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        "deepseek/deepseek-flash": {"limit": {"context": 1_000_000}},
+        "openai/gpt-4o": {"limit": {"context": 128_000}},
+    }), encoding="utf-8")
+    st = ModelMetaService(str(cache)).status()
+    assert st["cached"] is True
+    assert st["models"] == 2
+    assert isinstance(st["age_seconds"], float) and st["age_seconds"] >= 0
+
+
+def test_deepseek_default_model_uses_current_name():
+    """注册表默认模型名跟随官方现行名；历史别名仍可解析（旧配置不必立刻改）。"""
+    from litework.llm.registry import PROVIDER_META
+
+    assert PROVIDER_META["deepseek"]["default_model"] == "deepseek-flash"
+    r = LLMRegistry()
+    assert r.providers["deepseek"]["model"] == "deepseek-flash"
+    assert r.get_context_window("deepseek") == 1_000_000
+    assert r.get_context_window("deepseek", "deepseek-v4-flash") == 1_000_000
+
+
 def test_models_dev_missing_cache_falls_back(tmp_path):
     # 无缓存文件、无网络 → get_context_window 返回 None，不抛异常
     svc = ModelMetaService(str(tmp_path / "none.json"))

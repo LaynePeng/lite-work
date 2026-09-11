@@ -20,14 +20,17 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "name": "DeepSeek",
         "kind": "openai",
         "default_base_url": "https://api.deepseek.com",
-        "default_model": "deepseek-v4-flash",
-        "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+        # 官方现行名（2026 起沿用）：旧名 deepseek-v4-flash 仍受理，按 Flash 计费
+        "default_model": "deepseek-flash",
+        "models": ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
         "env_key": "DEEPSEEK_API_KEY",
         "context_window": 1_000_000,
         "context_windows": {
-            "deepseek-v4-flash": 1_000_000,
+            "deepseek-flash": 1_000_000,
             "deepseek-v4-pro": 1_000_000,
             "deepseek-v4-flash-vision-exp": 1_000_000,
+            # 历史别名：旧配置仍用旧名时也能解析出窗口（不再出现在模型列表里）
+            "deepseek-v4-flash": 1_000_000,
         },
         # 支持 reasoning_effort 的模型（官方 R1 系列 / 兼容推理模型）
         "reasoning_models": ["deepseek-reasoner"],

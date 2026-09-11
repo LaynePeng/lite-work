@@ -121,6 +121,16 @@ export interface ServerStatus {
   active_provider?: string;
 }
 
+/** models.dev 元数据缓存状态（GET /api/model-meta） */
+export interface ModelMetaStatus {
+  /** 缓存存在且未过期；false 时上下文窗口走内置表、成本走回退定价 */
+  cached: boolean;
+  /** 已索引的「供应商/模型」条目数 */
+  models: number;
+  /** 缓存文件年龄（秒）；无缓存为 null */
+  age_seconds: number | null;
+}
+
 export interface SessionModel {
   provider: string;
   model: string;
@@ -139,7 +149,7 @@ export interface AppConfig {
   subagent_timeout?: number;
   auto_approve: boolean;
   context_full_turns?: number;
-  pricing: { input_per_mtok: number; output_per_mtok: number };
+  pricing: { input_per_mtok: number; output_per_mtok: number; cache_hit_per_mtok?: number };
   /** 技能权限规则：glob 模式 → allow/deny/ask */
   skill_permissions?: Record<string, "allow" | "deny" | "ask">;
   /** Skills zip 导入大小上限（MB） */

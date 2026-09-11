@@ -66,6 +66,9 @@ def test_legacy_default_pricing_is_migrated(tmp_path):
     app = AgentApp(workspace=str(tmp_path), config_dir=str(cfg))
     assert app.config["pricing"] == DEFAULT_CONFIG["pricing"]
     assert app.config["pricing"]["cache_hit_per_mtok"] > 0  # 缓存价显式给出，不再靠 0.1x 折算
+    # 迁移结果必须落盘，否则每次启动都会重复迁移（并让用户以为设置没生效）
+    on_disk = json.loads((cfg / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["pricing"] == DEFAULT_CONFIG["pricing"]
 
 
 def test_user_pricing_is_preserved(tmp_path):
@@ -78,6 +81,32 @@ def test_user_pricing_is_preserved(tmp_path):
     (cfg / "config.json").write_text(json.dumps({"pricing": mine}), encoding="utf-8")
     app = AgentApp(workspace=str(tmp_path), config_dir=str(cfg))
     assert app.config["pricing"] == mine
+
+
+def test_deepseek_legacy_model_name_is_migrated(tmp_path):
+    """deepseek 供应商的旧模型名 → 官方现行名，且只动内置供应商、不动自定义中转。"""
+    from litework.app import AgentApp
+
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "config.json").write_text(json.dumps({
+        "llm": {"active": "deepseek", "providers": {
+            "deepseek": {"api_key": "sk-keep", "model": "deepseek-v4-flash",
+                         "models": ["deepseek-v4-flash", "deepseek-v4-pro"]},
+            # 用户自定义中转可能刻意用旧名对接上游 → 不能替他们改
+            "custom_relay": {"name": "中转", "api_key": "sk-relay",
+                             "model": "deepseek-v4-flash", "models": ["deepseek-v4-flash"]},
+        }},
+    }), encoding="utf-8")
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(cfg))
+    provs = app.llm_registry.providers
+    assert provs["deepseek"]["model"] == "deepseek-flash"
+    assert provs["deepseek"]["models"] == ["deepseek-flash", "deepseek-v4-pro"]
+    assert provs["custom_relay"]["model"] == "deepseek-v4-flash"
+    # 迁移流程不得覆盖用户真实 API Key（_persist_config 用注册表状态重写 llm 段）
+    assert provs["deepseek"]["api_key"] == "sk-keep"
+    on_disk = json.loads((cfg / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["llm"]["providers"]["deepseek"]["model"] == "deepseek-flash"
 
 
 def test_models_dev_pricing_per_model(tmp_path):

@@ -92,6 +92,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 # 时说明用户从未自定义，按新默认迁移，否则「预估成本」会一直偏高一个数量级。
 LEGACY_DEFAULT_PRICING: Dict[str, Any] = {"input_per_mtok": 1.6, "output_per_mtok": 4.8}
 
+# deepseek 官方现行模型名与历史别名（旧名仍受理，单按 Flash 计费）
+DEEPSEEK_CURRENT_MODEL = "deepseek-flash"
+DEEPSEEK_LEGACY_MODEL = "deepseek-v4-flash"
+
 TOOL_NAMES = [
     "read_file", "write_file", "list_dir", "file_tree",
     "search_code", "get_file_outline", "read_focused_symbol",
@@ -247,15 +251,21 @@ class AgentApp:
 
     def _load_config(self) -> None:
         if os.path.exists(self.config_path):
+            migrated = False
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                 self.config.update({k: v for k, v in loaded.items() if v is not None})
                 if self.config.get("max_steps") == 25:
                     self.config["max_steps"] = 100
+                    migrated = True
                 # 兼容旧配置：历史默认定价（1.6/4.8）会把预估成本放大一个数量级
                 if self.config.get("pricing") == LEGACY_DEFAULT_PRICING:
                     self.config["pricing"] = dict(DEFAULT_CONFIG["pricing"])
+                    migrated = True
+                # 兼容旧配置：deepseek 旧模型名 → 官方现行名
+                if self._migrate_deepseek_model_name():
+                    migrated = True
                 security_cfg = loaded.get("security")
                 if isinstance(security_cfg, dict):
                     self.guard.apply_config(security_cfg)
@@ -266,12 +276,45 @@ class AgentApp:
                 if isinstance(agents_cfg, dict):
                     self.agent_registry.load_config(agents_cfg)
                 logger.info("[App] 配置文件已加载: %s", self.config_path)
+                # 迁移结果落盘，避免每次启动重复迁移。必须在 apply_config 之后调用：
+                # _persist_config 会用注册表状态重写 llm 段，过早调用会把用户真实
+                # API Key 覆盖成注册表默认值。
+                if migrated:
+                    self._persist_config()
+                    logger.info("[App] 配置已迁移并落盘: %s", self.config_path)
             except Exception:
                 logger.exception("[App] 配置文件解析失败，使用默认配置")
         else:
             self._write_default_config()
         # 扫描 agents 目录下的自定义 agent 文件
         self.agent_registry.load_dir(os.path.join(self.config_dir, "agents"))
+
+    def _migrate_deepseek_model_name(self) -> bool:
+        """把 deepseek 供应商配置里的旧模型名迁到官方现行名。
+
+        官方改名 deepseek-v4-flash → deepseek-flash（旧名仍受理、按 Flash 计费），
+        模型列表与 models.dev 定价查询都以现行名为准。只改内置 deepseek 供应商：
+        用户自定义中转可能刻意用旧名对接上游，不能替他们改。
+        """
+        llm_cfg = self.config.get("llm")
+        providers = llm_cfg.get("providers") if isinstance(llm_cfg, dict) else None
+        entry = providers.get("deepseek") if isinstance(providers, dict) else None
+        if not isinstance(entry, dict):
+            return False
+        changed = False
+        if entry.get("model") == DEEPSEEK_LEGACY_MODEL:
+            entry["model"] = DEEPSEEK_CURRENT_MODEL
+            changed = True
+        models = entry.get("models")
+        if isinstance(models, list) and DEEPSEEK_LEGACY_MODEL in models:
+            renamed: List[Any] = []
+            for name in models:
+                cur = DEEPSEEK_CURRENT_MODEL if name == DEEPSEEK_LEGACY_MODEL else name
+                if cur not in renamed:  # 重名去重（保序）
+                    renamed.append(cur)
+            entry["models"] = renamed
+            changed = True
+        return changed
 
     def _write_default_config(self) -> None:
         try:
@@ -636,6 +679,17 @@ class AgentApp:
     def refresh_model_meta(self) -> bool:
         """同步 models.dev 模型元数据（启动时调用，失败静默降级）。"""
         return self.llm_registry.refresh_models_dev()
+
+    def model_meta_status(self) -> Dict[str, Any]:
+        """models.dev 元数据缓存状态（设置页「模型元数据」区展示）。
+
+        同步失败时整个进程都会用回退价估算成本，因此把缓存是否可用、索引了
+        多少模型、缓存文件年龄暴露出来，让用户能判断要不要手动同步。
+        """
+        svc = getattr(self.llm_registry, "meta_service", None)
+        if svc is None:
+            return {"cached": False, "models": 0, "age_seconds": None}
+        return svc.status()
 
     # ------------------------------------------------------------ 上下文统计
 
