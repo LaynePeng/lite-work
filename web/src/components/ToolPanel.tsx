@@ -278,7 +278,13 @@ const TODO_MARKS: Record<TodoItem["status"], string> = {
   completed: "✔",
 };
 
-/** TODOs 面板（ctx2 风格）：渐变进度条 + 平铺排序（进行中置顶、完成沉底）。 */
+/** TODOs 面板（竖排脊线看板）：三个状态组纵向排列，左侧脊线串联状态点。 */
+const TODO_LANES: { status: TodoItem["status"]; label: string }[] = [
+  { status: "in_progress", label: "进行中" },
+  { status: "pending", label: "待办" },
+  { status: "completed", label: "已完成" },
+];
+
 function TodosPanel({ todos }: { todos: TodoItem[] }) {
   if (!todos || todos.length === 0) {
     return <div className="tool-panel-empty">暂无 TODO（Agent 规划多步骤任务时自动生成）</div>;
@@ -287,9 +293,6 @@ function TodosPanel({ todos }: { todos: TodoItem[] }) {
   const doing = todos.filter((t) => t.status === "in_progress").length;
   const ratio = todos.length > 0 ? done / todos.length : 0;
   const allDone = done === todos.length;
-  // 平铺但有序：进行中置顶 → 待办 → 完成沉底；组内保持提交顺序（sort 稳定）
-  const order: Record<TodoItem["status"], number> = { in_progress: 0, pending: 1, completed: 2 };
-  const sorted = [...todos].sort((a, b) => order[a.status] - order[b.status]);
 
   return (
     <div className="todos-panel">
@@ -305,20 +308,42 @@ function TodosPanel({ todos }: { todos: TodoItem[] }) {
           <i style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
         </div>
       </div>
-      <ul className="todos-list">
-        {sorted.map((t, i) => (
-          <li
-            key={i}
-            className={`todo-item todo-${t.status}`}
-            title={t.updated_at ? `更新于 ${new Date(t.updated_at * 1000).toLocaleString()}` : undefined}
-          >
-            <span className={t.status === "in_progress" ? "todo-mark todo-spin" : "todo-mark"} aria-hidden>
-              {TODO_MARKS[t.status]}
-            </span>
-            <span className="todo-content">{t.content}</span>
-          </li>
-        ))}
-      </ul>
+      <div className="todos-board">
+        {TODO_LANES.map((lane) => {
+          const items = todos.filter((t) => t.status === lane.status);
+          return (
+            <div className={`todo-lane lane-${lane.status}`} key={lane.status}>
+              <div className="todo-lane-dotcol">
+                <span className="todo-lane-dot" aria-hidden />
+              </div>
+              <div className="todo-lane-main">
+                <div className="todo-lane-head">
+                  {lane.label}
+                  <span className="todo-lane-count">{items.length}</span>
+                </div>
+                <div className="todo-lane-cards">
+                  {items.length === 0 ? (
+                    <div className="todo-lane-empty" aria-hidden>—</div>
+                  ) : (
+                    items.map((t, i) => (
+                      <div
+                        key={i}
+                        className={`todo-item todo-${t.status}`}
+                        title={t.updated_at ? `更新于 ${new Date(t.updated_at * 1000).toLocaleString()}` : undefined}
+                      >
+                        <span className={t.status === "in_progress" ? "todo-mark todo-spin" : "todo-mark"} aria-hidden>
+                          {TODO_MARKS[t.status]}
+                        </span>
+                        <span className="todo-content">{t.content}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {allDone && <div className="todo2-alldone">本组任务已全部完成，Agent 可以开始下一个任务</div>}
     </div>
   );

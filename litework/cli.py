@@ -52,6 +52,8 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve.add_argument("--model", default=None, help="模型名（默认 deepseek-flash）")
     serve.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
+    warmup = sub.add_parser("warmup", help="预热本地缓存（matplotlib 字体缓存，供安装阶段调用）")
+
     parser.add_argument("--version", action="store_true", help="显示版本")
 
     return parser.parse_args(argv)
@@ -89,12 +91,43 @@ def _configure_logging(log_level: str, config_dir: str | None) -> str:
     return log_path
 
 
+def _run_warmup() -> int:
+    """预热本地缓存（当前仅 matplotlib 字体缓存），供安装阶段调用。
+
+    与 serve 共用同一持久缓存目录：打包版由 litework_entry.py 在 frozen
+    模式下把 MPLCONFIGDIR 指向 ~/.lite-work/mpl；开发模式走 matplotlib
+    默认目录（~/.matplotlib，同样持久）。fail-open：任何异常都不阻断
+    安装流程——首次启动的后台预热线程会兜底构建。
+    """
+    import time as _time
+
+    started = _time.time()
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.font_manager as _fm
+
+        # 公开 API：首次访问会构建 FontManager 单例并落盘字体缓存
+        # （不要用 findfont(FontProperties(family=...))：family 字符串会走
+        #   mathtext 解析器，在本机 matplotlib 版本上抛 ParseException）
+        _fm.get_font_names()
+    except Exception as exc:  # noqa: BLE001
+        print(f"lite-work warmup 失败（不阻断安装）: {exc}", file=sys.stderr)
+        return 0
+    print(f"lite-work warmup 完成，耗时 {_time.time() - started:.1f}s", flush=True)
+    return 0
+
+
 def main(argv: list = None) -> None:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
     if args.version:
         print(f"lite-work {VERSION}")
         return
+
+    if args.command == "warmup":
+        sys.exit(_run_warmup())
 
     if args.command != "serve":
         print("用法: lite-work serve [--port N] [--token xxx | --no-token] [--workspace /path]")

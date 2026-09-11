@@ -19,6 +19,15 @@ def_ok:
 def_fail:
   DetailPrint "Defender 排除项注册失败（非管理员或系统策略阻止），不影响安装完成。"
 def_done:
+
+  ; matplotlib 字体缓存预热：安装阶段构建一次（10-17s），消除首次启动
+  ; 时的字体缓存重建。与 serve 共用同一持久目录（frozen 入口把
+  ; MPLCONFIGDIR 指向 ~/.lite-work/mpl）。fail-open：预热失败不影响安装。
+  ; 注意：perMachine 提权安装时写入的是安装者账户的缓存目录，其他账户
+  ; 首次启动仍由后台预热线程兜底构建一次。
+  DetailPrint "正在预热本地缓存（matplotlib 字体）…"
+  ExecWait `"$INSTDIR\resources\litework-bin\lite-work-backend\lite-work-backend.exe" warmup` $0
+  Pop $0
 !macroend
 
 !macro customUnInstall

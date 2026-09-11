@@ -165,20 +165,27 @@ const TODOS = [
   { content: "还没做的第四步", status: "pending" as const },
 ];
 
-describe("ToolPanel · TODOs 面板（进度条 + 平铺排序）", () => {
-  it("进度条与百分比；进行中置顶、完成沉底（组内保持提交顺序）", () => {
+describe("ToolPanel · TODOs 面板（竖排脊线看板）", () => {
+  it("进度条与百分比；三泳道竖排（进行中 → 待办 → 已完成），组内保持提交顺序", () => {
     const { container } = render(
       <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={TODOS} activeTab="todos" />
     );
     expect(container.querySelector(".ctx2-meter")).toBeTruthy();
     expect(container.querySelector(".todo2-title")?.textContent).toContain("任务进度 1/4");
     expect(container.querySelector(".todo2-title")?.textContent).toContain("进行中 1");
-    const order = Array.from(container.querySelectorAll(".todos-list .todo-item"))
-      .map((el) => el.querySelector(".todo-content")?.textContent);
-    // 平铺但有序：进行中 → 待办 → 完成
-    expect(order).toEqual([
-      "正在做的第二步", "还没做的第三步", "还没做的第四步", "已完成的第一步",
+    const lanes = Array.from(container.querySelectorAll(".todo-lane"));
+    expect(lanes.map((el) => el.className)).toEqual([
+      "todo-lane lane-in_progress", "todo-lane lane-pending", "todo-lane lane-completed",
     ]);
+    // 计数徽章：1 / 2 / 1
+    const counts = lanes.map((el) => el.querySelector(".todo-lane-count")?.textContent);
+    expect(counts).toEqual(["1", "2", "1"]);
+    // 组内卡片保持提交顺序
+    const cardsOf = (lane: Element) =>
+      Array.from(lane.querySelectorAll(".todo-content")).map((el) => el.textContent);
+    expect(cardsOf(lanes[0])).toEqual(["正在做的第二步"]);
+    expect(cardsOf(lanes[1])).toEqual(["还没做的第三步", "还没做的第四步"]);
+    expect(cardsOf(lanes[2])).toEqual(["已完成的第一步"]);
   });
 
   it("悬停元信息：显示更新时间；完成项划线弱化", () => {

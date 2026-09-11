@@ -932,13 +932,99 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-1);
 }
 
-.todos-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* 看板（竖排脊线）：三个状态组纵向排列，左侧一条脊线串联状态点 */
+.todos-board {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-left: 2px;
+}
+
+/* 贯穿的脊线：穿过各组状态点圆心（padding-left 2px + 点列 20px 中心 = 12px，
+   线宽 2px → left 11px） */
+.todos-board::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.todo-lane {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  column-gap: 8px;
+}
+
+/* 状态点：底色描边制造"骑在脊线上"的断线效果 */
+.todo-lane-dotcol { position: relative; }
+
+.todo-lane-dot {
+  position: absolute;
+  left: 10px;
+  top: 3px;
+  transform: translateX(-50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-2);
+  border: 2px solid var(--bg-1);
+  box-sizing: content-box;
+  z-index: 1;
+}
+
+.todo-lane.lane-in_progress .todo-lane-dot {
+  background: var(--accent, #4c8dff);
+  animation: todo2-pulse 1.6s ease-in-out infinite;
+}
+
+.todo-lane.lane-completed .todo-lane-dot {
+  background: var(--green);
+}
+
+/* 组头：状态名 + 计数徽章 */
+.todo-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 5px;
+}
+
+.todo-lane-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 1.6;
+}
+
+.todo-lane-cards {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.todo-lane-empty {
+  font-size: 11px;
+  color: var(--text-2);
+  opacity: .6;
+  padding: 2px 0;
+}
+
+/* 泳道内卡片：宽度撑满剩余空间 */
+.todo-lane .todo-item {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .todo-item {
@@ -5463,6 +5549,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   word-break: break-word;
   max-height: 200px;
   overflow-y: auto;
+  /* 禁用原生滚动锚定：贴底由 SubAgentCard 的 useLayoutEffect 同步控制，
+     避免内容插入时锚定补偿 scrollTop 与脚本贴底互相干扰 */
+  overflow-anchor: none;
 }
 
 /* ---------------- 任务后归档摘要 ---------------- */

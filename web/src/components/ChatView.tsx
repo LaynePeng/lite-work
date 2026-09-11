@@ -108,6 +108,19 @@ function SubAgentCard({ card }: { card: ToolCardInfo }) {
   const [showSummary, setShowSummary] = useState(false);
   const running = card.status === "running" && (!sa || sa.status === "running");
   const roleLabel = sa?.role ?? "general";
+  // 实时输出框贴底跟随：stickRef 只由真实用户滚动事件改变，
+  // 流式追加内容后同步滚到底部（与主聊天流 ChatView 同一套策略）
+  const streamRef = useRef<HTMLPreElement>(null);
+  const streamStickRef = useRef(true);
+  const handleStreamScroll = useCallback(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    streamStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }, []);
+  useLayoutEffect(() => {
+    const el = streamRef.current;
+    if (el && streamStickRef.current) el.scrollTop = el.scrollHeight;
+  }, [sa?.streaming_text, open]);
   return (
     <div className={`subagent-card ${running ? "running" : "finished"}`}>
       <button className="subagent-header" onClick={() => setOpen(!open)}>
@@ -141,7 +154,7 @@ function SubAgentCard({ card }: { card: ToolCardInfo }) {
           {sa?.streaming_text && running && (
             <div className="subagent-streaming">
               <div className="subagent-streaming-label">实时输出</div>
-              <pre className="subagent-streaming-body">{sa.streaming_text}</pre>
+              <pre className="subagent-streaming-body" ref={streamRef} onScroll={handleStreamScroll}>{sa.streaming_text}</pre>
             </div>
           )}
           {!running && sa?.summary && (
