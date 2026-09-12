@@ -35,6 +35,10 @@ export interface AgentInfo {
   hidden: boolean;
   /** 自定义图标（emoji；空 = 前端回退默认映射） */
   icon?: string;
+  /** 职责域权限模型：{域: "allow"|"deny"|"ask"}；null/缺省 = 跟随后端默认 */
+  domains?: Record<string, "allow" | "deny" | "ask"> | null;
+  /** 高级微调：额外放行的未映射工具（MCP / 插件动态工具） */
+  extra_tools?: string[];
 }
 
 export interface ToolCall {

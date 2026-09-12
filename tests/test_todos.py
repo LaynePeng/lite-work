@@ -118,12 +118,16 @@ def test_todo_write_subagent_merges_into_root_session():
 
 def test_plan_agent_whitelist_contains_todo_write():
     from litework.core.agent_profile import default_plan_agent, default_build_agent
-    assert "todo_write" in default_plan_agent().tools
-    # build 为显式全量清单（含写类/流程工具），todo_write 自然可用
-    build_tools = default_build_agent().tools
-    assert "todo_write" in build_tools
-    assert "execute_command" in build_tools
-    assert "ask_user" in build_tools
+    from litework.core.permissions import TOOL_DOMAIN
+
+    # 职责域模型：interactive 域 allow → todo_write 可用
+    assert TOOL_DOMAIN["todo_write"] == "interactive"
+    plan = default_plan_agent()
+    assert plan.domains.get("interactive") == "allow"
+    # build 全放行：execute（execute_command）/ interactive（todo_write/ask_user）均 allow
+    build = default_build_agent()
+    assert build.domains.get("interactive") == "allow"
+    assert build.domains.get("execute") == "allow"
 
 
 def test_build_registry_exposes_todo_write(tmp_path):

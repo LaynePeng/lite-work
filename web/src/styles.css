@@ -5973,6 +5973,75 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-2);
 }
 
+/* ==================== Agent 职责域权限视图 ==================== */
+
+.agent-domain-editor {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-domain-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.agent-domain-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-domain-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.domain-action-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #444);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.domain-action-btn.active {
+  opacity: 1;
+  font-weight: 600;
+  border-color: var(--accent, #7aa2f7);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 18%, transparent);
+}
+
+.domain-action-btn[data-spam="deny"].active,
+.domain-action-btn.active[data-no] {
+  /* 无额外状态；禁止态由图标/颜色区分 */
+}
+
+.agent-advanced summary {
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-dim, #888);
+  user-select: none;
+}
+
+.agent-advanced summary:hover {
+  color: var(--text);
+}
+
 /* ==================== Agent 图标选择器 / 气泡头像 ==================== */
 
 .agent-icon-picker {

@@ -246,40 +246,23 @@ class OfficePlugin(ToolPlugin):
         return await self._tools.execute(name, args)
 
 
-class SubAgentPlugin(ToolPlugin):
-    name = "sub-agent-plugin"
+class PlanSavePlugin(ToolPlugin):
+    """Plan Agent 专属的计划文件写入通道（plan_save）。"""
+
+    name = "plan-save-plugin"
     version = "1.0.0"
-    description = "子 Agent 编排：spawn_sub_agent 派生子任务"
+    description = "规划产出落盘：plan_save 把计划写入 .lite-work/plans/"
 
     def __init__(self, app) -> None:
-        from .sub_agent import make_sub_agent_handler
+        from .plan_save import make_plan_save_handler
 
         self._app = app
-        self._handler = make_sub_agent_handler(app)
-        self._tool = ToolDefinition(
-            name="spawn_sub_agent",
-            description=(
-                "派生一个独立且上下文隔离的子 Agent 执行耗时的调研/测试/重构子任务，"
-                "返回汇总报告"
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "taskDescription": {
-                        "type": "string", "description": "指派给子 Agent 的具体任务指令",
-                    },
-                    "roleType": {
-                        "type": "string",
-                        "enum": ["explorer", "tester", "refactor", "general"],
-                        "description": "子 Agent 角色：explorer(只读调研)/tester(测试执行)/refactor(完整重构)",
-                    },
-                },
-                "required": ["taskDescription"],
-            },
-        )
+        self._handler = make_plan_save_handler(app)
 
     def get_tools(self) -> List[ToolDefinition]:
-        return [self._tool]
+        from .plan_save import get_plan_save_tool
+
+        return [get_plan_save_tool()]
 
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
         return await self._handler(args)

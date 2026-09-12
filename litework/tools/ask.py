@@ -17,7 +17,7 @@ def make_ask_user_handler(question_gate, events=None):
     """构造 ask_user 工具处理器。
 
     events 为任务 kernel 的事件总线（用于向 UI 广播 question:request/resolved）。
-    与 spawn_sub_agent 类似：build_registry 引导阶段注册工具定义时 events 为 None，
+    与 spawn_agent 类似：build_registry 引导阶段注册工具定义时 events 为 None，
     create_kernel 装配真实任务内核时通过 set_handler 注入 kernel.events。
     """
 

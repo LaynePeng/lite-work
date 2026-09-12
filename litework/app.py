@@ -33,10 +33,10 @@ from .tools.plugin import (
     GitPlugin,
     OcrPlugin,
     OfficePlugin,
+    PlanSavePlugin,
     ReviewPlugin,
     ShellPlugin,
     SkillsPlugin,
-    SubAgentPlugin,
     TOOL_FILTER_SERVICE,
     TOOLS_SERVICE,
     WebFetchPlugin,
@@ -116,7 +116,7 @@ TOOL_NAMES = [
     "search_code", "get_file_outline", "read_focused_symbol",
     "apply_search_replace", "apply_unified_diff",
     "execute_command", "check_command", "git_status", "git_diff", "git_log",
-    "git_commit", "git_branch", "review_code", "spawn_sub_agent",
+    "git_commit", "git_branch", "review_code",
         "webfetch", "webfetch_batch", "load_skill",
     # 办公工具（AGI 通用入口）
     "docx_create", "xlsx_create", "pptx_create", "pdf_create",
@@ -776,7 +776,7 @@ class AgentApp:
             WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
             OfficePlugin(ws),
             OcrPlugin(ws),
-            SubAgentPlugin(self),
+            PlanSavePlugin(self),
             MultiAgentPlugin(self),
             SkillsPlugin(ws),
             self.todo_plugin,
@@ -861,11 +861,12 @@ class AgentApp:
         kernel.register_service("app", self)
         if registry is not None:
             kernel.register_service(TOOLS_SERVICE, registry)
-            if registry.has("spawn_sub_agent"):
-                from .tools.sub_agent import make_sub_agent_handler
+            # Plan Agent 专属写通道：plan_save（计划文件落盘）
+            if registry.has("plan_save"):
+                from .tools.plan_save import make_plan_save_handler
 
                 registry.set_handler(
-                    "spawn_sub_agent", make_sub_agent_handler(self, kernel.events)
+                    "plan_save", make_plan_save_handler(self)
                 )
             # 多 Agent 工具（P1/P2）：handler 绑定本 kernel（fork_context 消息源 + events 转发）
             if registry.has("spawn_agent"):
@@ -1192,10 +1193,20 @@ class AgentApp:
         is_builtin = existing is not None and existing.id in ("build", "plan", "office", "research")
 
         if is_builtin:
-            # 内置 agent：只允许覆盖 tools / permissions / icon
+            # 内置 agent：允许覆盖 domains / extra_tools / tools / permissions / icon
             # （prompt/人格跟随主程序发版，图标是用户偏好允许自定义）
             tools = profile_data.get("tools")
             permissions = profile_data.get("permissions")
+            domains = profile_data.get("domains")
+            extra_tools = profile_data.get("extra_tools")
+            if "domains" in profile_data:
+                existing.domains = (
+                    {str(k): str(v) for k, v in domains.items()
+                     if v in ("allow", "deny", "ask")}
+                    if isinstance(domains, dict) else None
+                )
+            if "extra_tools" in profile_data and isinstance(extra_tools, list):
+                existing.extra_tools = [str(t) for t in extra_tools]
             if "tools" in profile_data:
                 existing.tools = tools if isinstance(tools, list) else None
             if "icon" in profile_data:
@@ -1204,7 +1215,7 @@ class AgentApp:
                 existing.permissions = {str(k): str(v) for k, v in permissions.items()
                                         if v in ("allow", "deny", "ask")}
             self.agent_registry.register(existing)
-            # 内置覆盖只落盘 tools/permissions：prompt 等字段不冻结，
+            # 内置覆盖只落盘 domains/tools/permissions：prompt 等字段不冻结，
             # 应用升级后内置默认人格自动跟进
             return self._persist_agent(existing, minimal=True)
 
@@ -1227,7 +1238,9 @@ class AgentApp:
         path = os.path.join(agents_dir, f"{profile.id}.json")
         if minimal:
             data = {"id": profile.id, "tools": profile.tools,
-                    "permissions": profile.permissions}
+                    "permissions": profile.permissions,
+                    "domains": profile.domains,
+                    "extra_tools": profile.extra_tools}
             if profile.icon:
                 data["icon"] = profile.icon
         else:
@@ -1266,14 +1279,25 @@ class AgentApp:
         return {"ok": True, "id": agent_id}
 
     def create_agent_registry(self, agent_id: str) -> ToolRegistry:
-        """按 Agent 配置裁剪工具集（参考 OpenCode：plan 只读、build 全量）。"""
+        """按 Agent 配置裁剪工具集（职责域模型，参考 OpenCode：plan 只读、build 全量）。
+
+        domains → allowed/permissions 换算：域 allow/ask 的工具进白名单，
+        ask 同时进 permissions（审批门），deny 进 permissions（双保险拦截）。
+        plan 的「plan」域默认 deny 保证通用写工具不进入白名单（create_kernel
+        的写工具 handler 仅在 registry.has() 时绑定，天然与工具面一致）。
+        """
+        from .core.permissions import domains_to_allowed_and_permissions
+
         profile = self.get_agent(agent_id)
-        registry = self.build_registry(
-            allowed=profile.tools,
-            exclude=["spawn_sub_agent"] if agent_id == "plan" else None,
-            permissions=profile.permissions,
+        all_names = [t.name for t in self.build_registry().get_tools()]
+        allowed, permissions = domains_to_allowed_and_permissions(
+            profile.domains, all_names, profile.extra_tools
         )
-        return registry
+        return self.build_registry(
+            allowed=allowed,
+            exclude=None,
+            permissions=permissions,
+        )
 
     def create_loop(self, kernel: Kernel, registry: ToolRegistry, agent_id: Optional[str] = None,
                     model_override: Optional[Dict[str, str]] = None,

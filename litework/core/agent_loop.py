@@ -36,7 +36,7 @@ from ..tools.todos import current_session_id, current_root_session_id
 
 logger = logging.getLogger("litework.agentloop")
 
-# 当前执行的工具调用 ID（跨层传递给 spawn_sub_agent 等需要关联事件的工具；
+# 当前执行的工具调用 ID（跨层传递给 spawn_agent 等需要关联事件的工具；
 # asyncio 同一 task 内 ContextVar 可靠传播，并行协程各自独立 context）
 current_tool_call: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "current_tool_call", default=None

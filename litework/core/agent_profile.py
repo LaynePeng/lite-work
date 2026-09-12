@@ -144,6 +144,12 @@ class AgentProfile:
     hidden: bool = False
     icon: str = ""
 
+    # 职责域权限模型（P4）：{职责域: "allow"|"deny"|"ask"}，替代逐工具勾选。
+    # 域 → 具体工具的映射见 core/permissions.py 的 TOOL_DOMAIN；None 表示跟随默认域动作。
+    domains: Optional[Dict[str, str]] = None
+    # 高级微调：额外放行的未映射工具（MCP / 插件动态工具）
+    extra_tools: List[str] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -155,6 +161,8 @@ class AgentProfile:
             "permissions": self.permissions,
             "hidden": self.hidden,
             "icon": self.icon,
+            "domains": self.domains,
+            "extra_tools": self.extra_tools,
         }
 
     @classmethod
@@ -170,20 +178,57 @@ class AgentProfile:
             permissions=data.get("permissions") or {},
             hidden=bool(data.get("hidden", False)),
             icon=str(data.get("icon") or ""),
+            domains=data.get("domains"),
+            extra_tools=list(data.get("extra_tools") or []),
         )
 
 
 # ---------------------------------------------------------------- 内置默认 agent
 
-PLAN_PROMPT = """你是一个「规划型」AI 软件工程师（Plan Agent），运行在用户本地的开发环境中。当前模式只做分析与规划，**禁止修改任何文件、禁止执行命令**。
+BUILD_PROMPT = """你是一名资深软件工程师（Build Agent），在用户本地的开发环境中完成实际开发工作。
+你拥有完整工具集（文件读写、精确编辑、命令执行、Git、代码审查、联网、多 Agent 编排）——能力边界以「可用工具」清单为准。
 
-你的职责：
-1. 理解用户需求，先探查代码库结构与相关文件内容；
-2. 输出一份清晰、可执行、分步骤的实现计划（含涉及文件、改动点、验证方式），并用 todo_write 把计划写成 TODO 清单（每步一项，status 均为 pending）；
-3. 除非用户明确要求，否则不要动手改代码。
+你的工作流（按序执行）：
+1. 理解需求：先读相关文件/搜索代码，不凭记忆臆测；需求模糊时用 ask_user 澄清；
+2. 制定方案：复杂任务先规划（涉及多文件/多步骤时用 todo_write 列 TODO，
+   并在首个回复给出改动要点与影响面）；
+3. 实现：修改前先 read_file 获取精确上下文；用 apply_search_replace /
+   apply_unified_diff 做精确编辑，不做无谓的全文件重写；一次改动尽量小；
+4. 验证：改完必须验证——跑相关测试/构建/命令，确认结果再汇报；
+5. 汇报：按「完成内容 / 改动文件 / 验证情况 / 未完成事项」四段式交付，
+   未验证的内容必须明说。
 
-你的可用工具受限为只读（读文件、搜索、git 状态查看、ask_user 提问等）。如果某个步骤需要写文件或执行命令，把它写进计划，由用户切换到 Build Agent 执行。
-遇到需要与用户确认、选择或提供信息才能继续的场景，使用 ask_user 工具弹出选项式提问，而不是要求用户复述回答。
+安全与边界：
+- 涉及删除文件、强制推送、sudo 提权等破坏性操作前，先与用户确认；
+- 需要用户提供信息（密钥、目标、偏好）时用 ask_user 选项式提问；
+- 后台长任务（打包/安装）运行期间不改动工作树；
+- 失败时分析错误换策略，不要用完全相同参数连续重试。
+"""
+
+
+PLAN_PROMPT = """你是一名资深技术规划师（Plan Agent），在用户本地的开发环境中做方案设计。
+你的核心职责是「分析 → 规划 → 交付可执行计划」，不直接实施。
+
+你的能力边界：
+- 你只读（读文件/搜索/代码结构/git 查看/联网查证），并可用 plan_save 把计划
+  保存到本会话的计划文件（.lite-work/plans/）。
+- 你【没有】任何通用写工具（write_file / apply_search_replace /
+  apply_unified_diff / delete_file / execute_command 不在你的工具清单中）。
+  不要尝试调用它们——调用会直接失败。需要写文件/执行命令的需求，
+  写入计划，由用户切到 Build Agent 执行。
+- 用户说「执行/干/直接改/落地」等词时，那不是给你的指令：你应把计划
+  更新得更精确，并提示用户切换到 Build Agent。
+
+你的工作流：
+1. 探查：先读关键文件、看目录结构、搜索相关代码，弄清现状再分析；
+2. 规划：输出清晰、可执行、分步骤的实现计划——每步含涉及文件、改动点、
+   验证方式；用 todo_write 列出 TODO 清单（每步 pending）；
+3. 落盘：需要交接时用 plan_save 把完整计划写入计划文件
+   （Markdown，含可执行步骤）；不需要落盘时直接在回复给出；
+4. 确认：遇到方向性选择用 ask_user 弹选项，不擅自假设；
+5. 汇报：交付「分析结论 + 计划」，并说明哪些信息不足/需要用户确认。
+
+参考边界：规划可以涉及任何范围的改动建议，但执行永远留给 Build Agent。
 """
 
 
@@ -192,25 +237,13 @@ def default_build_agent() -> AgentProfile:
         id="build",
         mode="primary",
         description="默认开发 Agent：代码开发、文件编辑、Git 操作、Shell 执行。",
-        tools=[
-            # 代码开发
-            "read_file", "write_file", "delete_file", "list_dir", "file_tree",
-            "search_code", "get_file_outline", "read_focused_symbol",
-            "apply_search_replace", "apply_unified_diff",
-            "execute_command",
-            # Git
-            "git_status", "git_diff", "git_log", "git_commit", "git_branch",
-            # 代码审查
-            "review_code",
-            # 联网 / 技能 / 子任务
-            "webfetch", "webfetch_batch", "load_skill", "spawn_sub_agent",
-            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
-            "spawn_agent", "list_agents", "close_agent", "wait_agents",
-            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
-            # 流程
-            "todo_write", "ask_user",
-        ],
-        permissions={},
+        system_prompt=BUILD_PROMPT,
+        # 职责域全放行（plan 域 deny：计划文件写入是 Plan Agent 专属通道）
+        domains={
+            "read": "allow", "plan": "deny", "edit": "allow", "execute": "allow",
+            "git_write": "allow", "web": "allow", "office": "allow",
+            "collab": "allow", "interactive": "allow",
+        },
     )
 
 
@@ -218,127 +251,95 @@ def default_plan_agent() -> AgentProfile:
     return AgentProfile(
         id="plan",
         mode="primary",
-        description="规划 Agent：只读分析与方案设计，禁止修改文件与执行命令。",
+        description="规划 Agent：只读分析与方案设计，计划落盘（plan_save），不实施。",
         system_prompt=PLAN_PROMPT,
-        # 只读工具白名单 + todo_write + ask_user（规划产物与讨论）
-        tools=[
-            "todo_write",
-            "ask_user",
-            "read_file", "list_dir", "file_tree", "search_code",
-            "get_file_outline", "read_focused_symbol",
-            "git_status", "git_diff", "git_log", "git_branch", "review_code",
-            "webfetch", "webfetch_batch",
-            "load_skill",
-        ],
-        # 权限兜底：即使被授予写工具也强制 deny
-        permissions={"write_file": PERM_DENY, "apply_search_replace": PERM_DENY,
-                     "apply_unified_diff": PERM_DENY, "execute_command": PERM_DENY},
+        # 只读 + 交互 + 派生子 Agent；唯一写通道 plan_save（plan 域 allow）
+        domains={
+            "read": "allow", "plan": "allow", "edit": "deny", "execute": "deny",
+            "git_write": "deny", "web": "allow", "office": "deny",
+            "collab": "allow", "interactive": "allow",
+            "misc": "deny",
+        },
     )
 
 
-OFFICE_PROMPT = """你是一个通用办公助手（Office Agent），帮助用户完成日常工作：写作、制表、演示文稿、数据分析与资料整理。当前不聚焦于软件开发。
+OFFICE_PROMPT = """你是一名办公生产力专家（Office Agent），帮助用户完成日常工作交付：
+文档、表格、演示文稿、数据分析、图表与资料整理。你擅长把需求直接做成文件。
 
-工作准则：
-1. 产出文件：需要交付文档/表格/演示时，优先使用办公工具直接生成文件——
-   docx_create（Word）、xlsx_create（Excel）、pptx_create（PPT）、pdf_create（PDF）、
-   chart_make（图表 PNG）、data_analyze（数据统计）；
-   工具输出会给出文件保存路径，完成后务必把路径告知用户。
-2. 文档内容用规范的 Markdown 编写（标题层级/列表/表格），工具会自动排版；
-   长文档先给用户看大纲，确认后再生成全文；生成后需要补充或修改章节时
-   用 docx_append 在既有 docx 上迭代追加（可配 page_break 分页），
-   不要为改一段而重新生成整篇。
-3. 数据分析：先看数据结构与列名，再执行分析；结论要给出数字依据；
-   大数据集先抽样预览，避免一次性输出全部行。
-4. 信息不足时用 ask_user 向用户提问（提供选项），不要凭空编造业务数据；
-   用户提供的数字、名称、日期必须原样保留，不得改写。
-5. 需要外部资料时用 webfetch / webfetch_batch 查证，并在文档中注明来源。
-6. 复杂任务先用 todo_write 列出步骤清单，逐步执行并更新进度。
-7. 图表必须保留：用户内容中的 PlantUML / Mermaid 代码块（时序图、架构图、
-   流程图等）必须原样放进 docx_create / pdf_create 的 content 或 pptx 的
-   content——不要剔除、不要改写、不要转成文字描述；工具会自动把图表
-   代码块渲染成图片嵌入文档（渲染失败会保留源码文本，内容不丢）。
-   需要精细控制图表（多图命名/暗色模式等）时才用 load_skill 加载
-   diagram-to-office 技能自行渲染；UML 类图表一律用 PlantUML 而非
-   Mermaid 写。
+你的能力：
+- 产出文件：docx_create（Word）/ xlsx_create（Excel）/ pptx_create（PPT）/
+  pdf_create（PDF）/ chart_make（图表）/ data_analyze（数据分析），
+  产出保存到工作区 .outputs/，完成后务必告知用户路径；
+- 读取与再加工：docx_read / xlsx_read / pptx_read / pdf_read 读取既有
+  办公文件；OCR 系列识别图片/扫描件内文字；可读写工作区普通文件；
+- 长文档用 docx_append 增量追加，不为改一段重生成整篇。
 
-你可以读写工作区内的文件，但没有 git 与代码编辑能力；如任务涉及写代码，
-提示用户切换到 build Agent。"""
+你的工作流：
+1. 需求确认：先明确交付物形态（Word/PPT/Excel/PDF）、受众与要点；
+   关键数字/名称/日期必须来自用户或已读资料，绝不编造；
+2. 大纲先行：长文档先给大纲让用户确认，再全文生成；
+3. 图表保留：内容中的 PlantUML/Mermaid 代码块原样保留（工具自动渲染成图），
+   不剔除不改写；UML 类图表一律用 PlantUML 而非 Mermaid 写；
+4. 数据分析：先看数据结构与列名再分析，结论给出数字依据；
+   大数据集先抽样预览，避免一次性输出全部行；
+5. 自检：交付前检查——文件能否打开、数据是否准确、章节是否完整。
+
+边界：
+- 你【不】做代码开发：没有 git 提交、代码编辑、AST 工具；涉及写代码的
+  任务提示用户切到 Build Agent；
+- 执行命令仅在需要渲染图表等场景，且需用户确认（ask）；
+- 数据不足用 ask_user 提问，不臆造业务数据。"""
 
 
 def default_office_agent() -> AgentProfile:
     return AgentProfile(
         id="office",
         mode="primary",
-        description="通用办公助手：写文档、做表格、生成 PPT、数据分析与图表。",
+        description="办公助手：Word/Excel/PPT/PDF、数据分析、图表、OCR。",
         system_prompt=OFFICE_PROMPT,
-        tools=[
-            # 办公产出（docx_append：在既有 Word 上迭代追加章节）
-            "docx_create", "docx_append", "xlsx_create", "pptx_create", "pdf_create",
-            "data_analyze", "chart_make",
-            # 办公文件读取
-            "docx_read", "xlsx_read", "pptx_read", "pdf_read",
-            # OCR 识别（图片/PDF/PPT 内嵌图片文字）
-            "ocr_image", "ocr_document", "ocr_pptx",
-            # 图表渲染脚本（diagram-to-office 技能：plantuml/mermaid 转图片）
-            "execute_command",
-            # 文件读写与浏览
-            "read_file", "write_file", "list_dir", "file_tree",
-            # 资料获取
-            "webfetch", "webfetch_batch",
-            # 流程与交互
-            "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
-            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
-            "spawn_agent", "list_agents", "close_agent", "wait_agents",
-            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
-        ],
-        permissions={
-            "execute_command": PERM_ASK,
+        # 办公全开 + 文件读写 + 联网 + 协作；execute 仅 ask（图表渲染）；
+        # 无 git_write；plan 域 deny（不写计划文件）
+        domains={
+            "read": "allow", "plan": "deny", "edit": "allow", "execute": "ask",
+            "git_write": "deny", "web": "allow", "office": "allow",
+            "collab": "allow", "interactive": "allow",
         },
     )
 
 
-RESEARCH_PROMPT = """你是一个调研分析助手（Research Agent），帮助用户查证外部信息、整理资料并输出结构化报告。
+RESEARCH_PROMPT = """你是一名调研分析师（Research Agent），帮助用户查证外部信息、整理资料并输出
+结构化的调研报告或汇报材料。
 
-工作准则：
-1. 信息查证：优先使用 webfetch / webfetch_batch 抓取权威来源；
-   多来源交叉验证，不凭记忆臆测，注明每条关键结论的来源 URL；
-   抓取失败时明确告知，不要编造内容。
-2. 结构化输出与文档落盘：调研结果先给摘要（要点式），再给详细分析；
-   - 长报告用 docx_create 生成后按章节 docx_append 迭代追加（每调研完
-     一个主题就写入，不要等全部完成才动笔）；
-   - 汇报材料用 pptx_create 生成演示文稿，数据对比用 xlsx_create 表格
-     或 chart_make 图表呈现，需要 PDF 存档时用 pdf_create；
-   - 已有的 Word/PPT/Excel/PDF 资料先用 docx_read / pptx_read /
-     xlsx_read / pdf_read 读取，在既有内容基础上续写或引用。
-3. 信息不足或需求模糊时用 ask_user 提问（提供选项）澄清范围。
-4. 复杂调研（多主题/多来源）先用 todo_write 拆分任务，可用 spawn_sub_agent
-   并行调研不同子主题后汇总。
-5. 区分事实与观点：客观陈述标注来源，推断与建议单独标明。"""
+你的工作流：
+1. 澄清范围：需求模糊用 ask_user 提问（范围、深度、输出形态）；
+2. 多源查证：webfetch / webfetch_batch 抓取权威来源，多来源交叉验证；
+   不凭记忆臆测；每条关键结论标注来源 URL；抓取失败如实说明，不编造；
+3. 结构化产出：先摘要（要点式）再详细分析；长报告边调研边用 docx_create +
+   docx_append 落盘（每完成一个主题写一章）；数据对比用 xlsx_create /
+   chart_make；汇报用 pptx_create；存档用 pdf_create；
+4. 区分事实与观点：客观陈述标来源，推断与建议单独标明；
+5. 自检：交付前检查——结论是否有来源、是否有未验证假设、是否有遗漏面。
+
+边界：
+- 你不做代码开发与命令执行：只读文件 + 联网 + 生成办公文档；
+  涉及写代码/跑脚本的需求提示用户切到 Build Agent；
+- 产出物写到工作区（.outputs/），不修改业务代码文件。"""
 
 
 def default_research_agent() -> AgentProfile:
     return AgentProfile(
         id="research",
         mode="primary",
-        description="调研分析助手：网络查证、资料整理、生成调研报告与汇报材料。",
+        description="调研助手：网络查证、多源交叉、调研报告与汇报材料。",
         system_prompt=RESEARCH_PROMPT,
-        tools=[
-            # 资料获取
-            "webfetch", "webfetch_batch",
-            # 文档产出与迭代写作（调研结果落盘）
-            "docx_create", "docx_append", "pptx_create", "pdf_create",
-            "xlsx_create", "chart_make",
-            # 文件读取（本地资料/数据/OCR 识别）
-            "read_file", "list_dir", "file_tree",
-            "docx_read", "xlsx_read", "pptx_read", "pdf_read",
-            "ocr_image", "ocr_document", "ocr_pptx",
-            # 流程与交互
-            "todo_write", "ask_user", "load_skill", "spawn_sub_agent",
-            # 多 Agent 协作（P1 异步派生 + P2 agent 间合作 + 共享任务池）
-            "spawn_agent", "list_agents", "close_agent", "wait_agents",
-            "send_message", "followup_task", "create_shared_tasks", "list_shared_tasks",
-        ],
-        permissions={},
+        # 只读 + 联网 + 办公产出 + 协作；无 edit/execute/git_write；
+        # plan 域 deny（不写计划文件）
+        domains={
+            "read": "allow", "plan": "deny", "edit": "deny", "execute": "deny",
+            "git_write": "deny", "web": "allow", "office": "allow",
+            "collab": "allow", "interactive": "allow",
+            "misc": "deny",
+        },
     )
 
 
@@ -443,6 +444,9 @@ class AgentRegistry:
         内置 agent 覆盖文件通常只含 tools/permissions（minimal 持久化）：
         其余字段（system_prompt/描述/模型）为空时继承当前内置默认，
         使人格修复与增强随主程序发版自动跟进，不被旧覆盖文件冻结。
+
+        旧配置迁移：无 domains 时从 tools/permissions 反推（deny 优先），
+        保证存量 agents/*.json 升级后职责域模型可用、安全语义不变。
         """
         existing = self._agents.get(profile.id)
         if existing is not None and profile.id in BUILTIN_AGENT_IDS:
@@ -456,7 +460,43 @@ class AgentRegistry:
                 profile.temperature = existing.temperature
             if not profile.icon:
                 profile.icon = existing.icon
+        self._infer_domains_from_legacy(profile)
         self._agents[profile.id] = profile
+
+    @staticmethod
+    def _infer_domains_from_legacy(profile: AgentProfile) -> None:
+        """旧 tools+permissions 配置 → 职责域反推（仅当未声明 domains 时）。
+
+        - 白名单里有某域工具 → 该域 allow；
+        - permissions 显式 deny 的工具 → 其域 deny（最高优先）；
+        - permissions 显式 ask 的工具 → 其域 ask（除非已被 deny）；
+        - 完全没工具（tools=None）→ 保持 None（跟随默认：偏安全）。
+        """
+        if profile.domains:
+            return
+        if profile.tools is None:
+            return
+        from .permissions import TOOL_DOMAIN
+
+        deny_set = {t for t, a in (profile.permissions or {}).items() if a == "deny"}
+        ask_set = {t for t, a in (profile.permissions or {}).items() if a == "ask"}
+        inferred: Dict[str, str] = {}
+        for t in profile.tools:
+            dom = TOOL_DOMAIN.get(t)
+            if not dom or dom == "misc":
+                continue
+            if dom not in inferred or inferred[dom] == "deny":
+                inferred[dom] = "allow"
+        for t in deny_set:
+            dom = TOOL_DOMAIN.get(t)
+            if dom:
+                inferred[dom] = "deny"
+        for t in ask_set:
+            dom = TOOL_DOMAIN.get(t)
+            if dom and inferred.get(dom) != "deny":
+                inferred[dom] = "ask"
+        if inferred:
+            profile.domains = inferred
 
     def delete(self, agent_id: str) -> None:
         """删除一个自定义 agent（内置 agent 用 register(默认) 恢复，不走这里）。"""

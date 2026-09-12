@@ -93,7 +93,11 @@ def test_delete_file_in_write_scope_tools():
 
 def test_build_agent_has_delete_file():
     from litework.core.agent_profile import default_build_agent
-    assert "delete_file" in default_build_agent().tools
+    from litework.core.permissions import domain_of
+
+    # 职责域模型：build 的 edit 域 allow → delete_file 可用
+    assert default_build_agent().domains.get("edit") == "allow"
+    assert domain_of("delete_file") == "edit"
 
 
 async def test_delete_session_stops_background_agents(tmp_path):

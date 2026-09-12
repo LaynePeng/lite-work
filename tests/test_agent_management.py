@@ -43,8 +43,9 @@ async def test_builtin_agent_tools_override_and_reset(tmp_path):
     r = app.agent_delete("office")
     assert r["reset"] is True
     assert not os.path.isfile(override_path)
-    assert app.get_agent("office").tools == app.get_agent("office").tools  # 默认白名单
-    assert "docx_create" in (app.get_agent("office").tools or [])
+    # 恢复默认职责域（office 域 allow）→ docx_create 在 registry 工具面可用
+    restored = app.create_agent_registry("office")
+    assert "docx_create" in restored.names()
 
 
 async def test_custom_agent_create_and_delete(tmp_path):

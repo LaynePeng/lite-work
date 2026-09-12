@@ -7,6 +7,30 @@ import { api } from "../api";
 import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, ModelMetaStatus, PluginInfo, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
 
+// 职责域 UI 定义（与后端 core/permissions.py 的 DOMAIN_ORDER/DOMAIN_LABELS 对齐）
+const AGENT_DOMAINS_UI: { key: string; label: string }[] = [
+  { key: "read", label: "读取与搜索（文件/AST/Git 查看/代码审查）" },
+  { key: "plan", label: "规划产出（plan_save 写计划文件）" },
+  { key: "edit", label: "修改文件（写入/精确编辑/删除）" },
+  { key: "execute", label: "执行命令（终端/脚本）" },
+  { key: "git_write", label: "Git 写入（提交）" },
+  { key: "web", label: "联网（webfetch / 批量抓取）" },
+  { key: "office", label: "办公生产力（文档/表格/PPT/PDF/OCR/图表）" },
+  { key: "collab", label: "多 Agent 协作（派生/消息/共享任务）" },
+  { key: "interactive", label: "交互（提问/待办/技能加载）" },
+  { key: "misc", label: "其他/未分类（MCP 与插件动态工具）" },
+];
+const AGENT_DOMAIN_ACTIONS: { value: "allow" | "deny" | "ask"; label: string }[] = [
+  { value: "allow", label: "允许" },
+  { value: "ask", label: "询问" },
+  { value: "deny", label: "禁止" },
+];
+// 后端 core/permissions.py 的 DEFAULT_DOMAIN_ACTIONS 同款（前端兜底显示）
+const AGENT_DEFAULT_DOMAINS: Record<string, "allow" | "deny" | "ask"> = {
+  read: "allow", plan: "deny", edit: "deny", execute: "deny", git_write: "deny",
+  web: "allow", office: "deny", collab: "allow", interactive: "allow", misc: "ask",
+};
+
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
 // 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
 // "1.0.0rc0" 视作 1.0.0 的预发布版（1.0.0 > 1.0.0rc0 > 1.0.0-beta）
@@ -121,7 +145,14 @@ export default function SettingsModal({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMsg, setAgentMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean; model?: string; icon?: string }>>({});
+  const [agentDrafts, setAgentDrafts] = useState<Record<string, {
+    tools: string[];
+    useAll: boolean;
+    model?: string;
+    icon?: string;
+    domains?: Record<string, "allow" | "deny" | "ask"> | null;
+    extraTools?: string[];
+  }>>({});
   const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "",
     mode: "subagent" as "primary" | "subagent", model: "", icon: "" });
 
@@ -309,8 +340,16 @@ export default function SettingsModal({
         for (const a of Object.values(r.agents)) {
           if (!next[a.id]) {
             const t = a.tools;
-            next[a.id] = { tools: Array.isArray(t) ? t : r.tools.map((x) => x.name), useAll: !Array.isArray(t),
-              model: a.model || "", icon: a.icon || "" };
+            next[a.id] = {
+              tools: Array.isArray(t) ? t : r.tools.map((x) => x.name),
+              useAll: !Array.isArray(t),
+              model: a.model || "",
+              icon: a.icon || "",
+              // UI 直接读写完整域对象：未配置时展开为后端默认（所见即所得）；
+              // 保存时整对象提交（用户改过任一域即持久化完整域配置）
+              domains: a.domains ? { ...a.domains } : { ...AGENT_DEFAULT_DOMAINS },
+              extraTools: a.extra_tools ?? [],
+            };
           }
         }
         return next;
@@ -484,6 +523,8 @@ export default function SettingsModal({
       await api.saveAgent({
         id: agentId,
         tools: draft.useAll ? null : draft.tools,
+        domains: draft.domains ?? undefined,
+        extra_tools: draft.extraTools?.length ? draft.extraTools : undefined,
         model: draft.model || null,
         icon: draft.icon || "",
       });
@@ -1760,33 +1801,54 @@ export default function SettingsModal({
                               )}
                             </div>
                           </div>
-                          <label className="mcp-toggle" style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                            <input type="checkbox" checked={draft.useAll}
-                              onChange={(e) => setAgentDrafts((p) => ({
-                                ...p, [a.id]: { ...p[a.id], useAll: e.target.checked,
-                                  tools: p[a.id]?.tools || agentAllTools.map((t) => t.name) },
-                              }))} />
-                            使用全部工具（含未来新增插件）
-                          </label>
-                          {!draft.useAll && (
+                          <div className="agent-domain-editor">
+                            职责域权限（决定该 Agent 可用工具面）：
+                            {AGENT_DOMAINS_UI.map((d) => {
+                              const cur = (draft.domains ?? AGENT_DEFAULT_DOMAINS)[d.key] ?? "deny";
+                              return (
+                                <div key={d.key} className="agent-domain-row">
+                                  <span className="agent-domain-label" title={d.label}>{d.label}</span>
+                                  <div className="agent-domain-actions">
+                                    {AGENT_DOMAIN_ACTIONS.map((act) => (
+                                      <button key={act.value} type="button"
+                                        className={`domain-action-btn ${cur === act.value ? "active" : ""}`}
+                                        onClick={() => setAgentDrafts((p) => ({
+                                          ...p, [a.id]: {
+                                            ...p[a.id],
+                                            domains: { ...(p[a.id]?.domains ?? AGENT_DEFAULT_DOMAINS), [d.key]: act.value },
+                                          },
+                                        }))}>
+                                        {act.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <details className="agent-advanced" style={{ marginTop: 8 }}>
+                            <summary>高级：工具级微调（额外放行未映射工具，一般无需修改）</summary>
+                            <p className="mcp-hint" style={{ marginTop: 4 }}>
+                              勾选的工具会追加放行（MCP / 插件动态工具等）；职责域设为「禁止」的工具即使在此勾选也会被拦截。
+                            </p>
                             <div className="agent-tool-grid">
                               {agentAllTools.map((t) => {
-                                const checked = draft.tools.includes(t.name);
+                                const extra = draft.extraTools ?? [];
+                                const checked = extra.includes(t.name);
                                 return (
-                                  <label key={t.name} className="agent-tool-check"
-                                    title={t.description}>
+                                  <label key={t.name} className="agent-tool-check" title={t.description}>
                                     <input type="checkbox" checked={checked}
                                       onChange={(e) => {
-                                        const next = new Set(draft.tools);
+                                        const next = new Set(extra);
                                         if (e.target.checked) next.add(t.name); else next.delete(t.name);
-                                        setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], tools: [...next] } }));
+                                        setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], extraTools: [...next] } }));
                                       }} />
                                     {t.name}
                                   </label>
                                 );
                               })}
                             </div>
-                          )}
+                          </details>
                           {!isBuiltin && (
                             <div className="form-group" style={{ marginTop: 6, marginBottom: 0 }}>
                               <label>该角色的模型（派生时使用）</label>

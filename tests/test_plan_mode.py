@@ -49,16 +49,22 @@ def test_plan_agent_prompt_injects_role_into_system_prompt(tmp_path):
     )
 
     # 1. Plan 角色人格注入，且只出现一次（FINAL_REPORT 由 builder 统一前置，不重复）
-    assert "规划型" in plan_prompt
-    assert "禁止修改任何文件" in plan_prompt
+    assert "技术规划师" in plan_prompt
+    assert "不直接实施" in plan_prompt
     assert plan_prompt.count(FINAL_REPORT_REQUIREMENT) == 1
     # 2. 共享头：交付要求在最前，两个 Agent 的 prompt 均以其开头（缓存友好）
     assert plan_prompt.startswith(FINAL_REPORT_REQUIREMENT)
     assert build_prompt.startswith(FINAL_REPORT_REQUIREMENT)
-    # 3. build 无专属提示时与通用版逐字节一致（存量会话缓存不受影响）
-    assert SystemPromptBuilder.build(str(tmp_path), app.build_registry().get_tools()) == build_prompt
-    # 4. Plan 的工具清单不含写工具（角色声明与实际工具集一致）
-    assert "write_file" not in plan_prompt
+    # 3. build 有专属提示时与通用版不同（各自独立、缓存前缀按 agent 稳定）
+    build_with_prompt = SystemPromptBuilder.build(
+        str(tmp_path), app.build_registry().get_tools(),
+        agent_prompt=app.get_agent("build").system_prompt
+    )
+    assert build_with_prompt != build_prompt
+    assert "资深软件工程师" in build_with_prompt
+    # 4. Plan 的工具清单不含写工具（角色声明与实际工具集一致）；
+    #    提示词正文允许提到 write_file 作为"你没有的"示例，但工具清单格式不能出现
+    assert "- **write_file**" not in plan_prompt
     assert "- **execute_command**" not in plan_prompt   # 工具清单无此工具（规则文本中的提及不计）
 
 
@@ -89,8 +95,8 @@ async def test_plan_mode_never_leaks_write_tools(tmp_path):
     assert WRITE_TOOLS.isdisjoint(schema), f"plan 模式泄漏写工具: {sorted(WRITE_TOOLS & set(schema))}"
     # 1.5 全链路：Plan 角色人格确实进入发给 LLM 的 System Prompt
     assert app._mock_adapter.seen_systems, "未捕获 system prompt"
-    assert "规划型" in app._mock_adapter.seen_systems[0]
-    assert "禁止修改任何文件" in app._mock_adapter.seen_systems[0]
+    assert "技术规划师" in app._mock_adapter.seen_systems[0]
+    assert "不直接实施" in app._mock_adapter.seen_systems[0]
     # 2. 写文件未发生
     assert not os.path.exists(tmp_path / "x.txt")
     # 3. 注册表执行写工具返回未注册错误（防 LLM 越权调用）
@@ -282,15 +288,15 @@ async def test_plan_agent_gets_plan_file_guidance(tmp_path):
     handle = tm.start("pf-new-session", "帮我规划", agent_id="plan")
     await handle.task
     system = app._mock_adapter.seen_systems[0]
-    assert "请把本会话的规划产出写入" in system
+    assert "plan_save" in system
     assert "pf-new-session.md" in system
 
-    # 已有计划文件的会话：引导增量更新
+    # 已有计划文件的会话：引导用 plan_save 更新（整体重写语义）
     handle = tm.start("pf-guide-session", "继续规划", agent_id="plan")
     await handle.task
     system = app._mock_adapter.seen_systems[-1]
     assert "已有计划文件" in system
-    assert "增量更新" in system
+    assert "plan_save" in system
 
 
 async def test_non_plan_agent_without_switch_no_plan_hint(tmp_path):

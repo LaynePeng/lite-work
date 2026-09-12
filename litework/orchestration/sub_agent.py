@@ -7,7 +7,7 @@
 结果压缩：最终产出汇总为精简报告 + Token 消耗归集到父级事件。
 
 第11课增强：角色来源扩展为 AgentRegistry —— 用户自定义的 subagent
-（mode="subagent"）也能被 spawn_sub_agent 直接派生使用。
+（mode="subagent"）也能被派生使用。
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ ROLE_TOOLS: Dict[str, List[str]] = {
 # 子 Agent 禁用的工具：交互工具（通道未转发）+ 编排者专属（唤醒/建池）。
 # 嵌套派生按深度动态放开：depth < agent_spawn_depth 时子 Agent 获得 spawn_agent
 # （可再派一层，深度受配置上限约束）；达到上限则排除。
-SUB_AGENT_EXCLUDE_BASE = ["spawn_sub_agent", "close_agent", "wait_agents",
+SUB_AGENT_EXCLUDE_BASE = ["close_agent", "wait_agents",
                           "followup_task", "ask_user", "create_shared_tasks"]
 
 

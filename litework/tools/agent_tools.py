@@ -4,7 +4,7 @@
 """多 Agent 协作工具（Phase 1）：spawn_agent / list_agents / close_agent / wait_agents。
 
 设计对齐 docs/multi-agent-design.md §3。协作模式配方见 orchestration/collab_policy.py。
-spawn_sub_agent（同步语义）保留为兼容包装，逐步迁移到 spawn_agent。
+（旧同步工具 spawn_sub_agent 已移除，统一走异步 spawn_agent。）
 """
 from __future__ import annotations
 
@@ -96,8 +96,16 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
             if oid:
                 try:
                     prof = app.get_agent(oid)
-                    parent_denies = [t for t, act in (prof.permissions or {}).items()
-                                     if act == "deny"]
+                    if prof.domains:
+                        # 职责域模型：deny 域的全部已知工具禁止传给子 Agent
+                        from ..core.permissions import TOOL_DOMAIN, resolved_domains
+
+                        resolved = resolved_domains(prof.domains)
+                        parent_denies = [t for t, dom in TOOL_DOMAIN.items()
+                                         if resolved.get(dom) == "deny"]
+                    else:
+                        parent_denies = [t for t, act in (prof.permissions or {}).items()
+                                         if act == "deny"]
                 except Exception:
                     pass
         result = await manager.spawn(

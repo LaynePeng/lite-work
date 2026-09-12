@@ -14,7 +14,7 @@ triggers: 调研,调研报告,行业分析,竞品分析,查资料,research
    交付格式；模糊时用 ask_user 提供选项澄清。
 
 2. **拆分任务**：复杂调研用 todo_write 建立清单；3 个以上独立子主题时
-   可用 spawn_sub_agent（roleType=explorer）并行调研。
+   可用 spawn_agent（role=explorer）并行调研。
 
 3. **多来源查证**：用 webfetch / webfetch_batch 抓取权威来源
    （官网、白皮书、权威媒体、行业报告）；单条关键结论至少 2 个来源交叉验证；

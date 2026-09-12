@@ -346,9 +346,19 @@ class TaskHandle:
             return None
 
     def _can_write(self, profile) -> bool:
-        """从 profile.tools + permissions 推导该 Agent 是否具备写能力。"""
+        """从 profile 推导该 Agent 是否具备写能力（职责域模型优先）。
+
+        domains：edit / execute / git_write 任一域 allow 即视为可写型
+        （execute=ask 或 office 等受限可写归为可写——重点是区分「纯只读」）。
+        旧模型（tools+permissions）仍兼容：tools=None=全量，deny 排除后判断。
+        """
         if profile is None:
             return False
+        if profile.domains:
+            from ..core.permissions import resolved_domains
+
+            resolved = resolved_domains(profile.domains)
+            return any(resolved.get(d) == "allow" for d in ("edit", "execute", "git_write"))
         tools = profile.tools  # None = 全量
         denied = {k for k, v in (profile.permissions or {}).items() if v == "deny"}
         if tools is None:
@@ -432,9 +442,11 @@ class TaskHandle:
             if cur_is_plan:
                 if exists:
                     return (f"\n\n计划文件：本会话已有计划文件 `{plan_path}`，"
-                            "你可以在其基础上增量更新（该文件在工作区内，plan 会话可写）")
-                return (f"\n\n计划文件：请把本会话的规划产出写入 `{plan_path}`"
-                        "（Markdown 格式，含可执行步骤），供后续切换到执行型 Agent 时直接落地。")
+                            "你可以用 plan_save 工具在其基础上更新"
+                            "（注意：plan_save 是整体重写，增量请传入含原内容的完整版本）")
+                return (f"\n\n计划文件：请用 plan_save 工具把本会话的规划产出写入计划文件 "
+                        f"`{plan_path}`（Markdown 格式，含可执行步骤），"
+                        "供后续切换到执行型 Agent 时直接落地。")
             return ""
         except Exception:
             logger.debug("[Task %s] 计划文件交接提示生成失败", self.task_id, exc_info=True)
