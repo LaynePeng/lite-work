@@ -87,7 +87,7 @@ describe("ToolPanel · 上下文面板（仪表 + 账单 + 平铺明细）", () 
     expect(textOf(container)).toContain("本会话累计成本");
     expect(textOf(container)).toContain("$0.0225");   // 本任务
     expect(textOf(container)).toContain("$0.0003");   // 本次调用
-    expect(textOf(container)).toContain("90.0%");     // 缓存命中率（本任务）
+    expect(textOf(container)).toContain("90.0%");     // 缓存命中率（会话累计）
     expect(textOf(container)).toContain("缓存帮你省下（会话累计）");
     expect(textOf(container)).toContain("≈ $0.2381"); // 1.62M × (0.15-0.003)/1M（会话累计口径）
   });

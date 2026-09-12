@@ -187,9 +187,9 @@ function ContextPanel({ stats, history, running }: {
         </div>
         {(task.cache_hit_rate != null || saved != null) && (
           <div className="ctx2-cachewrap">
-            <div className="ctx2-meterrow"><span>缓存命中率（本任务）</span><b>{pct(task.cache_hit_rate)}</b></div>
+            <div className="ctx2-meterrow"><span>缓存命中率（会话累计）</span><b>{pct(session.cache_hit_rate)}</b></div>
             <div className="ctx2-meter">
-              <i style={{ width: `${Math.min(100, Math.max(0, (task.cache_hit_rate ?? 0) * 100))}%` }} />
+              <i style={{ width: `${Math.min(100, Math.max(0, (session.cache_hit_rate ?? 0) * 100))}%` }} />
             </div>
             {saved != null && saved > 0 && (
               <div className="ctx2-meterrow" title="整个会话所有任务的缓存命中部分，若全按未命中价计费需多花的金额（未命中全价 − 命中折扣价）">
