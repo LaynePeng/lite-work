@@ -145,6 +145,12 @@ export default function SettingsModal({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMsg, setAgentMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
+  // 展开某个 Agent 的编辑区时，把该卡滚动到可视区（弹窗唯一滚动层内就近显示）
+  useEffect(() => {
+    if (!editingAgent || !bodyRef.current) return;
+    const el = bodyRef.current.querySelector(`[data-agent-id="${editingAgent}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [editingAgent]);
   const [agentDrafts, setAgentDrafts] = useState<Record<string, {
     tools: string[];
     useAll: boolean;
@@ -1761,7 +1767,7 @@ export default function SettingsModal({
                   const isBuiltin = ["build", "plan", "office", "research"].includes(a.id);
                   const isEditing = editingAgent === a.id;
                   return (
-                    <div className="skill-item" key={a.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+                    <div className="skill-item" key={a.id} data-agent-id={a.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
                       <div className="skill-item-main" style={{ width: "100%" }}>
                         <span className="skill-item-name">{a.id}</span>
                         {isBuiltin

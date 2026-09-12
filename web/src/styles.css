@@ -5988,17 +5988,19 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-1);
   border-radius: 8px;
   font-size: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  /* 2 列 × 5 行：编辑区高度减半，配合弹窗 max-height 大多数情况零滚动条 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
 }
 
 .agent-domain-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   padding: 2px 0;
+  min-width: 0;
 }
 
 .agent-domain-label {
@@ -6007,6 +6009,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11px;
 }
 
 .agent-domain-actions {
