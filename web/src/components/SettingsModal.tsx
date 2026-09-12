@@ -1745,8 +1745,8 @@ export default function SettingsModal({
             <div className={`settings-section settings-tabpanel ${activeTab === "agents" ? "active" : ""}`}>
               <h3>Agents（工作模式）</h3>
               <p className="mcp-hint">
-                每个 Agent 是一套独立的工作人格与工具集。内置 build/plan/office/research 可调整工具白名单；
-                可新建自定义 Agent（描述 + 系统提示词 + 工具集）。工具覆盖内置与所有已安装插件。
+                每个 Agent 是一套独立的工作人格与职责域权限。内置 build/plan/office/research 可按职责域调整工具面；
+                可新建自定义 Agent（描述 + 系统提示词 + 权限）。
               </p>
               {agentMsg && <div className={`test-result ${agentMsg.ok ? "ok" : "error"}`}>{agentMsg.text}</div>}
 
@@ -1755,7 +1755,7 @@ export default function SettingsModal({
                 <button className="btn-test" onClick={() => void refreshAgents()}>刷新</button>
               </div>
 
-              <div className="skills-list">
+              <div className="skills-list agents-list">
                 {agents.map((a) => {
                   const draft = agentDrafts[a.id] || { tools: [], useAll: true, icon: "" };
                   const isBuiltin = ["build", "plan", "office", "research"].includes(a.id);
@@ -1771,7 +1771,7 @@ export default function SettingsModal({
                         <div className="skill-item-actions">
                           <button className="btn-test" disabled={agentBusy}
                             onClick={() => setEditingAgent(isEditing ? null : a.id)}>
-                            {isEditing ? "收起" : "编辑工具"}
+                            {isEditing ? "收起" : "编辑权限"}
                           </button>
                           {!isBuiltin && (
                             <button className="btn-test" disabled={agentBusy}

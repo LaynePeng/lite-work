@@ -5955,8 +5955,15 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 4px;
-  max-height: 260px;
-  overflow-y: auto;
+  /* 不做内部滚动（max-height/overflow）：Agent 页只保留弹窗一层滚动，
+     避免三层嵌套滚动条；网格自然撑开由外层统一滚动 */
+}
+
+/* Agent 页专用：解除 skills-list 的高度限制（该样式为 Skills 页共用），
+   只滚弹窗一层，最多两层滚动 */
+.skills-list.agents-list {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .agent-tool-check {
