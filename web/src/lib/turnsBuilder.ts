@@ -106,7 +106,7 @@ function consume(cache: TurnsCache, messages: Msg[], start: number): void {
       cache.openTurnIdx = turnIdx;
       const items = [...turns[turnIdx].items];
       if (m.content) {
-        items.push({ type: "text", id: `text-${turns.length}-${items.length}`, content: m.content });
+        items.push({ type: "text", id: `text-${turns.length}-${items.length}`, content: m.content, agent: m.agent });
       }
       for (const tc of toolCalls) {
         const card: ToolCardInfo = {

@@ -11,8 +11,21 @@ import { DiffPre, DiffStats, isFileDiff } from "./FileDiff";
 import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
 import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
+import { agentIconOf } from "../lib/agentMeta";
 
 // ---------------------------------------------------------------- 渲染助手
+
+/** assistant 头像：按消息/条目的 agent 身份显示对应图标；
+ *  无标记（历史消息）回退应用默认图标 */
+function AgentAvatar({ agent, size = 26 }: { agent?: string; size?: number }) {
+  if (!agent) return <AppIcon size={size} />;
+  return (
+    <div className="agent-avatar-emoji" style={{ width: size, height: size, fontSize: size * 0.62 }}
+         title={agent}>
+      {agentIconOf(agent)}
+    </div>
+  );
+}
 
 function ToolIcon({ name }: { name: string }) {
   const emoji = name.startsWith("git")
@@ -178,7 +191,7 @@ function WorkItems({ items, streaming = false }: { items: WorkItem[]; streaming?
         if (item.type === "text") {
           return (
             <div className="msg-row assistant timeline-text" key={item.id}>
-              <div className="assistant-avatar"><AppIcon size={26} /></div>
+              <AgentAvatar agent={item.agent} />
               <div className="bubble assistant-bubble">
                 <Markdown text={item.content} />
                 {streaming && item.id === items[items.length - 1]?.id && <span className="cursor"><span /></span>}
@@ -223,7 +236,7 @@ function MessageBubble({ message }: { message: Msg }) {
   }
   return (
     <div className="msg-row assistant">
-      <div className="assistant-avatar"><AppIcon size={26} /></div>
+      <AgentAvatar agent={message.agent} />
       <div className="bubble assistant-bubble">
         {message.content && <Markdown text={message.content} />}
       </div>
@@ -267,7 +280,7 @@ const TurnItem = memo(function TurnItem({ turn }: { turn: RenderTurn }) {
           )}
           {turn.assistant && turn.assistant.content && (
             <div className="msg-row assistant">
-              <div className="assistant-avatar"><AppIcon size={26} /></div>
+              <AgentAvatar agent={turn.assistant.agent} />
               <div className="bubble assistant-bubble">
                 <Markdown text={turn.assistant.content} />
               </div>

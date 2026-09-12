@@ -5973,6 +5973,48 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-2);
 }
 
+/* ==================== Agent 图标选择器 / 气泡头像 ==================== */
+
+.agent-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-icon-choice {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.agent-icon-choice:hover {
+  background: var(--bg-2);
+}
+
+.agent-icon-choice.active {
+  border-color: var(--accent, #4a9eff);
+  background: var(--bg-2);
+}
+
+.agent-avatar-emoji {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-2);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 /* ==================== 产出物 Tab（AGI 通用入口） ==================== */
 
 .outputs-panel {

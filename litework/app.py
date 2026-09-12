@@ -1192,11 +1192,14 @@ class AgentApp:
         is_builtin = existing is not None and existing.id in ("build", "plan", "office", "research")
 
         if is_builtin:
-            # 内置 agent：只允许覆盖 tools / permissions（prompt/人格跟随主程序发版）
+            # 内置 agent：只允许覆盖 tools / permissions / icon
+            # （prompt/人格跟随主程序发版，图标是用户偏好允许自定义）
             tools = profile_data.get("tools")
             permissions = profile_data.get("permissions")
             if "tools" in profile_data:
                 existing.tools = tools if isinstance(tools, list) else None
+            if "icon" in profile_data:
+                existing.icon = str(profile_data.get("icon") or "")
             if permissions is not None:
                 existing.permissions = {str(k): str(v) for k, v in permissions.items()
                                         if v in ("allow", "deny", "ask")}
@@ -1225,6 +1228,8 @@ class AgentApp:
         if minimal:
             data = {"id": profile.id, "tools": profile.tools,
                     "permissions": profile.permissions}
+            if profile.icon:
+                data["icon"] = profile.icon
         else:
             data = profile.to_dict()
         with open(path, "w", encoding="utf-8") as f:

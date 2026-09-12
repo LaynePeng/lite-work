@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, ModelMetaStatus, PluginInfo, SkillInfo } from "../types";
+import { ICON_CHOICES } from "../lib/agentMeta";
 
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
 // 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
@@ -120,9 +121,9 @@ export default function SettingsModal({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMsg, setAgentMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean; model?: string }>>({});
+  const [agentDrafts, setAgentDrafts] = useState<Record<string, { tools: string[]; useAll: boolean; model?: string; icon?: string }>>({});
   const [newAgentForm, setNewAgentForm] = useState({ name: "", description: "", prompt: "",
-    mode: "subagent" as "primary" | "subagent", model: "" });
+    mode: "subagent" as "primary" | "subagent", model: "", icon: "" });
 
   // 设置弹窗滚动容器：所有 tab 面板同格叠加渲染后，弹窗高度固定为最高面板；
   // 切 tab 时把内部滚动复位到顶部，避免停留在上个 tab 的滚动位置。
@@ -309,7 +310,7 @@ export default function SettingsModal({
           if (!next[a.id]) {
             const t = a.tools;
             next[a.id] = { tools: Array.isArray(t) ? t : r.tools.map((x) => x.name), useAll: !Array.isArray(t),
-              model: a.model || "" };
+              model: a.model || "", icon: a.icon || "" };
           }
         }
         return next;
@@ -484,6 +485,7 @@ export default function SettingsModal({
         id: agentId,
         tools: draft.useAll ? null : draft.tools,
         model: draft.model || null,
+        icon: draft.icon || "",
       });
       setAgentMsg({ ok: true, text: `Agent ${agentId} 已保存` });
       setEditingAgent(null);
@@ -514,9 +516,10 @@ export default function SettingsModal({
         tools: null,
         mode: newAgentForm.mode,
         model: newAgentForm.model || null,
+        icon: newAgentForm.icon || "",
       });
       setAgentMsg({ ok: true, text: `Agent ${name} 已创建` });
-      setNewAgentForm({ name: "", description: "", prompt: "", mode: "subagent", model: "" });
+      setNewAgentForm({ name: "", description: "", prompt: "", mode: "subagent", model: "", icon: "" });
       void refreshAgents();
     } catch (err) {
       setAgentMsg({ ok: false, text: `创建失败: ${(err as Error).message}` });
@@ -1713,7 +1716,7 @@ export default function SettingsModal({
 
               <div className="skills-list">
                 {agents.map((a) => {
-                  const draft = agentDrafts[a.id] || { tools: [], useAll: true };
+                  const draft = agentDrafts[a.id] || { tools: [], useAll: true, icon: "" };
                   const isBuiltin = ["build", "plan", "office", "research"].includes(a.id);
                   const isEditing = editingAgent === a.id;
                   return (
@@ -1737,6 +1740,26 @@ export default function SettingsModal({
                       </div>
                       {isEditing && (
                         <div className="agent-tool-editor">
+                          <div className="form-group" style={{ marginTop: 0, marginBottom: 6 }}>
+                            <label>图标（显示在对话气泡与 Agent 选择条）</label>
+                            <div className="agent-icon-picker" role="group" aria-label="选择图标">
+                              {ICON_CHOICES.map((ic) => (
+                                <button key={ic} type="button"
+                                  className={`agent-icon-choice ${draft.icon === ic ? "active" : ""}`}
+                                  onClick={() => setAgentDrafts((p) => ({
+                                    ...p, [a.id]: { ...p[a.id], icon: draft.icon === ic ? "" : ic },
+                                  }))}
+                                  title={draft.icon === ic ? "点击清除（回退默认图标）" : ic}>
+                                  {ic}
+                                </button>
+                              ))}
+                              {draft.icon && (
+                                <button type="button" className="agent-icon-choice active"
+                                  onClick={() => setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], icon: "" } }))}
+                                  title="清除已选图标（回退默认）">✕</button>
+                              )}
+                            </div>
+                          </div>
                           <label className="mcp-toggle" style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                             <input type="checkbox" checked={draft.useAll}
                               onChange={(e) => setAgentDrafts((p) => ({
@@ -1826,6 +1849,14 @@ export default function SettingsModal({
                   <option value="">模型：跟随全局</option>
                   {agentModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
+              </div>
+              <div className="agent-icon-picker" style={{ marginTop: 8 }} role="group" aria-label="选择图标">
+                {ICON_CHOICES.map((ic) => (
+                  <button key={ic} type="button"
+                    className={`agent-icon-choice ${newAgentForm.icon === ic ? "active" : ""}`}
+                    onClick={() => setNewAgentForm((p) => ({ ...p, icon: p.icon === ic ? "" : ic }))}
+                    title={ic}>{ic}</button>
+                ))}
               </div>
               <div className="form-actions" style={{ marginTop: 8 }}>
                 <button className="btn-test" disabled={agentBusy || !newAgentForm.name.trim()}

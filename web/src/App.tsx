@@ -199,6 +199,9 @@ export default function App() {
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [currentAgent, setCurrentAgent] = useState<string>("build");
+  // 当前任务的 agent 身份（发消息时记录）：llm:stream 流式 chunk 创建
+  // 文本 WorkItem 时打标，让气泡图标按产生该内容的 agent 显示
+  const currentAgentRef = useRef<string>("build");
   const [success, setSuccess] = useState<string | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
   const [outputRevision, setOutputRevision] = useState(0);
@@ -1014,7 +1017,7 @@ export default function App() {
           const last = cur.items[cur.items.length - 1];
           const items: WorkItem[] = last?.type === "text"
             ? [...cur.items.slice(0, -1), { ...last, content: last.content + ev.data.chunk }]
-            : [...cur.items, { type: "text" as const, id: `s${Date.now()}-${Math.random()}`, content: ev.data.chunk }];
+            : [...cur.items, { type: "text" as const, id: `s${Date.now()}-${Math.random()}`, content: ev.data.chunk, agent: currentAgentRef.current }];
           streamingRefs.current.set(sid, { ...cur, items });
           scheduleStreamFlush(sid);
           break;
@@ -1718,6 +1721,7 @@ export default function App() {
 
       try {
         pushLog("➤ 提交任务…");
+        currentAgentRef.current = currentAgent;
         const resp = await api.chat(sid, prompt, currentAgent, reasoningEffort);
         if (resp.queued) {
           // 后端确认入队：当前任务继续跑，不覆盖 taskIds/SSE 连接
@@ -1791,6 +1795,7 @@ export default function App() {
     streamingRefs.current.set(targetSid, { items: [] });
     void (async () => {
       try {
+        currentAgentRef.current = currentAgent;
         const resp = await api.chat(targetSid, prompt, currentAgent, reasoning);
         const { task_id } = resp;
         taskIdsRef.current.set(targetSid, task_id);

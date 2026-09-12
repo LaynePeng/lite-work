@@ -130,6 +130,7 @@ class AgentProfile:
     - tools:         允许使用的工具列表（None = 全部；[] = 只读）
     - permissions:   工具权限覆盖 {工具名或通配: "deny"|"allow"|"ask"}
     - hidden:        是否在 UI 隐藏
+    - icon:          图标（emoji 字符串，供前端气泡/选择器显示；空 = 前端回退默认映射）
     """
 
     id: str
@@ -141,6 +142,7 @@ class AgentProfile:
     tools: Optional[List[str]] = None
     permissions: Dict[str, str] = field(default_factory=dict)
     hidden: bool = False
+    icon: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -152,6 +154,7 @@ class AgentProfile:
             "tools": self.tools,
             "permissions": self.permissions,
             "hidden": self.hidden,
+            "icon": self.icon,
         }
 
     @classmethod
@@ -166,6 +169,7 @@ class AgentProfile:
             tools=data.get("tools"),
             permissions=data.get("permissions") or {},
             hidden=bool(data.get("hidden", False)),
+            icon=str(data.get("icon") or ""),
         )
 
 
@@ -450,6 +454,8 @@ class AgentRegistry:
                 profile.model = existing.model
             if profile.temperature is None:
                 profile.temperature = existing.temperature
+            if not profile.icon:
+                profile.icon = existing.icon
         self._agents[profile.id] = profile
 
     def delete(self, agent_id: str) -> None:

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
+import { AGENT_META } from "../lib/agentMeta";
 
 /** 协作模式图标：插件自带 logo（icon.svg 等），加载失败回退默认图。 */
 function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
@@ -104,14 +105,12 @@ export default function Composer({
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [collabOpen]);
-  // Agent 图标与中文名（AGI 通用入口：办公/调研/代码一站式）
-  const AGENT_META: Record<string, { icon: string; label: string }> = {
-    build: { icon: "💻", label: "代码" },
-    plan: { icon: "📋", label: "规划" },
-    office: { icon: "📄", label: "办公" },
-    research: { icon: "🔎", label: "调研" },
+  // Agent 图标与中文名（共享模块；fallback：profile.icon → 内置映射 → 🤖）
+  const agentMeta = (id: string) => {
+    const p = agents.find((x) => x.id === id);
+    if (p?.icon?.trim()) return { icon: p.icon.trim(), label: p.description || id };
+    return AGENT_META[id] ?? { icon: "🤖", label: id };
   };
-  const agentMeta = (id: string) => AGENT_META[id] ?? { icon: "🤖", label: id };
 
   // ------------------------------------------------------------ 输入历史
 
