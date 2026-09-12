@@ -426,13 +426,13 @@ export default function Composer({
       {primary.length > 0 && (
         <div className="agent-bar" role="group" aria-label="选择 Agent">
           <span className="agent-bar-label">Agent:</span>
-          {primary.map((a) => {
+          {primary.map((a, i) => {
             const meta = agentMeta(a.id);
             return (
               <button
                 key={a.id}
                 className={`agent-btn ${currentAgent === a.id ? "active" : ""}`}
-                title={a.description}
+                title={`${a.description}（快捷键 Alt+${i + 1}）`}
                 onClick={() => onSelectAgent(a.id)}
                 disabled={disabled || running}
               >

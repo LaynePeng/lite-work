@@ -518,9 +518,18 @@ export default function App() {
     void refreshAll();
   }, [refreshAll]);
 
-  // Tab 键切换 agent
+  // Alt+数字 选中对应 primary agent；Tab 键循环切换 agent
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Alt+N：直接选中第 N 个 primary agent（build/plan/office/research → 1/2/3/4）
+      if (e.altKey && !e.ctrlKey && !e.metaKey && /^[1-9]$/.test(e.key)) {
+        const primary = agents.filter((a) => a.mode !== "subagent");
+        const idx = Number(e.key) - 1;
+        if (idx >= primary.length) return; // 超出 primary 数量：不响应
+        e.preventDefault();
+        setCurrentAgent(primary[idx].id);
+        return;
+      }
       if (e.key !== "Tab") return;
       e.preventDefault();
       setCurrentAgent((prev) => {
