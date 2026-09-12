@@ -108,9 +108,10 @@ function ContextPanel({ stats, history, running }: {
     : last < first * 0.97 ? "回落 ↘"
     : "平稳 →";
 
-  // 缓存帮本次任务省下多少钱：命中部分按「未命中全价 − 命中折扣价」的差额
-  const saved = pricing && (task.cache_hit_tokens ?? 0) > 0
-    ? (task.cache_hit_tokens * (pricing.input_per_mtok - pricing.cache_hit_per_mtok)) / 1_000_000
+  // 缓存帮整个会话省下多少钱：命中部分按「未命中全价 − 命中折扣价」的差额
+  // 口径 = 会话累计（session.cache_hit_tokens，跨任务加总），与「会话累计成本」一致
+  const saved = pricing && (session.cache_hit_tokens ?? 0) > 0
+    ? (session.cache_hit_tokens * (pricing.input_per_mtok - pricing.cache_hit_per_mtok)) / 1_000_000
     : null;
 
   // 环形仪表：r=32 → 周长 ≈ 201.06，dashoffset 控制进度
@@ -191,8 +192,8 @@ function ContextPanel({ stats, history, running }: {
               <i style={{ width: `${Math.min(100, Math.max(0, (task.cache_hit_rate ?? 0) * 100))}%` }} />
             </div>
             {saved != null && saved > 0 && (
-              <div className="ctx2-meterrow" title="这些命中部分若全按未命中价计费需多花多少">
-                <span>缓存帮你省下</span><b>≈ ${saved.toFixed(4)}</b>
+              <div className="ctx2-meterrow" title="整个会话所有任务的缓存命中部分，若全按未命中价计费需多花的金额（未命中全价 − 命中折扣价）">
+                <span>缓存帮你省下（会话累计）</span><b>≈ ${saved.toFixed(4)}</b>
               </div>
             )}
           </div>
