@@ -33,6 +33,8 @@ class StopRequest(BaseModel):
 class ApproveRequest(BaseModel):
     approval_id: str
     approved: bool
+    remember: bool = False
+    session_id: Optional[str] = None
 
 
 class QuestionAnswerRequest(BaseModel):
@@ -125,6 +127,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
     @router.post("/api/approve")
     async def approve(payload: ApproveRequest, request: Request):
         ctx.check_auth(request)
+        # 先取审批上下文（resolve 会把 entry 弹出）：
+        # rule 供「记住并允许同类」写入会话级自动同意规则
+        info = app.approval_gate.get_pending_info(payload.approval_id)
         ok = app.approval_gate.resolve(payload.approval_id, payload.approved, by="user")
         # 无论审批是否存在/是否已处理，都广播 resolved 事件：
         # 卡片能否关闭不应依赖「等待审批的协程恢复后自己发事件」——
@@ -132,14 +137,26 @@ def create_router(ctx: ServerContext) -> APIRouter:
         await _broadcast_approval_resolved(payload.approval_id, payload.approved)
         if not ok:
             raise HTTPException(status_code=404, detail="审批请求不存在或已处理")
-        return {"ok": True, "approved": payload.approved}
+        remembered = None
+        if payload.approved and payload.remember and info and info.get("rule"):
+            sid = payload.session_id or info.get("session_id")
+            if sid:
+                remembered = app.remember_approval_rule(sid, info["rule"])
+        return {"ok": True, "approved": payload.approved, "remembered": remembered}
+
+    @router.get("/api/approvals/pending")
+    async def list_pending_approvals(request: Request):
+        """当前全部挂起审批（SSE 重连后前端兜底同步，防断线窗口丢审批卡）。"""
+        ctx.check_auth(request)
+        return {"approvals": app.approval_gate.list_pending()}
 
     async def _broadcast_approval_resolved(approval_id: str, approved: bool) -> None:
         """向所有活跃任务的 kernel 广播审批结果（UI 按 id 匹配关闭卡片）。"""
         for handle in list(tasks.tasks.values()):
             try:
                 await handle.kernel.events.emit("approval:resolved", {
-                    "id": approval_id, "approved": approved,
+                    "id": approval_id, "approved": approved, "by": "user",
+                    "action": "",
                 })
             except Exception:
                 logger.debug("[Approve] 广播 approval:resolved 失败", exc_info=True)

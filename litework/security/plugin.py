@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Dict, Optional
 
 from ..core.kernel import Kernel
 from ..core.types import Plugin
@@ -26,12 +26,14 @@ class SecurityPlugin(Plugin):
     name = "security-plugin"
 
     def __init__(self, guard: SecurityGuard, approval_gate: ApprovalGate, workspace: str,
-                 skill_perm_resolver=None) -> None:
+                 skill_perm_resolver=None, approval_rule_matcher=None) -> None:
         self.guard = guard
         self.approval_gate = approval_gate
         self.workspace = os.path.abspath(workspace)
         # 技能权限规则解析器（返回 {glob: allow/deny/ask}），None 时 load_skill 不做权限过滤
         self.skill_perm_resolver = skill_perm_resolver
+        # 「记住并允许同类」规则匹配器：(session_id, tool_name, args) -> bool
+        self._approval_rule_matcher = approval_rule_matcher
         # 受信路径（免"项目外"审批）：技能目录是产品自身的合法位置——
         # load_skill 返回技能目录后 Agent 读脚本/执行渲染是设计内行为，
         # 不该被当敏感路径拦截。包含用户级 ~/.agents/skills 与安装包内置
@@ -104,25 +106,31 @@ class SecurityPlugin(Plugin):
             } or tool_name in {"write_file", "apply_search_replace", "apply_unified_diff"}:
                 path = args.get("filePath") or args.get("path") or ""
                 if path and self.guard.is_external_path(self.workspace, path):
+                    write = tool_name in {"write_file", "apply_search_replace", "apply_unified_diff"}
+                    access = "write" if write else "read"
+                    # 「记住并允许同类」：命中该会话的路径规则 → 免审批放行
+                    if self._auto_allowed(kernel, tool_name,
+                                          {**args, "_rule_access": access}):
+                        args["_approved_external_access"] = access
+                        return await next(data)
                     # 受信技能目录（用户级/安装包内置）的读取免审批：Agent
                     # 读技能脚本是设计内行为；写入仍需单独授权
-                    if (not tool_name in {"write_file", "apply_search_replace", "apply_unified_diff"}
-                            and self._is_trusted_skill_path(path)):
+                    if not write and self._is_trusted_skill_path(path):
                         pass  # 放行读取
                     else:
-                        write = tool_name in {"write_file", "apply_search_replace", "apply_unified_diff"}
-                        access = "写入" if write else "读取"
                         approved = await self._request_approval(
                             kernel,
                             f'{access}项目外路径 "{path}"',
                             f'工具 {tool_name} 请求{access}项目目录之外的路径。'
                             + ("写入需要单独授权。" if write else "批准后仅允许本次读取。"),
+                            rule={"tool": tool_name, "kind": "path_prefix",
+                                  "pattern": path, "access": access},
                         )
                         if not approved:
                             data["cancel"] = True
                             data["reason"] = f"[User Rejected]: 项目外路径{access}已被拒绝。"
                             return await next(data)
-                        args["_approved_external_access"] = "write" if write else "read"
+                        args["_approved_external_access"] = access
 
             # 删除文件：不可逆操作，一律审批（含子 Agent，事件透传到前端弹卡）
             if tool_name == "delete_file":
@@ -148,8 +156,14 @@ class SecurityPlugin(Plugin):
                     return await next(data)
 
                 if result.level == ThreatLevel.MEDIUM:
+                    # 「记住并允许同类」：命令首个词命中规则（如 git/npm）→ 免审批
+                    if self._auto_allowed(kernel, tool_name, args):
+                        return await next(data)
+                    first_word = command.strip().split(None, 1)[0] if command.strip() else ""
                     approved = await self._request_approval(
-                        kernel, f'execute_command("{command}")', result.reason or "中危操作"
+                        kernel, f'execute_command("{command}")', result.reason or "中危操作",
+                        rule={"tool": "execute_command", "kind": "command_prefix",
+                              "pattern": first_word} if first_word else None,
                     )
                     if not approved:
                         data["cancel"] = True
@@ -157,10 +171,14 @@ class SecurityPlugin(Plugin):
                         return await next(data)
 
             if tool_name.startswith("mcp_"):
+                # 「记住并允许同类」：该 MCP 工具已记住 → 免审批
+                if self._auto_allowed(kernel, tool_name, args):
+                    return await next(data)
                 approved = await self._request_approval(
                     kernel,
                     f"调用 MCP 工具 {tool_name}",
                     "MCP 工具由外部进程提供，可能访问文件、网络或其他本地资源。",
+                    rule={"tool": tool_name, "kind": "tool_exact", "pattern": tool_name},
                 )
                 if not approved:
                     data["cancel"] = True
@@ -182,19 +200,30 @@ class SecurityPlugin(Plugin):
             logger.exception("[Security] 技能权限解析失败，按 allow 放行: %s", skill_name)
             return "allow"
 
-    async def _request_approval(self, kernel: Kernel, action: str, reason: str) -> bool:
-        future = self.approval_gate.request_approval(action, reason)
+    def _auto_allowed(self, kernel: Kernel, tool_name: str, args: Dict[str, Any]) -> bool:
+        """「记住并允许同类」规则命中检查（App 层存储，会话级作用域）。"""
+        resolver = getattr(self, "_approval_rule_matcher", None)
+        if resolver is None:
+            return False
+        try:
+            return bool(resolver(kernel.session_id, tool_name, args))
+        except Exception:
+            logger.debug("[Security] 自动同意规则匹配失败", exc_info=True)
+            return False
+
+    async def _request_approval(self, kernel: Kernel, action: str, reason: str,
+                                rule: Optional[Dict[str, Any]] = None) -> bool:
+        future = self.approval_gate.request_approval(action, reason, rule=rule,
+                                                      session_id=getattr(kernel, "session_id", None))
         approval_id = self.approval_gate.current_id(future)
-        # 广播审批请求，Web UI 弹出确认卡片
+        # 广播审批请求，Web UI 弹出确认卡片（rule 存在 → 前端显示「记住并允许同类」）
         await kernel.events.emit("approval:request", {
             "id": approval_id,
             "action": action,
             "reason": reason,
+            "rememberable": bool(rule),
         })
         approved = await future
-        # 广播审批结果，UI 关闭确认卡片
-        await kernel.events.emit("approval:resolved", {
-            "id": approval_id,
-            "approved": approved,
-        })
+        # 审批结果广播由 gate.on_resolve（server/app.py 注入）统一发出
+        # （含 by=timeout 标记）；本会话流内不重复发，避免 payload 缺字段。
         return approved

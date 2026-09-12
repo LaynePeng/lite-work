@@ -218,10 +218,10 @@ async def test_mcp_tool_call_always_requires_approval():
     plugin.install(kernel)
 
     # 用户点「拒绝」→ _request_approval 返回 False
-    # （实例属性替换：不自动绑定 self，签名 = (kernel, action, reason)）
+    # （实例属性替换：不自动绑定 self，签名 = (kernel, action, reason, rule=None)）
     requested: list[str] = []
 
-    async def _deny(kernel, action: str, reason: str) -> bool:
+    async def _deny(kernel, action: str, reason: str, rule=None) -> bool:
         requested.append(action)
         return False
 
@@ -250,7 +250,7 @@ async def test_mcp_tool_call_approved_passes_through():
     plugin = SecurityPlugin(SecurityGuard(), ApprovalGate(timeout_seconds=5), workspace="/tmp")
     plugin.install(kernel)
 
-    async def _allow(kernel, action: str, reason: str) -> bool:
+    async def _allow(kernel, action: str, reason: str, rule=None) -> bool:
         return True
 
     plugin._request_approval = _allow

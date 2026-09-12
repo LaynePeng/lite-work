@@ -397,12 +397,12 @@ export default function ChatView({
   goal?: string | null;
   /** 目标循环（/loop）运行状态：null=未开启 */
   loop: { count: number; max: number } | null;
-  pendingApprovals: { id: string; action: string; reason: string }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean }[];
   subAgentRecords: SubAgentProgress[];
   skillLoaded?: string[];
   onSend: (prompt: string) => void;
   onStop: () => void;
-  onApprove: (approvalId: string, approved: boolean) => void;
+  onApprove: (approvalId: string, approved: boolean, remember?: boolean) => void;
   currentAgent: string;
   /** 展示折叠阈值（轮数）——可在设置中配置 */
   foldTurns?: number;
@@ -559,6 +559,12 @@ export default function ChatView({
               <button className="btn-approve" onClick={() => onApprove(pa.id, true)}>
                 允许执行
               </button>
+              {pa.rememberable && (
+                <button className="btn-approve btn-remember" title="本会话内同类操作自动允许（Claude Code 风格 Always allow）"
+                  onClick={() => onApprove(pa.id, true, true)}>
+                  ⚡ 记住并允许同类
+                </button>
+              )}
             </div>
           </div>
         </div>

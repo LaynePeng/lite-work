@@ -111,10 +111,16 @@ export const api = {
     req<{ tasks: import("./types").BackgroundTaskInfo[] }>("/api/tasks/background"),
   killBackgroundTask: (taskId: string) =>
     req<{ ok: boolean }>(`/api/tasks/background/${encodeURIComponent(taskId)}/kill`, { method: "POST" }),
-  approve: (approvalId: string, approved: boolean) =>
-    req<{ ok: boolean }>("/api/approve", {
-      method: "POST", body: JSON.stringify({ approval_id: approvalId, approved }),
+  approve: (approvalId: string, approved: boolean, opts?: { remember?: boolean; sessionId?: string | null }) =>
+    req<{ ok: boolean; remembered?: { ok: boolean } | null }>("/api/approve", {
+      method: "POST", body: JSON.stringify({
+        approval_id: approvalId, approved,
+        ...(opts?.remember ? { remember: true } : {}),
+        ...(opts?.sessionId ? { session_id: opts.sessionId } : {}),
+      }),
     }),
+  pendingApprovals: () =>
+    req<{ approvals: { id: string; action: string; reason: string; rememberable?: boolean; session_id?: string }[] }>("/api/approvals/pending"),
   answerQuestion: (questionId: string, answer: string) =>
     req<{ ok: boolean; answer: string }>("/api/question", {
       method: "POST", body: JSON.stringify({ question_id: questionId, answer }),

@@ -15,6 +15,7 @@ from typing import (
     Any,
     Dict,
     List,
+    NotRequired,
     Optional,
     TypedDict,
     Union,
@@ -71,11 +72,18 @@ class ApprovalRequestPayload(TypedDict):
     id: str
     action: str
     reason: str
+    # 「记住并允许同类」可用标记（rule 存在时为 True）；恒定携带
+    rememberable: bool
 
 
 class ApprovalResolvedPayload(TypedDict):
     id: str
     approved: bool
+    # by=user / by=timeout（超时自动拒绝时前端据此提示）；恒定携带。
+    # 注意：events.py 有 `from __future__ import annotations`，class 语法的
+    # TypedDict 在该组合下 NotRequired 会被误判为必填，故用恒定携带方案。
+    by: str
+    action: str
 
 
 class TaskStartPayload(TypedDict):

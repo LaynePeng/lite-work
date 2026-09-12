@@ -1091,7 +1091,8 @@ export default function App() {
           patchChat(sid, {
             pendingApprovals: [
               ...(cur.pendingApprovals ?? []).filter((p) => p.id !== ev.data.id),
-              { id: ev.data.id, action: ev.data.action, reason: ev.data.reason },
+              { id: ev.data.id, action: ev.data.action, reason: ev.data.reason,
+                rememberable: (ev.data as { rememberable?: boolean }).rememberable },
             ],
           });
           break;
@@ -1101,6 +1102,9 @@ export default function App() {
           patchChat(sid, {
             pendingApprovals: (cur.pendingApprovals ?? []).filter((p) => p.id !== ev.data.id),
           });
+          if ((ev.data as { by?: string }).by === "timeout") {
+            pushLog("⏰ 有一项审批因超时未确认已被自动拒绝（任务可能因此中断）");
+          }
           break;
         }
         case "question:request": {
@@ -1482,6 +1486,27 @@ export default function App() {
           lastEventTimesRef.current.set(sid, Date.now());
           patchChat(sid, { sseState: "connected" });
           pushLog(`🔗 已连接任务 ${taskId}`);
+          // 重连后兜底同步挂起审批：SSE 断线窗口里发出的 approval:request
+          // 不回放（tasks.subscribe 重连不回放历史），错过即审批卡永不出现，
+          // 600s 后静默超时拒绝——这里拉一次 pending 补齐
+          void api.pendingApprovals().then((r) => {
+            const mine = (r?.approvals ?? []).filter((a) => a.session_id === sid);
+            if (mine.length > 0) {
+              const cur = chatStatesRef.current[sid];
+              const known = new Set((cur?.pendingApprovals ?? []).map((p) => p.id));
+              const missing = mine.filter((a) => !known.has(a.id));
+              if (missing.length > 0) {
+                patchChat(sid, {
+                  pendingApprovals: [
+                    ...(cur?.pendingApprovals ?? []),
+                    ...missing.map((a) => ({ id: a.id, action: a.action, reason: a.reason,
+                      rememberable: a.rememberable })),
+                  ],
+                });
+                pushLog(`🛡️ 同步到 ${missing.length} 条待确认审批`);
+              }
+            }
+          }).catch(() => { /* 同步失败不影响主流程 */ });
         };
         es.onmessage = (e) => {
           if (e.data === "[DONE]") {
@@ -1828,15 +1853,21 @@ export default function App() {
   }, [activeSessionId, patchChat, pushLog]);
 
   const approve = useCallback(
-    async (approvalId: string, approved: boolean) => {
+    async (approvalId: string, approved: boolean, remember = false) => {
       patchActiveChat({ pendingApprovals: (currentChat.pendingApprovals ?? []).filter((p) => p.id !== approvalId) });
       try {
-        await api.approve(approvalId, approved);
+        const r = await api.approve(approvalId, approved, {
+          remember,
+          sessionId: activeSessionId,
+        });
+        if (r?.remembered?.ok) {
+          pushLog("⚡ 已记住：本会话内同类操作将自动允许");
+        }
       } catch {
         /* ignore */
       }
     },
-    [currentChat.pendingApprovals, patchActiveChat]
+    [currentChat.pendingApprovals, patchActiveChat, activeSessionId, pushLog]
   );
 
   const answerQuestion = useCallback(

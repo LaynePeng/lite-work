@@ -8,6 +8,8 @@
 - Server 通过 SSE 向 Web UI 广播 approval:request
 - 用户在 UI 点击允许/拒绝 → POST /api/approve → Future 被 resolve
 - 带超时保护：超时未确认自动拒绝，避免任务永久挂起
+- 「记住并允许同类」（Claude Code "Always allow" 模式）：approve 时携带
+  remember 标记，把该审批的 rule 写入会话级自动同意规则（见 plugin.py）
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ import asyncio
 import itertools
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("litework.approval")
 
@@ -25,11 +27,21 @@ class ApprovalGate:
         self.timeout_seconds = timeout_seconds
         self._ids = itertools.count(1)
         self._pending: Dict[str, Dict[str, Any]] = {}
+        # resolve 统一回调（app 注入）：无论用户确认还是超时拒绝都广播
+        # approval:resolved —— 超时路径原本只打日志，前端审批卡会永远挂着
+        self.on_resolve: Optional[Callable[[str, Dict[str, Any]], Any]] = None
 
     def request_approval(
-        self, action: str, risk_reason: str, auto_approve: bool = False
+        self, action: str, risk_reason: str, auto_approve: bool = False,
+        rule: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> "asyncio.Future":
-        """挂起等待 Web UI 的人工确认，返回 future（await 后得到 bool）。"""
+        """挂起等待 Web UI 的人工确认，返回 future（await 后得到 bool）。
+
+        rule：审批上下文（{"tool", "kind", "pattern", ...}），供「记住并允许
+        同类」按钮在确认时写入自动同意规则；None 表示该操作不提供记住能力
+        （如不可逆删除）。session_id：审批所属会话（记住规则的作用域）。
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:  # 兜底：非运行中的 loop（老式调用方）
@@ -46,6 +58,8 @@ class ApprovalGate:
             "id": approval_id,
             "action": action,
             "reason": risk_reason,
+            "rule": rule,
+            "session_id": session_id,
             "created_at": int(time.time() * 1000),
             "future": future,
         }
@@ -88,6 +102,17 @@ class ApprovalGate:
                 logger.warning("[Approval] %s 所在 loop 已关闭，无法唤醒等待方", approval_id)
         logger.info("[Approval] %s 已%s（by=%s）", approval_id,
                     "批准" if approved else "拒绝", by)
+        # 统一广播：超时拒绝也走这里（此前只打日志，前端卡片会永远挂着）
+        if self.on_resolve is not None:
+            try:
+                self.on_resolve(approval_id, {
+                    "id": approval_id,
+                    "approved": approved,
+                    "by": by,
+                    "action": entry.get("action", ""),
+                })
+            except Exception:
+                logger.debug("[Approval] on_resolve 回调失败", exc_info=True)
         return True
 
     def get_pending_info(self, approval_id: str) -> Optional[Dict[str, Any]]:
@@ -95,7 +120,15 @@ class ApprovalGate:
         if entry is None:
             return None
         return {"id": entry["id"], "action": entry["action"], "reason": entry["reason"],
-                "created_at": entry["created_at"]}
+                "created_at": entry["created_at"], "rule": entry.get("rule"),
+                "session_id": entry.get("session_id")}
+
+    def list_pending(self) -> List[Dict[str, Any]]:
+        """当前全部挂起审批（SSE 重连后前端兜底同步用）。"""
+        return [{"id": e["id"], "action": e["action"], "reason": e["reason"],
+                 "created_at": e["created_at"], "rule": e.get("rule"),
+                 "session_id": e.get("session_id")}
+                for e in self._pending.values()]
 
     def pending_count(self) -> int:
         return len(self._pending)

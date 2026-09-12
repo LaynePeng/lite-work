@@ -6042,6 +6042,17 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text);
 }
 
+/* ==================== 审批卡「记住并允许同类」 ==================== */
+
+.btn-remember {
+  border-color: var(--accent, #7aa2f7);
+  color: var(--accent, #7aa2f7);
+}
+
+.btn-remember:hover {
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 12%, transparent);
+}
+
 /* ==================== Agent 图标选择器 / 气泡头像 ==================== */
 
 .agent-icon-picker {

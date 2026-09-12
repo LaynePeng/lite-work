@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -113,6 +114,23 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     auth = TokenAuth(token)
     tasks = TaskManager(app)
     ctx = ServerContext(app=app, tasks=tasks, auth=auth)
+
+    # 审批门统一 resolve 回调：无论用户确认还是超时拒绝都广播 approval:resolved。
+    # 此前超时路径只打日志，前端审批卡会永远挂着（「干一会就停止」的表象之一）。
+    def _broadcast_gate_resolve(approval_id: str, info: Dict) -> None:
+        for handle in list(tasks.tasks.values()):
+            try:
+                if handle.kernel is None or handle.done:
+                    continue
+                coro = handle.kernel.events.emit("approval:resolved", dict(info))
+                try:
+                    asyncio.get_running_loop().create_task(coro)
+                except RuntimeError:
+                    pass  # 无运行中事件循环（罕见）：跳过广播，不影响 resolve
+            except Exception:
+                continue
+
+    app.approval_gate.on_resolve = _broadcast_gate_resolve
 
     fast_app.add_middleware(
         CORSMiddleware,

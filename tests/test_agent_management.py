@@ -25,12 +25,12 @@ async def test_builtin_agent_tools_override_and_reset(tmp_path):
     saved = app.agent_save({"id": "office", "tools": None})
     assert saved["tools"] is None
 
-    # 落盘为 minimal 覆盖文件：只含 id/tools/permissions
+    # 落盘为 minimal 覆盖文件：只含 id/tools/permissions/domains/extra_tools
     override_path = os.path.join(app.config_dir, "agents", "office.json")
     assert os.path.isfile(override_path)
     with open(override_path, encoding="utf-8") as f:
         data = json.load(f)
-    assert set(data.keys()) == {"id", "tools", "permissions"}
+    assert set(data.keys()) == {"id", "tools", "permissions", "domains", "extra_tools"}
     assert "system_prompt" not in data
 
     # 修改工具白名单为列表

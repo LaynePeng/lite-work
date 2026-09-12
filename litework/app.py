@@ -169,6 +169,10 @@ class AgentApp:
         self.approval_gate = ApprovalGate(
             timeout_seconds=self.config.get("approval_timeout", 600)
         )
+        # 「记住并允许同类」规则（Claude Code "Always allow" 模式）：
+        # session_id → [rule]；内存级会话语义（重启清空）。rule 结构：
+        # {"tool", "kind": command_prefix|path_prefix|tool_exact, "pattern", "access"?}
+        self.approval_rules: Dict[str, List[Dict[str, Any]]] = {}
 
         # 会话存储
         self.session_store = SessionStore(os.path.join(self.config_dir, "sessions"))
@@ -889,7 +893,8 @@ class AgentApp:
         # 安全门的「项目内」边界以工作树为准（否则写入全被当项目外拦截）
         kernel.use(SecurityPlugin(self.guard, self.approval_gate,
                                   security_workspace or self.workspace,
-                                  skill_perm_resolver=self.skill_permission_rules))
+                                  skill_perm_resolver=self.skill_permission_rules,
+                                  approval_rule_matcher=self.match_approval_rule))
         return kernel
 
     # ------------------------------------------------------------ Agent
@@ -1146,6 +1151,54 @@ class AgentApp:
     def get_agent(self, agent_id: Optional[str] = None) -> AgentProfile:
         """获取 Agent 配置：不传则返回默认 build agent。"""
         return self.agent_registry.get(agent_id or "build")
+
+    # ------------------------------------------------------------ 自动同意规则
+
+    def remember_approval_rule(self, session_id: str, rule: Dict[str, Any]) -> Dict[str, Any]:
+        """记录一条「允许同类」规则（审批卡「记住」按钮触发）。"""
+        rule = {
+            "tool": str(rule.get("tool") or ""),
+            "kind": str(rule.get("kind") or "tool_exact"),
+            "pattern": str(rule.get("pattern") or ""),
+            **({"access": rule["access"]} if rule.get("access") else {}),
+        }
+        if not rule["tool"] or not rule["pattern"]:
+            return {"ok": False}
+        rules = self.approval_rules.setdefault(session_id, [])
+        if rule not in rules:  # 去重
+            rules.append(rule)
+        logger.info("[ApprovalRule] %s 记住: %s", session_id, rule)
+        return {"ok": True, "rule": rule}
+
+    def match_approval_rule(self, session_id: str, tool_name: str, args: Dict[str, Any]) -> bool:
+        """工具调用是否命中该会话的「允许同类」规则（命中则跳过审批）。"""
+        rules = self.approval_rules.get(session_id)
+        if not rules:
+            return False
+        for r in rules:
+            if r.get("tool") != tool_name:
+                continue
+            kind = r.get("kind")
+            pattern = r.get("pattern") or ""
+            if kind == "tool_exact":
+                return True  # tool 已匹配（pattern 仅语义标注）
+            if kind == "command_prefix" and tool_name == "execute_command":
+                cmd = str(args.get("command") or "").strip()
+                first = cmd.split(None, 1)[0] if cmd else ""
+                if first and first == pattern:
+                    return True
+            if kind == "path_prefix":
+                access = r.get("access")
+                if access and access != str(args.get("_rule_access") or ""):
+                    continue
+                path = str(args.get("filePath") or args.get("path") or "")
+                try:
+                    if path and os.path.abspath(os.path.expanduser(path)).startswith(
+                            os.path.abspath(os.path.expanduser(pattern))):
+                        return True
+                except Exception:
+                    continue
+        return False
 
     def agents_meta(self) -> List[Dict[str, Any]]:
         """供 UI/CLI 列出全部可选 agent。"""

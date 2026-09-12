@@ -316,7 +316,7 @@ async def test_subagent_approval_forwarded_as_native_event(tmp_path):
             self.pending = {}
             self._n = 0
 
-        def request_approval(self, action, reason):
+        def request_approval(self, action, reason, **kwargs):
             self._n += 1
             fut = asyncio.get_running_loop().create_future()
             self.pending[f"ap{self._n}"] = fut

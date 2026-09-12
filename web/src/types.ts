@@ -309,8 +309,8 @@ export type SSEEvent =
   | { type: "llm:retry"; data: { attempt: number; max_retries: number; reason: string; wait: number } }
   | { type: "tool:before_execute"; data: { toolName: string; args: unknown; callId?: string } }
   | { type: "tool:after_execute"; data: { toolName: string; durationMs: number; status: string; result?: string; callId?: string } }
-  | { type: "approval:request"; data: { id: string; action: string; reason: string } }
-  | { type: "approval:resolved"; data: { id: string; approved: boolean } }
+  | { type: "approval:request"; data: { id: string; action: string; reason: string; rememberable?: boolean } }
+  | { type: "approval:resolved"; data: { id: string; approved: boolean; by?: string } }
   | { type: "task:start"; data: { session_id: string } }
   | { type: "task:done"; data: { content: string; stats: Stats } }
   | { type: "task:error"; data: { message: string } }
@@ -516,7 +516,7 @@ export interface ChatSessionState {
   contextHistory: ContextHistoryPoint[];
   error: string | null;
   // 审批队列：并行工具可同时挂起多个审批请求
-  pendingApprovals: { id: string; action: string; reason: string }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean }[];
   // 任务完成后归档的子 Agent 活动卡（会话级内存态，刷新即失）
   subAgentRecords: SubAgentProgress[];
   /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */

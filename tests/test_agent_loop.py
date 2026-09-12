@@ -64,7 +64,10 @@ async def test_basic_think_act_observe(tmp_path):
 
 
 async def test_loop_detection(tmp_path):
-    """连续 3 次相同工具+参数 → 触发死循环防御并注入错误消息。"""
+    """只读工具连续 6 次相同工具+参数 → 触发死循环防御并注入错误消息。
+
+    （阈值分级：只读工具放宽到 6 次避免误杀复查；写类工具仍为 3 次）
+    """
     registry = ToolRegistry()
     registry.register("read_file", "读文件", {"type": "object"},
                       lambda args: "content")
@@ -73,11 +76,34 @@ async def test_loop_detection(tmp_path):
         ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
         ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
         ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
+        ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
+        ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
+        ("", [tool_call("read_file", '{"filePath":"x.ts"}')]),
         ("好吧，我换策略。", []),
     ])
     loop, kernel, _ = _make_loop(tmp_path, adapter, registry)
 
     result, stats = await loop.run_task("读文件", system_prompt=SYSTEM_PROMPT)
+    tool_msgs = [m for m in kernel.ctx.messages if m.role == "tool"]
+    assert any("死循环" in m.content for m in tool_msgs)
+    assert result == "好吧，我换策略。"
+
+
+async def test_loop_detection_strict_for_write_tools(tmp_path):
+    """写类工具保持严格阈值：连续 3 次相同写操作 → 触发死循环防御。"""
+    registry = ToolRegistry()
+    registry.register("write_file", "写文件", {"type": "object"},
+                      lambda args: "ok")
+
+    adapter = MockLLMAdapter([
+        ("", [tool_call("write_file", '{"filePath":"x.ts","content":"a"}')]),
+        ("", [tool_call("write_file", '{"filePath":"x.ts","content":"a"}')]),
+        ("", [tool_call("write_file", '{"filePath":"x.ts","content":"a"}')]),
+        ("好吧，我换策略。", []),
+    ])
+    loop, kernel, _ = _make_loop(tmp_path, adapter, registry)
+
+    result, stats = await loop.run_task("写文件", system_prompt=SYSTEM_PROMPT)
     tool_msgs = [m for m in kernel.ctx.messages if m.role == "tool"]
     assert any("死循环" in m.content for m in tool_msgs)
     assert result == "好吧，我换策略。"

@@ -40,6 +40,10 @@ class TaskHandle:
         self._subscribers: List[asyncio.Queue] = []
         self._retained: List[Any] = []
         self._first_subscriber_seen = False
+        # 「需要用户响应」事件的保留区（审批/提问）：这类事件丢失的代价是
+        # 审批卡永不出现 → 600s 静默超时拒绝 → 任务停滞。resolved 后移除；
+        # 任意订阅者（含重连者）连接时回放，兜底断线窗口丢失。
+        self.retained_requests: Dict[str, Any] = {}
         self.abort_event = asyncio.Event()
         self.loop.abort_event = self.abort_event
         # 用户补充指令队列：与 loop 共享同一 deque，回合开始时注入对话
@@ -67,6 +71,10 @@ class TaskHandle:
             for ev in self._retained:
                 self._put(q, ev)
             self._retained.clear()
+        # 回放尚未 resolved 的审批/提问（SSE 断线窗口里发出的事件，
+        # 重连后补送达——否则审批卡永不出现，任务静默超时停滞）
+        for ev in list(self.retained_requests.values()):
+            self._put(q, ev)
         if self.done:
             q.put_nowait(None)
         self._subscribers.append(q)
@@ -114,6 +122,21 @@ class TaskHandle:
         return count
 
     def _forward_event(self, data: Any) -> None:
+        # 「需要用户响应」的事件进保留区（resolved 时移除），重连回放兜底；
+        # 不进 _retained（subscribe 时两者都回放会重复投递同一审批）
+        try:
+            if isinstance(data, dict):
+                etype, edata = data.get("type"), data.get("data") or {}
+                rid = edata.get("id") if isinstance(edata, dict) else None
+                if etype in ("approval:request", "question:request") and rid:
+                    self.retained_requests[rid] = data
+                    for q in list(self._subscribers):
+                        self._put(q, data)
+                    return
+                elif etype in ("approval:resolved", "question:resolved") and rid:
+                    self.retained_requests.pop(rid, None)
+        except Exception:
+            pass
         # 首个订阅者未连接：保留事件（终止事件不因截断丢失——保留列表足够长）
         if not self._first_subscriber_seen:
             self._retained.append(data)
