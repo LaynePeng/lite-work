@@ -60,7 +60,9 @@ Python 后端（litework/）
 
 新增任何提示 UI 时，先回答"它何时消失"，再写代码。
 
-## 使用
+## 快速开始（Quick Start）
+
+**桌面应用（完整体验）**：从 [Releases](https://github.com/LaynePeng/lite-work/releases) 下载安装包即可（自带后端，无需 Python / Node）；或源码运行：
 
 ```bash
 # 前提：Python 3.11+、Node 18+
@@ -68,11 +70,21 @@ python3 -m venv .venv
 .venv/bin/pip install -e .[dev]    # Windows: .venv\Scripts\pip install -e .[dev]
 npm install
 
-npm run dev    # 开发模式：Python Core + Vite + Electron 窗口
+npm run dev    # 开发模式（热更新）
 npm start      # 生产模式：构建前端 → 自动拉起 Core → 窗口
 ```
 
-> 办公工具依赖（python-docx / openpyxl / python-pptx / reportlab / pandas / matplotlib）已包含在主依赖中，`pip install -e .` 时自动安装。
+**纯浏览器（轻量 Web UI）**：
+
+```bash
+npm run build:web                                    # 一次性构建前端（web/dist）
+.venv/bin/python -m litework serve --no-token        # Windows: .venv\Scripts\python
+# 访问 http://127.0.0.1:8787
+```
+
+> **API Key**：首次启动后在设置界面选择供应商并填写（存储于 `~/.lite-work/config.json`），也支持 `DEEPSEEK_API_KEY` 等环境变量兜底。
+>
+> 更多执行方式（远程 Core、仅后端 API、serve 参数、鉴权细节、日志排障）见 **[执行方式指南](docs/usage.md)**。
 
 **测试**（后端 pytest / 前端 vitest）：
 
@@ -80,16 +92,6 @@ npm start      # 生产模式：构建前端 → 自动拉起 Core → 窗口
 LITEWORK_STRICT_EVENTS=1 .venv/bin/python -m pytest tests/    # 后端（strict=事件负载校验 fail-fast）
 cd web && npm test                                            # 前端组件测试（vitest + Testing Library）
 ```
-
--   **API Key**：首次启动后在设置界面选择供应商并填写（存储于 `~/.lite-work/config.json`），也支持 `DEEPSEEK_API_KEY` 等环境变量兜底
--   **纯浏览器形态**：`python -m litework serve` 后访问 `http://127.0.0.1:8787`
--   **远程 Core**：`~/.lite-work/client.json` 配置 `coreUrl` 与 Token，窗口直连远程后端
--   **鉴权（默认开启）**：`lite-work serve` 未显式指定 token 时自动生成随机令牌，
-    经就绪标记（`LITEWORK_CORE_READY ... token=...`）下发给 Electron 桌面外壳自动注入；
-    本机开发调试可用 `--no-token` 显式关闭（会输出告警）。Web 前端开发联调时用
-    `LITEWORK_CORE_TOKEN=<token> npm run dev` 让 Vite 代理注入请求头
-
-> 国内网络受限时 pip 可加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；Electron 二进制下载失败时执行 `node node_modules/electron/install.js`（已默认走 npmmirror 镜像）。
 
 ## 扩展：MCP 办公生态
 
