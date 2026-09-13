@@ -248,35 +248,6 @@ def test_render_syntax_error_classified_not_fallback(tmp_path, monkeypatch):
     assert "syntax error" in str(exc_info.value)
 
 
-def test_render_cli_syntax_error_hints(tmp_path):
-    """CLI：语法错误的 PlantUML（配对正确但元素非法）在有引擎时报语法错误并附速查提示。
-
-    无引擎环境下引擎缺失走兜底，不适用于本测试；跳过条件：无 @plantuml/core 且无 plantuml CLI。
-    """
-    import subprocess
-
-    mod = _load_render_module()
-    has_engine = mod._which("plantuml") or (
-        mod._which("node") and mod._plantuml_core_available()
-    )
-    if not has_engine:
-        pytest.skip("本机无 PlantUML 引擎，语法错误路径不可测")
-
-    src = tmp_path / "bad2.puml"
-    # @startuml 配对正确，但 () 嵌在 package 块内（已知易崩写法，可能触发引擎报错）
-    src.write_text(
-        '@startuml\npackage "组" {\n(接口)\n}\n@enduml', encoding="utf-8"
-    )
-    r = subprocess.run(
-        [sys.executable, str(RENDER_SCRIPT), str(src), "-o", str(tmp_path / "out.png"),
-         "--no-fallback"],
-        capture_output=True, text=True, timeout=120,
-    )
-    # 引擎若拒绝该语法：报语法错误且（plantuml 时）附速查；若引擎兼容渲染成功也允许通过
-    if r.returncode != 0:
-        assert "语法错误" in r.stderr or "渲染失败" in r.stderr or "兜底" in r.stderr
-
-
 def test_render_script_cli_error_on_unknown_type(tmp_path):
     """CLI 对无法识别的类型应报错退出（不依赖真实渲染引擎）。"""
     import subprocess

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 from typing import Any, Dict, List, Optional
@@ -1207,25 +1208,32 @@ class OfficeTools:
             spec.loader.exec_module(mod)
 
             chart_type = "plantuml" if lang in ("plantuml", "puml") else "mermaid"
-            out_dir = _ensure_output_dir(self.workspace, "diagrams")
-            out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
 
-            def _do_render() -> None:
-                with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
-                    if chart_type == "plantuml":
-                        mod.render_plantuml(code, out_path, 2, tmpdir, None)
-                    else:
-                        mod.render_mermaid(code, out_path, 2, tmpdir)
+            # 先在临时目录渲染，成功后才创建 产出物/diagrams 并落盘：保证
+            # 「diagrams 目录存在 ⟺ 渲染成功」，渲染失败时不留空目录
+            # （调用方回退源码文本，内容不丢）。
+            with tempfile.TemporaryDirectory(prefix="litework-md-diagram-out-") as staging:
+                staged_path = os.path.join(staging, "diagram.png")
 
-            # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
-            # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
-            from concurrent.futures import ThreadPoolExecutor as _TPE
-            with _TPE(max_workers=1) as pool:
-                future = pool.submit(_do_render)
-                future.result(timeout=60)
-            if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-                return out_path
-            return None
+                def _do_render() -> None:
+                    with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
+                        if chart_type == "plantuml":
+                            mod.render_plantuml(code, staged_path, 2, tmpdir, None)
+                        else:
+                            mod.render_mermaid(code, staged_path, 2, tmpdir)
+
+                # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
+                # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                with _TPE(max_workers=1) as pool:
+                    future = pool.submit(_do_render)
+                    future.result(timeout=60)
+                if not (os.path.isfile(staged_path) and os.path.getsize(staged_path) > 0):
+                    return None
+                out_dir = _ensure_output_dir(self.workspace, "diagrams")
+                out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
+                shutil.copyfile(staged_path, out_path)
+            return out_path
         except Exception:
             # 引擎缺失/语法错误/渲染失败 → 回退源码文本（内容不丢）
             return None
