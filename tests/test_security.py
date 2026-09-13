@@ -258,3 +258,60 @@ async def test_mcp_tool_call_approved_passes_through():
                  "args": {"selector": "#btn"}, "cancel": False, "reason": ""}
     result = await kernel.before_tool.run(kernel.ctx, hook_data)
     assert result["cancel"] is False
+
+
+# ---------------------------------------------------------------- 审批归属根会话
+
+async def _pending_session_id(kernel, plugin_workspace: str = "/tmp") -> str:
+    """跑一次真实 _request_approval，返回该审批登记进 gate 的 session_id（随后放行）。
+
+    协程会挂在 `await future`，这里轮询 gate 直到审批登记完成，取 session_id 后
+    立刻 resolve(future 被唤醒)，避免测试卡住。
+    """
+    import asyncio
+
+    from litework.security.approval import ApprovalGate
+    from litework.security.plugin import SecurityPlugin
+
+    gate = ApprovalGate(timeout_seconds=5)
+    plugin = SecurityPlugin(SecurityGuard(), gate, workspace=plugin_workspace)
+    task = asyncio.ensure_future(
+        plugin._request_approval(kernel, "read_file", "外部路径读取需确认"))
+    try:
+        pending: list = []
+        for _ in range(200):
+            pending = gate.list_pending()
+            if pending:
+                break
+            await asyncio.sleep(0.01)
+        assert pending, "审批未登记到 gate"
+        sid = pending[0]["session_id"]
+        gate.resolve(pending[0]["id"], True)
+        assert await task is True  # 放行后协程正常返回
+        return sid
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def test_approval_session_id_prefers_root_session():
+    """回归：子 Agent 的审批必须归属主会话（root_session_id）。
+
+    子 Agent 的 kernel 由 sub_agent 装配 root_session_id=主会话；审批若用子会话
+    id（sub_/sa_ 前缀）上报，前端 SSE 断线兜底按活跃会话 id 过滤会把审批卡全部
+    滤掉 → 卡永不出现 → 600s 超时静默拒绝（表现为「read_file 卡死在不问权限」）。
+    """
+    from litework.core.kernel import Kernel
+
+    sub_kernel = Kernel(session_id="sa_sub_deadbeef")
+    sub_kernel.root_session_id = "main-session"
+    assert await _pending_session_id(sub_kernel) == "main-session"
+
+
+async def test_approval_session_id_falls_back_to_own_session():
+    """主 Agent 的 kernel 无 root_session_id → 回退自身会话 id，行为不变。"""
+    from litework.core.kernel import Kernel
+
+    main_kernel = Kernel(session_id="plain-session")
+    assert not hasattr(main_kernel, "root_session_id")
+    assert await _pending_session_id(main_kernel) == "plain-session"

@@ -120,7 +120,7 @@ export const api = {
       }),
     }),
   pendingApprovals: () =>
-    req<{ approvals: { id: string; action: string; reason: string; rememberable?: boolean; session_id?: string }[] }>("/api/approvals/pending"),
+    req<{ approvals: import("./types").PendingApprovalInfo[] }>("/api/approvals/pending"),
   answerQuestion: (questionId: string, answer: string) =>
     req<{ ok: boolean; answer: string }>("/api/question", {
       method: "POST", body: JSON.stringify({ question_id: questionId, answer }),

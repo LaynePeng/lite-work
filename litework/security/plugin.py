@@ -213,8 +213,15 @@ class SecurityPlugin(Plugin):
 
     async def _request_approval(self, kernel: Kernel, action: str, reason: str,
                                 rule: Optional[Dict[str, Any]] = None) -> bool:
+        # 审批归属根会话：子 Agent 的 kernel 带 root_session_id（sub_agent 装配，
+        # 指向主会话），审批必须以主会话 id 上报——前端按活跃会话 id 过滤 pending
+        # 审批（SSE 断线重连兜底），用子会话 id（sub_/sa_ 前缀）会被全部滤掉，
+        # 表现为审批卡永不出现、600s 超时静默拒绝。主 Agent kernel 无该属性时
+        # 回退自身会话 id，行为不变。
+        approval_sid = (getattr(kernel, "root_session_id", None)
+                        or getattr(kernel, "session_id", None))
         future = self.approval_gate.request_approval(action, reason, rule=rule,
-                                                      session_id=getattr(kernel, "session_id", None))
+                                                      session_id=approval_sid)
         approval_id = self.approval_gate.current_id(future)
         # 广播审批请求，Web UI 弹出确认卡片（rule 存在 → 前端显示「记住并允许同类」）
         await kernel.events.emit("approval:request", {
