@@ -339,6 +339,36 @@ describe("ChatView", () => {
     await user.click(screen.getByRole("button", { name: "允许执行" }));
     expect(onApprove).toHaveBeenCalledWith("ap1", true);
   });
+
+  it("多个待审批：只渲染一个弹层 + 序号标签，可切换并分别回调", async () => {
+    const onApprove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[]}
+        streaming={null}
+        pendingApprovals={[
+          { id: "a1", action: "read /outside/a", reason: "项目外路径" },
+          { id: "a2", action: "read /outside/b", reason: "项目外路径" },
+          { id: "a3", action: "read /outside/c", reason: "项目外路径" },
+        ]}
+        onApprove={onApprove}
+      />
+    );
+    // 旧实现每张待审批各渲染一个全屏遮罩，多个遮罩互相覆盖、只有最后一张
+    // 可见可点——点掉一张后下一张原位弹出，看着像「卡在问权限前」。
+    expect(document.querySelectorAll(".approval-overlay")).toHaveLength(1);
+    expect(screen.getByText(/第 1\/3 个待审批/)).toBeInTheDocument();
+    expect(screen.getByText("read /outside/a")).toBeInTheDocument();
+    // 序号标签切换到第 3 张
+    const tabs = document.querySelectorAll(".approval-tab");
+    expect(tabs).toHaveLength(3);
+    await user.click(tabs[2] as HTMLElement);
+    expect(screen.getByText("read /outside/c")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "允许执行" }));
+    expect(onApprove).toHaveBeenCalledWith("a3", true);
+  });
 });
 
 describe("QuestionBar（ask_user 非阻塞提问条）", () => {

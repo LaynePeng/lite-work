@@ -440,7 +440,15 @@ export default function ChatView({
   // 折叠发生在追加消息跨过阈值的时刻，贴底逻辑（scrollTop = scrollHeight）
   // 自动适配变小的总高度；用户上翻浏览的多在保留区内，不受打扰。
   const [foldExpanded, setFoldExpanded] = useState(0);
-  useEffect(() => { setFoldExpanded(0); }, [sessionId]); // 切换会话重置展开状态
+  // 审批卡分页索引：多个审批同时挂起时，用单个弹层 + 序号标签切换。
+  // 此前每张待审批各自渲染一个全屏遮罩，多个遮罩互相覆盖——只有最后一张
+  // 可见/可点，点掉一张后下一张在原位几乎原样弹出，用户以为「点了没反应 /
+  // 卡在问权限前」，长任务里成批的外部路径读取尤其容易触发。
+  const [activeApprovalIdx, setActiveApprovalIdx] = useState(0);
+  useEffect(() => {
+    setFoldExpanded(0);
+    setActiveApprovalIdx(0);
+  }, [sessionId]); // 切换会话重置展开与审批分页状态
   const totalTurns = displayTurns.length;
   // 折叠条件：轮数或消息数任一超限（v1.6.0 起支持消息数维度，可在设置中配置）。
   // 高工具密度会话里 1 轮可含几十张工具卡片：973 条消息只折算出 71 轮，
@@ -492,6 +500,13 @@ export default function ChatView({
     const el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, streaming, displayTurns]);
+
+  // 当前展示的待审批：分页索引越界时收敛到最后一项（当前项被批准/拒绝后，
+  // 列表缩短仍能稳定落到下一张卡）。
+  const approvalIdx = pendingApprovals.length > 0
+    ? Math.min(activeApprovalIdx, pendingApprovals.length - 1)
+    : 0;
+  const activeApproval = pendingApprovals[approvalIdx];
 
   return (
     <div className="chat-view">
@@ -545,30 +560,49 @@ export default function ChatView({
         </div>
       )}
 
-      {pendingApprovals.map((pa) => (
-        <div className="approval-overlay" key={pa.id}>
+      {activeApproval && (
+        <div className="approval-overlay" key="approval-overlay">
           <div className="approval-card">
             <div className="approval-icon">🛡️</div>
-            <h3>需要你的确认{pendingApprovals.length > 1 ? `（${pendingApprovals.length} 个待审批）` : ""}</h3>
-            <p className="approval-action">{pa.action}</p>
-            <p className="approval-reason">{pa.reason}</p>
+            <h3>
+              需要你的确认
+              {pendingApprovals.length > 1
+                ? `（第 ${approvalIdx + 1}/${pendingApprovals.length} 个待审批）`
+                : ""}
+            </h3>
+            {pendingApprovals.length > 1 && (
+              <div className="approval-tabs">
+                {pendingApprovals.map((p, i) => (
+                  <button
+                    key={p.id}
+                    className={`approval-tab ${i === approvalIdx ? "active" : ""}`}
+                    onClick={() => setActiveApprovalIdx(i)}
+                    title={p.action}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="approval-action">{activeApproval.action}</p>
+            <p className="approval-reason">{activeApproval.reason}</p>
             <div className="approval-buttons">
-              <button className="btn-deny" onClick={() => onApprove(pa.id, false)}>
+              <button className="btn-deny" onClick={() => onApprove(activeApproval.id, false)}>
                 拒绝
               </button>
-              <button className="btn-approve" onClick={() => onApprove(pa.id, true)}>
+              <button className="btn-approve" onClick={() => onApprove(activeApproval.id, true)}>
                 允许执行
               </button>
-              {pa.rememberable && (
+              {activeApproval.rememberable && (
                 <button className="btn-approve btn-remember" title="本会话内同类操作自动允许（Claude Code 风格 Always allow）"
-                  onClick={() => onApprove(pa.id, true, true)}>
+                  onClick={() => onApprove(activeApproval.id, true, true)}>
                   ⚡ 记住并允许同类
                 </button>
               )}
             </div>
           </div>
         </div>
-      ))}
+      )}
 
       </div>
   );

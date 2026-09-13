@@ -121,12 +121,16 @@ class ApprovalGate:
             return None
         return {"id": entry["id"], "action": entry["action"], "reason": entry["reason"],
                 "created_at": entry["created_at"], "rule": entry.get("rule"),
+                # rememberable 与 approval:request 事件字段保持一致：SSE 断线
+                # 重连后前端靠 pending 同步补卡，缺该字段会丢掉「记住并允许同类」
+                "rememberable": bool(entry.get("rule")),
                 "session_id": entry.get("session_id")}
 
     def list_pending(self) -> List[Dict[str, Any]]:
         """当前全部挂起审批（SSE 重连后前端兜底同步用）。"""
         return [{"id": e["id"], "action": e["action"], "reason": e["reason"],
                  "created_at": e["created_at"], "rule": e.get("rule"),
+                 "rememberable": bool(e.get("rule")),
                  "session_id": e.get("session_id")}
                 for e in self._pending.values()]
 

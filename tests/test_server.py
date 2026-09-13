@@ -292,6 +292,47 @@ async def test_approval_flow(live_client):
     assert r.status_code == 404
 
 
+async def test_approve_skill_emits_strict_valid_payloads(tmp_path):
+    """启动前 ask 技能审批：事件负载字段完整（strict 校验通过）+ 携带 session_id。
+
+    回归：`TaskHandle._approve_skill` 的 approval:request 曾缺 `rememberable`、
+    approval:resolved 曾缺 `by`/`action`——非 strict 下只是刷错误日志，strict
+    事件模式（CI `LITEWORK_STRICT_EVENTS=1` / 生产 fail-fast）会直接抛异常，
+    表现为「任务在问权限前中断/卡住」。
+    """
+    import types
+
+    from litework.core.events import TypedEventBus
+    from litework.server.tasks import TaskHandle
+
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+    bus = TypedEventBus(strict=True)
+    requests, resolved = [], []
+    bus.on("approval:request", lambda p: requests.append(p))
+    bus.on("approval:resolved", lambda p: resolved.append(p))
+    # 只需 self.app / self.kernel 两个属性 → 轻量替身足够（不必装配完整 TaskHandle）
+    handle = types.SimpleNamespace(
+        app=app, kernel=types.SimpleNamespace(events=bus, session_id="sess-ask"))
+
+    task = asyncio.ensure_future(TaskHandle._approve_skill(handle, "ask-tool"))
+    for _ in range(20):  # 让审批请求挂起（emit 不 yield，一次 sleep 通常即可）
+        await asyncio.sleep(0)
+        if app.approval_gate.pending_count():
+            break
+
+    pending = app.approval_gate.list_pending()
+    assert len(pending) == 1
+    assert pending[0]["session_id"] == "sess-ask"
+    assert pending[0]["rememberable"] is False  # 断线重连同步也不丢字段
+    assert requests and requests[0]["rememberable"] is False
+
+    app.approval_gate.resolve(pending[0]["id"], True, by="user")
+    assert await asyncio.wait_for(task, timeout=2) is True
+    # on_resolve 未注入（未经 create_app 装配）→ 兜底补一条字段完整的 resolved
+    assert resolved and resolved[0]["approved"] is True and resolved[0]["by"] == "user"
+
+
 async def test_session_agents_endpoint(live_client):
     """/api/sessions/{session_id}/agents 返回子 Agent 状态（含 running/completed/errored）。"""
     c, app, _ = live_client

@@ -2,6 +2,58 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [1.7.1] — 审批卡与多窗口稳定性修复
+
+### 修复
+- **多个审批同时挂起时「卡在问权限前」**：此前每张待审批各自渲染一个全屏遮罩，多张互相覆盖
+  （只有最后一张可见可点；点掉一张后下一张在原位几乎原样弹出），用户会误以为「点了没反应 /
+  任务卡死」。改为**单个弹层 + 序号标签**（「第 i/N 个待审批」）逐条切换确认；
+- **同进程多项目窗口互相顶掉鉴权令牌（先开窗口全部 401）**：Electron 的 `webRequest` 同一事件
+  「只认最后注册的监听器」，而每个项目窗口（「新建项目窗口」）各自拉起一个本地 Core
+  （随机端口 + 独立令牌），后开窗口会顶掉先开窗口的 `Authorization` 注入，先开窗口随即
+  所有请求 401（表现为「停止失败: 401 Unauthorized」）。改为**只安装一次**监听器、
+  令牌按请求 origin 查表注入；重启某个窗口的 Core 也不会再影响其它窗口；
+- **启动前 ask 技能审批的事件负载缺字段**：`approval:request` 缺必填 `rememberable`、
+  `approval:resolved` 缺 `by`/`action`——非 strict 下只刷错误日志，strict 事件模式
+  （CI / 生产 fail-fast）会直接抛异常中断任务；
+- 审批待办同步（`GET /api/approvals/pending`）补齐 `rememberable`：SSE 断线重连后补卡
+  不再丢失「⚡ 记住并允许同类」按钮；
+- 删除 `/api/tasks/{id}/events` 流收尾中重复的 `unsubscribe + cleanup` 代码块。
+
+### 安全
+- Core 令牌只注入到已登记的 Core origin：此前默认 session 的**所有**请求都会被贴上令牌，
+  包括渲染进程对 GitHub 等外部地址的请求（插件图标），存在令牌外泄风险。
+
+### 内部
+- 新增 `electron/token-injector.js`：令牌注入器（按 origin 查表）含 7 个 `node:test` 用例，
+  已接入 CI（frontend job）；
+- 新增审批负载 strict 校验回归用例（`tests/test_server.py`）。
+
+## [1.7.0] — Agent 权限档位与职责域重构
+
+> 补记：该版本发布时未写入本文件，以下内容依据 `v1.6.2..v1.7.0` 的提交记录整理。
+
+### 新增
+- **Agent 权限档位 UI + 职责域权限模型重构**：工具按职责域分组授权（`read` / `plan` / `edit` /
+  `execute` / `git_write` / `web` / `office` / `collab` / `interactive` / `misc`，各域可取
+  allow / ask / deny）；移除 `spawn_sub_agent`，改为 `@` 主 Agent 派生；Plan 走 `plan_save`
+  专用写通道；四个内置 Agent（build / plan / office / research）提示词重写；
+- Agent 图标跟随对话气泡，支持自定义 Agent 图标；
+- 快捷键：`Alt+1/2/3/4` 直达切换 primary Agent（Tab 循环保留）；
+- 输入框长文本粘贴自动折叠为「粘贴块」；
+- 引入 mypy 类型检查并接入 CI。
+
+### 修复
+- 审批卡断线丢失、新增「记住并允许同类」（会话级自动同意）、死循环检测分级；
+- 嵌套事件载荷（TypedDict）校验误判；
+- 审批卡超长内容溢出、Agent 配置页三层嵌套滚动、「运行中 / 与 @ 面板」；
+- 图表渲染失败残留空 `diagrams` 目录。
+
+### 变更
+- 缓存命中率与「缓存帮你省下」改为会话累计口径（与累计成本一致）；
+- 删除已无引用的旧同步工具 `litework/tools/sub_agent.py`；
+- 新增「执行方式指南」文档，README 精简为快速开始。
+
 ## [1.6.1] — 审批卡死与上下文完整性修复
 
 ### 修复

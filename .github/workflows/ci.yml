@@ -94,3 +94,7 @@ jobs:
       - name: Run frontend tests
         working-directory: web
         run: npm test
+      # Electron 主进程的 Core 令牌注入器：纯 Node 单测（无额外依赖）。
+      # 回归「多项目窗口互相顶掉 Authorization 注入 → 先开窗口全部 401」。
+      - name: Electron token injector tests (node:test)
+        run: node --test tests/js/token-injector.test.mjs

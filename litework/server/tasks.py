@@ -313,15 +313,25 @@ class TaskHandle:
 
     async def _approve_skill(self, name: str) -> bool:
         """ask 权限技能的启动前审批（复用全局审批门 + approval:request 事件）。"""
+        action = f'加载技能 "{name}"'
+        reason = "该技能的权限规则为 ask，使用前需要确认。"
         future = self.app.approval_gate.request_approval(
-            f'加载技能 "{name}"', "该技能的权限规则为 ask，使用前需要确认。")
+            action, reason, session_id=getattr(self.kernel, "session_id", None))
         approval_id = self.app.approval_gate.current_id(future)
+        # rememberable 是 ApprovalRequestPayload 的必填字段（本路径无 rule →
+        # False）；缺字段在 strict 事件模式下会直接抛错中断任务
         await self.kernel.events.emit("approval:request", {
-            "id": approval_id, "action": f'加载技能 "{name}"',
-            "reason": "该技能的权限规则为 ask，使用前需要确认。",
+            "id": approval_id, "action": action, "reason": reason,
+            "rememberable": False,
         })
         approved = await future
-        await self.kernel.events.emit("approval:resolved", {"id": approval_id, "approved": approved})
+        # 正常路径（server）：approval:resolved 由 gate.on_resolve（server/app.py
+        # 注入）统一广播，含 by=timeout，本会话流内不重复发（避免 payload 缺字段
+        # 与 by 取错值）。仅在 on_resolve 未注入时兜底补一条，防审批卡悬挂。
+        if getattr(self.app.approval_gate, "on_resolve", None) is None:
+            await self.kernel.events.emit("approval:resolved", {
+                "id": approval_id, "approved": approved, "by": "user", "action": action,
+            })
         return approved
 
     def _read_skill_content(self, name: str) -> Optional[str]:

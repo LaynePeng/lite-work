@@ -92,9 +92,6 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 handle.unsubscribe(queue)
                 if handle.done and handle.subscribers_drained:
                     tasks.cleanup(task_id)
-                handle.unsubscribe(queue)
-                if handle.done and handle.subscribers_drained:
-                    tasks.cleanup(task_id)
 
         return StreamingResponse(
             _stream(),

@@ -15,6 +15,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const { createTokenInjector, originOf } = require("./token-injector");
+
 const CLIENT_CONFIG = path.join(os.homedir(), ".lite-work", "client.json");
 const LOG_DIR = path.join(os.homedir(), ".lite-work", "logs");
 const ELECTRON_LOG_FILE = path.join(LOG_DIR, "electron.log");
@@ -270,12 +272,20 @@ function spawnLocalCore(workspace) {
   });
 }
 
-function injectRemoteToken(token) {
-  if (!token) return;
-  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    details.requestHeaders["Authorization"] = `Bearer ${token}`;
-    callback({ requestHeaders: details.requestHeaders });
-  });
+// Core 鉴权令牌注入：只安装一次监听器，令牌按请求 origin 查表注入。
+// 不能「每开一个窗口重新注册一次」——Electron 的 webRequest 同一事件只认最后
+// 注册的监听器，多窗口（各自 Core/令牌）会互相顶掉，先开窗口全部 401。
+// 详细原因见 token-injector.js 头部注释。
+const tokenInjector = createTokenInjector(() => session.defaultSession);
+
+// 释放某 Core 的令牌登记；同一 origin 仍被其它窗口使用时保留（多窗口共享 Core 的场景）
+function releaseCoreToken(url) {
+  const origin = originOf(url);
+  if (!origin) return;
+  for (const record of localInstances.values()) {
+    if (record.url && originOf(record.url) === origin) return;
+  }
+  tokenInjector.release(url);
 }
 
 // 主进程直连 Core（fetch/net.fetch 不经过 session 请求头注入）所需的鉴权头
@@ -392,9 +402,9 @@ async function createLocalWindow(workspace = null) {
   const window = createWindow(loadingUrl);
   try {
     const instance = await spawnLocalCore(workspace);
-    // 本地 Core 默认开启鉴权（P0-2）：把就绪标记中的 token 注入渲染进程
-    // 的所有请求（fetch 与 EventSource 都经 session 请求头注入）
-    injectRemoteToken(instance.token);
+    // 本地 Core 默认开启鉴权（P0-2）：把就绪标记中的 token 登记给该 Core 的
+    // origin（fetch 与 EventSource 都经 session 请求头注入）
+    tokenInjector.register(instance.url, instance.token);
     // 竞态防护：窗口在等待后端就绪期间被关闭（closed 已触发、instance
     // 尚未注册）→ 立即回收刚拉起的 backend，防止 uvicorn 孤儿
     if (window.isDestroyed()) {
@@ -427,6 +437,9 @@ async function createLocalWindow(workspace = null) {
       // 否则重启后关窗只会回收已死的旧进程、泄漏新 Core
       stopCore(record.child);
       localInstances.delete(winId);
+      // 释放该窗口 Core 的令牌登记（此时已从 localInstances 移除，
+      // 仅供仍在使用同一 origin 的窗口保留）
+      releaseCoreToken(record.url);
     });
     if (!window.isDestroyed()) window.loadURL(instance.url);
     return { ok: true, workspace, url: instance.url };
@@ -475,16 +488,18 @@ async function restartLocalCore(winId) {
 
   stopTerminal(winId);
   killBackendTree(record.child);
+  const previousUrl = record.url;
   try {
     const instance = await spawnLocalCore(workspace);
-    // 重启后 Core 生成新 token：替换 session 注入（onBeforeSendHeaders 重复
-    // 注册同一 filter 会覆盖旧监听器），否则渲染进程仍带旧 token 被 401
-    injectRemoteToken(instance.token);
+    // 重启后 Core 换端口 + 换令牌：登记新 origin（按 origin 注入，不会影响
+    // 其它窗口的令牌），再释放旧 origin 的登记
+    tokenInjector.register(instance.url, instance.token);
     // 原地更新 record：closed 回调与 before-quit 兜底读取的都是 record.child
     record.child = instance.child;
     record.url = instance.url;
     record.token = instance.token;
     record.workspace = workspace;
+    releaseCoreToken(previousUrl);
     if (record.window && !record.window.isDestroyed()) {
       record.window.loadURL(instance.url);
     }
@@ -608,7 +623,7 @@ app.whenReady().then(async () => {
   if (config.coreUrl) {
     coreMode = "remote";
     remoteUrl = config.coreUrl;
-    injectRemoteToken(config.token);
+    tokenInjector.register(config.coreUrl, config.token);
     writeLog("log", `连接远程 Core: ${config.coreUrl}`);
     createWindow(config.coreUrl);
     return;

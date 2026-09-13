@@ -2066,6 +2066,37 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex-shrink: 0;
 }
 
+/* 多审批分页标签：同屏只保留一个确认弹层，用序号标签切换。
+   旧实现是每张待审批各渲染一个全屏遮罩，多个遮罩互相覆盖——
+   只有最后一张可见/可点，视觉上像「卡在问权限前」。 */
+.approval-tabs {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.approval-tab {
+  min-width: 30px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.approval-tab.active {
+  background: var(--grad);
+  color: #fff;
+  border-color: transparent;
+  font-weight: 600;
+}
+
 .approval-action {
   font-family: var(--font-mono);
   font-size: 12.5px;
