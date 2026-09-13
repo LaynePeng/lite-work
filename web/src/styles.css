@@ -2518,6 +2518,83 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-weight: 500;
 }
 
+/* 长文本粘贴折叠块：输入框上方的胶囊 + 展开预览
+   （CI 报错/堆栈日志等长文本自动折叠，避免淹没输入区） */
+.paste-blocks {
+  padding: 0 12px 6px;
+}
+
+.paste-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.paste-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.paste-chip.active {
+  border-color: var(--accent);
+}
+
+.paste-chip-main {
+  max-width: 100%;
+  padding: 5px 4px 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.paste-chip-main:hover {
+  color: var(--text-0);
+}
+
+.paste-chip-icon {
+  margin-right: 5px;
+}
+
+.paste-chip-x {
+  padding: 5px 9px 5px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.paste-chip-x:hover {
+  color: var(--red);
+}
+
+.paste-preview {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px/1.5 var(--font-mono);
+  color: var(--text-1);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 /* SSE 连接指示器（P1-5）：绿=已连接 / 黄=重连中（含原生重连）/ 红=重连耗尽 */
 .sse-dot {
   display: inline-block;

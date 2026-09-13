@@ -7,6 +7,20 @@ import { api } from "../api";
 import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
 import { AGENT_META } from "../lib/agentMeta";
 
+/**
+ * 长文本粘贴折叠阈值：行数 ≥ PASTE_FOLD_LINES 或字符数 ≥ PASTE_FOLD_CHARS
+ * 即折叠为「粘贴块」（短文本照常内联，不打扰输入体验）。
+ */
+const PASTE_FOLD_LINES = 8;
+const PASTE_FOLD_CHARS = 800;
+
+/** 粘贴块：折叠保存的长文本（如 CI 报错），发送时原样内联给 Agent。 */
+interface PasteBlock {
+  id: number;
+  text: string;
+  lines: number;
+}
+
 /** 协作模式图标：插件自带 logo（icon.svg 等），加载失败回退默认图。 */
 function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
   const [failed, setFailed] = useState(false);
@@ -76,6 +90,20 @@ export default function Composer({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
+
+  // ------------------------------------------------------------ 粘贴块（长文本折叠）
+  // 剪贴板里的长文本（CI 报错、堆栈日志等）自动折叠成输入框上方的「粘贴块」：
+  // 输入区只占一行胶囊，点击展开预览、可单独删除；发送时正文原样内联给 Agent
+  // （不落盘、不引用文件）。
+  const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([]);
+  const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
+  const pasteSeq = useRef(0);
+
+  /** 移除某个粘贴块（同时收起它的预览）。 */
+  const removePasteBlock = (id: number) => {
+    setPasteBlocks((list) => list.filter((b) => b.id !== id));
+    setExpandedPaste((cur) => (cur === id ? null : cur));
+  };
 
   const showToast = (msg: string) => {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
@@ -220,16 +248,33 @@ export default function Composer({
     void uploadFiles(Array.from(files));
   };
 
-  // 粘贴图片：仅当剪贴板里确有图片文件时才接管，纯文本粘贴完全走默认行为
+  // 粘贴处理：
+  // 1) 剪贴板里有图片文件 → 上传（原行为）；
+  // 2) 纯文本且属于「长文本」（行数/字符数超阈值）→ 折叠为粘贴块，避免淹没输入框；
+  // 3) 其余（短文本）→ 不接管，走浏览器默认内联粘贴。
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled) return;
     const images = Array.from(e.clipboardData?.items ?? [])
       .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
       .map((it) => it.getAsFile())
       .filter((f): f is File => f !== null);
-    if (images.length === 0) return;
+    if (images.length > 0) {
+      e.preventDefault();
+      void uploadFiles(images);
+      return;
+    }
+    const pasted = e.clipboardData?.getData("text/plain") ?? "";
+    if (!pasted) return;
+    // 统一换行（CRLF → LF）并去掉尾部换行，保证行数统计与预览整洁
+    const normalized = pasted.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    const lines = normalized.split("\n").length;
+    if (lines < PASTE_FOLD_LINES && normalized.length < PASTE_FOLD_CHARS) return;
     e.preventDefault();
-    void uploadFiles(images);
+    pasteSeq.current += 1;
+    const id = pasteSeq.current;
+    setPasteBlocks((list) => [...list, { id, text: normalized, lines }]);
+    setExpandedPaste(null);
+    inputRef.current?.focus();
   };
 
   // 拖拽文件：dataTransfer 里有文件才接管（阻止默认跳转），拖文本不受影响
@@ -400,8 +445,8 @@ export default function Composer({
 
   const submit = () => {
     const t = text.trim();
-    // 任务运行中也允许提交：作为补充指令排队，下一回合注入对话
-    if (!t || disabled) return;
+    // 只剩粘贴块（无文字指令）也允许发送
+    if ((!t && pasteBlocks.length === 0) || disabled) return;
     setPaletteOpen(false);
     // /history：本地命令（不消耗 LLM），弹出历史输入列表
     if (t === "/history" || t === "/history ") {
@@ -412,17 +457,26 @@ export default function Composer({
     }
     // @role 任务 → 显式派生指令（@-mention 触发多 Agent）
     // （协作模式已全会话级生效——由后端注入 system prompt，发送不再改写）
-    let outgoing = t;
+    let instruction = t;
     const atMatch = /^@([A-Za-z0-9_\-]+)\s+(.+)$/s.exec(t);
     if (atMatch) {
       const [, role, rest] = atMatch;
-      outgoing = `请使用 spawn_agent 工具派生 role=${role} 的子 Agent 执行以下任务，派生后继续你自己的工作，结果会自动送达：\n${rest}`;
+      instruction = `请使用 spawn_agent 工具派生 role=${role} 的子 Agent 执行以下任务，派生后继续你自己的工作，结果会自动送达：\n${rest}`;
     }
-    pushHistory(outgoing);
+    // 输入历史只记指令本身（不含粘贴块正文，避免把日志塞进 localStorage）
+    if (instruction) pushHistory(instruction);
     setHistoryIdx(-1);
+    // 粘贴块正文原样内联（附在指令之后，Agent 可结合上下文；内容不丢）
+    const pasted = pasteBlocks.map((b) => b.text).join("\n\n");
+    const outgoing = pasted ? (instruction ? `${instruction}\n\n${pasted}` : pasted) : instruction;
     onSend(outgoing);
     setText("");
+    setPasteBlocks([]);
+    setExpandedPaste(null);
   };
+
+  // 发送可用性：有文字指令或有粘贴块即可（仅有粘贴块也能发）
+  const canSend = !disabled && (text.trim() !== "" || pasteBlocks.length > 0);
 
   const primary = agents.filter((a) => a.mode !== "subagent");
 
@@ -504,6 +558,42 @@ export default function Composer({
               </div>
             )}
           </div>
+        </div>
+      )}
+      {pasteBlocks.length > 0 && (
+        <div className="paste-blocks">
+          <div className="paste-chips">
+            {pasteBlocks.map((b, i) => (
+              <span
+                key={b.id}
+                className={`paste-chip ${expandedPaste === b.id ? "active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="paste-chip-main"
+                  onClick={() => setExpandedPaste((cur) => (cur === b.id ? null : b.id))}
+                  title="点击展开 / 收起预览"
+                >
+                  <span className="paste-chip-icon" aria-hidden>📋</span>
+                  粘贴内容 {i + 1} · {b.lines} 行
+                </button>
+                <button
+                  type="button"
+                  className="paste-chip-x"
+                  onClick={() => removePasteBlock(b.id)}
+                  title="移除该粘贴块"
+                  aria-label={`移除粘贴内容 ${i + 1}`}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+          {expandedPaste !== null && (() => {
+            const b = pasteBlocks.find((p) => p.id === expandedPaste);
+            if (!b) return null;
+            return <pre className="paste-preview">{b.text}</pre>;
+          })()}
         </div>
       )}
       <div className={`composer ${dragOver ? "drag-over" : ""}`}>
@@ -635,7 +725,7 @@ export default function Composer({
         />
         {running ? (
           <>
-            <button className="btn-send" onClick={submit} disabled={disabled || !text.trim()} title="加入待发送队列">
+            <button className="btn-send" onClick={submit} disabled={!canSend} title="加入待发送队列">
               ➤
             </button>
             <button className="btn-send btn-stop" onClick={onStop} title="停止任务">
@@ -659,7 +749,7 @@ export default function Composer({
             >
               {uploading ? "…" : "📎"}
             </button>
-            <button className="btn-send" onClick={submit} disabled={disabled || !text.trim()}>
+            <button className="btn-send" onClick={submit} disabled={!canSend}>
               ➤
             </button>
           </>

@@ -184,3 +184,64 @@ describe("Composer · 模型选择器（全局默认去重）", () => {
     expect(onSessionModelChange).toHaveBeenCalledWith(null);
   });
 });
+
+// 长文本粘贴折叠为「粘贴块」：避免 CI 报错等日志淹没输入框，发送时原样内联给 Agent
+describe("Composer · 长文本粘贴折叠为粘贴块", () => {
+  const LONG = Array.from({ length: 20 }, (_, i) => `行${i + 1}: error`).join("\n");
+
+  const chip = (i: number) => screen.getByRole("button", { name: `粘贴内容 ${i} · 20 行` });
+
+  it("粘贴长文本 → 折叠成胶囊，正文不进输入框", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(LONG);
+
+    expect(chip(1)).toBeInTheDocument();
+    expect(ta.value).toBe("");
+    // 折叠后即可发送（即便没有文字指令）
+    expect(document.querySelector<HTMLButtonElement>(".btn-send")!.disabled).toBe(false);
+  });
+
+  it("短文本粘贴不折叠，保持默认内联", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste("短暂错误");
+
+    expect(screen.queryByRole("button", { name: /粘贴内容/ })).not.toBeInTheDocument();
+    expect(ta.value).toContain("短暂错误");
+  });
+
+  it("点击胶囊展开预览，点击 ✕ 移除", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(LONG);
+
+    await user.click(chip(1));
+    expect(screen.getByText(/行20: error/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "移除粘贴内容 1" }));
+    expect(screen.queryByRole("button", { name: /粘贴内容 1/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/行20: error/)).not.toBeInTheDocument();
+  });
+
+  it("仅粘贴块（无文字）也能发送，且正文原样内联给 Agent", async () => {
+    const onSend = vi.fn();
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} onSend={onSend} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(LONG);
+
+    await user.click(document.querySelector<HTMLButtonElement>(".btn-send")!);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toContain("行20: error");
+    // 发送后清空：胶囊消失
+    expect(screen.queryByRole("button", { name: /粘贴内容/ })).not.toBeInTheDocument();
+  });
+});
