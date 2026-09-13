@@ -349,6 +349,10 @@ export interface SubAgentCompletedData {
   tokens_used?: number;
   turns?: number;
   summary?: string;
+  /** 完成态："completed"（正常收敛）/ "errored"（LLM 失败、超时、步数耗尽等） */
+  status?: "completed" | "errored";
+  /** errored 时的错误摘要（completed 时为空/undefined） */
+  error?: string | null;
 }
 
 // 子 Agent 活动卡片（嵌在 spawn_sub_agent 工具卡内渲染）
@@ -502,6 +506,18 @@ export interface TabItem {
   fileLanguage?: string;
   fileContent?: string;
   fileDiff?: string;
+}
+
+/** /api/approvals/pending 返回的单条挂起审批（SSE 重连/轮询兜底补卡用）。
+ *
+ * session_id：审批归属会话（子 Agent 的审批后端以 root_session_id=主会话上报，
+ * 前端按当前活跃会话 id 过滤即可命中）。 */
+export interface PendingApprovalInfo {
+  id: string;
+  action: string;
+  reason: string;
+  rememberable?: boolean;
+  session_id?: string;
 }
 
 // 单个会话的独立状态

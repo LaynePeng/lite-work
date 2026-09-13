@@ -1016,3 +1016,41 @@ async def test_persist_subagent_completed_dedupes_followup(tmp_path):
     restored = store.load("s1").metadata["subagent_records"]
     assert len([r for r in restored if r["subagentId"] == "sa_d1"]) == 1
     assert restored[-1]["summary"] == "第二轮"
+
+
+# ------------------------------------------------- conversation_id 继承（OpenCode Go 秒死修复）
+
+async def test_spawn_inherits_parent_conversation_id(tmp_path, monkeypatch):
+    """子 Agent 继承父会话的 conversation_id（header_conversation_id）。
+
+    子 loop 的 session_store=None，若不显式下传，{conversation_id} 请求头
+    （如 OpenCode Go 的 x-opencode-session）展开为空被丢弃 → 上游 400 秒死。
+    这里 monkeypatch 捕获 AgentLoop.__init__ 的入参，验证继承链路。
+    """
+    from litework.core.types import header_context
+
+    app = _make_app(tmp_path)
+    # 断言只关心入参传递，这里让 mock 适配器带上模板头使场景更贴近真实
+    app._mock_adapter.custom_headers = {"x-opencode-session": "{conversation_id}"}
+
+    captured: list = []
+    original_init = AgentLoop.__init__
+
+    def _capture_init(self, *args, **kwargs):
+        captured.append(kwargs.get("header_conversation_id"))
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(AgentLoop, "__init__", _capture_init)
+
+    # 父会话已解析出 conversation_id（spawn 时当前上下文携带它，
+    # create_task 复制 context 后子协程可读到）
+    token = header_context.set({"conversation_id": "x"})
+    try:
+        mgr = app.agent_manager("s1")
+        r = await mgr.spawn("调研 A", role="explorer")
+        assert r["ok"]
+        await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    finally:
+        header_context.reset(token)
+
+    assert "x" in captured, f"子 loop 未继承 conversation_id: {captured!r}"

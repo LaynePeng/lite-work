@@ -155,6 +155,10 @@ class SubagentCompletedPayload(TypedDict):
     tokens_used: int
     turns: int
     summary: str
+    # 完成态："completed"（正常收敛）/ "errored"（LLM 失败、超时、步数耗尽等）。
+    # error 为 errored 时的错误摘要（completed 时为 None），供前端置失败态。
+    status: str
+    error: Optional[str]
 
 
 class SkillLoadedPayload(TypedDict):

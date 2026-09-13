@@ -296,3 +296,34 @@ async def test_append_tool_results_preserves_pairing(tmp_path):
     assert [m.role for m in messages[1:]] == ["tool", "tool"]
     assert [m.tool_call_id for m in messages[1:]] == ["c1", "c2"]
     assert [m.content for m in messages[1:]] == ["结果一", "结果二"]
+
+
+# ------------------------------------------------- header_context 的 conversation_id 注入
+
+def _conv_adapter() -> MockLLMAdapter:
+    adapter = MockLLMAdapter([("ok", [])])
+    # {conversation_id} 模板头：wants_conversation 为真的前置条件
+    adapter.custom_headers = {"x-opencode-session": "{conversation_id}"}
+    return adapter
+
+
+def test_build_header_context_injects_conversation_id_without_store():
+    """子 Agent（session_store=None）注入 header_conversation_id → 直接采用该值。
+
+    否则 {conversation_id} 展开为空被丢弃 → 供应商 400（子 Agent 秒死）。
+    """
+    from litework.core.kernel import Kernel
+
+    loop = AgentLoop(kernel=Kernel("phase-test"), adapter=_conv_adapter(),
+                     registry=ToolRegistry(), session_store=None,
+                     header_conversation_id="abc")
+    assert loop._build_header_context()["conversation_id"] == "abc"
+
+
+def test_build_header_context_omits_conversation_id_without_source():
+    """无注入值且无 session_store → 不填 conversation_id 键（避免发空头）。"""
+    from litework.core.kernel import Kernel
+
+    loop = AgentLoop(kernel=Kernel("phase-test"), adapter=_conv_adapter(),
+                     registry=ToolRegistry(), session_store=None)
+    assert "conversation_id" not in loop._build_header_context()

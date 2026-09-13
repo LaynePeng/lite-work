@@ -14,13 +14,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 from ..core.agent_loop import AgentLoop
 from ..core.system_prompt import FINAL_REPORT_REQUIREMENT, SystemPromptBuilder
-from ..core.types import Message, ToolDefinition
+from ..core.types import Message, ToolDefinition, header_context
 
 logger = logging.getLogger("litework.orchestration")
 
@@ -214,9 +215,40 @@ class SubAgentRunner:
                 "范围外的改动需求请写入最终报告，由主 Agent 决定。"
             )
 
+        # conversation_id 继承：custom_headers 含 {conversation_id} 模板的供应商
+        # 需要真实会话 id（如 OpenCode Go 的 x-opencode-session）。子 Agent 的
+        # session_store=None（不落盘），若不显式下传，该头展开为空会被丢弃 → 供应商 400。
+        # 优先继承父会话当前值（主 Agent run_task 起点已解析，经 context 拷贝传播到本协程）；
+        # 父值缺失时按（根会话 × 子适配器 provider）兜底复用主会话快照。
+        adapter = self._resolve_adapter(model)  # 模型路由：per-agent 覆盖
+        conv_id = ""
+        try:
+            conv_id = str(header_context.get().get("conversation_id") or "")
+        except LookupError:
+            conv_id = ""
+        if not conv_id:
+            wants_conv = any(
+                "{conversation_id}" in (v or "")
+                for v in getattr(adapter, "custom_headers", {}).values()
+            )
+            provider_id = getattr(adapter, "provider_id", "") or ""
+            if wants_conv and root_sid:
+                try:
+                    conv_id = self.app.session_store.get_or_create_conversation_id(
+                        root_sid, provider_id)
+                except Exception:
+                    logger.debug("[SubAgent] conversation_id 兜底解析失败", exc_info=True)
+                    conv_id = ""
+                if not conv_id:
+                    logger.warning(
+                        "[SubAgent] conversation_id 解析为空（主会话快照未落盘？"
+                        "provider=%s），{conversation_id} 请求头将被丢弃，供应商可能拒绝",
+                        provider_id or "unknown",
+                    )
+
         loop = AgentLoop(
             kernel=sub_kernel,
-            adapter=self._resolve_adapter(model),  # 模型路由：per-agent 覆盖
+            adapter=adapter,  # 模型路由：per-agent 覆盖
             registry=registry,
             session_store=None,  # 子 Agent 不落盘
             max_steps=max_steps,
@@ -225,9 +257,10 @@ class SubAgentRunner:
             llm_retries=int(self.app.config.get("llm_retries", 2)),
             token_budget=int(self.app.config.get("token_budget", 48000)) // 2,
             auto_approve=bool(self.app.config.get("auto_approve", False)),
+            header_conversation_id=conv_id or None,
         )
         loop.workspace = agent_ws
-        loop.truncation_dir = self.app.create_loop(sub_kernel, registry).truncation_dir
+        loop.truncation_dir = os.path.join(self.app.config_dir, "truncations")
         # 孙 agent 完成通知注入源：按 sub_id 查其专属 manager（嵌套派生时懒创建）
         loop.agent_manager_factory = lambda sid: self.app.agent_manager(sid, create=False)
         # 挂载 loop 引用（send_message 直达运行中的 agent 的 agent_inbox）
@@ -361,6 +394,9 @@ class SubAgentRunner:
                 current_agent_depth.reset(depth_token)
             except (LookupError, ValueError):
                 pass
+        # 完成态：SUCCESS = 正常收敛；其余（LLM 失败/超时/步数耗尽/停止）= errored，
+        # 前端据此把卡片置失败态而非误报「完成」。
+        _ok = stats.get("status") == "SUCCESS"
         completed_payload = {
             "task": task_description,
             "role": role,
@@ -373,6 +409,8 @@ class SubAgentRunner:
             "tokens_used": stats["input_tokens"] + stats["output_tokens"],
             "turns": stats["turns"],
             "summary": summary,
+            "status": "completed" if _ok else "errored",
+            "error": None if _ok else summary,
         }
         await sub_kernel.events.emit("subagent:completed", completed_payload)
         if parent_events is not None:

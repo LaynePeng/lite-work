@@ -16,7 +16,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 
 interface StreamingState {
@@ -37,6 +37,10 @@ const OFFICE_TOUCH_TOOLS = new Set([
   "docx_create", "xlsx_create", "pptx_create", "pdf_create",
   "data_analyze", "chart_make", "write_file", "execute_command",
 ]);
+
+// 审批兜底轮询间隔：审批卡到达前端依赖 SSE 推送，断线窗口丢失的靠该轮询补齐，
+// 低频即可（实时路径仍是 SSE approval:request 事件）。
+const PENDING_APPROVAL_POLL_MS = 30_000;
 
 let tabSeq = 0;
 const nextTabId = () => `tab_${++tabSeq}`;
@@ -1357,6 +1361,9 @@ export default function App() {
         }
         case "subagent:completed": {
           const data = ev.data;
+          // errored（LLM 失败/超时/步数耗尽等）→ 卡片置失败态，summary 显示错误摘要；
+          // 否则才显示「已完成」。避免子 Agent 秒死时前端误报完成。
+          const errored = data.status === "errored";
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming;
           if (cur) {
             let finalized: SubAgentProgress | null = null;
@@ -1372,8 +1379,8 @@ export default function App() {
                   task: sa?.task ?? data.task,
                   turn: data.turns ?? sa?.turn ?? 0,
                   steps: sa?.steps ?? [],
-                  status: "done",
-                  summary: data.summary,
+                  status: errored ? "error" : "done",
+                  summary: errored ? (data.error ?? data.summary) : data.summary,
                   tokens: data.tokens_used,
                 };
               }
@@ -1381,7 +1388,7 @@ export default function App() {
                 ...item,
                 card: {
                   ...card,
-                  status: "done" as const,
+                  status: errored ? ("error" as const) : ("done" as const),
                   durationMs: card.durationMs,
                   subagent: finalized ?? undefined,
                 },
@@ -1393,7 +1400,12 @@ export default function App() {
             }
           }
           setTreeRevision((v) => v + 1);
-          log(`◈ 子 Agent ${String(data.role ?? "general")} 已完成`);
+          if (errored) {
+            const brief = String(data.error ?? data.summary ?? "未知错误").slice(0, 120);
+            log(`◈ 子 Agent ${String(data.role ?? "general")} 已失败：${brief}`);
+          } else {
+            log(`◈ 子 Agent ${String(data.role ?? "general")} 已完成`);
+          }
           pushAgentEvent(sid, "completed", data as unknown as Record<string, unknown>);
           break;
         }
@@ -1438,6 +1450,42 @@ export default function App() {
         resolve(0);
       });
   }), []);
+
+  // ------------------------------------------------------------ 审批兜底同步
+
+  /** 把 /api/approvals/pending 拉到的一批审批按 id 去重并入指定会话的审批卡。
+   *
+   * 过滤口径与 SSE 重连兜底一致：`a.session_id === sid`（子 Agent 的审批在后端
+   * 以 root_session_id=主会话上报，故主会话 id 能命中）。返回新增条数。
+   * 抽成公共函数供「SSE 重连 onopen」与「低频轮询」两处复用，避免逻辑漂移。
+   */
+  const mergePendingApprovals = useCallback(
+    (sid: string, approvals: PendingApprovalInfo[]) => {
+      const mine = approvals.filter((a) => a.session_id === sid);
+      if (mine.length === 0) return 0;
+      const cur = chatStatesRef.current[sid];
+      const known = new Set((cur?.pendingApprovals ?? []).map((p) => p.id));
+      const missing = mine.filter((a) => !known.has(a.id));
+      if (missing.length === 0) return 0;
+      patchChat(sid, {
+        pendingApprovals: [
+          ...(cur?.pendingApprovals ?? []),
+          ...missing.map((a) => ({ id: a.id, action: a.action, reason: a.reason,
+            rememberable: a.rememberable })),
+        ],
+      });
+      return missing.length;
+    },
+    [patchChat]
+  );
+
+  /** 拉取并合并某会话当前挂起的审批（SSE 重连兜底 / 低频轮询共用）。 */
+  const pullPendingApprovals = useCallback((sid: string) => {
+    void api.pendingApprovals().then((r) => {
+      const n = mergePendingApprovals(sid, r?.approvals ?? []);
+      if (n > 0) pushLog(`🛡️ 同步到 ${n} 条待确认审批`);
+    }).catch(() => { /* 同步失败不影响主流程 */ });
+  }, [mergePendingApprovals, pushLog]);
 
   /** 统一的任务 SSE 生命周期：连接、断开自动重连（指数退避）、[DONE] 收尾。
 
@@ -1498,24 +1546,7 @@ export default function App() {
           // 重连后兜底同步挂起审批：SSE 断线窗口里发出的 approval:request
           // 不回放（tasks.subscribe 重连不回放历史），错过即审批卡永不出现，
           // 600s 后静默超时拒绝——这里拉一次 pending 补齐
-          void api.pendingApprovals().then((r) => {
-            const mine = (r?.approvals ?? []).filter((a) => a.session_id === sid);
-            if (mine.length > 0) {
-              const cur = chatStatesRef.current[sid];
-              const known = new Set((cur?.pendingApprovals ?? []).map((p) => p.id));
-              const missing = mine.filter((a) => !known.has(a.id));
-              if (missing.length > 0) {
-                patchChat(sid, {
-                  pendingApprovals: [
-                    ...(cur?.pendingApprovals ?? []),
-                    ...missing.map((a) => ({ id: a.id, action: a.action, reason: a.reason,
-                      rememberable: a.rememberable })),
-                  ],
-                });
-                pushLog(`🛡️ 同步到 ${missing.length} 条待确认审批`);
-              }
-            }
-          }).catch(() => { /* 同步失败不影响主流程 */ });
+          pullPendingApprovals(sid);
         };
         es.onmessage = (e) => {
           if (e.data === "[DONE]") {
@@ -1547,8 +1578,20 @@ export default function App() {
 
       open();
     },
-    [closeStream, handleSSEEvent, patchChat, probeTaskAlive, pushLog, syncSessionAgents]
+    [closeStream, handleSSEEvent, patchChat, probeTaskAlive, pullPendingApprovals, pushLog, syncSessionAgents]
   );
+
+  // 审批兜底轮询（30s）：审批卡到达前端原本只依赖 SSE approval:request 事件，
+  // 断线/刷新窗口内错过即永久丢失（→ 600s 超时静默拒绝，表现为「卡死在不问权限」）。
+  // 低频拉取挂起审批，按当前活跃会话 id 过滤补齐（与 SSE 重连兜底同一口径）；
+  // 无活跃会话时不起轮询，会话切换/卸载时清 interval。
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const sid = activeSessionId;
+    pullPendingApprovals(sid);
+    const timer = setInterval(() => pullPendingApprovals(sid), PENDING_APPROVAL_POLL_MS);
+    return () => clearInterval(timer);
+  }, [activeSessionId, pullPendingApprovals]);
 
   // 30s stall 检测：任务运行中超时无事件仅提示不阻断
   useEffect(() => {

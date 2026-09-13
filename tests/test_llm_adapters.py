@@ -201,3 +201,69 @@ async def test_retryable_flag_drives_agent_loop_retry(tmp_path):
     content, _, _ = await loop._call_llm_with_retry(
         [Message(role="user", content="x")], [])
     assert content == "ok"
+
+
+# ---------------------------------------------------------------- custom_headers 会话模板
+
+async def test_custom_header_conversation_id_expanded_and_sent():
+    """{conversation_id} 模板 + 上下文有值 → 请求头被展开发送。
+
+    守卫 OpenCode Go（x-opencode-session）一类「必需会话头」的回归：
+    头丢失会导致上游 400、子 Agent 秒死。
+    """
+    from litework.core.types import header_context
+
+    seen: dict = {}
+
+    def handler(request):
+        seen["x-opencode-session"] = request.headers.get("x-opencode-session")
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"content": "ok"}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = OpenAICompatAdapter(
+        api_key="sk-test", base_url="https://mock.test",
+        custom_headers={"x-opencode-session": "{conversation_id}"})
+    adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    token = header_context.set({"conversation_id": "conv-abc"})
+    try:
+        content, _, _ = await adapter.chat_stream([Message(role="user", content="hi")], [])
+    finally:
+        header_context.reset(token)
+
+    assert content == "ok"
+    assert seen.get("x-opencode-session") == "conv-abc"
+
+
+async def test_custom_header_conversation_id_missing_drops_and_warns(caplog):
+    """上下文无 conversation_id → 该头被丢弃（不发空头）且记录 WARNING。"""
+    import logging
+
+    from litework.core.types import header_context
+
+    sent: dict = {}
+
+    def handler(request):
+        sent["header_present"] = "x-opencode-session" in request.headers
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"content": "ok"}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = OpenAICompatAdapter(
+        api_key="sk-test", base_url="https://mock.test",
+        custom_headers={"x-opencode-session": "{conversation_id}"})
+    adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    token = header_context.set({})
+    try:
+        with caplog.at_level(logging.WARNING, logger="litework.llm"):
+            await adapter.chat_stream([Message(role="user", content="hi")], [])
+    finally:
+        header_context.reset(token)
+
+    assert sent.get("header_present") is False
+    assert any(
+        r.levelno == logging.WARNING and "x-opencode-session" in r.getMessage()
+        for r in caplog.records
+    )

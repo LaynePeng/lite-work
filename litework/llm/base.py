@@ -4,10 +4,13 @@
 """LLM 适配器抽象基类。"""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.events import TypedEventBus
 from ..core.types import Message, ToolCall, ToolDefinition, header_context
+
+logger = logging.getLogger("litework.llm")
 
 
 def decode_utf8_incremental(buffer: bytes, chunk: bytes) -> Tuple[str, bytes]:
@@ -61,12 +64,23 @@ def expand_header_templates(
     out: Dict[str, str] = {}
     for key, value in cleaned.items():
         had_template = False
+        had_conversation = False
         for name in HEADER_TEMPLATE_KEYS:
             token = "{" + name + "}"
             if token in value:
                 had_template = True
+                if name == "conversation_id":
+                    had_conversation = True
                 value = value.replace(token, ctx.get(name, ""))
         if had_template and not value.strip():
+            # {conversation_id} 展开为空被丢弃是供应商 400（如 OpenCode Go 秒死）
+            # 的高危信号，必须显式告警；其余可选模板静默丢弃即可。
+            if had_conversation:
+                logger.warning(
+                    "custom_headers[%s] 模板展开后为空（会话上下文缺 conversation_id），"
+                    "该请求头被丢弃，供应商可能拒绝请求", key)
+            else:
+                logger.debug("custom_headers[%s] 模板展开后为空被丢弃", key)
             continue
         out[key] = value.strip() if had_template else value
     return out

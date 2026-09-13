@@ -95,6 +95,7 @@ class AgentLoop:
         reducer_adapter=None,
         enable_observation_pack: bool = True,
         enable_compaction_economics: bool = True,
+        header_conversation_id: Optional[str] = None,
     ) -> None:
         self.kernel = kernel
         self.adapter = adapter
@@ -143,6 +144,9 @@ class AgentLoop:
         self.agent_manager_factory: Optional[Callable[[str], Any]] = None
         # 压缩经济学开关（关闭则回到旧「超阈值即摘要」行为）
         self._enable_compaction_economics = enable_compaction_economics
+        # custom_headers 模板展开用 conversation_id 的注入值（子 Agent 从父会话继承；
+        # None = 走 session_store 惰性生成逻辑，见 _build_header_context）
+        self.header_conversation_id: Optional[str] = header_conversation_id
         # 最近一次压缩决策理由（面板可解释性）
         self._compaction_reason: Optional[str] = None
         self._register_obs_recall_tool()
@@ -214,10 +218,14 @@ class AgentLoop:
             "{conversation_id}" in (v or "")
             for v in getattr(self.adapter, "custom_headers", {}).values()
         )
-        if wants_conversation and self.session_store is not None:
-            ctx["conversation_id"] = self.session_store.get_or_create_conversation_id(
-                self.kernel.session_id, provider
-            )
+        if wants_conversation:
+            if self.header_conversation_id:
+                # 子 Agent：直接继承父会话 conversation_id（子 loop 无 session_store）
+                ctx["conversation_id"] = self.header_conversation_id
+            elif self.session_store is not None:
+                ctx["conversation_id"] = self.session_store.get_or_create_conversation_id(
+                    self.kernel.session_id, provider
+                )
         return ctx
 
     # ------------------------------------------------------------------ 主循环
