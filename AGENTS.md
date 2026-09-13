@@ -48,6 +48,25 @@ cd web && npm test
 
 提交前至少跑：`test_server.py test_security.py test_agent_loop.py test_context_and_tokens.py test_llm_adapters.py test_compact.py`。
 
+## 3.1 类型检查（mypy）
+
+```bash
+.venv/bin/python -m mypy            # 读 pyproject [tool.mypy]，默认只查 litework/
+.venv/bin/python -m mypy litework/core/agent_loop.py   # 单文件
+```
+
+配置见 `pyproject.toml` 的 `[tool.mypy]`（`mypy` 属 `dev` 可选依赖，`pip install -e ".[dev]"` 即可）。
+两条**刻意的豁免**，改动前先读原因，不要顺手"修"：
+
+-   `exclude = ["^litework/builtin_plugins/"]` 与 `office.py` 的 `ignore_errors`：
+    社区同步代码（AGENTS.md §6）不得为类型检查而与上游分叉；
+-   `no_site_packages = true`：不读第三方 stub，保证本地/CI 结果一致，并规避
+   第三方 stub 与 `python_version = "3.11"` 的语法冲突。
+
+**当前状态**：`litework/` 全量已清零（76 源文件）、并作为 **CI 门禁**接入
+`.github/workflows/ci.yml` 的 backend job（与 pytest 同 job 先跑 mypy）。
+新增代码请保持零错误；确需豁免时写明原因并落在 `pyproject.toml` 的 overrides 里。
+
 ## 4\. 命令纪律
 
 1.  **跑任何构建/打包/发版命令前，先确认该脚本的平台与作用**（看脚本头部注释），  
@@ -59,7 +78,10 @@ cd web && npm test
     不运行删除类命令；
 5.  提交信息用 `feat:` / `fix:` / `docs:` / `chore:` / `perf:` / `test:` 前缀；
 6.  日志在 `~/.lite-work/logs/`（lite-work.log 后端 / electron.log 前端+Core stdout，  
-    electron.log 时间戳为 UTC）——排查运行时问题先看日志再猜代码。
+    electron.log 时间戳为 UTC）——排查运行时问题先看日志再猜代码；
+7.  提交 / PR 会触发 CI（`.github/workflows/ci.yml`）：version-sync 版本一致性、  
+    mypy 类型检查、后端 pytest（strict 事件）、前端 tsc + vitest。  
+    提交前本地先跑一遍同样的命令，别等 CI 挂掉才发现。
 
 ## 5\. 项目结构速查
 

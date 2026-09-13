@@ -54,6 +54,12 @@ class TaskHandle:
         self.running = False
         self.done = False
         self.subscription = None
+        # 由 TaskManager 在构造后回填的动态属性（此处先声明类型，供类型检查
+        # 与静态分析可见；默认值与回填前的读取语义一致）
+        self.agent_id: str = ""
+        self.skill_extra: Optional[str] = None
+        self.skill_names: List[str] = []
+        self.skill_ask_names: List[str] = []
 
     # ------------------------------------------------------------ SSE 订阅
 
@@ -222,7 +228,7 @@ class TaskHandle:
                         note = f"[技能 {name!r} 需要确认，已被操作员拒绝]"
                         self.skill_extra = (extra + ("\n\n" if extra else "") + note) if extra else note
             system_prompt = SystemPromptBuilder.build(
-                self.app.workspace, self.registry.get_tools(), agent_prompt=agent_prompt,
+                self.app.workspace or "", self.registry.get_tools(), agent_prompt=agent_prompt,
                 skill_extra=getattr(self, "skill_extra", None),
                 skill_index=self._filtered_skill_index(),
             )

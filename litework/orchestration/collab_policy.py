@@ -216,6 +216,9 @@ class CollabModePlugin(Plugin):
     display_name: str = ""
     # hover 说明
     description: str = ""
+    # 由 AgentApp.collab_modes() 在发现「用户目录覆盖同名内置」时置位
+    # （声明为类属性，便于类型检查与阅读；默认 False）
+    _is_local_override: bool = False
 
     def recipe(self) -> str:
         """模式配方：默认读插件目录下的 recipe.md。"""
@@ -262,21 +265,39 @@ class PluginCollabPolicy(CollabPolicy):
 # ---------------------------------------------------------------- 钩子安全调用
 
 def _fire_and_forget(coro, hook_name: str, loop=None) -> None:
-    """异步钩子 fire-and-forget：异常兜底记录，不进入内核调用栈。"""
+    """异步钩子 fire-and-forget：异常兜底记录，不进入内核调用栈。
 
-    async def _wrapped():
-        try:
-            await coro
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("[Collab] 策略钩子 %s 执行失败（已隔离）", hook_name)
+    直接把钩子协程交给 create_task（不再套一层 wrapper 协程）：事件循环在
+    任务首次执行前关闭时（测试 teardown 等），asyncio 会取消/关闭任务自身
+    的协程；若套 wrapper，则取消发生在 wrapper 首步之前、其内部的钩子协程
+    永远不会被 await，Python 会在 GC 时抛
+    "coroutine 'CollabPolicy.on_agent_complete' was never awaited" 告警。
+    """
+    try:
+        target_loop = loop or asyncio.get_running_loop()
+    except RuntimeError:
+        # 无运行循环（极端时序）：显式关闭协程，避免 never awaited 告警
+        coro.close()
+        logger.debug("[Collab] 策略钩子 %s 无事件循环可调度", hook_name)
+        return
 
     try:
-        (loop or asyncio.get_running_loop()).create_task(_wrapped())
+        task = target_loop.create_task(coro)
     except RuntimeError:
-        # 无运行循环（极端时序）：丢弃钩子，不影响内核
-        logger.debug("[Collab] 策略钩子 %s 无事件循环可调度", hook_name)
+        # 循环已关闭等时序：同上，关闭协程后丢弃钩子
+        coro.close()
+        logger.debug("[Collab] 策略钩子 %s 调度失败（事件循环不可用）", hook_name)
+        return
+
+    def _log_failure(finished: "asyncio.Task[Any]") -> None:
+        if finished.cancelled():
+            return
+        exc = finished.exception()
+        if exc is not None:
+            logger.error("[Collab] 策略钩子 %s 执行失败（已隔离）",
+                         hook_name, exc_info=exc)
+
+    task.add_done_callback(_log_failure)
 
 
 def fire_collab_hook(app, hook: str, ctx: CollabContext) -> None:

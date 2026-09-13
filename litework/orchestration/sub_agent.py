@@ -35,7 +35,7 @@ ROLE_PROMPTS = {
     "general": "你是一名专注的专家工人，聚焦你的任务并返回简洁总结。",
 }
 
-ROLE_TOOLS: Dict[str, List[str]] = {
+ROLE_TOOLS: Dict[str, Optional[List[str]]] = {
     "explorer": ["read_file", "list_dir", "file_tree", "search_code", "get_file_outline",
                  "read_focused_symbol", "git_status", "git_diff", "git_log", "git_branch",
                  "review_code", "webfetch", "webfetch_batch",
@@ -73,7 +73,7 @@ def sub_agent_excludes(depth: int, max_depth: int = 2) -> List[str]:
 
 # 声明 allowed_dirs 的写域 agent：读全开 + 写文件工具（写/删受 IsolationPlugin 约束；
 # shell 命令无法静态判定写目标，不授予，由父 Agent 执行）
-WRITE_SCOPE_TOOLS = ROLE_TOOLS["explorer"] + [
+WRITE_SCOPE_TOOLS = list(ROLE_TOOLS["explorer"] or []) + [
     "write_file", "apply_search_replace", "apply_unified_diff", "delete_file",
 ]  # 共享任务工具已含于 explorer 白名单
 
@@ -131,6 +131,9 @@ class SubAgentRunner:
         if role == "explore":
             role = "explorer"
         profile = self._resolve_role(role)
+        # 工具白名单：None = 该角色不限定工具（全量）。显式声明类型，让
+        # 「按 profile 计算」与「按角色表查」两个分支的赋值类型一致
+        allowed: Optional[List[str]]
         if profile is not None:
             if profile.mode == "primary" and profile.tools is None:
                 # primary 作为派生角色：工具面按职责域模型计算（与主会话切换该

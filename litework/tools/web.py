@@ -42,7 +42,9 @@ try:
 
     _HAS_CURL_CFFI = True
 except ImportError:
-    _CurlAsyncSession = None  # type: ignore[assignment]
+    # 可选依赖缺失：置 None 并置标志位（配置了 no_site_packages，
+    # 该赋值不需要 type: ignore）
+    _CurlAsyncSession = None
     _HAS_CURL_CFFI = False
 
 MAX_READ_BYTES = 2 * 1024 * 1024  # 最多读取 2MB
@@ -199,7 +201,12 @@ class WebFetchTools:
     # ------------------------------------------------------------ 磁盘缓存
 
     def _cache_path(self, url: str) -> str:
-        return os.path.join(self._cache_dir, hashlib.sha256(url.encode("utf-8")).hexdigest() + ".json")
+        # 调用方（_cache_get / _cache_set）已守卫「未启用磁盘缓存」的分支，
+        # 这里取本地变量收窄类型，兼作误调用的兜底
+        cache_dir = self._cache_dir
+        if not cache_dir:
+            raise RuntimeError("磁盘缓存未启用（_cache_dir 未配置）")
+        return os.path.join(cache_dir, hashlib.sha256(url.encode("utf-8")).hexdigest() + ".json")
 
     def _cache_get(self, url: str) -> Optional[Tuple[int, str, str]]:
         """返回 (status, content_type, text)；未命中或过期返回 None。"""
@@ -309,7 +316,7 @@ class WebFetchTools:
                 status, content_type, text = cached
                 flag = "cache=hit"
             else:
-                resp = None
+                resp: Any = None
                 retried = False
                 for attempt in range(2):
                     async with self._client_factory() as client:

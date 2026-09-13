@@ -40,7 +40,7 @@ try:
     _HAS_PYMUPDF = True
 except ImportError:
     try:
-        import fitz as pymupdf  # type: ignore[no-redef]
+        import fitz as pymupdf
 
         _HAS_PYMUPDF = True
     except ImportError:
@@ -275,7 +275,7 @@ class OCRTools:
         total_images = 0
         with tempfile.TemporaryDirectory(prefix="litework-ocr-") as tmpdir:
             for idx, slide in enumerate(prs.slides, 1):
-                images = []
+                images: List[Dict[str, Any]] = []
                 for shape in slide.shapes:
                     if shape.shape_type is None:
                         continue

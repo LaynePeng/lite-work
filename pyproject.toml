@@ -39,6 +39,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
+    "mypy>=1.11",
 ]
 package = [
     "pyinstaller>=6.10",
@@ -60,3 +61,39 @@ testpaths = ["tests"]
 # 每个测试默认 60s 超时（thread 法可强制中断），防止个别测试挂住拖死整轮测试；
 # pytest-timeout 属于开发依赖，未安装时该参数会导致 pytest 报错，按需 pip install pytest-timeout
 addopts = "--timeout=60 --timeout-method=thread"
+
+
+# ---------------------------------------------------------------- 类型检查
+# 用法：.venv/bin/python -m mypy          （读取本配置，默认只查 litework/）
+#      .venv/bin/python -m mypy litework/core/agent_loop.py   （单文件）
+[tool.mypy]
+python_version = "3.11"
+files = ["litework"]
+# 渐进式接入：先开「能查出真问题」的基础项，不要求全量注解；
+# 后续可逐步打开 disallow_untyped_defs 等严格项
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+warn_unreachable = true
+# 第三方库缺 stub（rapidocr / tree_sitter / curl_cffi 等）：静默，避免噪音
+ignore_missing_imports = true
+# 不读取 site-packages 的类型信息（第三方库 import 一律视为 Any）：
+# ① 环境无关——依赖版本/stub 差异不影响检查结果，本地与 CI 一致；
+# ② 规避第三方 stub 语法不兼容（numpy 等 stub 用 3.12+ `type` 语句，
+#    而本项目按真实支持下限 python_version=3.11 检查，解析即 syntax error
+#    中止整轮检查）；
+# ③ 本仓库内部尚未全量注解，第三方 stub 的边际收益低。
+# 若日后需要第三方类型信息，可逐个模块用 overrides follow_imports="normal" 放开。
+no_site_packages = true
+# 社区同步代码（MIT，上游 lite-work-plugins 为事实源）：不做类型修正，
+# 与 AGENTS.md §6「不得改写社区同步副本」一致；且 collab-* 目录带连字符、
+# 非合法包名，mypy 会因模块重名直接报错中止
+exclude = ["^litework/builtin_plugins/"]
+
+[[tool.mypy.overrides]]
+module = ["litework.tools.office"]
+# office.py 与社区 office-plugin v1.3.0 同源（AGENTS.md §6）：类型问题不在
+# 本仓库修，避免与上游分叉
+ignore_errors = true

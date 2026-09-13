@@ -44,7 +44,8 @@ class MCPClient:
     async def start(self) -> None:
         resolved = self._resolve_command()
         # GUI 场景（Electron → 后端 → MCP 子进程）避免弹出额外控制台窗口
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        # getattr 兜底：CREATE_NO_WINDOW 仅 Windows 存在（跨平台保留同一行赋值）
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
             self.process = await asyncio.create_subprocess_exec(
                 resolved, *self.args,
@@ -151,9 +152,13 @@ class MCPClient:
         # 出现 "unclosed transport / Event loop is closed" 噪音
         if self.process:
             for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
+                # StreamWriter 有 close()，StreamReader 没有（asyncio 语义）：
+                # 用 getattr 只关可关的，避免 AttributeError 被静默吞掉
+                close = getattr(pipe, "close", None)
+                if close is None:
+                    continue
                 try:
-                    if pipe:
-                        pipe.close()
+                    close()
                 except Exception:
                     pass
             # transport 无公开访问器（_transport 为 CPython 稳定内部属性），

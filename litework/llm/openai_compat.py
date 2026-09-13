@@ -115,7 +115,7 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         messages: List[Message],
         tools: List[ToolDefinition],
         events: Optional[TypedEventBus] = None,
-    ) -> Tuple[str, List[ToolCall]]:
+    ) -> Tuple[str, List[ToolCall], Optional[Dict[str, Any]]]:
         client = self._get_client()
         payload = self._build_payload(messages, tools)
 

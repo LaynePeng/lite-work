@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .token_counter import TokenCounter
 from .types import Message
@@ -127,7 +127,7 @@ class ContextManager:
         self.max_allowed_tokens = max_allowed_tokens
         self.keep_recent_full_turns = max(1, keep_recent_full_turns)
         # 最近一次裁剪的统计（供 UI「上下文情况」展示）
-        self.last_prune: Dict[str, object] = {
+        self.last_prune: Dict[str, Any] = {
             "compressed": False,
             "removed_tokens": 0,
             "stage": None,

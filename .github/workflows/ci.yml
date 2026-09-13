@@ -1,0 +1,96 @@
+# CI 工作流：提交 / PR 时跑类型检查与测试。
+# 与 release.yml（仅 tag 触发、负责打包发版）相互独立。
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.11"
+
+# 同一分支的旧运行自动取消，避免排队堆积
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 快速门禁：npm 侧版本字段必须与 litework/__init__.py 的 __version__ 一致
+  # （v1.6.1 踩过的坑：改了版本号但没跑 sync-version，CI 打包才失败）
+  version-sync:
+    name: Version files in sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Run sync-version and assert no drift
+        shell: bash
+        run: |
+          node scripts/sync-version.mjs
+          git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json \
+            || (echo "Committed npm version files are out of sync with litework/__init__.py"; exit 1)
+
+  backend:
+    name: Backend (mypy + pytest)
+    runs-on: ubuntu-latest
+    # 主依赖含 pandas / matplotlib / onnxruntime(rapidocr) / pymupdf，安装较慢
+    timeout-minutes: 30
+    env:
+      # 事件负载严格校验（与 AGENTS.md 命令保持一致）
+      LITEWORK_STRICT_EVENTS: "1"
+      # 测试期禁止拉起图表引擎预装（npm install 后台线程）
+      LITEWORK_SKIP_ENGINE_PREINSTALL: "1"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install backend dependencies
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev]"
+      - name: Type check (mypy)
+        run: .venv/bin/python -m mypy
+      - name: Run backend tests
+        run: .venv/bin/python -m pytest tests/ --timeout=120 -q
+
+  frontend:
+    name: Frontend (tsc + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Type check (tsc)
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: Run frontend tests
+        working-directory: web
+        run: npm test

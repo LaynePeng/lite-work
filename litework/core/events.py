@@ -239,11 +239,15 @@ def _check_type(value: Any, annotation: Any) -> bool:
             return all(_check_type(v, args[1]) for v in value.values())
         return True
     if isinstance(annotation, type) and annotation.__name__.endswith("Payload"):
-        # 嵌套 TypedDict：按其声明递归校验
+        # 嵌套 TypedDict：按其声明递归校验。_validate_against 失败时 raise、
+        # 成功时返回 None——此处必须显式返回 True：调用方用
+        # `not _check_type(...)` 判定，返回 None 会被当成"校验失败"，
+        # 导致所有带嵌套 Payload 字段的事件被误判为非法载荷。
         try:
-            return _validate_against(value, annotation, strict=False)
+            _validate_against(value, annotation, strict=False)
         except EventPayloadError:
             return False
+        return True
     if annotation is bool:
         return isinstance(value, bool)
     if annotation in (int, float):
@@ -259,8 +263,8 @@ def _validate_against(data: Any, payload_type: type, strict: bool = True) -> Non
         raise EventPayloadError(
             f"payload 必须是 dict，实际 {type(data).__name__}（声明 {payload_type.__name__}）")
     hints = get_type_hints(payload_type, include_extras=False)
-    required = getattr(payload_type, "__required_keys__", frozenset())
-    optional = getattr(payload_type, "__optional_keys__", frozenset())
+    required: "frozenset[str]" = getattr(payload_type, "__required_keys__", frozenset())
+    optional: "frozenset[str]" = getattr(payload_type, "__optional_keys__", frozenset())
     for key in required:
         if key not in data:
             raise EventPayloadError(

@@ -125,7 +125,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                     "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
                 })
         # 新产出的排前面
-        items.sort(key=lambda x: x["mtime"], reverse=True)
+        items.sort(key=lambda x: str(x["mtime"]), reverse=True)
         return {"items": items}
 
     @router.get("/api/outputs/zip")

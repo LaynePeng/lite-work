@@ -135,3 +135,6 @@ class BaseLLMAdapter:
     async def test_connection(self) -> Tuple[bool, str, float]:
         """测试连接，返回 (是否成功, 消息, 延迟ms)。"""
         raise NotImplementedError
+
+    async def close(self) -> None:
+        """释放底层连接资源（默认无操作；带连接池的适配器覆盖实现）。"""

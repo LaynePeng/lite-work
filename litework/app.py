@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .core.agent_loop import AgentLoop
 from .core.agent_profile import AgentProfile, AgentRegistry
@@ -42,6 +42,9 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .tools.registry import ToolRegistry
+
+if TYPE_CHECKING:  # 仅供类型标注：运行时按需懒导入，避免与 orchestration 循环依赖
+    from .orchestration.agent_manager import SessionAgentManager
 
 logger = logging.getLogger("litework.app")
 
@@ -211,6 +214,8 @@ class AgentApp:
         # 子 Agent 运行器（延迟绑定）
         from .orchestration.sub_agent import SubAgentRunner
         self.sub_agent_runner = SubAgentRunner(self)
+        # 测试注入的假适配器（生产恒为 None；tests/test_multi_agent.py 直接赋值）
+        self._mock_adapter: Optional[BaseLLMAdapter] = None
 
         # 多智能体：会话级 AgentManager 注册表（懒创建，spawn 时首次建立）
         from .orchestration.agent_manager import SessionAgentManager
@@ -249,7 +254,7 @@ class AgentApp:
 
         local = [
             p for p in self._local_plugins
-            if isinstance(p, CollabModePlugin) and getattr(p, "mode_name", "")
+            if isinstance(p, CollabModePlugin) and p.mode_name
         ]
         for p in local:
             p._is_local_override = True
@@ -361,8 +366,12 @@ class AgentApp:
 
     RECENT_PROJECTS_MAX = 20
 
-    def _load_recent_projects_raw(self) -> List[Dict[str, Any]]:
-        """读原始最近项目记录（不做过滤/排序）。"""
+    def _load_recent_projects_raw(self) -> List[Any]:
+        """读原始最近项目记录（不做过滤/排序）。
+
+        返回 List[Any]（而非 List[Dict]）：内容来自未校验的 JSON，
+        调用方按条目做 isinstance 防御，标注过严会让该防御被判为不可达。
+        """
         try:
             with open(self.recent_projects_path, "r", encoding="utf-8") as f:
                 items = json.load(f)
@@ -553,6 +562,8 @@ class AgentApp:
 
         try:
             python = _shutil.which("python3") or _shutil.which("python")
+            if not python:
+                return  # 前置已校验过 python 存在；此处仅为类型收窄
             r = subprocess.run(
                 [python, script, "--install"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace',
@@ -609,8 +620,9 @@ class AgentApp:
 
     @property
     def adapter(self) -> BaseLLMAdapter:
-        if getattr(self, "_mock_adapter", None) is not None:
-            return self._mock_adapter
+        mock = self._mock_adapter
+        if mock is not None:
+            return mock
         try:
             return self.llm_registry.get_adapter()
         except ValueError as exc:
@@ -892,7 +904,7 @@ class AgentApp:
         # security_workspace（P3 worktree 隔离）：子 Agent 在独立工作树执行时，
         # 安全门的「项目内」边界以工作树为准（否则写入全被当项目外拦截）
         kernel.use(SecurityPlugin(self.guard, self.approval_gate,
-                                  security_workspace or self.workspace,
+                                  security_workspace or self.workspace or "",
                                   skill_perm_resolver=self.skill_permission_rules,
                                   approval_rule_matcher=self.match_approval_rule))
         return kernel
@@ -1010,7 +1022,8 @@ class AgentApp:
         for p in self._builtin_plugins():
             tools: List[str] = []
             try:
-                tools = [t.name for t in p.get_tools()]
+                get_tools = getattr(p, "get_tools", None)
+                tools = [t.name for t in get_tools()] if get_tools is not None else []
             except Exception:
                 logger.debug("[App] 读取插件 %s 工具列表失败", p.name, exc_info=True)
             results.append({
@@ -1245,7 +1258,7 @@ class AgentApp:
             pass
         is_builtin = existing is not None and existing.id in ("build", "plan", "office", "research")
 
-        if is_builtin:
+        if is_builtin and existing is not None:
             # 内置 agent：允许覆盖 domains / extra_tools / tools / permissions / icon
             # （prompt/人格跟随主程序发版，图标是用户偏好允许自定义）
             tools = profile_data.get("tools")
@@ -1426,7 +1439,7 @@ class AgentApp:
         for _ad in (adapter, reducer_adapter):
             if _ad is not None and hasattr(_ad, "idle_timeout"):
                 _ad.idle_timeout = _idle
-        loop.workspace = self.workspace
+        loop.workspace = self.workspace or "."  # 未打开项目时退回库默认值
         # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
         loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)
         return loop

@@ -60,7 +60,7 @@ class SessionStore:
         safe_id = session_id.replace("/", "_").replace("\\", "_")
         return os.path.join(self.storage_dir, f"{safe_id}.json")
 
-    def save(self, session_id: str, messages: List[Message], metadata: Dict[str, Any] = None) -> None:
+    def save(self, session_id: str, messages: List[Message], metadata: Optional[Dict[str, Any]] = None) -> None:
         existing = self.load(session_id)
         snapshot = SessionSnapshot(
             session_id=session_id,

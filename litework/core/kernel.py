@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .events import TypedEventBus
 from .pipeline import Pipeline
@@ -29,6 +29,9 @@ class Kernel:
         self.before_tool = Pipeline("before_tool")
         self.after_tool = Pipeline("after_tool")
         self._plugins: Dict[str, Plugin] = {}
+        # 编排者身份（可选，由 TaskManager 在启动任务时挂载）：spawn_agent 等
+        # handler 读取它做「子权限不超过父」的收敛；未挂载时为 None
+        self.orchestrator_agent_id: Optional[str] = None
 
     @property
     def session_id(self) -> str:

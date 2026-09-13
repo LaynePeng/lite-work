@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 from litework.app import AgentApp
 from litework.core.agent_profile import AgentProfile, AgentRegistry
@@ -97,8 +98,10 @@ WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff",
 
 
 def _make_app():
+    # 临时目录用系统临时目录：此前 `TEMP or "."` 在 macOS/Linux（无 TEMP）
+    # 会把 lite-work-test-perms/ 落到仓库根目录，污染工作区（未跟踪噪音）
     return AgentApp(workspace=os.getcwd(), config_dir=os.path.join(
-        os.environ.get("TEMP") or ".", "lite-work-test-perms"))
+        tempfile.gettempdir(), "lite-work-test-perms"))
 
 
 def test_builtin_agents_tool_face():

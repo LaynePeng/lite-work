@@ -119,7 +119,7 @@ def _run_warmup() -> int:
     return 0
 
 
-def main(argv: list = None) -> None:
+def main(argv: list | None = None) -> None:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
     if args.version:

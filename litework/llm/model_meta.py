@@ -29,7 +29,7 @@ MODELS_DEV_URL = "https://models.dev/api.json"
 CACHE_TTL_SECONDS = 7 * 24 * 3600  # 缓存 7 天
 
 
-def _flatten(data: Dict[str, dict]) -> Dict[str, dict]:
+def _flatten(data: Dict[str, Any]) -> Dict[str, dict]:
     """把 models.dev 的 provider→models→model_id 结构拍平成 "provider/model_id" → entry。
 
     必须以「供应商 + 模型」为键：同一个模型 ID 在 models.dev 里往往有几十家

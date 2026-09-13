@@ -17,7 +17,7 @@ import logging
 import os
 import time
 from collections import deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .compaction_economics import cache_write_read_ratio, decide_compaction
 from .context_manager import ContextManager, patch_dangling_tool_calls, repair_tool_call_pairs
@@ -126,7 +126,7 @@ class AgentLoop:
         # 并行工具执行模式："auto"（只读轮并行/含写串行）| "always" | "never"
         self.parallel_tool_calls: str = "auto"
         # 任务运行期间用户补充的输入队列（TaskHandle 持有同一个 deque，跨回合注入）
-        self.injected_inputs = deque()
+        self.injected_inputs: deque = deque()
         # agent 间消息队列（P2 合作）：其他 agent 经 send_message 发来的消息，
         # turn 边界注入本 agent 上下文（与用户补充指令同一合法注入点）
         self.agent_inbox: deque = deque()
@@ -138,6 +138,9 @@ class AgentLoop:
         self._mech_reducer_saved_tokens = 0
         # 证据收据 reducer（opt-in：传入小模型适配器才启用）
         self.reducer_adapter = reducer_adapter
+        # 孙 agent 完成通知注入源（可选装配）：按 session_id 取会话级 AgentManager。
+        # 由 AgentApp / SubAgentRunner 装配时注入；None = 未装配（无注入源）
+        self.agent_manager_factory: Optional[Callable[[str], Any]] = None
         # 压缩经济学开关（关闭则回到旧「超阈值即摘要」行为）
         self._enable_compaction_economics = enable_compaction_economics
         # 最近一次压缩决策理由（面板可解释性）
@@ -589,7 +592,9 @@ class AgentLoop:
             # auto 精细并行：写类工具串行（可被输入中断）+ 只读工具并行
             write_indices = [i for i, c in enumerate(tool_calls) if c.name in WRITE_TOOLS]
             read_indices = [i for i, c in enumerate(tool_calls) if c.name not in WRITE_TOOLS]
-            results: List[Optional[str]] = [None] * len(tool_calls)
+            # 默认全填中断占位：未执行 / 被跳过的索引保持占位（等价于原实现
+            # 「先填 None 再兜底替换」，同时让列表保持 List[str]，无需再兜底）
+            results = [INTERRUPTED] * len(tool_calls)
             for i in write_indices:
                 if self._check_abort():
                     return None
@@ -605,10 +610,6 @@ class AgentLoop:
                 )
                 for i, r in zip(read_indices, read_results):
                     results[i] = r
-            # 兜底：中断/跳过的未执行项填占位（防 None 进入消息链）
-            for i in range(len(results)):
-                if results[i] is None:
-                    results[i] = INTERRUPTED
         return results
 
     async def _append_tool_results(
@@ -1043,7 +1044,7 @@ class AgentLoop:
         hit = stats.get("cache_hit_tokens", 0)
         miss = stats.get("cache_miss_tokens", 0)
         hit_rate = round(hit / (hit + miss), 4) if (hit + miss) > 0 else None
-        last_call = dict(self._last_call or {})
+        last_call: Dict[str, Any] = dict(self._last_call or {})
         # 当前上下文水位 = 最近一次调用真正发出去的 prompt（不是任务累计值）
         prompt_tokens = (last_call.get("prompt_tokens")
                          or self._last_prompt_estimate

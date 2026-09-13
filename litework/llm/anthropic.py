@@ -174,7 +174,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         messages: List[Message],
         tools: List[ToolDefinition],
         events: Optional[TypedEventBus] = None,
-    ) -> Tuple[str, List[ToolCall]]:
+    ) -> Tuple[str, List[ToolCall], Optional[Dict[str, Any]]]:
         client = self._get_client()
 
         # 提取 system 消息（Anthropic 单独字段）

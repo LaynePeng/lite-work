@@ -47,7 +47,9 @@ class ToolRegistry:
         if handler is None:
             return f'[Error]: 未注册的工具 "{name}"。'
         try:
-            result = handler(args)
+            # handler 既可能是协程函数也可能是普通函数（都在此处统一调度）：
+            # 标注 Any 让 mypy 明白分支重赋值后类型收窄，而不是 Awaitable[str] 残留
+            result: Any = handler(args)
             if asyncio.iscoroutine(result):
                 result = await result
             return result

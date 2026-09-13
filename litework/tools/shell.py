@@ -209,20 +209,25 @@ class ShellTools:
             pass
 
     async def _monitor(self, task: _BackgroundTask, timeout: float) -> None:
+        # 调用点保证 proc 已赋值（_start_background 先 task.proc = proc 再调度）；
+        # 这里做一次局部收窄，兼作进程未创建时的兜底
+        proc = task.proc
+        if proc is None:
+            return
         try:
-            await asyncio.wait_for(task.proc.wait(), timeout=timeout)
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             task.timed_out = True
             try:
-                task.proc.kill()
+                proc.kill()
             except ProcessLookupError:
                 pass
             try:
-                await task.proc.wait()
+                await proc.wait()
             except Exception:
                 pass
         finally:
-            task.exit_code = task.proc.returncode if task.proc is not None else None
+            task.exit_code = proc.returncode
             task.done = True
 
     def _check_command(self, args: Dict[str, Any]) -> str:

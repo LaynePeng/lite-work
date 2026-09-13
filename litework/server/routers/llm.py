@@ -66,7 +66,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         override = snapshot.metadata.get("model") if snapshot else None
         if not isinstance(override, dict):
             override = None
-        provider_id = override.get("provider") if override else app.llm_registry.active
+        # provider 取值可能是未校验的会话元数据（Any）或注册表当前供应商
+        # （Optional[str]）：统一落到 str，避免下游签名不匹配
+        provider_id = (override.get("provider") if override else app.llm_registry.active) or ""
         if override and override.get("model"):
             model_name = override["model"]
         else:
