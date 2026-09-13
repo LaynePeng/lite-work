@@ -35,7 +35,7 @@ if [ "$SKIP_DEPS" -eq 0 ]; then
 
   if [ ! -x ".venv/bin/python" ]; then
     echo "缺少 .venv（PyInstaller 打包后端需要）。先执行："
-    echo "  python3 -m venv .venv && .venv/bin/pip install -e \".[dev,package]\""
+    echo "  python3 -m venv .venv && .venv/bin/pip install -e \".[package]\""
     exit 1
   fi
   ok ".venv"

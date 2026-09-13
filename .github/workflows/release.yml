@@ -45,7 +45,7 @@ jobs:
           fi
       - name: Install Python packaging dependencies
         shell: bash
-        run: python -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e ".[dev,package]"
+        run: python -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e ".[package]"
       - name: Install JavaScript dependencies
         shell: bash
         run: npm ci && npm --prefix web ci

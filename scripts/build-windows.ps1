@@ -73,8 +73,9 @@ if (Test-Path $pythonMarker) {
     $pythonDepsChanged = ((Get-Content $pythonMarker -Raw).Trim() -ne $pythonFingerprint)
 }
 if ($pythonDepsChanged) {
-    Invoke-Step "Install Python dependencies (.venv\Scripts\pip install -e .[dev,package])" {
-        & $venvPip install -e ".[dev,package]"
+    Invoke-Step "Install Python dependencies (.venv\Scripts\pip install -e .[package])" {
+        # 只装打包所需依赖（runtime deps + pyinstaller）；dev 依赖（pytest/mypy）仅测试/类型检查用，不装
+        & $venvPip install -e ".[package]"
         if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
         Set-Content -Path $pythonMarker -Value $pythonFingerprint -NoNewline
     }
