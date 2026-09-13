@@ -31,6 +31,42 @@ const AGENT_DEFAULT_DOMAINS: Record<string, "allow" | "deny" | "ask"> = {
   web: "allow", office: "deny", collab: "allow", interactive: "allow", misc: "ask",
 };
 
+// 权限档位（预设）：与内置 agent 的职责域配置精确对应，点选即整组写入 domains。
+// 当前域配置与任何档位都不匹配（如手动微调过）时，界面显示「自定义」。
+type DomainAction = "allow" | "deny" | "ask";
+const AGENT_TIERS: { key: string; label: string; desc: string; domains: Record<string, DomainAction> }[] = [
+  {
+    key: "full", label: "全能",
+    desc: "开发 Agent：读写文件、执行命令、Git 提交、联网、办公、MCP（调用时确认）全开",
+    domains: { read: "allow", plan: "deny", edit: "allow", execute: "allow", git_write: "allow", web: "allow", office: "allow", collab: "allow", interactive: "allow", misc: "ask" },
+  },
+  {
+    key: "office", label: "办公",
+    desc: "办公助手：可读写文件与办公产出，执行命令需确认，无 Git 写入，MCP（调用时确认）",
+    domains: { read: "allow", plan: "deny", edit: "allow", execute: "ask", git_write: "deny", web: "allow", office: "allow", collab: "allow", interactive: "allow", misc: "ask" },
+  },
+  {
+    key: "research", label: "调研",
+    desc: "调研助手：只读 + 联网查证 + 办公产出，不修改文件、不执行命令，MCP（调用时确认）",
+    domains: { read: "allow", plan: "deny", edit: "deny", execute: "deny", git_write: "deny", web: "allow", office: "allow", collab: "allow", interactive: "allow", misc: "ask" },
+  },
+  {
+    key: "readonly", label: "只读",
+    desc: "规划 Agent：仅读取与搜索、联网抓取、写计划文件，改文件/跑命令/Git 提交全部禁止",
+    domains: { read: "allow", plan: "allow", edit: "deny", execute: "deny", git_write: "deny", web: "allow", office: "deny", collab: "allow", interactive: "allow", misc: "ask" },
+  },
+];
+
+/** 将 agent 当前 domains（可能稀疏）补全默认值后，与档位精确比对；匹配返回档位 key，否则 null。 */
+function matchAgentTier(domains?: Record<string, DomainAction> | null): string | null {
+  if (!domains) return null;
+  const resolved: Record<string, DomainAction> = { ...AGENT_DEFAULT_DOMAINS, ...domains };
+  for (const t of AGENT_TIERS) {
+    if (Object.entries(t.domains).every(([k, v]) => resolved[k] === v)) return t.key;
+  }
+  return null;
+}
+
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
 // 返回 >0（a 更新）/ 0 / <0；解析失败回退字符串比较。
 // "1.0.0rc0" 视作 1.0.0 的预发布版（1.0.0 > 1.0.0rc0 > 1.0.0-beta）
@@ -168,6 +204,9 @@ export default function SettingsModal({
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
   }, [activeTab]);
+
+  // Agent 权限「高级微调」折叠容器：点「自定义」档位时自动展开
+  const advRef = useRef<HTMLDetailsElement>(null);
 
   const refreshSkills = useCallback(() => {
     api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
@@ -1766,6 +1805,8 @@ export default function SettingsModal({
                   const draft = agentDrafts[a.id] || { tools: [], useAll: true, icon: "" };
                   const isBuiltin = ["build", "plan", "office", "research"].includes(a.id);
                   const isEditing = editingAgent === a.id;
+                  // 当前域配置命中的权限档位（无匹配 → 自定义）
+                  const tierKey = matchAgentTier(draft.domains);
                   return (
                     <div className="skill-item" key={a.id} data-agent-id={a.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
                       <div className="skill-item-main" style={{ width: "100%" }}>
@@ -1807,53 +1848,82 @@ export default function SettingsModal({
                               )}
                             </div>
                           </div>
-                          <div className="agent-domain-editor">
-                            职责域权限（决定该 Agent 可用工具面）：
-                            {AGENT_DOMAINS_UI.map((d) => {
-                              const cur = (draft.domains ?? AGENT_DEFAULT_DOMAINS)[d.key] ?? "deny";
+                          <div className="agent-tier-row" role="group" aria-label="权限档位">
+                            <span className="agent-tier-label">权限档位：</span>
+                            {AGENT_TIERS.map((tier) => {
+                              const active = tierKey === tier.key;
                               return (
-                                <div key={d.key} className="agent-domain-row">
-                                  <span className="agent-domain-label" title={d.label}>{d.label}</span>
-                                  <div className="agent-domain-actions">
-                                    {AGENT_DOMAIN_ACTIONS.map((act) => (
-                                      <button key={act.value} type="button"
-                                        className={`domain-action-btn ${cur === act.value ? "active" : ""}`}
-                                        onClick={() => setAgentDrafts((p) => ({
-                                          ...p, [a.id]: {
-                                            ...p[a.id],
-                                            domains: { ...(p[a.id]?.domains ?? AGENT_DEFAULT_DOMAINS), [d.key]: act.value },
-                                          },
-                                        }))}>
-                                        {act.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
+                                <button key={tier.key} type="button"
+                                  className={`agent-tier-btn ${active ? "active" : ""}`}
+                                  title={tier.desc}
+                                  onClick={() => setAgentDrafts((p) => ({
+                                    ...p, [a.id]: { ...p[a.id], domains: { ...tier.domains } },
+                                  }))}>
+                                  {tier.label}
+                                </button>
                               );
                             })}
+                            {/* 无匹配档位（手动微调过）：显示「自定义」，点击展开高级微调 */}
+                            <button type="button"
+                              className={`agent-tier-btn ${tierKey ? "" : "active"}`}
+                              title="当前为自定义配置，点击展开职责域与工具微调"
+                              onClick={() => { if (advRef.current && !advRef.current.open) advRef.current.open = true; }}>
+                              自定义
+                            </button>
                           </div>
-                          <details className="agent-advanced" style={{ marginTop: 8 }}>
-                            <summary>高级：工具级微调（额外放行未映射工具，一般无需修改）</summary>
-                            <p className="mcp-hint" style={{ marginTop: 4 }}>
-                              勾选的工具会追加放行（MCP / 插件动态工具等）；职责域设为「禁止」的工具即使在此勾选也会被拦截。
-                            </p>
-                            <div className="agent-tool-grid">
-                              {agentAllTools.map((t) => {
-                                const extra = draft.extraTools ?? [];
-                                const checked = extra.includes(t.name);
+                          <details ref={advRef} className="agent-advanced" style={{ marginTop: 6 }}>
+                            <summary>高级：职责域与工具微调（一般无需修改）</summary>
+                            <div className="agent-domain-editor" style={{ marginTop: 6 }}>
+                              职责域权限（决定该 Agent 可用工具面）：
+                              {AGENT_DOMAINS_UI.map((d) => {
+                                // 未声明的域回退后端默认动作（permissions.py DEFAULT_DOMAIN_ACTIONS，misc 默认 ask），
+                                // 不能一律兜底 deny——build/office 未声明 misc（MCP），实际是 ask 而非 deny
+                                const cur = (draft.domains ?? AGENT_DEFAULT_DOMAINS)[d.key]
+                                  ?? AGENT_DEFAULT_DOMAINS[d.key] ?? "deny";
                                 return (
-                                  <label key={t.name} className="agent-tool-check" title={t.description}>
-                                    <input type="checkbox" checked={checked}
-                                      onChange={(e) => {
-                                        const next = new Set(extra);
-                                        if (e.target.checked) next.add(t.name); else next.delete(t.name);
-                                        setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], extraTools: [...next] } }));
-                                      }} />
-                                    {t.name}
-                                  </label>
+                                  <div key={d.key} className="agent-domain-row">
+                                    <span className="agent-domain-label" title={d.label}>{d.label}</span>
+                                    <div className="agent-domain-actions">
+                                      {AGENT_DOMAIN_ACTIONS.map((act) => (
+                                        <button key={act.value} type="button"
+                                          className={`domain-action-btn ${cur === act.value ? "active" : ""}`}
+                                          onClick={() => setAgentDrafts((p) => ({
+                                            ...p, [a.id]: {
+                                              ...p[a.id],
+                                              domains: { ...(p[a.id]?.domains ?? AGENT_DEFAULT_DOMAINS), [d.key]: act.value },
+                                            },
+                                          }))}>
+                                          {act.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
                                 );
                               })}
                             </div>
+                            <details className="agent-advanced" style={{ marginTop: 8 }}>
+                              <summary>工具级微调（额外放行未映射工具）</summary>
+                              <p className="mcp-hint" style={{ marginTop: 4 }}>
+                                勾选的工具会追加放行（MCP / 插件动态工具等）；职责域设为「禁止」的工具即使在此勾选也会被拦截。
+                              </p>
+                              <div className="agent-tool-grid">
+                                {agentAllTools.map((t) => {
+                                  const extra = draft.extraTools ?? [];
+                                  const checked = extra.includes(t.name);
+                                  return (
+                                    <label key={t.name} className="agent-tool-check" title={t.description}>
+                                      <input type="checkbox" checked={checked}
+                                        onChange={(e) => {
+                                          const next = new Set(extra);
+                                          if (e.target.checked) next.add(t.name); else next.delete(t.name);
+                                          setAgentDrafts((p) => ({ ...p, [a.id]: { ...p[a.id], extraTools: [...next] } }));
+                                        }} />
+                                      {t.name}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </details>
                           </details>
                           {!isBuiltin && (
                             <div className="form-group" style={{ marginTop: 6, marginBottom: 0 }}>

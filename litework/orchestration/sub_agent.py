@@ -83,10 +83,12 @@ class SubAgentRunner:
         self.app = app
 
     def _resolve_role(self, role: str):
-        """从 AgentRegistry 查找角色（支持用户自定义 subagent），否则回退内置 ROLE_*。"""
+        """从 AgentRegistry 查找角色（支持用户自定义 subagent 与内置 primary），否则回退内置 ROLE_*。"""
         try:
             profile = self.app.agent_registry.get(role)
-            if profile.mode in ("subagent", "all"):
+            # primary（build/plan/office/research）也可作为派生角色：@主Agent 任务
+            # = 以该 Agent 的域权限与提示词派生子 Agent（对齐 OpenCode 的 @agent 语义）
+            if profile.mode in ("subagent", "all", "primary"):
                 return profile
         except KeyError:
             pass
@@ -130,8 +132,18 @@ class SubAgentRunner:
             role = "explorer"
         profile = self._resolve_role(role)
         if profile is not None:
-            allowed = profile.tools
-            permissions = profile.permissions
+            if profile.mode == "primary" and profile.tools is None:
+                # primary 作为派生角色：工具面按职责域模型计算（与主会话切换该
+                # Agent 完全一致），不能用 tools=None 的「全量」语义——否则 plan
+                # 这类只读 Agent 被派生时会拿到全部写工具
+                from ..core.permissions import domains_to_allowed_and_permissions
+
+                all_names = [t.name for t in self.app.build_registry().get_tools()]
+                allowed, permissions = domains_to_allowed_and_permissions(
+                    profile.domains, all_names, profile.extra_tools)
+            else:
+                allowed = profile.tools
+                permissions = profile.permissions
             base_prompt = profile.system_prompt or ROLE_PROMPTS.get("general", "")
             # 角色级模型路由：profile 声明了 model 且 spawn 未显式指定时生效
             # （优先级：spawn 参数 > 角色定义 > 全局）

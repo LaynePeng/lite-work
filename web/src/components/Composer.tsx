@@ -334,7 +334,8 @@ export default function Composer({
   const input = text;
   const startsWithSlash = input.startsWith("/");
   const startsWithAt = input.startsWith("@");
-  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt) && !running;
+  // 运行中也可用：追加指令走队列，/ 与 @ 补全面板保持一致体验
+  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt);
   const tokens = startsWithSlash ? input.slice(1).split(/\s+/) : [];
   const cmdToken = tokens[0] ?? "";
   const restAfterCmd = input.slice(1 + cmdToken.length).replace(/^\s+/, "");
@@ -342,7 +343,8 @@ export default function Composer({
   const atToken = startsWithAt ? (input.slice(1).split(/\s+/)[0] ?? "") : "";
   const pickingAgent = startsWithAt && !atToken.includes(" ") || (startsWithAt && input === "@");
 
-  // @-mention 候选：内置子 Agent 角色 + 用户自定义 subagent（去重）
+  // @-mention 候选：主 Agent（@任务 = 以该 Agent 身份派生执行）+ 内置 spawn 角色
+  // + 用户自定义 subagent（去重）
   const MENTION_ROLES: { name: string; description: string }[] = [
     { name: "explorer", description: "只读调研员：搜索与分析代码" },
     { name: "critic", description: "批判审查员：找漏洞/风险/未验证假设" },
@@ -350,10 +352,13 @@ export default function Composer({
     { name: "general", description: "通用专家工人" },
   ];
   const mentionCandidates = useMemo(() => {
+    const primary = agents
+      .filter((a) => a.mode === "primary")
+      .map((a) => ({ name: a.id, description: `${a.description || "主 Agent"}（以该 Agent 身份派生执行）` }));
     const custom = agents
       .filter((a) => a.mode === "subagent")
       .map((a) => ({ name: a.id, description: a.description || "自定义 subagent" }));
-    const merged = [...MENTION_ROLES];
+    const merged = [...primary, ...MENTION_ROLES];
     for (const c of custom) {
       if (!merged.some((m) => m.name === c.name)) merged.push(c);
     }
@@ -421,6 +426,9 @@ export default function Composer({
 
   const primary = agents.filter((a) => a.mode !== "subagent");
 
+  // 快捷键修饰键按平台显示：macOS 为 Option，其余（Windows/Linux）为 Alt
+  const modKey = navigator.platform.toUpperCase().includes("MAC") ? "Option" : "Alt";
+
   return (
     <div className="composer-wrap">
       {primary.length > 0 && (
@@ -432,7 +440,7 @@ export default function Composer({
               <button
                 key={a.id}
                 className={`agent-btn ${currentAgent === a.id ? "active" : ""}`}
-                title={`${a.description}（快捷键 Alt+${i + 1}）`}
+                title={`${a.description}（快捷键 ${modKey}+${i + 1}）`}
                 onClick={() => onSelectAgent(a.id)}
                 disabled={disabled || running}
               >

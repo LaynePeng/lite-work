@@ -254,11 +254,11 @@ def default_plan_agent() -> AgentProfile:
         description="规划 Agent：只读分析与方案设计，计划落盘（plan_save），不实施。",
         system_prompt=PLAN_PROMPT,
         # 只读 + 交互 + 派生子 Agent；唯一写通道 plan_save（plan 域 allow）
+        # misc 未声明 → 跟随后端默认 ask：MCP 工具可用，调用时弹审批卡确认
         domains={
             "read": "allow", "plan": "allow", "edit": "deny", "execute": "deny",
             "git_write": "deny", "web": "allow", "office": "deny",
             "collab": "allow", "interactive": "allow",
-            "misc": "deny",
         },
     )
 
@@ -334,11 +334,11 @@ def default_research_agent() -> AgentProfile:
         system_prompt=RESEARCH_PROMPT,
         # 只读 + 联网 + 办公产出 + 协作；无 edit/execute/git_write；
         # plan 域 deny（不写计划文件）
+        # misc 未声明 → 跟随后端默认 ask：MCP 工具可用，调用时弹审批卡确认
         domains={
             "read": "allow", "plan": "deny", "edit": "deny", "execute": "deny",
             "git_write": "deny", "web": "allow", "office": "allow",
             "collab": "allow", "interactive": "allow",
-            "misc": "deny",
         },
     )
 
