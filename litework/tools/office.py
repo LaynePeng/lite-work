@@ -8,8 +8,9 @@ v1.2.0 新增：已有文件的格式化编辑（字体/粗体/斜体/颜色/高
 所有依赖包已包含在主依赖中（pyproject.toml dependencies），
 `pip install -e .` 时自动安装。
 """
-# 同步自 lite-work 主仓库 litework/tools/office.py（社区独立分发版）
-# v1.2.0+ 含社区版独有功能（格式化/查找替换），主仓库同步时需保留
+# 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
+# plugins/office-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本。
+# v1.2.0+ 含社区版独有功能（格式化/查找替换），同步时需保留。
 from __future__ import annotations
 
 import io
