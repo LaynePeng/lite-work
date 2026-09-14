@@ -1,0 +1,6 @@
+# 技能运行时依赖（由系统 Python 安装；打包版主程序不负责）
+# 说明：docx / reportlab / Pillow 通常已随 lite-work 捆绑，此处声明以保证
+# 独立运行（如纯命令行/CI）时也能装上。
+python-docx>=1.1.0
+reportlab>=4.0.0
+Pillow>=9.0.0

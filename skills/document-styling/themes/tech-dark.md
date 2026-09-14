@@ -1,0 +1,23 @@
+name: tech-dark
+label: 科技青
+description: 冷静现代，适合技术方案、架构说明、复盘
+color_primary: "#0F766E"
+color_accent: "#115E59"
+color_text: "#1A1A1A"
+color_muted: "#6B7280"
+color_table_head: "#0F766E"
+color_table_band: "#E8F3F1"
+color_code_bg: "#F3F6F6"
+font_zh: 微软雅黑
+font_en: Helvetica
+font_heading_zh: 微软雅黑
+font_heading_en: Helvetica
+font_mono: Courier New
+size_body: 11
+size_h1: 21
+size_h2: 16
+size_h3: 13
+size_small: 10
+line_spacing: 1.5
+para_space: 6
+margin_mm: 24

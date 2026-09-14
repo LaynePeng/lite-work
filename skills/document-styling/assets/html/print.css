@@ -1,0 +1,67 @@
+/* document-styling · Chrome 打印样式
+   颜色/字体通过 CSS 变量注入（见 md2pdf.py 的 _to_html） */
+@page { size: A4; margin: var(--margin); }
+
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  font-family: var(--font), "Songti SC", "Noto Serif CJK SC", serif;
+  color: var(--text);
+  font-size: 12pt;
+  line-height: 1.6;
+}
+.doc-title {
+  font-family: var(--font-head), "PingFang SC", sans-serif;
+  color: var(--primary);
+  font-size: 24pt;
+  text-align: center;
+  margin: 0 0 24pt;
+}
+h1, h2, h3, h4 {
+  font-family: var(--font-head), "PingFang SC", sans-serif;
+  color: var(--primary);
+  line-height: 1.35;
+  page-break-after: avoid;
+}
+h1 { font-size: 18pt; margin: 18pt 0 8pt; }
+h2 { font-size: 15pt; margin: 14pt 0 6pt; }
+h3 { font-size: 13pt; margin: 12pt 0 5pt; }
+h4 { font-size: 12pt; margin: 10pt 0 4pt; }
+p { margin: 0 0 8pt; text-align: justify; }
+ul, ol { margin: 0 0 8pt; padding-left: 22pt; }
+li { margin: 2pt 0; }
+code {
+  font-family: "Courier New", monospace;
+  background: var(--code-bg);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+pre {
+  background: var(--code-bg);
+  border: 0.5pt solid #dcdcdc;
+  border-radius: 3px;
+  padding: 8pt;
+  font-size: 9pt;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  page-break-inside: avoid;
+}
+pre code { background: none; padding: 0; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8pt 0 12pt;
+  font-size: 10.5pt;
+  page-break-inside: auto;
+}
+thead { display: table-header-group; }
+th {
+  background: var(--thead);
+  color: #fff;
+  font-weight: 600;
+  padding: 6pt 8pt;
+  text-align: left;
+}
+td { border: 0.5pt solid #d0d7de; padding: 5pt 8pt; vertical-align: top; }
+tbody tr:nth-child(even) { background: var(--band); }
+figure { margin: 10pt 0; text-align: center; }
+figure img { max-width: 100%; }

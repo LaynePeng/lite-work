@@ -1,0 +1,23 @@
+name: modern-minimal
+label: 现代极简
+description: 干净利落，适合产品文档、说明、演讲备注
+color_primary: "#111111"
+color_accent: "#333333"
+color_text: "#1A1A1A"
+color_muted: "#8A8A8A"
+color_table_head: "#111111"
+color_table_band: "#F6F6F6"
+color_code_bg: "#F4F4F4"
+font_zh: 微软雅黑
+font_en: Helvetica
+font_heading_zh: 微软雅黑
+font_heading_en: Helvetica
+font_mono: Courier New
+size_body: 11
+size_h1: 20
+size_h2: 15
+size_h3: 13
+size_small: 10
+line_spacing: 1.5
+para_space: 8
+margin_mm: 22
