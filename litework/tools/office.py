@@ -1407,25 +1407,32 @@ class OfficeTools:
             spec.loader.exec_module(mod)
 
             chart_type = "plantuml" if lang in ("plantuml", "puml") else "mermaid"
-            out_dir = _ensure_output_dir(self.workspace, "diagrams")
-            out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
 
-            def _do_render() -> None:
+            def _do_render() -> Optional[str]:
+                import shutil as _shutil
+
+                # 先在临时目录渲染，成功后落盘到 产出物/diagrams：渲染失败
+                # （引擎缺失/语法错）时不留空的 diagrams 缓存目录
                 with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
+                    tmp_png = os.path.join(tmpdir, "diagram.png")
                     if chart_type == "plantuml":
-                        mod.render_plantuml(code, out_path, 2, tmpdir, None)
+                        mod.render_plantuml(code, tmp_png, 2, tmpdir, None)
                     else:
-                        mod.render_mermaid(code, out_path, 2, tmpdir)
+                        mod.render_mermaid(code, tmp_png, 2, tmpdir)
+                    if not (os.path.isfile(tmp_png) and os.path.getsize(tmp_png) > 0):
+                        return None
+                    out_dir = _ensure_output_dir(self.workspace, "diagrams")
+                    out_path = os.path.join(
+                        out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
+                    _shutil.copyfile(tmp_png, out_path)
+                    return out_path
 
             # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
             # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
             from concurrent.futures import ThreadPoolExecutor as _TPE
             with _TPE(max_workers=1) as pool:
                 future = pool.submit(_do_render)
-                future.result(timeout=60)
-            if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-                return out_path
-            return None
+                return future.result(timeout=60)
         except Exception:
             # 引擎缺失/语法错误/渲染失败 → 回退源码文本（内容不丢）
             return None
