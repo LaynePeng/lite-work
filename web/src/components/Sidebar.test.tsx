@@ -15,6 +15,7 @@ vi.mock("../api", () => ({
     renameFile: vi.fn(),
     filePreview: vi.fn(),
     clearOutputs: vi.fn(),
+    workspaceTree: vi.fn(),
     fileDownloadUrl: (p: string) => `/api/files/download?path=${encodeURIComponent(p)}`,
     fileRawUrl: (p: string) => `/api/files/raw?path=${encodeURIComponent(p)}`,
     outputsZipUrl: (includeUploads = false) =>
@@ -97,6 +98,63 @@ describe("Sidebar · 产出物右键菜单", () => {
     fireEvent.contextMenu(row);
     await user.click(screen.getByText(/删除/));
     await waitFor(() => expect(api.deleteFile).toHaveBeenCalledWith("素材/报表.xlsx"));
+    confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------- 文件页签右键菜单
+
+const fileProps = { ...baseProps, tab: "files" as const };
+
+const NESTED_FILE = { name: "main.py", path: "src/main.py", type: "file" as const, status: "M" };
+const SRC_DIR = { name: "src", path: "src", type: "dir" as const };
+
+describe("Sidebar · 文件页签右键菜单", () => {
+  beforeEach(() => {
+    (api.workspaceTree as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path?: string) => ({
+        workspace: "/tmp/ws",
+        path: path ?? "",
+        git: { branch: "main", has_repo: true },
+        entries: path === "src" ? [NESTED_FILE] : [SRC_DIR],
+      })
+    );
+  });
+
+  /** 展开 src/ 目录，让嵌套文件行出现。 */
+  async function openNestedFile() {
+    const user = userEvent.setup();
+    render(<Sidebar {...fileProps} />);
+    await user.click(await screen.findByText("src"));
+    return screen.findByTitle("src/main.py");
+  }
+
+  it("右键文件行弹出「重命名 / 删除」菜单（与产出物面板一致）", async () => {
+    const row = await openNestedFile();
+    fireEvent.contextMenu(row);
+    expect(screen.getByText(/重命名/)).toBeInTheDocument();
+    expect(screen.getByText(/删除/)).toBeInTheDocument();
+  });
+
+  it("点击「重命名」→ 行内输入 → Enter 调用 api.renameFile（支持嵌套路径）", async () => {
+    const user = userEvent.setup();
+    const row = await openNestedFile();
+    fireEvent.contextMenu(row);
+    await user.click(screen.getByText(/重命名/));
+    const input = screen.getByDisplayValue("main.py") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "app.py");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(api.renameFile).toHaveBeenCalledWith("src/main.py", "app.py"));
+  });
+
+  it("点击「删除」→ 确认后调用 api.deleteFile", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const row = await openNestedFile();
+    fireEvent.contextMenu(row);
+    await user.click(screen.getByText(/删除/));
+    await waitFor(() => expect(api.deleteFile).toHaveBeenCalledWith("src/main.py"));
     confirmSpy.mockRestore();
   });
 });

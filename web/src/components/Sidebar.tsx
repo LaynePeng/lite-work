@@ -22,6 +22,11 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
   const [error, setError] = useState(false);
   const openRef = useRef<Set<string>>(new Set([""]));
   const refreshingRef = useRef(false);
+  // 右键菜单 / 行内重命名（文件页签：删除·重命名工作区文件）
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const loadDir = useCallback(async (path: string) => {
     const r = await api.workspaceTree(path);
@@ -77,6 +82,56 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
     [dirs, loadDir]
   );
 
+  // 右键菜单：点击外部 / 滚动 / Esc 关闭
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onScroll = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  /** 删除文件（右键菜单）：确认后调用后端，成功刷新目录树。 */
+  const removeFile = (path: string, name: string) => {
+    setMenu(null);
+    if (!window.confirm(`删除「${name}」？此操作不可恢复`)) return;
+    void api.deleteFile(path)
+      .then(() => void refresh())
+      .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
+  };
+
+  /** 进入行内重命名（预填原名；扩展名不可改，由后端校验兜底）。 */
+  const startRename = (path: string, name: string) => {
+    setMenu(null);
+    setRenamingPath(path);
+    setRenameValue(name);
+  };
+
+  /** 提交重命名：成功刷新目录树，失败提示（扩展名/重名等约束由后端返回）。 */
+  const commitRename = async (path: string, name: string) => {
+    const next = renameValue.trim();
+    if (!next || next === name) {
+      setRenamingPath(null);
+      return;
+    }
+    try {
+      await api.renameFile(path, next);
+      setRenamingPath(null);
+      void refresh();
+    } catch (err) {
+      window.alert(`重命名失败：${err instanceof Error ? err.message : err}`);
+    }
+  };
+
   const renderNodes = (path: string, depth: number): ReactNode[] => {
     const nodes = dirs.get(path) ?? [];
     return nodes.map((n) =>
@@ -108,10 +163,29 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
           style={{ paddingLeft: depth * 14 + 8 }}
           title={n.path}
           onDoubleClick={() => onFileOpen?.(n.path)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ x: e.clientX, y: e.clientY, path: n.path, name: n.name });
+          }}
         >
           <span className="tree-caret-placeholder" />
           <span className="tree-icon">{n.status === "D" ? "✕" : "📄"}</span>
-          <span className="tree-name">{n.name}</span>
+          {renamingPath === n.path ? (
+            <input
+              className="output-rename-input"
+              value={renameValue}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => setRenamingPath(null)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); void commitRename(n.path, n.name); }
+                else if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
+              }}
+            />
+          ) : (
+            <span className="tree-name">{n.name}</span>
+          )}
           {n.status && <span className="tree-status">{n.status}</span>}
         </div>
       )
@@ -149,6 +223,18 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
         <div className="sidebar-empty">（无法读取工作区）</div>
       ) : (
         <div className="file-tree">{renderNodes("", 0)}</div>
+      )}
+
+      {/* 右键菜单：重命名 / 删除（工作区文件简单管理） */}
+      {menu && (
+        <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
+          <button className="context-menu-item" onClick={() => startRename(menu.path, menu.name)}>
+            ✏ 重命名
+          </button>
+          <button className="context-menu-item danger" onClick={() => removeFile(menu.path, menu.name)}>
+            🗑 删除
+          </button>
+        </div>
       )}
     </div>
   );

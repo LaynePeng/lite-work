@@ -13,7 +13,7 @@ from .context import ServerContext
 
 
 class RenameRequest(BaseModel):
-    """重命名产出物/素材文件：path=工作区相对路径，new_name=新文件名（不含目录）。"""
+    """重命名工作区内文件：path=工作区相对路径，new_name=新文件名（不含目录）。"""
 
     path: str
     new_name: str
@@ -23,6 +23,11 @@ def _guess_media_type(target: str) -> str:
     import mimetypes
     mt, _ = mimetypes.guess_type(target)
     return mt or "application/octet-stream"
+
+
+def _is_git_internal(rel: str) -> bool:
+    """路径是否位于 .git/ 内部（禁止经 UI 改删仓库元数据）。"""
+    return ".git" in (rel or "").split("/")
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -219,18 +224,28 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.delete("/api/files")
     async def delete_file(path: str, request: Request = None):
-        """删除单个产出物/素材文件（仅限 产出物/素材 内，防误删代码）。"""
+        """删除工作区内的单个文件（产出物/素材 与源码文件均可）。
+
+        侧边栏「文件」页签与「产出物」面板共用此端点；底线不放开的项：
+        - 只允许工作区内的路径（`..` 越界一律 403）；
+        - `.git/` 内部文件禁止删除（避免破坏仓库）；
+        - 只允许删除文件，不允许删除目录（目录需递归确认，UI 未提供）。
+        """
         if request:
             ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
         rel = (path or "").strip().lstrip("/\\").replace("\\", "/")
-        if not rel.split("/")[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME):
-            raise HTTPException(status_code=403, detail="仅支持删除 产出物/素材 内的文件")
+        if not rel:
+            raise HTTPException(status_code=400, detail="缺少 path")
+        if _is_git_internal(rel):
+            raise HTTPException(status_code=403, detail="不允许操作 .git 内部文件")
         target = _os.path.abspath(_os.path.join(workspace, rel))
-        if not (target.startswith(workspace + _os.path.sep) and rel.split("/")[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)):
+        if not target.startswith(workspace + _os.path.sep):
             raise HTTPException(status_code=403, detail="路径越界")
+        if _os.path.isdir(target):
+            raise HTTPException(status_code=400, detail="不支持删除目录")
         if not _os.path.isfile(target):
             raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
         try:
@@ -241,10 +256,13 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.post("/api/files/rename")
     async def rename_file(payload: RenameRequest, request: Request = None):
-        """重命名单个产出物/素材文件（仅限 产出物/素材 内，防误改代码）。
+        """重命名工作区内的单个文件（产出物/素材 与源码文件均可，同目录改名）。
 
-        - 只允许改名（同目录），不允许修改扩展名（防把 .xlsx 改成别的东西后解析失败）；
+        侧边栏「文件」页签与「产出物」面板共用此端点；底线不放开的项：
+        - 只允许工作区内、且保持在同一目录下改名（不允许挪目录）；
+        - 不允许修改扩展名（防把 .xlsx 改成别的东西后解析失败）；
         - 新文件名为空 / 含路径分隔符与危险字符 → 400；
+        - `.git/` 内部文件禁止重命名；
         - 目标同名已存在 → 409。
         """
         if request:
@@ -253,11 +271,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
         workspace = ctx.require_workspace()
         rel = (payload.path or "").strip().lstrip("/\\").replace("\\", "/")
-        parts = rel.split("/")
-        if len(parts) != 2 or parts[0] not in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME):
-            raise HTTPException(status_code=403, detail="仅支持重命名 产出物/素材 内的文件")
+        if not rel:
+            raise HTTPException(status_code=400, detail="缺少 path")
+        if _is_git_internal(rel):
+            raise HTTPException(status_code=403, detail="不允许操作 .git 内部文件")
         target = _os.path.abspath(_os.path.join(workspace, rel))
-        if not (target.startswith(workspace + _os.path.sep) and parts[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)):
+        if not target.startswith(workspace + _os.path.sep):
             raise HTTPException(status_code=403, detail="路径越界")
         if not _os.path.isfile(target):
             raise HTTPException(status_code=404, detail=f"文件不存在: {rel}")
@@ -271,9 +290,11 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if _os.path.splitext(rel)[1].lower() != _os.path.splitext(new_name)[1].lower():
             raise HTTPException(status_code=400, detail="不允许修改文件扩展名")
 
-        new_rel = f"{parts[0]}/{new_name}"
-        new_path = _os.path.join(workspace, parts[0], new_name)
-        if new_name == parts[1]:
+        # 与原文件同目录（支持嵌套目录下的源码文件）
+        parent = _os.path.dirname(rel)
+        new_rel = f"{parent}/{new_name}" if parent else new_name
+        new_path = _os.path.join(workspace, parent, new_name) if parent else _os.path.join(workspace, new_name)
+        if new_name == _os.path.basename(rel):
             # 名字没变：幂等返回
             return {"ok": True, "path": rel, "name": new_name}
         if _os.path.exists(new_path):

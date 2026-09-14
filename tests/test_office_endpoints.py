@@ -243,15 +243,39 @@ def test_delete_single_output_file(client_and_workspace):
     assert r.status_code == 200
     assert not os.path.exists(os.path.join(ws, "产出物", "图表.png"))
 
-    # 删除 产出物 外的文件被拒绝（防误删代码）
-    r2 = client.delete("/api/files", params={"path": "litework/app.py"})
-    assert r2.status_code == 403
+    # 文件页签：嵌套目录下的源码文件同样可删（旧「仅限 产出物/素材」限制已放开）
+    nested = os.path.join(ws, "src", "core")
+    os.makedirs(nested)
+    with open(os.path.join(nested, "main.py"), "w", encoding="utf-8") as f:
+        f.write("print('hi')\n")
+    r2 = client.delete("/api/files", params={"path": "src/core/main.py"})
+    assert r2.status_code == 200
+    assert not os.path.exists(os.path.join(nested, "main.py"))
+
+    # 越界仍被拒绝
     r3 = client.delete("/api/files", params={"path": "../../etc/passwd"})
     assert r3.status_code in (403, 404)
 
     # 不存在的文件
     r4 = client.delete("/api/files", params={"path": "产出物/nope.png"})
     assert r4.status_code == 404
+
+
+def test_delete_dir_and_git_internal_rejected(client_and_workspace):
+    """底线不放开的项：目录不可删、.git 内部文件不可删。"""
+    client, ws = client_and_workspace
+    os.makedirs(os.path.join(ws, "src", "pkg"))
+
+    r = client.delete("/api/files", params={"path": "src/pkg"})
+    assert r.status_code == 400
+    assert os.path.isdir(os.path.join(ws, "src", "pkg"))
+
+    os.makedirs(os.path.join(ws, ".git"))
+    with open(os.path.join(ws, ".git", "config"), "w", encoding="utf-8") as f:
+        f.write("[core]\n")
+    r2 = client.delete("/api/files", params={"path": ".git/config"})
+    assert r2.status_code == 403
+    assert os.path.isfile(os.path.join(ws, ".git", "config"))
 
 
 # ---------------------------------------------------------------- /api/files/rename
@@ -310,13 +334,32 @@ def test_rename_invalid_name(client_and_workspace):
     assert r2.status_code == 400
 
 
-def test_rename_outside_dirs_rejected(client_and_workspace):
-    client, _ = client_and_workspace
-    # 产出物/素材 之外的文件禁止重命名（防误改代码）
-    r = client.post("/api/files/rename", json={"path": "litework/app.py", "new_name": "app2.py"})
-    assert r.status_code == 403
+def test_rename_workspace_source_file(client_and_workspace):
+    """文件页签：嵌套目录下的源码文件可重命名（旧「仅限 产出物/素材」限制已放开）。"""
+    client, ws = client_and_workspace
+    os.makedirs(os.path.join(ws, "src"))
+    with open(os.path.join(ws, "src", "main.py"), "w", encoding="utf-8") as f:
+        f.write("print('hi')\n")
+
+    r = client.post("/api/files/rename", json={"path": "src/main.py", "new_name": "app.py"})
+    assert r.status_code == 200
+    assert r.json()["path"] == "src/app.py"
+    assert os.path.isfile(os.path.join(ws, "src", "app.py"))
+    assert not os.path.exists(os.path.join(ws, "src", "main.py"))
+
+    # 越界仍被拒绝
     r2 = client.post("/api/files/rename", json={"path": "../../etc/passwd", "new_name": "passwd"})
     assert r2.status_code in (403, 404)
+
+
+def test_rename_git_internal_rejected(client_and_workspace):
+    client, ws = client_and_workspace
+    os.makedirs(os.path.join(ws, ".git"))
+    with open(os.path.join(ws, ".git", "config"), "w", encoding="utf-8") as f:
+        f.write("[core]\n")
+    r = client.post("/api/files/rename", json={"path": ".git/config", "new_name": "config2"})
+    assert r.status_code == 403
+    assert os.path.isfile(os.path.join(ws, ".git", "config"))
 
 
 def test_rename_missing_file_404(client_and_workspace):
