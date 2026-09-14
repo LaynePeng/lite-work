@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
   api: {
     commands: vi.fn().mockResolvedValue({ commands: [{ name: "compact", description: "压缩上下文", argsHint: "" }] }),
     skills: vi.fn().mockResolvedValue({ skills: [] }),
+    outputs: vi.fn().mockResolvedValue({ items: [] }),
   },
 }));
 

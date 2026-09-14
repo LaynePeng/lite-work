@@ -36,6 +36,13 @@ function ModeIcon({ mode, size = 16 }: { mode: CollabMode; size?: number }) {
   return <span className="collab-mode-fallback" style={{ fontSize: size - 3 }}>🧩</span>;
 }
 
+/** 文件大小人类可读（与 Sidebar 的 fmtSize 口径一致）。 */
+function fmtSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export default function Composer({
   disabled = false,
   running,
@@ -87,6 +94,8 @@ export default function Composer({
   // 上传反馈提示（"上传中… / N 个文件已上传"）：操作反馈类，几秒后自动消失
   const [uploadToast, setUploadToast] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // # 素材引用：候选＝工作区 素材/（用户上传的分析素材），选择后插入 #<相对路径>
+  const [materials, setMaterials] = useState<{ name: string; path: string; size: number }[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
@@ -354,19 +363,26 @@ export default function Composer({
   //      （一次是裸名字的全局默认项，一次是带「（默认）」标记的供应商项）。
   const globalCovered = hasProviderOption(llmConfig?.active ?? "", activeProviderModel);
 
-  // 打开面板时懒加载命令与技能列表
+  // 打开面板时懒加载命令、技能与素材（# 引用）列表
   useEffect(() => {
     if (!paletteOpen) return;
     let cancelled = false;
     void (async () => {
       try {
-        const [cmdResp, skillResp] = await Promise.all([
+        const [cmdResp, skillResp, outResp] = await Promise.all([
           api.commands().catch(() => ({ commands: [] })),
           api.skills().catch(() => ({ skills: [] })),
+          api.outputs().catch(() => ({ items: [] })),
         ]);
         if (!cancelled) {
           setCommands(cmdResp.commands);
           setSkills(skillResp.skills);
+          // # 只引用「素材/」（用户上传的分析素材），不含 Agent 产出物
+          setMaterials(
+            outResp.items
+              .filter((i) => i.source === "uploads")
+              .map((i) => ({ name: i.name, path: i.path, size: i.size }))
+          );
         }
       } catch {
         /* 面板数据加载失败不阻断输入 */
@@ -375,18 +391,23 @@ export default function Composer({
     return () => { cancelled = true; };
   }, [paletteOpen]);
 
-  // 面板打开时解析当前输入（/ 命令面板；@ 角色派生补全——OpenCode 式 mention）
+  // 面板打开时解析当前输入（/ 命令面板；@ 角色派生补全；# 素材引用——mention）
   const input = text;
   const startsWithSlash = input.startsWith("/");
   const startsWithAt = input.startsWith("@");
-  // 运行中也可用：追加指令走队列，/ 与 @ 补全面板保持一致体验
-  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt);
+  // # 素材引用仅办公/调研 Agent 可用（其余 Agent 下 # 视为普通文本）
+  const isMaterialAgent = currentAgent === "office" || currentAgent === "research";
+  const startsWithHash = isMaterialAgent && input.startsWith("#");
+  // 运行中也可用：追加指令走队列，面板保持一致体验
+  const panelVisible = paletteOpen && (startsWithSlash || startsWithAt || startsWithHash);
   const tokens = startsWithSlash ? input.slice(1).split(/\s+/) : [];
   const cmdToken = tokens[0] ?? "";
   const restAfterCmd = input.slice(1 + cmdToken.length).replace(/^\s+/, "");
   const pickingSkill = cmdToken.toLowerCase() === "skill" && !restAfterCmd.includes(" ");
   const atToken = startsWithAt ? (input.slice(1).split(/\s+/)[0] ?? "") : "";
   const pickingAgent = startsWithAt && !atToken.includes(" ") || (startsWithAt && input === "@");
+  const hashToken = startsWithHash ? (input.slice(1).split(/\s+/)[0] ?? "") : "";
+  const pickingMaterial = startsWithHash;
 
   // @-mention 候选：主 Agent（@任务 = 以该 Agent 身份派生执行）+ 内置 spawn 角色
   // + 用户自定义 subagent（去重）
@@ -423,11 +444,21 @@ export default function Composer({
     return skills.filter((s) => s.name.toLowerCase().includes(q));
   }, [skills, pickingSkill, restAfterCmd]);
 
+  // # 素材候选：按文件名/路径子串过滤（大小写不敏感）
+  const materialCandidates = useMemo(() => {
+    const q = hashToken.toLowerCase();
+    return materials.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.path.toLowerCase().includes(q)
+    );
+  }, [materials, hashToken]);
+
   const candidates: { name: string; description: string; hint: string }[] = startsWithAt
     ? mentionCandidates.map((m) => ({ ...m, hint: "agent" }))
-    : pickingSkill
-      ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
-      : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
+    : pickingMaterial
+      ? materialCandidates.map((m) => ({ name: m.path, description: `${m.name} · ${fmtSize(m.size)}`, hint: "file" }))
+      : pickingSkill
+        ? filteredSkills.map((s) => ({ name: s.name, description: s.description || "技能", hint: "skill" }))
+        : filtered.map((c) => ({ name: c.name, description: c.description, hint: c.argsHint }));
 
   // 输入变化时重置选中索引
   useEffect(() => { setSelIdx(0); }, [input]);
@@ -435,6 +466,8 @@ export default function Composer({
   const applySuggestion = (name: string) => {
     if (startsWithAt) {
       setText(`@${name} `);
+    } else if (pickingMaterial) {
+      setText(`#${name} `);
     } else if (pickingSkill) {
       setText(`/skill ${name} `);
     } else {
@@ -606,7 +639,7 @@ export default function Composer({
                 onMouseDown={(e) => { e.preventDefault(); applySuggestion(c.name); }}
                 onMouseEnter={() => setSelIdx(i)}
               >
-                <span className="command-palette-name">{c.hint === "agent" ? "@" : "/"}{c.name}</span>
+                <span className="command-palette-name">{c.hint === "agent" ? "@" : c.hint === "file" ? "#" : "/"}{c.name}</span>
                 <span className="command-palette-desc">{c.description}</span>
                 {c.hint && <span className="command-palette-hint">{c.hint}</span>}
               </button>
@@ -648,9 +681,10 @@ export default function Composer({
             setText(v);
             // 用户手动编辑 → 退出历史翻阅态（下次 ↑ 从最新开始）
             exitHistoryMode();
-            // 首字符输入 "/"（命令）或 "@"（角色派生）时触发面板
-            if ((v.startsWith("/") || v.startsWith("@")) && !paletteOpen) setPaletteOpen(true);
-            if (!v.startsWith("/") && !v.startsWith("@")) setPaletteOpen(false);
+            // 首字符输入 "/"（命令）、"@"（角色派生）或 "#"（素材引用，仅办公/调研）时触发面板
+            const trigger = v.startsWith("/") || v.startsWith("@") || (isMaterialAgent && v.startsWith("#"));
+            if (trigger && !paletteOpen) setPaletteOpen(true);
+            if (!trigger) setPaletteOpen(false);
           }}
           onKeyDown={(e) => {
             if (panelVisible && candidates.length > 0) {
@@ -671,6 +705,13 @@ export default function Composer({
               }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
+                // # 素材引用：Enter 直接补全选中文件（无参数概念）
+                if (pickingMaterial) {
+                  if (candidates.length > 0) {
+                    applySuggestion(candidates[Math.min(selIdx, candidates.length - 1)].name);
+                  }
+                  return;
+                }
                 // 有候选且尚未带参数时，Enter 选中补全；已有参数则直接发送
                 const needsArgs = pickingSkill ? false : (filtered[selIdx]?.argsHint ?? "") !== "";
                 if (needsArgs && !restAfterCmd) {
@@ -719,7 +760,7 @@ export default function Composer({
           onDragOver={handleDragOver}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
-          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（/ 命令 · @ 角色派生）`}
+          placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（/ 命令 · @ 角色派生${isMaterialAgent ? " · # 引用素材" : ""}）`}
           rows={3}
           disabled={disabled}
         />

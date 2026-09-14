@@ -254,6 +254,77 @@ def test_delete_single_output_file(client_and_workspace):
     assert r4.status_code == 404
 
 
+# ---------------------------------------------------------------- /api/files/rename
+
+def test_rename_output_file(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "新图表.png"})
+    assert r.status_code == 200
+    assert r.json()["path"] == "产出物/新图表.png"
+    assert r.json()["name"] == "新图表.png"
+    assert os.path.isfile(os.path.join(ws, "产出物", "新图表.png"))
+    assert not os.path.exists(os.path.join(ws, "产出物", "图表.png"))
+
+
+def test_rename_upload_file(client_and_workspace):
+    client, ws = client_and_workspace
+    client.post("/api/upload", files={"file": ("数据.csv", "a,b\n1,2\n", "text/csv")})
+    r = client.post("/api/files/rename", json={"path": "素材/数据.csv", "new_name": "新数据.csv"})
+    assert r.status_code == 200
+    assert os.path.isfile(os.path.join(ws, "素材", "新数据.csv"))
+    assert not os.path.exists(os.path.join(ws, "素材", "数据.csv"))
+
+
+def test_rename_same_name_is_noop(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "图表.png"})
+    assert r.status_code == 200
+    assert os.path.isfile(os.path.join(ws, "产出物", "图表.png"))
+
+
+def test_rename_extension_change_rejected(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "图表.txt"})
+    assert r.status_code == 400
+    # 原文件安然无恙
+    assert os.path.isfile(os.path.join(ws, "产出物", "图表.png"))
+
+
+def test_rename_conflict_409(client_and_workspace):
+    client, ws = client_and_workspace
+    client.post("/api/upload", files={"file": ("a.csv", "x\n", "text/csv")})
+    client.post("/api/upload", files={"file": ("b.csv", "y\n", "text/csv")})
+    r = client.post("/api/files/rename", json={"path": "素材/a.csv", "new_name": "b.csv"})
+    assert r.status_code == 409
+
+
+def test_rename_invalid_name(client_and_workspace):
+    client, ws = client_and_workspace
+    _make_outputs(ws)
+    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": ""})
+    assert r.status_code == 400
+    r2 = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "a/b.png"})
+    assert r2.status_code == 400
+
+
+def test_rename_outside_dirs_rejected(client_and_workspace):
+    client, _ = client_and_workspace
+    # 产出物/素材 之外的文件禁止重命名（防误改代码）
+    r = client.post("/api/files/rename", json={"path": "litework/app.py", "new_name": "app2.py"})
+    assert r.status_code == 403
+    r2 = client.post("/api/files/rename", json={"path": "../../etc/passwd", "new_name": "passwd"})
+    assert r2.status_code in (403, 404)
+
+
+def test_rename_missing_file_404(client_and_workspace):
+    client, _ = client_and_workspace
+    r = client.post("/api/files/rename", json={"path": "产出物/nope.png", "new_name": "x.png"})
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------- 新建项目
 
 def test_create_project_with_git(client_and_workspace):

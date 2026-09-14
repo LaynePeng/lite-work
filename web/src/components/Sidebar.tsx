@@ -181,6 +181,11 @@ function OutputPreview({ revision }: { revision: number }) {
   const [previewError, setPreviewError] = useState("");
   const [previewPath, setPreviewPath] = useState("");
   const refreshingRef = useRef(false);
+  // 右键菜单 / 行内重命名（产出物·素材文件简单管理）
+  const [menu, setMenu] = useState<{ x: number; y: number; item: OutputItem } | null>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     if (refreshingRef.current) return;
@@ -226,6 +231,56 @@ function OutputPreview({ revision }: { revision: number }) {
     setPreview(null);
     setPreviewPath("");
     setPreviewError("");
+  };
+
+  // 右键菜单：点击外部 / 滚动 / Esc 关闭
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onScroll = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  /** 删除单个文件（右键菜单与行内 ✕ 共用）。 */
+  const removeItem = (it: OutputItem) => {
+    setMenu(null);
+    if (!window.confirm(`删除「${it.name}」？`)) return;
+    void api.deleteFile(it.path)
+      .then(() => void refresh())
+      .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
+  };
+
+  /** 进入行内重命名（预填原名；扩展名不可改，由后端校验兜底）。 */
+  const startRename = (it: OutputItem) => {
+    setMenu(null);
+    setRenamingPath(it.path);
+    setRenameValue(it.name);
+  };
+
+  /** 提交重命名：成功刷新列表，失败提示（扩展名/重名等约束由后端返回）。 */
+  const commitRename = async (it: OutputItem) => {
+    const next = renameValue.trim();
+    if (!next || next === it.name) {
+      setRenamingPath(null);
+      return;
+    }
+    try {
+      await api.renameFile(it.path, next);
+      setRenamingPath(null);
+      void refresh();
+    } catch (err) {
+      window.alert(`重命名失败：${err instanceof Error ? err.message : err}`);
+    }
   };
 
   return (
@@ -290,54 +345,87 @@ function OutputPreview({ revision }: { revision: number }) {
         </div>
       ) : (
         <div className="file-tree outputs-list">
-          {items.map((it) => (
-            <div key={it.path} className="tree-row file output-item" title={it.path} onClick={() => void openPreview(it.path)}>
-              <span className="tree-caret-placeholder" />
-              <span className="tree-icon">{fileIcon(it.name)}</span>
-              <span className="tree-name">{it.name}</span>
-              <span className="output-meta">
-                {it.source === "uploads" ? "素材" : "产出"} · {fmtSize(it.size)} · {it.mtime}
-              </span>
-              <a
-                className="output-download"
-                href={api.fileDownloadUrl(it.path)}
-                onClick={(e) => e.stopPropagation()}
-                title="下载"
-              >
-                ⬇
-              </a>
-              <button
-                className="output-download output-locate"
-                title="在系统文件管理器中定位该文件"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const bridge = window.liteWork;
-                  if (bridge?.showInFolder) {
-                    void bridge.showInFolder(it.path).then((r) => {
-                      if (!r.ok) window.alert(`无法定位文件：${r.error ?? ""}`);
-                    });
-                  } else {
-                    window.alert("在文件管理器中定位文件仅支持桌面应用。");
-                  }
+          {items.map((it) => {
+            const isRenaming = renamingPath === it.path;
+            return (
+              <div
+                key={it.path}
+                className="tree-row file output-item"
+                title={it.path}
+                onClick={() => { if (!isRenaming) void openPreview(it.path); }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, item: it });
                 }}
               >
-                📍
-              </button>
-              <button
-                className="output-download output-delete"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!window.confirm(`删除「${it.name}」？`)) return;
-                  void api.deleteFile(it.path)
-                    .then(() => void refresh())
-                    .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
-                }}
-                title="删除"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
+                <span className="tree-caret-placeholder" />
+                <span className="tree-icon">{fileIcon(it.name)}</span>
+                {isRenaming ? (
+                  <input
+                    className="output-rename-input"
+                    value={renameValue}
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={() => setRenamingPath(null)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); void commitRename(it); }
+                      else if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
+                    }}
+                  />
+                ) : (
+                  <span className="tree-name">{it.name}</span>
+                )}
+                <span className="output-meta">
+                  {it.source === "uploads" ? "素材" : "产出"} · {fmtSize(it.size)} · {it.mtime}
+                </span>
+                <a
+                  className="output-download"
+                  href={api.fileDownloadUrl(it.path)}
+                  onClick={(e) => e.stopPropagation()}
+                  title="下载"
+                >
+                  ⬇
+                </a>
+                <button
+                  className="output-download output-locate"
+                  title="在系统文件管理器中定位该文件"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const bridge = window.liteWork;
+                    if (bridge?.showInFolder) {
+                      void bridge.showInFolder(it.path).then((r) => {
+                        if (!r.ok) window.alert(`无法定位文件：${r.error ?? ""}`);
+                      });
+                    } else {
+                      window.alert("在文件管理器中定位文件仅支持桌面应用。");
+                    }
+                  }}
+                >
+                  📍
+                </button>
+                <button
+                  className="output-download output-delete"
+                  onClick={(e) => { e.stopPropagation(); removeItem(it); }}
+                  title="删除"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 右键菜单：删除 / 重命名（产出物·素材文件的简单管理） */}
+      {menu && (
+        <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
+          <button className="context-menu-item" onClick={() => startRename(menu.item)}>
+            ✏ 重命名
+          </button>
+          <button className="context-menu-item danger" onClick={() => removeItem(menu.item)}>
+            🗑 删除
+          </button>
         </div>
       )}
 

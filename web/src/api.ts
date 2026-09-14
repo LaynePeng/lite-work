@@ -230,6 +230,10 @@ export const api = {
     req<{ ok: boolean; path: string }>(`/api/files?path=${encodeURIComponent(path)}`, {
       method: "DELETE",
     }),
+  renameFile: (path: string, newName: string) =>
+    req<{ ok: boolean; path: string; name: string }>("/api/files/rename", {
+      method: "POST", body: JSON.stringify({ path, new_name: newName }),
+    }),
   createProject: (parent: string, name: string, git = true) =>
     req<{ ok: boolean; path: string; name: string; git_initialized: boolean }>(
       "/api/projects/create",

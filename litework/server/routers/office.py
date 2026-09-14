@@ -6,9 +6,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
 from ...tools.office import OUTPUT_DIR_NAME, UPLOADS_DIR_NAME
 from .context import ServerContext
+
+
+class RenameRequest(BaseModel):
+    """重命名产出物/素材文件：path=工作区相对路径，new_name=新文件名（不含目录）。"""
+
+    path: str
+    new_name: str
 
 
 def _guess_media_type(target: str) -> str:
@@ -230,6 +238,51 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except OSError as exc:
             raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
         return {"ok": True, "path": rel}
+
+    @router.post("/api/files/rename")
+    async def rename_file(payload: RenameRequest, request: Request = None):
+        """重命名单个产出物/素材文件（仅限 产出物/素材 内，防误改代码）。
+
+        - 只允许改名（同目录），不允许修改扩展名（防把 .xlsx 改成别的东西后解析失败）；
+        - 新文件名为空 / 含路径分隔符与危险字符 → 400；
+        - 目标同名已存在 → 409。
+        """
+        if request:
+            ctx.check_auth(request)
+        import os as _os
+
+        workspace = ctx.require_workspace()
+        rel = (payload.path or "").strip().lstrip("/\\").replace("\\", "/")
+        parts = rel.split("/")
+        if len(parts) != 2 or parts[0] not in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME):
+            raise HTTPException(status_code=403, detail="仅支持重命名 产出物/素材 内的文件")
+        target = _os.path.abspath(_os.path.join(workspace, rel))
+        if not (target.startswith(workspace + _os.path.sep) and parts[0] in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)):
+            raise HTTPException(status_code=403, detail="路径越界")
+        if not _os.path.isfile(target):
+            raise HTTPException(status_code=404, detail=f"文件不存在: {rel}")
+
+        new_name = (payload.new_name or "").strip()
+        if not new_name or new_name in (".", ".."):
+            raise HTTPException(status_code=400, detail="新文件名不能为空")
+        # 禁止任何路径成分与危险字符（只允许改文件名，不允许挪目录）
+        if new_name != _os.path.basename(new_name) or any(c in new_name for c in '\\/:*?"<>|'):
+            raise HTTPException(status_code=400, detail="文件名不能包含路径分隔符或特殊字符")
+        if _os.path.splitext(rel)[1].lower() != _os.path.splitext(new_name)[1].lower():
+            raise HTTPException(status_code=400, detail="不允许修改文件扩展名")
+
+        new_rel = f"{parts[0]}/{new_name}"
+        new_path = _os.path.join(workspace, parts[0], new_name)
+        if new_name == parts[1]:
+            # 名字没变：幂等返回
+            return {"ok": True, "path": rel, "name": new_name}
+        if _os.path.exists(new_path):
+            raise HTTPException(status_code=409, detail=f"同名文件已存在: {new_name}")
+        try:
+            _os.rename(target, new_path)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"重命名失败: {exc}")
+        return {"ok": True, "path": new_rel, "name": new_name}
 
     @router.get("/api/files/raw")
     async def serve_file_raw(path: str, request: Request = None):
