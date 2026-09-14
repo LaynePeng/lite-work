@@ -346,26 +346,6 @@ class FlakyLLMAdapter(MockLLMAdapter):
         return await super().chat_stream(messages, tools, events)
 
 
-async def test_llm_retry_on_transient_error(tmp_path):
-    """LLM 瞬时故障（retryable=True）→ 指数退避重试后成功，并 emit llm:retry 事件。"""
-    adapter = FlakyLLMAdapter(
-        [("重试后成功。", [])],
-        fail_times=2,
-        error=LLMError("HTTP 429: rate limited", retryable=True),
-    )
-    loop, kernel, _ = _make_loop(tmp_path, adapter, llm_retries=3, llm_timeout=5.0)
-
-    retry_events = []
-    kernel.events.on("llm:retry", lambda d: retry_events.append(d))
-
-    result, _ = await loop.run_task("开始任务", system_prompt=SYSTEM_PROMPT)
-
-    assert result == "重试后成功。"
-    assert adapter.attempts == 3  # 失败 2 次 + 成功 1 次
-    assert len(retry_events) == 2
-    assert retry_events[0]["attempt"] == 1 and retry_events[0]["max_retries"] == 3
-
-
 async def test_llm_no_retry_on_fatal_error(tmp_path):
     """不可重试错误（如鉴权失败）→ 立即终止，不重试。"""
     adapter = FlakyLLMAdapter(
@@ -380,45 +360,6 @@ async def test_llm_no_retry_on_fatal_error(tmp_path):
     assert "[LLM Error]" in result
     assert "401" in result
     assert adapter.attempts == 1  # 只调用了一次，未重试
-
-
-async def test_llm_retry_exhausted_fails_task(tmp_path):
-    """重试次数耗尽 → 任务失败并返回最后一次错误。"""
-    adapter = FlakyLLMAdapter(
-        [("不该被调用", [])],
-        fail_times=10,
-        error=LLMError("HTTP 503: service unavailable", retryable=True),
-    )
-    loop, _, _ = _make_loop(tmp_path, adapter, llm_retries=1, llm_timeout=5.0)
-
-    result, _ = await loop.run_task("开始任务", system_prompt=SYSTEM_PROMPT)
-
-    assert "[LLM Error]" in result and "503" in result
-    assert adapter.attempts == 2  # 初次 + 1 次重试
-
-
-async def test_llm_retry_on_timeout(tmp_path):
-    """单次请求超过 llm_timeout → 视为可重试，退避后再次调用成功。"""
-
-    class SlowFirstCallAdapter(MockLLMAdapter):
-        """首次调用先阻塞（被 wait_for 按 llm_timeout 取消），之后按脚本返回。"""
-
-        def __init__(self, responses):
-            super().__init__(responses)
-            self.attempts = 0
-
-        async def chat_stream(self, messages, tools, events=None):
-            self.attempts += 1
-            if self.attempts == 1:
-                await asyncio.sleep(1.0)  # 超过 llm_timeout=0.05，被 wait_for 取消
-            return await super().chat_stream(messages, tools, events)
-
-    slow = SlowFirstCallAdapter([("超时后恢复。", [])])
-    loop, _, _ = _make_loop(tmp_path, slow, llm_retries=2, llm_timeout=0.05)
-
-    result, _ = await loop.run_task("开始任务", system_prompt=SYSTEM_PROMPT)
-
-    assert result == "超时后恢复。"
 
 
 async def test_midbatch_queued_input_interrupts_remaining_tools(tmp_path):

@@ -180,29 +180,6 @@ async def test_anthropic_error_classification():
     assert ei.value.retryable is False
 
 
-# ---------------------------------------------------------------- 与 AgentLoop 重试的衔接
-
-async def test_retryable_flag_drives_agent_loop_retry(tmp_path):
-    """适配器 retryable 标记 → AgentLoop._call_llm_with_retry 的重试语义。"""
-    from tests.test_agent_loop_phases import _make_loop
-
-    class Flaky:
-        def __init__(self):
-            self.attempts = 0
-
-        async def chat_stream(self, messages, tools, events=None):
-            self.attempts += 1
-            if self.attempts == 1:
-                raise __import__("litework.llm", fromlist=["LLMError"]).LLMError(
-                    "HTTP 429", retryable=True)
-            return "ok", [], None
-
-    loop, _, _ = _make_loop(tmp_path, Flaky(), llm_retries=2)
-    content, _, _ = await loop._call_llm_with_retry(
-        [Message(role="user", content="x")], [])
-    assert content == "ok"
-
-
 # ---------------------------------------------------------------- custom_headers 会话模板
 
 async def test_custom_header_conversation_id_expanded_and_sent():

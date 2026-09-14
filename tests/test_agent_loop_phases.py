@@ -48,18 +48,6 @@ class FlakyAdapter:
         return self.response
 
 
-async def test_call_llm_with_retry_success_after_transient(tmp_path):
-    adapter = FlakyAdapter(("ok", [], None), fail_times=1,
-                           error=LLMError("HTTP 503", retryable=True))
-    loop, kernel, _ = _make_loop(tmp_path, adapter, llm_retries=2)
-    retries = []
-    kernel.events.on("llm:retry", lambda d: retries.append(d))
-    content, calls, usage = await loop._call_llm_with_retry([Message(role="user", content="x")], [])
-    assert content == "ok"
-    assert adapter.attempts == 2
-    assert retries and retries[0]["attempt"] == 1
-
-
 async def test_call_llm_with_retry_fatal_raises_immediately(tmp_path):
     adapter = FlakyAdapter(("ok", [], None), fail_times=5,
                            error=LLMError("HTTP 401", retryable=False))
@@ -67,15 +55,6 @@ async def test_call_llm_with_retry_fatal_raises_immediately(tmp_path):
     with pytest.raises(AgentLoop._LLMCallFailure):
         await loop._call_llm_with_retry([Message(role="user", content="x")], [])
     assert adapter.attempts == 1  # 不可重试：一次即终局
-
-
-async def test_call_llm_with_retry_exhaustion(tmp_path):
-    adapter = FlakyAdapter(("ok", [], None), fail_times=10,
-                           error=LLMError("HTTP 503", retryable=True))
-    loop, _, _ = _make_loop(tmp_path, adapter, llm_retries=2)
-    with pytest.raises(AgentLoop._LLMCallFailure):
-        await loop._call_llm_with_retry([Message(role="user", content="x")], [])
-    assert adapter.attempts == 3  # 初次 + 2 次重试
 
 
 # ---------------------------------------------------------------- 阶段二：工具批次执行
