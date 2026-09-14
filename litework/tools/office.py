@@ -4,6 +4,9 @@
 docx/xlsx/pptx/pdf 等办公文件，以及进行数据分析和生成图表。
 v1.2.0 新增：已有文件的格式化编辑（字体/粗体/斜体/颜色/高亮/对齐/行距等）、
 查找替换、docx 生成时基础字体字号控制。
+v1.4.0 新增：pdf_create 中文字体嵌入与 CJK 断行、Markdown 表格渲染、内联
+格式（粗体/斜体/删除线/行内代码）、主题配色（theme/accent_color）、封面与
+页脚页码。
 
 所有依赖包已包含在主依赖中（pyproject.toml dependencies），
 `pip install -e .` 时自动安装。
@@ -18,7 +21,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import tempfile
 from typing import Any, Dict, List, Optional
@@ -115,6 +117,183 @@ def _safe_filename(name: str) -> str:
     """清理文件名，移除不安全字符。"""
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     return name.strip() or "output"
+
+
+# ------------------------------------------------- PDF 渲染辅助（v1.4.0 新增）
+
+# 预设配色主题（pdf_create 的 theme 参数取值 → 主色）
+_PDF_THEMES = {
+    "business": "#1F4E79",   # 商务蓝
+    "academic": "#3C3C3C",   # 学术灰
+    "gov": "#C00000",        # 政务红
+    "tech": "#0F766E",       # 科技青
+    "minimal": "#111111",    # 现代极简
+}
+
+_CJK_FONT: Optional[str] = None
+_CJK_BOLD: Optional[str] = None
+
+
+def _register_cjk_font():
+    """注册一个可嵌入的中文字体，返回 (regular, bold)。
+
+    优先嵌入系统 TTF/TTC（字形一致、离线可靠）；全部失败时回退 reportlab
+    内置 CID 字体 STSong-Light（非嵌入，仅保证中文可显示）。
+    """
+    global _CJK_FONT, _CJK_BOLD
+    if _CJK_FONT:
+        return _CJK_FONT, _CJK_BOLD or _CJK_FONT
+
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+    except ImportError:
+        _CJK_FONT = _CJK_BOLD = "Helvetica"
+        return _CJK_FONT, _CJK_BOLD
+
+    if sys.platform == "darwin":
+        cands = [
+            ("/System/Library/Fonts/PingFang.ttc", "PingFangSC-Regular", "PingFangSC-Semibold"),
+            ("/System/Library/Fonts/STHeiti Medium.ttc", 0, 0),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0, 0),
+            ("/System/Library/Fonts/Supplemental/Songti.ttc", 0, 0),
+            ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0, 0),
+            ("/Library/Fonts/Arial Unicode.ttf", 0, 0),
+        ]
+    elif sys.platform.startswith("win"):
+        cands = [
+            ("C:/Windows/Fonts/msyh.ttc", 0, 0),
+            ("C:/Windows/Fonts/simsun.ttc", 0, 0),
+            ("C:/Windows/Fonts/simhei.ttf", 0, 0),
+        ]
+    else:
+        cands = [
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0, 0),
+            ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 0, 0),
+            ("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 0, 0),
+            ("/usr/share/fonts/truetype/arphic/uming.ttc", 0, 0),
+        ]
+
+    for path, reg, bold in cands:
+        if not os.path.isfile(path):
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("CJK", path, subfontIndex=reg))
+        except Exception:
+            try:
+                pdfmetrics.registerFont(TTFont("CJK", path, subfontIndex=0))
+            except Exception:
+                continue
+        b = "CJK"
+        try:
+            if bold not in (reg, None):
+                pdfmetrics.registerFont(TTFont("CJK-Bold", path, subfontIndex=bold))
+                b = "CJK-Bold"
+        except Exception:
+            pass
+        pdfmetrics.registerFontFamily(
+            "CJK", normal="CJK", bold=b, italic="CJK", boldItalic=b)
+        _CJK_FONT, _CJK_BOLD = "CJK", b
+        return "CJK", b
+
+    try:  # 兜底：内置 CID 字体（非嵌入字形，仅保证中文可见）
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        pdfmetrics.registerFontFamily(
+            "STSong-Light", normal="STSong-Light", bold="STSong-Light",
+            italic="STSong-Light", boldItalic="STSong-Light")
+        _CJK_FONT = _CJK_BOLD = "STSong-Light"
+    except Exception:
+        _CJK_FONT = _CJK_BOLD = "Helvetica"
+    return _CJK_FONT, _CJK_BOLD
+
+
+def _has_cjk(text: str) -> bool:
+    """文本是否含 CJK 字符（决定等宽/中文用哪个字体，避免缺字方块）。"""
+    return any("\u2e80" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff"
+               or "\uff00" <= ch <= "\uffef" for ch in text)
+
+
+def _pdf_inline_md(text: str) -> str:
+    """把一行 Markdown 内联语法转成 reportlab Paragraph 的 mini-HTML。"""
+    text = (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+
+    def _code(m):
+        inner = m.group(1)
+        # 行内代码含中文时改用中文字体，否则 Courier 会缺字
+        face = _CJK_FONT if (_CJK_FONT and _has_cjk(inner)) else "Courier"
+        return '<font face="%s">%s</font>' % (face, inner)
+
+    text = re.sub(r"`([^`]+)`", _code, text)
+    text = re.sub(r"~~(.+?)~~", r"<strike>\1</strike>", text)
+    text = re.sub(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)", r"<i>\1</i>", text)
+    return text
+
+
+def _pdf_styles(font: str, bold: str, accent: str = "#1F4E79") -> Dict[str, Any]:
+    """构建 PDF 段落样式表（中文字体 + CJK 断行 + 主题配色）。"""
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+    from reportlab.lib.units import mm
+
+    def para(name: str, **kw) -> Any:
+        kw.setdefault("wordWrap", "CJK")
+        return ParagraphStyle(name, **kw)
+
+    return {
+        "title": para("T", fontName=bold, fontSize=24, leading=32,
+                      alignment=TA_CENTER, spaceAfter=10 * mm, textColor=accent),
+        "h1": para("H1", fontName=bold, fontSize=18, leading=24,
+                   spaceBefore=6 * mm, spaceAfter=3 * mm, textColor=accent),
+        "h2": para("H2", fontName=bold, fontSize=15, leading=20,
+                   spaceBefore=5 * mm, spaceAfter=2 * mm, textColor=accent),
+        "h3": para("H3", fontName=bold, fontSize=13, leading=18,
+                   spaceBefore=4 * mm, spaceAfter=2 * mm, textColor=accent),
+        "h4": para("H4", fontName=bold, fontSize=12, leading=16,
+                   spaceBefore=3 * mm, spaceAfter=2 * mm, textColor=accent),
+        "h5": para("H5", fontName=bold, fontSize=11, leading=15,
+                   spaceBefore=3 * mm, spaceAfter=2 * mm, textColor=accent),
+        "body": para("B", fontName=font, fontSize=10.5, leading=18,
+                     alignment=TA_JUSTIFY, spaceAfter=2.5 * mm),
+        "code": para("C", fontName="Courier", fontSize=8.5, leading=11,
+                     leftIndent=4 * mm, backColor="#F5F5F5",
+                     borderPadding=4, spaceAfter=3 * mm),
+        "code_cjk": para("C2", fontName=font, fontSize=8.5, leading=11,
+                         leftIndent=4 * mm, backColor="#F5F5F5",
+                         borderPadding=4, spaceAfter=3 * mm),
+        "cell": para("cell", fontName=font, fontSize=9.5, leading=13),
+        "cellh": para("cellh", fontName=bold, fontSize=9.5, leading=13,
+                      textColor="#FFFFFF"),
+    }
+
+
+def _pdf_table(rows: List[List[str]], styles: Dict[str, Any], accent: str) -> Any:
+    """把 Markdown 表格行转成 reportlab Table（表头底色 + 隔行底纹 + 边框）。"""
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.lib import colors
+
+    data = [
+        [Paragraph(_pdf_inline_md(c), styles["cellh" if r == 0 else "cell"])
+         for c in row]
+        for r, row in enumerate(rows)
+    ]
+    t = Table(data, repeatRows=1, hAlign="LEFT")
+    cmds = [
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D0D7DE")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(accent)),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    for i in range(2, len(data), 2):
+        cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#EEF3F9")))
+    t.setStyle(TableStyle(cmds))
+    return t
 
 
 # ---------------------------------------------------------------- OfficeTools
@@ -403,6 +582,25 @@ class OfficeTools:
                         "title": {
                             "type": "string",
                             "description": "文档标题（可选）",
+                        },
+                        "theme": {
+                            "type": "string",
+                            "enum": ["business", "academic", "gov", "tech", "minimal"],
+                            "description": "配色主题：business 商务蓝(默认)/academic 学术灰/"
+                                           "gov 政务红/tech 科技青/minimal 现代极简",
+                        },
+                        "accent_color": {
+                            "type": "string",
+                            "description": "自定义主色（覆盖 theme），命名色或 #RRGGBB",
+                        },
+                        "cover": {
+                            "type": "boolean",
+                            "description": "是否生成封面页（默认 false）",
+                        },
+                        "footer": {
+                            "type": ["boolean", "string"],
+                            "description": "页脚：true 用标题作页眉文字（默认）/false 关闭/"
+                                           "字符串自定义页眉文字；页码始终居中显示",
                         },
                     },
                     "required": ["content"],
@@ -1209,32 +1407,25 @@ class OfficeTools:
             spec.loader.exec_module(mod)
 
             chart_type = "plantuml" if lang in ("plantuml", "puml") else "mermaid"
+            out_dir = _ensure_output_dir(self.workspace, "diagrams")
+            out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
 
-            # 先在临时目录渲染，成功后才创建 产出物/diagrams 并落盘：保证
-            # 「diagrams 目录存在 ⟺ 渲染成功」，渲染失败时不留空目录
-            # （调用方回退源码文本，内容不丢）。
-            with tempfile.TemporaryDirectory(prefix="litework-md-diagram-out-") as staging:
-                staged_path = os.path.join(staging, "diagram.png")
+            def _do_render() -> None:
+                with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
+                    if chart_type == "plantuml":
+                        mod.render_plantuml(code, out_path, 2, tmpdir, None)
+                    else:
+                        mod.render_mermaid(code, out_path, 2, tmpdir)
 
-                def _do_render() -> None:
-                    with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
-                        if chart_type == "plantuml":
-                            mod.render_plantuml(code, staged_path, 2, tmpdir, None)
-                        else:
-                            mod.render_mermaid(code, staged_path, 2, tmpdir)
-
-                # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
-                # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
-                from concurrent.futures import ThreadPoolExecutor as _TPE
-                with _TPE(max_workers=1) as pool:
-                    future = pool.submit(_do_render)
-                    future.result(timeout=60)
-                if not (os.path.isfile(staged_path) and os.path.getsize(staged_path) > 0):
-                    return None
-                out_dir = _ensure_output_dir(self.workspace, "diagrams")
-                out_path = os.path.join(out_dir, f"diagram_{int(_time.time() * 1000)}_{seq}.png")
-                shutil.copyfile(staged_path, out_path)
-            return out_path
+            # 60s 硬超时：单图渲染超时即放弃（回退源码文本），不拖死整个
+            # 文档生成——工具执行已在事件循环外的线程池，但用户等不了几分钟
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=1) as pool:
+                future = pool.submit(_do_render)
+                future.result(timeout=60)
+            if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                return out_path
+            return None
         except Exception:
             # 引擎缺失/语法错误/渲染失败 → 回退源码文本（内容不丢）
             return None
@@ -2103,64 +2294,115 @@ class OfficeTools:
         content = args.get("content", "")
         filename = _safe_filename(args.get("filename", "文档.pdf"))
         title = args.get("title", "")
+        theme = str(args.get("theme") or "").strip().lower()
+        accent = (str(args.get("accent_color") or "").strip()
+                  or _PDF_THEMES.get(theme, "#1F4E79"))
+        cover = bool(args.get("cover", False))
+        footer = args.get("footer", True)
+        footer_text = footer if isinstance(footer, str) else (title if footer else "")
 
         if not filename.lower().endswith(".pdf"):
             filename += ".pdf"
 
         try:
             from reportlab.lib.pagesizes import A4
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             from reportlab.lib.units import mm
             from reportlab.platypus import (
                 Paragraph, SimpleDocTemplate, Spacer,
-                ListFlowable, ListItem, Preformatted,
+                ListFlowable, ListItem, Preformatted, PageBreak,
             )
-            from reportlab.lib.enums import TA_CENTER
         except ImportError:
             return (
                 "[Office Tools] 需要安装 reportlab 才能使用 pdf_create 工具。\n"
                 "请运行: pip install reportlab"
             )
 
+        font, bold = _register_cjk_font()          # v1.4.0：注册中文字体
+        styles = _pdf_styles(font, bold, accent)
+
         out_dir = _ensure_output_dir(self.workspace)
         filepath = os.path.join(out_dir, filename)
 
+        def _draw_page(canvas, doc):               # 页眉分隔线 + 页脚页码
+            from reportlab.lib import colors as _colors
+            canvas.saveState()
+            w, h = doc.pagesize
+            canvas.setStrokeColor(_colors.HexColor("#DDDDDD"))
+            canvas.setLineWidth(0.4)
+            canvas.line(20 * mm, h - 15 * mm, w - 20 * mm, h - 15 * mm)
+            canvas.setFont(font, 8)
+            canvas.setFillColor(_colors.HexColor("#888888"))
+            if footer_text:
+                canvas.drawString(20 * mm, h - 13 * mm, str(footer_text))
+            canvas.drawCentredString(w / 2, 12 * mm,
+                                     "第 %d 页" % canvas.getPageNumber())
+            canvas.restoreState()
+
         doc = SimpleDocTemplate(filepath, pagesize=A4,
-                                topMargin=20*mm, bottomMargin=20*mm,
-                                leftMargin=20*mm, rightMargin=20*mm)
-        styles = getSampleStyleSheet()
+                                topMargin=20 * mm, bottomMargin=20 * mm,
+                                leftMargin=20 * mm, rightMargin=20 * mm)
         story: List = []
 
         if title:
-            title_style = ParagraphStyle(
-                "Title1", parent=styles["Title"],
-                fontSize=24, spaceAfter=12*mm,
-                alignment=TA_CENTER,
-            )
-            story.append(Paragraph(title, title_style))
-            story.append(Spacer(1, 6*mm))
+            if cover:
+                import datetime
+                from reportlab.lib.styles import ParagraphStyle
+                from reportlab.lib.enums import TA_CENTER
+                story.append(Spacer(1, 45 * mm))
+                story.append(Paragraph(_pdf_inline_md(title), styles["title"]))
+                story.append(Spacer(1, 8 * mm))
+                date_style = ParagraphStyle(
+                    "date", fontName=font, fontSize=11, alignment=TA_CENTER,
+                    textColor="#888888", wordWrap="CJK")
+                story.append(Paragraph(
+                    datetime.date.today().strftime("%Y-%m-%d"), date_style))
+                story.append(PageBreak())
+            else:
+                story.append(Paragraph(_pdf_inline_md(title), styles["title"]))
+                story.append(Spacer(1, 6 * mm))
 
         lines = content.split("\n")
         i = 0
+        in_table = False
+        table_rows: List[List[str]] = []
+        table_cols = 0
+
         while i < len(lines):
             line = lines[i]
 
+            # Markdown 表格（管道语法）
+            if line.strip().startswith("|") and line.strip().endswith("|"):
+                cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                if not in_table:
+                    table_rows = [cells]
+                    table_cols = len(cells)
+                    in_table = True
+                    if i + 1 < len(lines) and re.match(r"^\|[\s\-:]+\|",
+                                                       lines[i + 1].strip()):
+                        i += 1  # 跳过分隔行
+                elif len(cells) <= table_cols:
+                    table_rows.append(cells)
+                i += 1
+                continue
+            elif in_table:
+                if len(table_rows) >= 2:
+                    story.append(_pdf_table(table_rows, styles, accent))
+                    story.append(Spacer(1, 3 * mm))
+                table_rows = []
+                in_table = False
+                continue
+
             if not line.strip():
-                story.append(Spacer(1, 3*mm))
+                story.append(Spacer(1, 2 * mm))
                 i += 1
                 continue
 
             # 标题
-            hm = re.match(r"^(#{1,5})\s+(.+)$", line)
+            hm = re.match(r"^(#{1,6})\s+(.+)$", line)
             if hm:
-                level = len(hm.group(1))
-                text = hm.group(2).strip()
-                sz = [22, 18, 15, 13, 11][min(level - 1, 4)]
-                h_style = ParagraphStyle(
-                    f"Heading{level}", parent=styles["Heading1"],
-                    fontSize=sz, spaceBefore=6*mm, spaceAfter=3*mm,
-                )
-                story.append(Paragraph(text, h_style))
+                level = min(len(hm.group(1)), 5)
+                story.append(Paragraph(
+                    _pdf_inline_md(hm.group(2).strip()), styles[f"h{level}"]))
                 i += 1
                 continue
 
@@ -2181,48 +2423,71 @@ class OfficeTools:
                     if img_abs:
                         try:
                             from reportlab.platypus import Image as RLImage
-                            from reportlab.lib.units import mm as _mm
                             from PIL import Image as _PILImage
                             with _PILImage.open(img_abs) as im:
                                 w_px, h_px = im.size
-                            max_w = 160 * _mm  # A4 内容宽
+                            max_w = 160 * mm  # A4 内容宽
                             scale = min(max_w / w_px, 1.0) if w_px else 1.0
-                            story.append(RLImage(img_abs, width=w_px * scale, height=h_px * scale))
+                            story.append(RLImage(img_abs, width=w_px * scale,
+                                                 height=h_px * scale))
+                            story.append(Spacer(1, 3 * mm))
                             continue
                         except Exception:
                             pass  # 图片嵌入失败 → 回退源码文本
-                code_style = ParagraphStyle(
-                    "Code", parent=styles["Code"],
-                    fontSize=8, leading=10,
-                    leftIndent=6*mm, spaceAfter=3*mm,
-                )
-                story.append(Preformatted(code_text, code_style))
+                story.append(Preformatted(
+                    code_text,
+                    styles["code_cjk"] if _has_cjk(code_text) else styles["code"]))
+                continue
+
+            # 图片 ![alt](path)
+            img_match = re.match(r"^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$", line)
+            if img_match:
+                img_path = img_match.group(2).strip().strip("\"'")
+                abs_path = (img_path if os.path.isabs(img_path)
+                            else os.path.join(self.workspace, img_path))
+                try:
+                    from reportlab.platypus import Image as RLImage
+                    from PIL import Image as _PILImage
+                    with _PILImage.open(abs_path) as im:
+                        w_px, h_px = im.size
+                    max_w = 160 * mm
+                    scale = min(max_w / w_px, 1.0) if w_px else 1.0
+                    story.append(RLImage(abs_path, width=w_px * scale,
+                                         height=h_px * scale))
+                    story.append(Spacer(1, 3 * mm))
+                except Exception:
+                    story.append(Paragraph(_pdf_inline_md(line), styles["body"]))
+                i += 1
                 continue
 
             # 无序列表
             if re.match(r"^[\s]*[-*+]\s+", line):
                 text = re.sub(r"^[\s]*[-*+]\s+", "", line)
-                p = Paragraph(text, styles["Normal"])
-                story.append(ListFlowable([ListItem(p)], bulletType="bullet",
-                                           leftIndent=30, bulletOffsetY=-2))
+                story.append(ListFlowable(
+                    [ListItem(Paragraph(_pdf_inline_md(text), styles["body"]))],
+                    bulletType="bullet", leftIndent=24, bulletOffsetY=-2))
                 i += 1
                 continue
 
             # 有序列表
             if re.match(r"^\s*\d+[\.\)]\s+", line):
                 text = re.sub(r"^\s*\d+[\.\)]\s+", "", line)
-                p = Paragraph(text, styles["Normal"])
-                story.append(ListFlowable([ListItem(p)], bulletType="1",
-                                           leftIndent=30, bulletOffsetY=-2))
+                story.append(ListFlowable(
+                    [ListItem(Paragraph(_pdf_inline_md(text), styles["body"]))],
+                    bulletType="1", leftIndent=24, bulletOffsetY=-2))
                 i += 1
                 continue
 
             # 普通段落
-            p = Paragraph(line, styles["Normal"])
-            story.append(p)
+            story.append(Paragraph(_pdf_inline_md(line), styles["body"]))
             i += 1
 
-        doc.build(story)
+        if in_table and len(table_rows) >= 2:
+            story.append(_pdf_table(table_rows, styles, accent))
+
+        # 注意：onFirstPage/onLaterPages 必须传给 build()——reportlab 构造函数
+        # 会静默忽略这两个参数，传错位置会导致页眉页脚根本不绘制。
+        doc.build(story, onFirstPage=_draw_page, onLaterPages=_draw_page)
         return f"[Office OK]: 已生成 PDF 文档 → {filepath}"
 
     # ------------------------------------------------------------ 数据分析

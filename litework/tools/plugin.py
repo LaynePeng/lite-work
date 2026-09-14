@@ -233,7 +233,9 @@ class OfficePlugin(ToolPlugin):
     # 内置 litework/tools/office.py 是社区原样同步副本（无许可证头，保持 MIT）。
     # 1.3.0：与社区 v1.3.0 同源——产出物/素材工作区可见目录 + 格式化编辑
     #        （docx/xlsx/pptx_format）与查找替换（docx/xlsx_replace）
-    version = "1.3.0"
+    # 1.4.0：与社区 v1.4.0 同源——pdf_create 中文字体嵌入/CJK 断行、Markdown
+    #        表格渲染、内联格式、主题配色（theme/accent_color）、封面与页脚页码
+    version = "1.4.0"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
