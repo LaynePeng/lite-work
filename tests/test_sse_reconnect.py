@@ -21,17 +21,30 @@ from litework.server.app import create_app
 
 
 class SlowMockAdapter:
-    """每轮 LLM 调用前延时：给测试留出断开 SSE 的窗口。
+    """第 1 轮 LLM 调用阻塞在 gate 上，由测试在重连完成后放行。
+
+    为何不用固定延时：重连耗时依赖运行时（CI 慢机可能远超延时），
+    若重连晚于第 1 轮工具执行，断连期间的事件按设计不回放，
+    工具事件就会「丢」——测试假失败。用事件门把「重连成功」与
+    「LLM 继续」严格串行，消除这类墙钟竞态（gate 带超时兜底，
+    测试提前失败时不会挂死任务）。
 
     脚本：第 1 轮调用 read_file 工具，第 2 轮输出终答。"""
 
-    def __init__(self, delay: float = 0.4) -> None:
+    def __init__(self, delay: float = 0.2) -> None:
         self.delay = delay
         self.calls = 0
+        self.first_call_gate = asyncio.Event()
 
     async def chat_stream(self, messages, tools, events=None):
         self.calls += 1
-        await asyncio.sleep(self.delay)
+        if self.calls == 1:
+            try:
+                await asyncio.wait_for(self.first_call_gate.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(self.delay)
         if self.calls == 1:
             if events:
                 await events.emit("llm:stream", {"chunk": "先读文件…"})
@@ -46,7 +59,7 @@ class SlowMockAdapter:
 @pytest.fixture
 async def live_client(tmp_path):
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
-    app._mock_adapter = SlowMockAdapter(delay=0.8)
+    app._mock_adapter = SlowMockAdapter(delay=0.2)
     app.refresh_model_meta = lambda: False
     fast_app = create_app(app, token=None)
     config = uvicorn.Config(fast_app, host="127.0.0.1", port=0, log_level="error",
@@ -101,8 +114,9 @@ async def test_sse_disconnect_and_reconnect_no_premature_done(live_client):
     sid = r.json()["session_id"]
     r = await c.post("/api/chat", json={"session_id": sid, "prompt": "读取并总结 x.txt"})
     task_id = r.json()["task_id"]
+    adapter = app._mock_adapter
 
-    # 阶段一：连接后读到首个事件即断开（任务仍在第 1 轮 LLM 延时中）
+    # 阶段一：连接后读到 task:start 即断开（第 1 轮 LLM 仍阻塞在 gate 上）
     first = []
     async with c.stream("GET", f"/api/tasks/{task_id}/events") as resp:
         assert resp.status_code == 200
@@ -111,10 +125,12 @@ async def test_sse_disconnect_and_reconnect_no_premature_done(live_client):
 
     await asyncio.sleep(0.1)  # 让服务端感知断连（generator cancel 传播）
 
-    # 阶段二：重连，读完整流
+    # 阶段二：重连；确认订阅建立后再放行第 1 轮 LLM——工具事件必然落在
+    # 重连之后，与重连速度无关（`async with` 返回时 handle.subscribe 已执行）
     second = []
     async with c.stream("GET", f"/api/tasks/{task_id}/events") as resp:
         assert resp.status_code == 200
+        adapter.first_call_gate.set()
         done = await _read_events_until(resp, lambda ev: False, second)
     assert done, "重连后应能读到 [DONE] 结束标记"
 
