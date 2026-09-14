@@ -2,6 +2,7 @@
 name: diagram-to-office
 description: 图表转 Office：把 PlantUML / Mermaid 源码渲染成 PNG/SVG 图片，再嵌入 Word/PPT 文档
 triggers: plantuml,PlantUML,mermaid,Mermaid,uml,UML,图表转图片,图转word,图转ppt,图转office,时序图,流程图,类图
+version: "1.0.0"
 ---
 
 # 图表转 Office 技能（diagram-to-office）

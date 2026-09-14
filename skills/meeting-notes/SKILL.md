@@ -2,6 +2,7 @@
 name: meeting-notes
 description: 会议纪要整理：根据会议记录/录音转写文本生成结构化会议纪要 Word 文档
 triggers: 会议纪要,会议记录,meeting notes,整理会议
+version: "1.0.0"
 ---
 
 # 会议纪要技能

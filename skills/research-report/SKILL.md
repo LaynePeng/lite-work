@@ -2,6 +2,7 @@
 name: research-report
 description: 调研报告：多来源网络查证、交叉验证，输出带来源标注的调研报告（Word/PDF）
 triggers: 调研,调研报告,行业分析,竞品分析,查资料,research
+version: "1.0.0"
 ---
 
 # 调研报告技能

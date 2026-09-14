@@ -2,6 +2,7 @@
 name: data-analysis
 description: 数据分析：对 CSV/JSON 数据做清洗、统计与可视化，输出结论并可选导出 Excel/图表
 triggers: 数据分析,分析数据,统计,做报表,analyze data
+version: "1.0.0"
 ---
 
 # 数据分析技能

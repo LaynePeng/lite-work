@@ -2,6 +2,7 @@
 name: weekly-report
 description: 生成周报：收集本周工作内容（可结合 git 提交记录），排版生成 Word 周报文档
 triggers: 周报,weekly report,汇总本周,本周总结
+version: "1.0.0"
 ---
 
 # 周报生成技能
