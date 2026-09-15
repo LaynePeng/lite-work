@@ -131,7 +131,12 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
     for attempt in range(1, retries + 1):
         try:
             _resume_download(url, part, expected_size, on_bytes)
-            os.replace(part, dest)
+            if os.path.isfile(part):
+                os.replace(part, dest)
+            elif not os.path.isfile(dest):
+                # 0 字节文件：_resume_download 在 offset == expected_size 时
+                # 直接返回，未创建 .part 文件。显式创建空 dest 确保后续替换成功。
+                open(dest, "wb").close()
             return
         except Exception as exc:  # 网络/超时/不完整 → 退避重试
             last_exc = exc
