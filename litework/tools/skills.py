@@ -33,9 +33,10 @@ logger = logging.getLogger("litework.tools.skills")
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 NAME_MAX_LEN = 64
 DESC_MAX_LEN = 1024
-# 导入大小限制
-ZIP_MAX_BYTES = 50 * 1024 * 1024
-ZIP_MAX_ENTRIES = 2000
+# 导入大小限制（社区仓库含大型技能如 ppt-master：12000+ 文件 / 60MB+，
+# 无 git 用户的 zipball 回退按整仓 zip 判定，上限需覆盖整仓而非单技能）
+ZIP_MAX_BYTES = 150 * 1024 * 1024
+ZIP_MAX_ENTRIES = 20000
 # GitHub 导入仅允许这些主机（防 SSRF）
 GITHUB_ALLOWED_HOSTS = {"github.com", "api.github.com", "codeload.github.com", "raw.githubusercontent.com"}
 
