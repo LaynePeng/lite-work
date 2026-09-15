@@ -87,6 +87,41 @@ def test_workspace_skill_overrides_builtin(tmp_path, monkeypatch):
     assert matched[0]["description"] == "工作区定制版"
 
 
+def test_workspace_skills_not_shadow_user_when_coincide_with_builtin(tmp_path, monkeypatch):
+    """工作区 skills/ 与内置技能根重合时不参与优先级（只读副本不影子用户更新）。
+
+    模拟场景：workspace = lite-work 仓库，其 skills/ 与内置技能根是同一目录。
+    此时用户安装的更新版应占上风，而不是工作区只读旧版。
+    """
+    from litework.tools import skills as skills_mod
+    monkeypatch.setenv("HOME", str(tmp_path))  # 隔离用户级路径
+
+    # 用户级安装目标技能（模拟社区更新到 v1.0.1）
+    user_skill_dir = tmp_path / ".agents" / "skills" / "diagram-to-office"
+    user_skill_dir.mkdir(parents=True)
+    user_skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: diagram-to-office\ndescription: updated user copy\nversion: '1.0.1'\n---\nnew version",
+        encoding="utf-8",
+    )
+    # 新建一个 workspace，skills/ 指向实际内置技能根（模拟重合）
+    ws = tmp_path / "my-project"
+    ws.mkdir()
+    builtin = skills_mod._builtin_skills_dir()
+    if builtin and builtin.is_dir():
+        # 把内置技能根软链到 workspace/skills/（模拟重合场景）
+        ws_skills = ws / "skills"
+        try:
+            ws_skills.symlink_to(builtin.resolve(), target_is_directory=True)
+        except OSError:
+            pytest.skip("symlink 不可用")
+
+    tools = skills_mod.SkillsTools(str(ws))
+    skills = {s["name"]: s for s in tools.list_skills()}
+    hit = skills.get("diagram-to-office")
+    assert hit is not None, "diagram-to-office 应在用户级可见"
+    assert hit["scope"] == "user", f"应为 user 而非 {hit['scope']}"
+
+
 def test_project_instructions_support_claude_uppercase(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("Use the repository style.", encoding="utf-8")
     prompt = SystemPromptBuilder.build(str(tmp_path), [])

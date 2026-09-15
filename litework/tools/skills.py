@@ -224,10 +224,17 @@ class SkillsTools:
     def __init__(self, workspace: Optional[str]) -> None:
         self.workspace = Path(workspace).resolve() if workspace else None
         self.roots: List[Dict[str, Any]] = []
+        # 内置技能根：提前计算，用于跳过工作区中与内置重合的只读路径
+        builtin = _builtin_skills_dir()
         if self.workspace:
             for suffix, writable in WORKSPACE_ROOT_SUFFIXES:
+                path = self.workspace / suffix
+                # 跳过与内置技能根目录重合的 workspace 条目（如 dev 态 lite-work
+                # 仓库自身的 skills/），避免只读副本影子用户已更新的版本
+                if builtin and path.resolve() == builtin.resolve():
+                    continue
                 self.roots.append({
-                    "path": self.workspace / suffix, "scope": "workspace", "writable": writable,
+                    "path": path, "scope": "workspace", "writable": writable,
                 })
         home = Path.home()
         for suffix, writable in USER_ROOT_SUFFIXES:
@@ -236,7 +243,6 @@ class SkillsTools:
             })
         # 产品内置技能根（随包分发，任何 workspace 都可见；只读）。
         # 优先级最低：workspace / user 同名技能覆盖内置版。
-        builtin = _builtin_skills_dir()
         if builtin:
             self.roots.append({
                 "path": builtin, "scope": "builtin", "writable": False,
