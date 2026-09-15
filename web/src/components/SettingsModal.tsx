@@ -1812,9 +1812,9 @@ export default function SettingsModal({
                               <span className="plugin-desc-row" title={cs.description}>{cs.description}</span>
                             </div>
                             <div className="skill-item-actions">
-                              <button className="btn-update" disabled={pluginBusy || !srcUrl}
+                              <button className="btn-update" disabled={skillBusy || !srcUrl}
                                 title="覆盖更新（保留本地 .env 配置）"
-                                onClick={() => void pluginAction(async () => {
+                                onClick={() => void skillAction(async () => {
                                   const job = await runInstallJob("skill", { source: srcUrl, scope: "user", overwrite: true });
                                   refreshSkills();
                                   const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
@@ -1839,8 +1839,8 @@ export default function SettingsModal({
                               <span className="plugin-desc-row" title={cs.description}>{cs.description}</span>
                             </div>
                             <div className="skill-item-actions">
-                              <button className="btn-test" disabled={pluginBusy || !srcUrl}
-                                onClick={() => void pluginAction(async () => {
+                              <button className="btn-test" disabled={skillBusy || !srcUrl}
+                                onClick={() => void skillAction(async () => {
                                   const job = await runInstallJob("skill", { source: srcUrl, scope: "user" });
                                   refreshSkills();
                                   const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
