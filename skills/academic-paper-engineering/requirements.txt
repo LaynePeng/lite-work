@@ -1,0 +1,7 @@
+# academic-paper-engineering 运行时依赖
+# 注：这些包在 lite-work 主程序中已内置（skills 由系统 Python 执行时按需安装）
+PyYAML>=6.0.1
+python-docx>=1.1.0
+pymupdf>=1.24.0
+openpyxl>=3.1.0
+python-pptx>=0.6.23

@@ -2,7 +2,7 @@
 name: research-report
 description: 调研报告：多来源网络查证、交叉验证，输出带来源标注的调研报告（Word/PDF）
 triggers: 调研,调研报告,行业分析,竞品分析,查资料,research
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # 调研报告技能
@@ -15,7 +15,7 @@ version: "1.0.0"
    交付格式；模糊时用 ask_user 提供选项澄清。
 
 2. **拆分任务**：复杂调研用 todo_write 建立清单；3 个以上独立子主题时
-   可用 spawn_agent（role=explorer）并行调研。
+   可用 spawn_sub_agent（roleType=explorer）并行调研。
 
 3. **多来源查证**：用 webfetch / webfetch_batch 抓取权威来源
    （官网、白皮书、权威媒体、行业报告）；单条关键结论至少 2 个来源交叉验证；
@@ -31,6 +31,9 @@ version: "1.0.0"
 
 5. **生成交付物**：默认 docx_create 生成 Word；用户要求不可编辑时用 pdf_create；
    数据对比多时附 xlsx_create 表格。
+   - **美化排版**：交付成品前用 document-styling 技能套主题
+     （`apply_docx_theme.py <docx> --theme academic-gray`，或
+     `md2pdf.py <md> --theme academic-gray`）；调研报告推荐 academic-gray / business-blue。
 
 ## 注意
 

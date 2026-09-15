@@ -1,8 +1,8 @@
 ---
 name: document-writing
 description: 文档写作：方案/通知/制度/说明书等正式文档撰写，排版生成 Word 或 PDF
-triggers: 写文档,写方案,写通知,写制度,起草,写报告,文档排版
-version: "1.0.0"
+triggers: 写文档,写方案,写通知,写制度,起草,写报告,文档排版,文档美化,美化
+version: "1.1.0"
 ---
 
 # 文档写作技能
@@ -31,8 +31,11 @@ version: "1.0.0"
    - 定稿/不可编辑场景 → pdf_create；
    - 文件名含文档类型与主题，如 `项目实施方案_v1.docx`。
    - **迭代修改**：在已有文档上补充内容 → docx_append（path 指向
-     .outputs/ 下的 docx，content 为要追加的 Markdown，可 page_break
+     产出物/ 下的 docx，content 为要追加的 Markdown，可 page_break
      分页开新章）；推倒重写才重新 docx_create。
+   - **美化排版（推荐）**：需要正式/美观成品时调用 document-styling 技能——
+     已有 docx 直接套主题（`apply_docx_theme.py <产出物/x.docx> --theme business-blue`），
+     或从 Markdown 一次生成（`md2docx.py` / `md2pdf.py`，均支持 `--theme <name>`）。
 
 5. 回复：文件路径 + 内容摘要 + 需要用户补充确认的点。
 

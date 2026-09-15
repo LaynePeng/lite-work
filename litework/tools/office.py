@@ -14,6 +14,9 @@ v1.4.0 新增：pdf_create 中文字体嵌入与 CJK 断行、Markdown 表格渲
 # 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
 # plugins/office-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本。
 # v1.2.0+ 含社区版独有功能（格式化/查找替换），同步时需保留。
+# 注意：本副本另含主仓库侧修复「图表渲染失败不残留空 diagrams 目录」
+# （office.py _render_diagram，主仓库 commit 1d666b9/3a5e076）——该修复尚未
+# 回传上游 lite-work-plugins，未来同步上游时不要回退它。
 from __future__ import annotations
 
 import io
@@ -2749,7 +2752,8 @@ class OfficeTools:
         parts = []
         for p in doc.paragraphs:
             if p.text.strip():
-                style = (p.style.name or "").lower()
+                # p.style 可能为 None：文档未声明默认段落样式时 python-docx 返回 None
+                style = (getattr(p.style, "name", "") or "").lower()
                 prefix = "#" * min(4, 1 + sum(1 for c in style if c.isdigit() and c != "0")) \
                     if "heading" in style else ""
                 parts.append(f"{prefix} {p.text.strip()}".strip())

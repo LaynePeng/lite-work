@@ -2,7 +2,7 @@
 name: weekly-report
 description: 生成周报：收集本周工作内容（可结合 git 提交记录），排版生成 Word 周报文档
 triggers: 周报,weekly report,汇总本周,本周总结
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # 周报生成技能
@@ -24,7 +24,10 @@ version: "1.0.0"
    - 四、需要的支持（可选）
 
 3. **生成文档**：用 docx_create 生成 Word 文件，文件名 `周报_{起始日期}_{结束日期}.docx`，
-   保存到工作区 `.outputs/` 目录；把完整文件路径告诉用户。
+   保存到工作区 `产出物/` 目录（docx_create 的默认输出目录）；
+   交付前用 document-styling 技能套主题美化
+   （`apply_docx_theme.py <产出物/周报_*.docx> --theme business-blue`）；
+   把完整文件路径告诉用户。
 
 ## 注意
 
