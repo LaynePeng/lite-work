@@ -20,8 +20,8 @@ BUILTIN_COMMANDS: List[Dict[str, str]] = [
     },
     {
         "name": "compact",
-        "description": "手动压缩当前会话上下文（旧轮次摘要化，最近几轮原样保留）",
-        "argsHint": "[关注点]",
+        "description": "手动压缩当前会话上下文（旧轮次摘要化，最近几轮原样保留；可加关注点如 /compact 数据库设计）",
+        "argsHint": "",
         "kind": "builtin",
     },
     {
