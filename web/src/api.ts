@@ -9,6 +9,9 @@ const TIMEOUT = 15000;
 // 慢网下载 zipball 合法耗时远超 15s。后端已把网络调用移出事件循环并设了
 // connect/read 超时兜底，这里给足余量，避免「后端还在下、前端先中断」。
 const NETWORK_TIMEOUT = 120000;
+// 手动压缩：同步的 LLM 摘要调用（head 最多 ~180K 字符），生成摘要耗时远超 15s，
+// 用与联网类同级的余量，避免「后端还在摘要、前端先中断」。
+const COMPACT_TIMEOUT = 180000;
 
 /** 安装任务进度快照（/api/install/jobs/{id}）。 */
 export interface InstallJobStatus {
@@ -208,7 +211,7 @@ export const api = {
       summary: string;
     }>("/api/compact", {
       method: "POST", body: JSON.stringify({ session_id: sessionId, focus }),
-    }),
+    }, COMPACT_TIMEOUT),
 
   getTodos: (sessionId: string) =>
     req<{ todos: import("./types").TodoItem[] }>(
