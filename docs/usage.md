@@ -3,6 +3,9 @@
 lite-work 支持多种运行形态：**桌面应用（Electron）**、**纯浏览器**、**远程 Core** 与**仅后端 API**。
 本文按使用场景列出所有执行方式；快速上手见根目录 README，Web API 细节见 `docs/web-api.md`。
 
+> 项目内的推荐组织方式（`AGENTS.md` + `素材/` + `产出物/` 版本归档）见
+> `docs/project-structure.md`，配套内置技能 `project-init` 可一键初始化。
+
 ## 1. 桌面应用（完整体验，推荐）
 
 ### 1.1 安装包（无需任何环境）
