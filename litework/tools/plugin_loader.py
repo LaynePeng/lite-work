@@ -690,7 +690,7 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
     # 失败再回退 zipball 全量下载。
     if subpath:
         try:
-            from .gh_fetch import fetch_subpath, default_cache_root
+            from .gh_fetch import TooManyFilesError, default_cache_root, fetch_subpath
 
             cached = fetch_subpath(
                 default_cache_root(config_dir), owner, repo, branch or "HEAD", subpath,
@@ -703,6 +703,9 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
             if entries:
                 return _copy_plugin_entries(_plugin_root(config_dir), entries, name, overwrite)
             logger.warning("[PluginLoader] 可续传下载未找到插件条目，回退 zipball: %s", subpath)
+        except TooManyFilesError as exc:
+            # 子目录文件数过多：按文件续传请求数不划算，回退 zipball 整包
+            logger.warning("[PluginLoader] %s；改用 zipball 整包下载", exc)
         except Exception as exc:
             logger.warning("[PluginLoader] 可续传下载失败，回退 zipball（%s）: %s", subpath, exc)
 

@@ -16,6 +16,12 @@
    已完整下载的文件直接跳过，**跨重试 / 跨重启复用**，即真正的「可续」。
 
 整仓安装（无子目录）仍回退 zipball；本模块只服务有明确子路径的场景。
+
+**文件数上限（阈值回退）**：按文件下载的请求数 = 文件数。大技能（如
+ppt-master 可达 12000+ 文件）首次安装会发起上万次 raw 请求，得不偿失——
+超过阈值（`DEFAULT_MAX_FILES`，可用环境变量 `LITEWORK_RESUMABLE_MAX_FILES`
+覆盖）时抛 `TooManyFilesError`，由调用方回退整包路径（技能 → git clone、
+插件 → zipball）：单 pack 请求数是常数级，代价是不可续传（靠重试兜底）。
 """
 from __future__ import annotations
 
@@ -35,6 +41,38 @@ logger = logging.getLogger("litework.gh_fetch")
 _TIMEOUT = None  # httpx.Timeout，惰性构造（避免模块导入即依赖 httpx 细节）
 _RAW_BASE = "https://raw.githubusercontent.com"
 _API_BASE = "https://api.github.com"
+
+# 按文件续传的文件数上限：超过则回退 git clone / zipball（见模块 docstring）
+DEFAULT_MAX_FILES = 1000
+
+
+def _resumable_max_files() -> int:
+    """读取生效的文件数上限（环境变量 LITEWORK_RESUMABLE_MAX_FILES 可覆盖）。"""
+    raw = os.environ.get("LITEWORK_RESUMABLE_MAX_FILES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILES
+    try:
+        n = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_FILES
+    return n if n > 0 else DEFAULT_MAX_FILES
+
+
+class TooManyFilesError(Exception):
+    """子路径文件数超过按文件续传阈值：应改用整包（git clone / zipball）。"""
+
+    def __init__(self, owner: str, repo: str, subpath: str, count: int, max_files: int) -> None:
+        self.count = count
+        self.max_files = max_files
+        super().__init__(
+            f"{owner}/{repo} 的 {subpath} 共 {count} 个文件，超过可续传阈值 {max_files}"
+            f"（按文件下载需发起 {count}+ 次 raw 请求）"
+        )
+
+
+def should_use_resumable(file_count: int, max_files: int = DEFAULT_MAX_FILES) -> bool:
+    """纯函数：文件数是否适合按文件续传（独立出来便于单测）。"""
+    return file_count <= max_files
 
 
 def default_cache_root(config_dir: Optional[str] = None) -> str:
@@ -190,11 +228,15 @@ class _Tracker:
 
 def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str,
                   *, retries: int = 4, max_workers: int = 8,
+                  max_files: Optional[int] = None,
                   on_progress: Optional[Callable[[int, int], None]] = None) -> str:
     """把仓库子目录抓到缓存，返回缓存中该子目录的本地路径。
 
     真正「可续」：文件级缓存 + 单文件 Range 续传，跨重试/重启不重复下载。
     过程中通过 install_progress 上报「列出/下载」阶段与字节进度。
+
+    max_files：按文件下载的文件数上限（None → 环境变量/默认值）；
+    超过抛 TooManyFilesError，调用方应回退 git clone / zipball 整包下载。
     """
     import httpx
 
@@ -224,6 +266,9 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
     ]
     if not entries:
         raise ValueError(f"仓库 {owner}/{repo}@{ref} 中未找到路径: {subpath}")
+    effective_max = max_files if (max_files is not None and max_files > 0) else _resumable_max_files()
+    if not should_use_resumable(len(entries), effective_max):
+        raise TooManyFilesError(owner, repo, subpath, len(entries), effective_max)
 
     base = os.path.join(cache_root, f"{owner}__{repo}__{commit[:12]}")
     target_root = os.path.join(base, subpath)

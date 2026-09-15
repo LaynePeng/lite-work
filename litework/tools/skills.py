@@ -701,7 +701,7 @@ class SkillsTools:
         if subpath:
             ref = branch or parts[3] or "HEAD"
             try:
-                from .gh_fetch import fetch_subpath, default_cache_root
+                from .gh_fetch import TooManyFilesError, default_cache_root, fetch_subpath
 
                 cached = fetch_subpath(
                     default_cache_root(), owner, repo, ref, subpath,
@@ -712,6 +712,10 @@ class SkillsTools:
                     return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None, overwrite)
                             for c in candidates]
                 logger.warning("[Skills] 可续传下载未找到技能目录，回退 git/zip: %s", subpath)
+            except TooManyFilesError as exc:
+                # 大技能（如 ppt-master 12000+ 文件）：按文件续传请求数过多，
+                # 回退 git clone 单 pack 整包下载（不可续传，靠重试兜底）
+                logger.warning("[Skills] %s；改用 git clone 整包下载", exc)
             except Exception as exc:
                 logger.warning("[Skills] 可续传下载失败，回退 git/zip（%s）: %s", subpath, exc)
 
