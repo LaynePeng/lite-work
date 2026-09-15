@@ -1134,8 +1134,15 @@ class AgentApp:
         after_tokens = TokenCounter.count_messages_tokens(compacted)
         self.session_store.save(session_id, compacted, metadata=snapshot.metadata)
 
-        # 统计回写：面板立即反映压缩后水位（usage/费用等累计值不动）
-        acc = self._context_session_stats.setdefault(session_id, {})
+        # 统计回写：面板立即反映压缩后水位（usage/费用等累计值不动）。
+        # 必须使用与 accumulate_context_stats 一致的全字段默认值，
+        # 否则 setdefault 空 dict 会致后续 accumulate 时 KeyError。
+        acc = self._context_session_stats.setdefault(session_id, {
+            "prompt_tokens": 0, "output_tokens": 0,
+            "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+            "compression_count": 0, "compressed_tokens": 0,
+            "tool_calls": 0, "blocked": 0, "cost_estimate": 0.0,
+        })
         acc["compression_count"] = int(acc.get("compression_count", 0) or 0) + 1
         acc["compressed_tokens"] = int(acc.get("compressed_tokens", 0) or 0) + max(0, head_tokens - TokenCounter.count_text_tokens(summary))
         acc["last_prompt_tokens"] = after_tokens

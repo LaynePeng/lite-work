@@ -148,3 +148,31 @@ def test_compact_summary_failure_keeps_session(tmp_path):
     assert result["ok"] is False and "摘要" in result["reason"]
     snap = app.session_store.load(sid)
     assert len(snap.messages) == len(_seed_messages())  # 原样未动
+
+
+def test_compact_then_task_stats_no_keyerror(tmp_path):
+    """先手动压缩、后任务累计 context:stats：不得因统计字典缺字段而 KeyError。
+
+    回归：compact_session 曾用 setdefault(sid, {}) 初始化空统计字典，
+    后续 accumulate_context_stats 对缺失的 prompt_tokens 等字段 += 时抛
+    KeyError，导致 context:stats 事件断裂、前端上下文面板数据不显示。
+    """
+    adapter = RecordingAdapter("摘要内容")
+    app = _make_app(tmp_path, adapter)
+    sid = "s8"
+    app.session_store.save(sid, _seed_messages())
+
+    # 先手动压缩（写入压缩统计）
+    result = asyncio.run(app.compact_session(sid))
+    assert result["ok"] is True
+
+    # 模拟随后的任务 context:stats 累计：不应抛 KeyError
+    stats = app.accumulate_context_stats(sid, {
+        "prompt_tokens": 1000, "output_tokens": 200,
+        "cache_hit_tokens": 300, "cache_miss_tokens": 700,
+        "compression_count": 0, "compressed_tokens": 0,
+        "tool_calls": 1, "blocked": 0, "cost_estimate": 0.001,
+    })
+    assert stats["prompt_tokens"] == 1000
+    assert stats["compression_count"] == 1
+    assert stats["last_prompt_tokens"] == result["after_tokens"]
