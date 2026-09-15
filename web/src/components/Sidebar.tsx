@@ -676,6 +676,7 @@ export default function Sidebar({
   onOpenRecent,
   onRemoveRecent,
   onTogglePin,
+  onToggleKind,
   onBackToProjects,
   onOpenProjectNewWindow,
   onOpenSettings,
@@ -706,6 +707,7 @@ export default function Sidebar({
   onOpenRecent: (path: string) => void;
   onRemoveRecent: (path: string) => void;
   onTogglePin: (path: string) => void;
+  onToggleKind?: (path: string, kind: "code" | "project") => void;
   onBackToProjects: () => void;
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
@@ -821,6 +823,18 @@ export default function Sidebar({
                   </span>
                   <span className="recent-project-name">{p.name}</span>
                   <span className={`recent-project-kind ${p.kind}`}>{p.kind === "code" ? "代码" : "项目"}</span>
+                  <button
+                    className="recent-project-kind-toggle"
+                    title={p.kind === "code"
+                      ? "标记为普通项目（📁）"
+                      : "标记为代码项目（💻）"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleKind?.(p.path, p.kind === "code" ? "project" : "code");
+                    }}
+                  >
+                    ⇄
+                  </button>
                   <button
                     className={`recent-project-pin ${p.pinned ? "pinned" : ""}`}
                     title={p.pinned ? "取消置顶" : "置顶固定"}

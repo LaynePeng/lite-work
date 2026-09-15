@@ -535,6 +535,21 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   transition: opacity 0.12s, color 0.12s;
 }
 
+/* 手动标记项目类型（代码/项目）：hover 显示，点击切换并锁定 */
+.recent-project-kind-toggle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.recent-project-item:hover .recent-project-kind-toggle {
+  opacity: 1;
+}
+
 .recent-project-item:hover .recent-project-remove {
   opacity: 1;
 }
@@ -3633,6 +3648,15 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-bottom: 1px solid var(--border);
 }
 
+/* 新建项目成功提示（含结构初始化说明） */
+.picker-note {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: #22c55e;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+
 .picker-tree {
   flex: 1;
   overflow-y: auto;
@@ -4666,6 +4690,12 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   50% { opacity: .35; }
 }
 
+/* 压缩中：弧线绕环心扫掠 */
+@keyframes ctx2-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .ctx2-gaugerow {
   display: flex;
   gap: 12px;
@@ -4677,6 +4707,23 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   width: 74px;
   height: 74px;
   flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  border-radius: 50%;
+}
+.ctx2-gauge:disabled {
+  cursor: default;
+  opacity: .7;
+}
+.ctx2-gauge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.ctx2-gauge:hover:not(:disabled) .ctx2-arc {
+  filter: brightness(1.2);
 }
 
 .ctx2-gauge svg {
@@ -4691,6 +4738,13 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .ctx2-arc.danger {
   stroke: var(--red);
+}
+
+/* 压缩中动画：包裹弧线的 <g> 绕环心旋转（弧线本身是短弧 → 扫掠效果） */
+.ctx2-arc-spin {
+  animation: ctx2-spin .8s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .ctx2-gv {
@@ -4725,6 +4779,17 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .ctx2-lab {
   font-size: 10px;
   color: var(--text-2);
+}
+
+/* 环形可压缩提示：hover 环时浮现（仅当回调存在） */
+.ctx2-compact-hint {
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity .2s;
+}
+.ctx2-gauge:hover:not(:disabled) ~ .ctx2-gside .ctx2-compact-hint,
+.ctx2-gauge:focus-visible ~ .ctx2-gside .ctx2-compact-hint {
+  opacity: 1;
 }
 
 .ctx2-big {

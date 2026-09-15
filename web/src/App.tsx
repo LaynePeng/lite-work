@@ -16,7 +16,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 
@@ -229,6 +229,8 @@ export default function App() {
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
   // 工具面板 tab 受控（聊天区 Agents 状态条可跳转）
   const [toolPanelTab, setToolPanelTab] = useState<"context" | "todos" | "agents" | "mcp" | "background" | "tools">("context");
+  // 手动压缩上下文进行中（按 session 记录，避免切 tab 状态串台）
+  const [compactingSessions, setCompactingSessions] = useState<Record<string, boolean>>({});
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
   const sidebarResize = useResizable({
@@ -965,6 +967,19 @@ export default function App() {
     }
   }, []);
 
+  // 手动标记项目类型（code/project）：写入并锁定，启发式不再覆盖
+  const toggleProjectKind = useCallback(async (path: string, kind: "code" | "project") => {
+    try {
+      await api.setProjectKind(path, kind);
+      const list = await api.recentProjects();
+      setRecentProjects(list.items);
+      setSuccess(kind === "code" ? "已标记为代码项目" : "已标记为普通项目");
+      setTimeout(() => setSuccess(null), 2000);
+    } catch (e) {
+      setErrorPublic((e as Error).message);
+    }
+  }, []);
+
   const backToProjects = useCallback(() => setProjectsView("list"), []);
 
   // 首次启动：打开一个占位会话 tab
@@ -1678,16 +1693,49 @@ export default function App() {
     [activeSessionId, getChat, patchChat, pushLog]
   );
 
-  // ------------------------------------------------------------ 发送
+  // ------------------------------------------------------------ 手动压缩（面板环形 / /compact 命令）
 
+  const compactNow = useCallback(async (sid: string, focus: string) => {
+    if (!sid) {
+      window.alert("当前没有会话，无法压缩上下文。");
+      return null;
+    }
+    if (getChat(sid).running) {
+      window.alert("任务运行中无法压缩，请先停止任务。");
+      return null;
+    }
+    setCompactingSessions((m) => ({ ...m, [sid]: true }));
+    try {
+      const r = await api.compact(sid, focus);
+      const cur = getChat(sid);
+      const history = [...(cur.contextHistory ?? []), { p: r.after_tokens }].slice(-60);
+      const [stats, snap] = await Promise.all([
+        api.contextStats(sid).catch(() => null),
+        api.getSession(sid).catch(() => null),
+      ]);
+      patchChat(sid, {
+        contextStats: {
+          ...(stats ?? cur.contextStats ?? { model: "", context_window: 0, session: {} }),
+          task: { ...(cur.contextStats?.task ?? {}), last_prompt_tokens: r.after_tokens } as ContextTaskStats,
+        } as ContextStats,
+        contextHistory: history,
+        messages: snap?.messages ?? cur.messages,
+      });
+      pushLog(`🗜️ 手动压缩完成：${r.before_tokens} → ${r.after_tokens} tokens（释放 ${r.removed_tokens}，折叠 ${r.turns_compacted} 轮）`);
+      return r;
+    } catch (e) {
+      patchChat(sid, { error: (e as Error).message });
+      pushLog(`✗ 手动压缩失败: ${(e as Error).message}`);
+      return null;
+    } finally {
+      setCompactingSessions((m) => { const n = { ...m }; delete n[sid]; return n; });
+    }
+  }, [getChat, patchChat, pushLog]);
 
   const runCompact = useCallback(
     async (raw: string) => {
       const sid = activeSessionId;
-      if (!sid) {
-        window.alert("当前没有会话，无法压缩上下文。");
-        return;
-      }
+      if (!sid) return;
       if (getChat(sid).running) {
         window.alert("任务运行中无法压缩，请先停止任务。");
         return;
@@ -1695,25 +1743,26 @@ export default function App() {
       const focus = raw.replace(/^\/compact\s*/i, "").trim();
       patchChat(sid, { messages: [...(getChat(sid).messages ?? []), { role: "user", content: raw }], error: null });
       pushLog("🗜️ 正在压缩会话上下文…");
-      try {
-        const r = await api.compact(sid, focus);
+      const r = await compactNow(sid, focus);
+      if (r) {
+        const cur = getChat(sid);
         patchChat(sid, {
-          messages: [...getChat(sid).messages, {
+          messages: [...cur.messages, {
             role: "assistant",
             content: `🗜️ 上下文已压缩：${r.before_tokens} → ${r.after_tokens} tokens（释放 ${r.removed_tokens}，折叠 ${r.turns_compacted} 轮、保留最近 ${r.keep_turns} 轮）。`,
           }],
         });
-        // 用压缩后的会话历史替换本地消息 + 刷新上下文面板水位
-        const [stats, snap] = await Promise.all([api.contextStats(sid), api.getSession(sid).catch(() => null)]);
-        patchChat(sid, { contextStats: stats, messages: snap?.messages ?? getChat(sid).messages });
         pushLog(`🗜️ /compact 完成：${r.before_tokens} → ${r.after_tokens} tokens`);
-      } catch (e) {
-        patchChat(sid, { error: (e as Error).message });
-        pushLog(`✗ /compact 失败: ${(e as Error).message}`);
       }
     },
-    [activeSessionId, getChat, patchChat, pushLog]
+    [activeSessionId, getChat, patchChat, pushLog, compactNow]
   );
+
+  const handlePanelCompact = useCallback(() => {
+    if (!activeSessionId || compactingSessions[activeSessionId]) return;
+    pushLog("🗜️ 正在压缩会话上下文…");
+    void compactNow(activeSessionId, "");
+  }, [activeSessionId, compactingSessions, compactNow, pushLog]);
 
   const send = useCallback(
     async (prompt: string) => {
@@ -2012,6 +2061,7 @@ export default function App() {
         onOpenRecent={(path) => void openRecentProject(path)}
         onRemoveRecent={(path) => void removeRecentProject(path)}
         onTogglePin={(path) => void togglePinProject(path)}
+        onToggleKind={(path, kind) => void toggleProjectKind(path, kind)}
         onBackToProjects={backToProjects}
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
@@ -2205,6 +2255,8 @@ export default function App() {
             onKillBackground={(id) => void api.killBackgroundTask(id).then(() => {
               setBackgroundTasks((prev) => prev.filter((t) => t.task_id !== id));
             }).catch(() => {})}
+            onCompact={activeSessionId && !currentChat.running ? handlePanelCompact : undefined}
+            compacting={activeSessionId ? !!compactingSessions[activeSessionId] : false}
           />
           </ErrorBoundary>
         </>
@@ -2225,6 +2277,7 @@ export default function App() {
         <ProjectPicker
           initialPath={status?.workspace ?? ""}
           initialCreate={pickerMode === "new-code" || pickerMode === "new-project"}
+          createMode={pickerMode === "new-code" ? "code" : "project"}
           onClose={() => setShowPicker(false)}
           onSelect={(p) => void selectProject(p)}
         />

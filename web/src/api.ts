@@ -293,11 +293,23 @@ export const api = {
     req<{ ok: boolean; path: string; name: string }>("/api/files/rename", {
       method: "POST", body: JSON.stringify({ path, new_name: newName }),
     }),
-  createProject: (parent: string, name: string, git = true) =>
-    req<{ ok: boolean; path: string; name: string; git_initialized: boolean }>(
+  createProject: (parent: string, name: string, opts?: { git?: boolean; structure?: boolean; kind?: "code" | "project" }) =>
+    req<{ ok: boolean; path: string; name: string; git_initialized: boolean; scaffolded?: boolean; kind?: string }>(
       "/api/projects/create",
-      { method: "POST", body: JSON.stringify({ parent, name, git }) }
+      {
+        method: "POST",
+        body: JSON.stringify({
+          parent, name,
+          git: opts?.git ?? true,
+          structure: opts?.structure,
+          kind: opts?.kind,
+        }),
+      }
     ),
+  setProjectKind: (path: string, kind: "code" | "project") =>
+    req<{ ok: boolean; path: string; kind: string }>("/api/projects/recent/kind", {
+      method: "POST", body: JSON.stringify({ path, kind }),
+    }),
   recentProjects: () =>
     req<{ items: import("./types").RecentProject[] }>("/api/projects/recent"),
   openProject: (path: string) =>

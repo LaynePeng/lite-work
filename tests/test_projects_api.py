@@ -77,9 +77,89 @@ def test_create_project_remembered(client_and_app):
     client, app, ws = client_and_app
     r = client.post("/api/projects/create", json={"parent": ws, "name": "新项目", "git": False})
     assert r.status_code == 200
+    body = r.json()
+    # 默认初始化结构（structure 缺省 = True）：素材/产出物/AGENTS.md 就位
+    assert body["scaffolded"] is True
+    assert body["kind"] == "project"
+    target = body["path"]
+    assert os.path.isdir(os.path.join(target, "素材", "原始"))
+    assert os.path.isdir(os.path.join(target, "产出物", "报告"))
+    with open(os.path.join(target, "AGENTS.md"), encoding="utf-8") as f:
+        assert "新项目" in f.read()
     # 新建即进入最近列表
     items = client.get("/api/projects/recent").json()["items"]
     assert any(i["name"] == "新项目" for i in items)
+
+
+def test_create_project_code_entry_no_structure(client_and_app):
+    """「新建代码」：不初始化结构、kind=code，保持仓库干净。"""
+    client, app, ws = client_and_app
+    r = client.post("/api/projects/create", json={
+        "parent": ws, "name": "codeX", "git": True, "structure": False, "kind": "code",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scaffolded"] is False
+    assert body["kind"] == "code"
+    assert body["git_initialized"] is True
+    target = body["path"]
+    assert not os.path.exists(os.path.join(target, "AGENTS.md"))
+    assert not os.path.isdir(os.path.join(target, "产出物"))
+
+
+def test_create_project_kind_default_heuristic(client_and_app):
+    """kind 缺省 → 按目录内容启发式（结构初始化后 → project）。"""
+    client, app, ws = client_and_app
+    r = client.post("/api/projects/create", json={"parent": ws, "name": "pKind", "git": False})
+    assert r.status_code == 200
+    assert r.json()["kind"] == "project"
+
+
+# ---------------------------------------------------------------- 类型标记（kind 锁定）
+
+def test_set_project_kind_and_lock(client_and_app):
+    client, app, ws = client_and_app
+    # 文档项目（带 .git，历史上会被误判为代码）
+    proj = os.path.join(ws, "docs")
+    os.makedirs(os.path.join(proj, ".git"))
+    with open(os.path.join(proj, "论文.docx"), "wb") as f:
+        f.write(b"x")
+    client.post("/api/projects/recent", json={"path": proj})
+    # 启发式：文档占优 → project（与 git 解耦）
+    items = client.get("/api/projects/recent").json()["items"]
+    assert next(i for i in items if i["name"] == "docs")["kind"] == "project"
+
+    # 手动标记为代码并锁定
+    r = client.post("/api/projects/recent/kind", json={"path": proj, "kind": "code"})
+    assert r.status_code == 200 and r.json()["kind"] == "code"
+    # 再次打开（启发式路径）不覆盖锁定值
+    client.post("/api/projects/recent", json={"path": proj})
+    items = client.get("/api/projects/recent").json()["items"]
+    rec = next(i for i in items if i["name"] == "docs")
+    assert rec["kind"] == "code"
+    assert rec.get("kind_locked") is True
+
+
+def test_set_project_kind_validation(client_and_app):
+    client, app, ws = client_and_app
+    assert client.post("/api/projects/recent/kind",
+                       json={"path": ws, "kind": "bad"}).status_code == 400
+    assert client.post("/api/projects/recent/kind",
+                       json={"path": os.path.join(ws, "nope"), "kind": "code"}).status_code == 400
+
+
+def test_heuristic_reclassifies_git_document_project(client_and_app):
+    """复旦mem 场景：git 文档项目重新打开后自愈为 project。"""
+    client, app, ws = client_and_app
+    proj = os.path.join(ws, "fudan-mem")
+    os.makedirs(os.path.join(proj, ".git"))
+    for i in range(3):
+        with open(os.path.join(proj, f"章节{i}.docx"), "wb") as f:
+            f.write(b"x")
+    client.post("/api/projects/recent", json={"path": proj})
+    items = client.get("/api/projects/recent").json()["items"]
+    rec = next(i for i in items if i["name"] == "fudan-mem")
+    assert rec["kind"] == "project" and rec["is_git"] is True
 
 
 # ---------------------------------------------------------------- 置顶（pin）

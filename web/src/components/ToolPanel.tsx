@@ -71,10 +71,14 @@ function MechanismRows({ mechanisms }: { mechanisms?: ContextMechanisms }) {
   );
 }
 
-function ContextPanel({ stats, history, running }: {
+function ContextPanel({ stats, history, running, onCompact, compacting }: {
   stats: ContextStats | null;
   history?: ContextHistoryPoint[];
   running?: boolean;
+  /** 手动压缩入口（环形仪表点击触发，来自 App 层） */
+  onCompact?: () => void;
+  /** 压缩进行中（禁用环 + 扫掠动画 + 中间文字切换） */
+  compacting?: boolean;
 }) {
   if (!stats) {
     return <div className="tool-panel-empty">暂无上下文数据（发起对话后显示）</div>;
@@ -83,8 +87,9 @@ function ContextPanel({ stats, history, running }: {
   const task = stats.task ?? ({} as ContextTaskStats);
   const session = stats.session ?? {};
   const pricing = stats.pricing;
-  // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）
-  const prompt = task.last_prompt_tokens ?? task.prompt_tokens ?? 0;
+  // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）；
+  // GET 刷新后无 task 段 → 回退会话压缩后水位（compact_session 写入）
+  const prompt = task.last_prompt_tokens ?? task.prompt_tokens ?? session.last_prompt_tokens ?? 0;
   const ratio = window > 0 ? Math.min(1, Math.max(0, prompt / window)) : 0;
   const danger = ratio >= 0.9;
   // 「本次调用」：优先取 last 段；旧载荷无该字段时退化为累计值（保持可用）
@@ -130,20 +135,35 @@ function ContextPanel({ stats, history, running }: {
       </div>
 
       <div className="ctx2-gaugerow">
-        <div className="ctx2-gauge">
+        <button
+          type="button"
+          className="ctx2-gauge"
+          onClick={onCompact}
+          disabled={!onCompact || compacting}
+          title={compacting ? "正在压缩上下文…" : "点击压缩上下文（旧轮次摘要化，最近几轮原样保留）"}
+          aria-label={compacting ? "压缩中" : "压缩上下文"}
+        >
           <svg width="74" height="74" viewBox="0 0 74 74">
             <circle cx="37" cy="37" r="32" fill="none" stroke="var(--bg-3)" strokeWidth="7" />
-            <circle
-              cx="37" cy="37" r="32" fill="none"
-              className={danger ? "ctx2-arc danger" : "ctx2-arc"}
-              strokeDasharray={CIRC}
-              strokeDashoffset={CIRC * (1 - ratio)}
-            />
+            <g className={compacting ? "ctx2-arc-spin" : undefined}>
+              <circle
+                cx="37" cy="37" r="32" fill="none"
+                className={danger ? "ctx2-arc danger" : "ctx2-arc"}
+                strokeDasharray={compacting ? 90 : CIRC}
+                strokeDashoffset={CIRC * (1 - ratio)}
+              />
+            </g>
           </svg>
-          <div className="ctx2-gv"><b>{pct(ratio)}</b><i>已用</i></div>
-        </div>
+          <div className="ctx2-gv">
+            <b>{pct(ratio)}</b>
+            <i>{compacting ? "压缩中…" : "已用"}</i>
+          </div>
+        </button>
         <div className="ctx2-gside">
-          <div className="ctx2-lab">当前上下文</div>
+          <div className="ctx2-lab">
+            当前上下文
+            {onCompact && <span className="ctx2-compact-hint"> · 🗜️ 点击环形压缩</span>}
+          </div>
           <div className="ctx2-big">{fmt(prompt)}<small> / {compactTokens(window)}</small></div>
           {danger && <div className="ctx2-warn">≥90%，将触发自动压缩</div>}
           {spark && (
@@ -790,7 +810,7 @@ function useTabStripDrag() {
 export default function ToolPanel({
   contextStats, contextHistory, running, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
-  activeTab, onTabChange,
+  activeTab, onTabChange, onCompact, compacting,
 }: {
   contextStats: ContextStats | null;
   /** 每轮水位轨迹（面板趋势图数据源） */
@@ -809,6 +829,10 @@ export default function ToolPanel({
   /** 受控 tab（可选）：聊天区状态条等外部入口可跳转到指定 tab */
   activeTab?: PanelTabId;
   onTabChange?: (tab: PanelTabId) => void;
+  /** 手动压缩上下文（环形仪表点击触发） */
+  onCompact?: () => void;
+  /** 压缩进行中 */
+  compacting?: boolean;
 }) {
   const [panelTabLocal, setPanelTabLocal] = useState<PanelTabId>("context");
   // 受控优先（外部传入），否则内部状态
@@ -858,7 +882,8 @@ export default function ToolPanel({
       </div>
       <div className="tool-panel-body tool-panel-context">
         {panelTab === "context"
-          ? <ContextPanel stats={contextStats} history={contextHistory} running={running} />
+          ? <ContextPanel stats={contextStats} history={contextHistory} running={running}
+              onCompact={onCompact} compacting={compacting} />
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />
             : panelTab === "agents"

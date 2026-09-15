@@ -3,7 +3,7 @@
 //
 
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ToolPanel from "./ToolPanel";
 import type { ContextHistoryPoint, ContextStats } from "../types";
 
@@ -153,6 +153,28 @@ describe("ToolPanel · 上下文面板（仪表 + 账单 + 平铺明细）", () 
     expect(countOf(container, "12,000")).toBe(1);
     expect(countOf(container, "360,017")).toBe(1);
     expect(countOf(container, "$0.1125")).toBe(1);
+  });
+
+  it("点击环形仪表触发 onCompact 回调", () => {
+    const onCompact = vi.fn();
+    const { container } = render(
+      <ToolPanel contextStats={STATS} mcpServers={[]} tools={[]} todos={[]}
+        onCompact={onCompact} />
+    );
+    const btn = container.querySelector(".ctx2-gauge") as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    btn.click();
+    expect(onCompact).toHaveBeenCalledTimes(1);
+  });
+
+  it("compacting 状态禁用按钮并显示压缩中…", () => {
+    const { container } = render(
+      <ToolPanel contextStats={STATS} mcpServers={[]} tools={[]} todos={[]}
+        compacting onCompact={() => {}} />
+    );
+    const btn = container.querySelector(".ctx2-gauge") as HTMLButtonElement;
+    expect(btn?.disabled).toBe(true);
+    expect(textOf(container)).toContain("压缩中…");
   });
 });
 

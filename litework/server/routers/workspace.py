@@ -5,11 +5,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .context import ServerContext
+
+logger = logging.getLogger("litework.server.workspace")
 
 
 class WorkspaceUpdateRequest(BaseModel):
@@ -17,10 +21,20 @@ class WorkspaceUpdateRequest(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
-    """新建项目：parent 下创建 name 目录，git=True 时初始化 git 仓库。"""
     parent: str
     name: str
     git: bool = True
+    # 结构初始化（素材/产出物/AGENTS.md，调 project_scaffold.scaffold_project）：
+    # None → 默认初始化（新建项目的产品默认行为）；「新建代码」显式传 False
+    structure: Optional[bool] = None
+    # 项目类型（入口语义）：code/project；缺省按目录内容启发式判定
+    kind: Optional[str] = None
+
+
+class ProjectKindRequest(BaseModel):
+    """手动标记项目类型（写入最近项目并锁定，不再被启发式覆盖）。"""
+    path: str
+    kind: str
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -89,12 +103,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if bg > 0:
             raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
         app.workspace = path
-        # 切换工作区即记录到最近项目（含目录选择器/子 Agent 场景）
+        # 切换工作区即记录到最近项目（含目录选择器/子 Agent 场景）。
+        # 类型按目录内容启发式判定（与 git 解耦；手动标记过的由 remember_project 锁定保护）
         try:
-            kind = "code" if _os.path.isdir(_os.path.join(path, ".git")) else "project"
-            app.remember_project(path, kind=kind)
+            from ...tools.project_scaffold import classify_project_kind
+
+            app.remember_project(path, kind=classify_project_kind(path))
         except Exception:
-            pass
+            logger.debug("[Workspace] 记录最近项目失败", exc_info=True)
         return {"ok": True, "workspace": app.workspace}
 
     @router.post("/api/projects/create")
@@ -142,12 +158,30 @@ def create_router(ctx: ServerContext) -> APIRouter:
             except (OSError, _sp.TimeoutExpired):
                 git_initialized = False
 
-        # 新建即记住（代码仓库优先按 git 判定 kind）
+        # 结构初始化（素材/产出物/AGENTS.md）：新建项目默认执行；
+        # 失败不阻断创建（目录已建好，Agent 可用 project-init 技能补建）
+        scaffolded = False
+        if payload.structure if payload.structure is not None else True:
+            try:
+                from ...tools.project_scaffold import scaffold_project
+
+                scaffold_project(target)
+                scaffolded = True
+            except Exception:
+                logger.warning("[Projects] 项目结构初始化失败（%s）", target, exc_info=True)
+
+        # 类型：入口语义优先（新建项目=project / 新建代码=code），缺省启发式
+        from ...tools.project_scaffold import classify_project_kind
+
+        kind = payload.kind if payload.kind in ("code", "project") else classify_project_kind(target)
         try:
-            app.remember_project(target, kind="code" if git_initialized else "project")
+            app.remember_project(target, kind=kind)
         except Exception:
-            pass
-        return {"ok": True, "path": target, "name": name, "git_initialized": git_initialized}
+            logger.debug("[Projects] 新建项目记录失败", exc_info=True)
+        return {
+            "ok": True, "path": target, "name": name,
+            "git_initialized": git_initialized, "scaffolded": scaffolded, "kind": kind,
+        }
 
     @router.get("/api/projects/recent")
     async def list_recent_projects(request: Request = None):
@@ -170,11 +204,31 @@ def create_router(ctx: ServerContext) -> APIRouter:
         bg = app.background_agent_count()
         if bg > 0:
             raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
-        # kind 由前端按入口传入（打开代码=code / 打开项目=project），缺省按 git 判定
-        kind = "code" if _os.path.isdir(_os.path.join(path, ".git")) else "project"
+        # 类型按目录内容启发式判定（与 git 解耦）；手动标记过的项目由
+        # remember_project 的 kind_locked 保护，不会被这里覆盖
+        from ...tools.project_scaffold import classify_project_kind
+
+        kind = classify_project_kind(path)
         app.remember_project(path, kind=kind)
         app.workspace = path
         return {"ok": True, "workspace": path, "kind": kind}
+
+    @router.post("/api/projects/recent/kind")
+    async def set_recent_project_kind(payload: ProjectKindRequest, request: Request):
+        """手动标记项目类型（code/project）：写入最近项目并锁定，不再被启发式覆盖。"""
+        ctx.check_auth(request)
+        import os as _os
+
+        if payload.kind not in ("code", "project"):
+            raise HTTPException(status_code=400, detail="kind 仅支持 code / project")
+        path = _os.path.abspath(_os.path.expanduser(payload.path))
+        if not _os.path.isdir(path):
+            raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
+        try:
+            record = app.remember_project(path, kind=payload.kind, lock_kind=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": True, "path": path, "kind": record.get("kind", payload.kind)}
 
     @router.delete("/api/projects/recent")
     async def remove_recent_project(path: str, request: Request):

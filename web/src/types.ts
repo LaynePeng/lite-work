@@ -249,6 +249,8 @@ export interface ContextSessionStats {
   cache_hit_rate: number | null;
   compression_count: number;
   compressed_tokens: number;
+  /** 最近一次压缩后的水位（手动压缩后写入，供面板 GET 刷新时还原环形） */
+  last_prompt_tokens?: number;
   tool_calls?: number;
   blocked?: number;
   cost_estimate?: number;

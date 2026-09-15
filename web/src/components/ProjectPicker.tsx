@@ -21,12 +21,15 @@ interface FsEntry {
 export default function ProjectPicker({
   initialPath,
   initialCreate = false,
+  createMode = "project",
   onClose,
   onSelect,
 }: {
   initialPath: string;
   /** true 时打开即展开「新建项目」表单（新建代码/新建项目入口） */
   initialCreate?: boolean;
+  /** 新建入口语义：project=新建项目（默认初始化 素材/产出物/AGENTS.md 结构）；code=新建代码（不建结构） */
+  createMode?: "project" | "code";
   onClose: () => void;
   onSelect: (path: string) => void;
 }) {
@@ -46,6 +49,7 @@ export default function ProjectPicker({
   const [newGit, setNewGit] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createNote, setCreateNote] = useState<string | null>(null);
 
   const load = useCallback(async (path: string, hidden: boolean) => {
     setLoading(true);
@@ -123,13 +127,24 @@ export default function ProjectPicker({
     }
     setCreating(true);
     setCreateError(null);
+    setCreateNote(null);
     try {
       const parent = entry?.path ?? current;
-      const r = await api.createProject(parent, name, newGit);
+      const r = await api.createProject(parent, name, {
+        git: newGit,
+        // 新建项目 → 初始化 素材/产出物/AGENTS.md 结构；新建代码 → 保持仓库干净
+        structure: createMode !== "code",
+        kind: createMode === "code" ? "code" : "project",
+      });
       // 创建成功：进入新项目目录并收起表单
       setShowCreate(false);
       setNewName("");
       setCurrent(r.path);
+      setCreateNote(
+        r.scaffolded
+          ? `✓ 已创建「${name}」并初始化项目结构（素材 / 产出物 / AGENTS.md）`
+          : `✓ 已创建「${name}」`
+      );
     } catch (e) {
       setCreateError((e as Error).message);
     } finally {
@@ -219,6 +234,7 @@ export default function ProjectPicker({
           </div>
         )}
         {createError && <div className="picker-error">⚠ {createError}</div>}
+        {createNote && <div className="picker-note">{createNote}</div>}
 
         {error && <div className="picker-error">⚠ {error}</div>}
 

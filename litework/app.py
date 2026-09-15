@@ -114,6 +114,9 @@ LEGACY_DEFAULT_PRICING: Dict[str, Any] = {"input_per_mtok": 1.6, "output_per_mto
 DEEPSEEK_CURRENT_MODEL = "deepseek-flash"
 DEEPSEEK_LEGACY_MODEL = "deepseek-v4-flash"
 
+# 手动压缩时 head 摘要输入字符上限（超过则只保留最近部分）
+MAX_SUMMARY_CHARS = 180_000
+
 TOOL_NAMES = [
     "read_file", "write_file", "list_dir", "file_tree",
     "search_code", "get_file_outline", "read_focused_symbol",
@@ -412,16 +415,20 @@ class AgentApp:
                 "kind": it.get("kind") if it.get("kind") in ("code", "project") else "project",
                 "is_git": bool(it.get("is_git", os.path.isdir(os.path.join(path, ".git")))),
                 "pinned": bool(it.get("pinned", False)),
+                "kind_locked": bool(it.get("kind_locked", False)),
                 "opened_at": it.get("opened_at") or "",
             })
         # pinned 前置（稳定排序保持组内原顺序），其余新→旧由插入顺序保证
         alive.sort(key=lambda x: 0 if x["pinned"] else 1)
         return alive[: self.RECENT_PROJECTS_MAX]
 
-    def remember_project(self, path: str, kind: str = "project") -> Dict[str, Any]:
+    def remember_project(self, path: str, kind: str = "project",
+                         lock_kind: bool = False) -> Dict[str, Any]:
         """记录一次项目打开（去重置顶，超限淘汰最旧）。kind: code/project。
 
-        已 pin 的项目重复打开：保持 pinned 并回到置顶组（不丢 pin 状态）。
+        - 已 pin 的项目重复打开：保持 pinned 并回到置顶组（不丢 pin 状态）；
+        - kind_locked：用户手动标记过的类型不被启发式覆盖——已锁定的记录
+          重复打开时沿用锁定值（lock_kind=False 不解锁，仅 True 显式重设）。
         """
         import datetime as _dt
         abs_path = os.path.abspath(os.path.expanduser(path))
@@ -429,20 +436,28 @@ class AgentApp:
             raise ValueError(f"目录不存在: {abs_path}")
         items = self._load_recent_projects_raw()
         key = os.path.normcase(abs_path)
-        # 继承已存在记录的 pinned 状态
-        was_pinned = any(
-            isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key
-            and it.get("pinned")
-            for it in items
-        )
-        items = [it for it in items
-                 if not (isinstance(it, dict) and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)]
+
+        def _match(it: Any) -> bool:
+            return (isinstance(it, dict)
+                    and os.path.normcase(os.path.abspath(it.get("path") or "")) == key)
+
+        existing = next((it for it in items if _match(it)), None)
+        was_pinned = bool(existing and existing.get("pinned"))
+        was_locked = bool(existing and existing.get("kind_locked"))
+        # 锁定的类型优先（手动标记 > 启发式）；显式 lock_kind=True 时以本次传入为准
+        effective = kind if kind in ("code", "project") else "project"
+        if was_locked and not lock_kind and existing:
+            locked_kind = existing.get("kind")
+            if locked_kind in ("code", "project"):
+                effective = locked_kind
+        items = [it for it in items if not _match(it)]
         items.insert(0, {
             "path": abs_path,
             "name": os.path.basename(abs_path) or abs_path,
-            "kind": kind if kind in ("code", "project") else "project",
+            "kind": effective,
             "is_git": os.path.isdir(os.path.join(abs_path, ".git")),
             "pinned": was_pinned,
+            "kind_locked": True if lock_kind else was_locked,
             "opened_at": _dt.datetime.now().isoformat(timespec="seconds"),
         })
         # 淘汰时保护 pinned：超限时优先淘汰未 pin 的最旧项
@@ -1135,16 +1150,31 @@ class AgentApp:
         }
 
     async def _summarize_head(self, head: List[Any], system: Any, focus: str = "") -> Optional[str]:
-        """压缩摘要 LLM 调用（无工具、不流式转发），focus 指定摘要保留重点。"""
-        from .core.token_counter import TokenCounter
+        """手动压缩摘要 LLM 调用（与自动压缩同口径：携带工具 schema）。
+        
+        focus 指定摘要保留重点。head 超长时软截断——最近历史足以提取上下文，
+        更早部分视为已压缩丢弃，而不是整个失败。
+        """
         from .core.types import Message
 
         body = [m for m in head if m.role != "system"]
         if not body:
             return None
         total_chars = sum(len(m.content or "") for m in body)
-        if total_chars > 200_000:
-            return None
+        selected = body
+        if total_chars > MAX_SUMMARY_CHARS:
+            budget = MAX_SUMMARY_CHARS
+            selected = []
+            for m in reversed(body):
+                if budget <= 0:
+                    break
+                selected.append(m)
+                budget -= len(m.content or "")
+            selected = list(reversed(selected))
+            logger.warning(
+                "[App] 手动压缩 head 超长（%d 字符），仅摘要最近 %d 条（约 %d 字符）",
+                total_chars, len(selected), sum(len(m.content or "") for m in selected),
+            )
         instruction = (
             "请将以上全部对话历史压缩为一段精炼的中文摘要，作为后续工作的背景说明：\n"
             "保留已完成的决策与结论、修改过的文件清单、关键发现与未完成的任务，"
@@ -1152,14 +1182,22 @@ class AgentApp:
         )
         if focus:
             instruction += f"\n用户特别要求：摘要重点保留与以下关注点相关的内容：{focus}"
-        messages = ([system] if system else []) + body + [
+        messages = ([system] if system else []) + selected + [
             Message(role="user", content=instruction),
         ]
         try:
-            content, _, _ = await self.adapter.chat_stream(messages, [], None)
+            # 与自动压缩 (AgentLoop._summarize_history) 对齐：携带工具 schema，
+            # 避免模型在无工具上下文里误发工具调用而返回空正文
+            tools = self.build_registry().get_tools()
+            content, _, _ = await self.adapter.chat_stream(messages, tools, None)
         except Exception:
+            logger.exception("[App] 手动压缩摘要 LLM 调用失败")
             return None
-        return (content or "").strip() or None
+        summary = (content or "").strip()
+        if not summary:
+            logger.warning("[App] 手动压缩摘要返回空正文，会话保持不变")
+            return None
+        return summary
 
     def get_agent(self, agent_id: Optional[str] = None) -> AgentProfile:
         """获取 Agent 配置：不传则返回默认 build agent。"""

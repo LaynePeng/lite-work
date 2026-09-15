@@ -188,15 +188,21 @@ class LLMRegistry:
             self.apply_config(llm_config)
 
     def _apply_env_defaults(self) -> None:
-        """从环境变量兜底注入 API Key。"""
-        import os
+        """从环境变量兜底注入 API Key（仅当前为空时）。
 
+        优先级：配置文件 > CLI --api-key > 环境变量。此前实现是无条件覆盖，
+        导致设了 DEEPSEEK_API_KEY 的机器上配置文件里的 key 被环境变量顶掉
+        （且 _persist_config 会把环境变量值写回配置文件，污染用户真实 key）。
+        """
         for pid, meta in PROVIDER_META.items():
             env_key = meta.get("env_key")
-            if env_key:
-                val = os.environ.get(env_key, "").strip()
-                if val:
-                    self.providers[pid]["api_key"] = val
+            if not env_key:
+                continue
+            if self.providers.get(pid, {}).get("api_key"):
+                continue  # 已有配置值：配置优先，环境变量只兜底空位
+            val = os.environ.get(env_key, "").strip()
+            if val:
+                self.providers[pid]["api_key"] = val
 
     # ------------------------------------------------------------ 配置
 

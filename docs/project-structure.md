@@ -44,6 +44,22 @@ lite-work 项目的推荐组织方式：**明确的 AGENTS.md + 素材/产出物
 | `python scripts/archive_artifact.py --path 产出物/报告/x_v1.docx` | 旧版移入 `归档/YYYY-MM-DD_<原名>` 并更新 INDEX |
 | `python scripts/lint_artifacts.py [--project-root .]` | 检查补充文件违例（非零退出） |
 
+## 新建项目自动初始化
+
+桌面端「新建项目」入口在创建目录时即自动完成结构初始化（`素材/`、
+`产出物/`、品类目录、`INDEX.md`、`AGENTS.md`——由后端
+`litework/tools/project_scaffold.py` 执行，打包态可用）；「新建代码」入口
+**不**初始化结构、不生成 `AGENTS.md`，保持代码仓库干净。存量项目用上表的
+`scaffold.py` 补建即可（幂等）。
+
+## 项目类型（代码 / 项目）
+
+项目类型与 git 解耦，按目录内容启发式判定（`classify_project_kind`）：
+根目录有代码标记文件（`pyproject.toml` / `package.json` 等）→ 代码；
+有 `素材/` 或 `产出物/` → 项目；文档文件（docx/pdf/pptx/xlsx）多于代码文件
+→ 项目；仅 `.git` 的空仓库 → 代码兜底。最近项目列表可手动标记
+（行内 ⇄ 按钮），标记后锁定、不再被启发式覆盖。
+
 ## 与现有机制的衔接
 
 - `AGENTS.md` 会被 `SystemPromptBuilder` 自动注入系统提示（项目指令），
