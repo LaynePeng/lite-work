@@ -542,6 +542,9 @@ def _copy_plugin_entries(
     root: str, entries: List[Path], name: Optional[str], overwrite: bool = False,
 ) -> List[Dict[str, Any]]:
     """把一批插件条目复制到插件根目录，支持覆盖。"""
+    from .install_progress import STAGE_INSTALL, report
+
+    report(step=STAGE_INSTALL, message="安装插件…")
     os.makedirs(root, exist_ok=True)
     imported = []
     for cand in entries:
@@ -677,21 +680,52 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
     repo = repo.removesuffix(".git")
     # 子目录：github.com/{owner}/{repo}/tree/{branch}/{dir...}
     subpath = ""
+    branch = ""
     if len(parts) >= 5 and parts[2] == "tree":
+        branch = parts[3]
         subpath = "/".join(parts[4:])
+
+    # 优先「可续传」按文件下载（raw + Range + 持久缓存）：GitHub zipball 不支持
+    # Range、git clone 不能续传，慢网一次抖动就得整包重下。子目录安装走此路径，
+    # 失败再回退 zipball 全量下载。
+    if subpath:
+        try:
+            from .gh_fetch import fetch_subpath, default_cache_root
+
+            cached = fetch_subpath(
+                default_cache_root(config_dir), owner, repo, branch or "HEAD", subpath,
+                on_progress=lambda d, t: logger.info("[PluginLoader] 可续传下载 %s: %d/%d", subpath, d, t),
+            )
+            cached_path = Path(cached)
+            entries: List[Path] = (
+                [cached_path] if _is_plugin_module_root(cached_path) else _find_plugin_entries(cached_path)
+            )
+            if entries:
+                return _copy_plugin_entries(_plugin_root(config_dir), entries, name, overwrite)
+            logger.warning("[PluginLoader] 可续传下载未找到插件条目，回退 zipball: %s", subpath)
+        except Exception as exc:
+            logger.warning("[PluginLoader] 可续传下载失败，回退 zipball（%s）: %s", subpath, exc)
 
     api = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {"User-Agent": "lite-work-agent", "Accept": "application/vnd.github+json"}
     branch = ""
-    with httpx.Client(timeout=60, follow_redirects=True, headers=headers) as client:
-        if subpath:
-            meta = client.get(api).json()
-            branch = meta.get("default_branch") or "main"
-        zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
-        resp = client.get(zip_url)
-        if resp.status_code == 404:
-            raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
-        resp.raise_for_status()
+    # read 给足下载余量（zipball 可能较大），connect 快速失败避免慢网长时间挂起
+    timeout = httpx.Timeout(connect=8.0, read=120.0, write=10.0, pool=8.0)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            if subpath:
+                meta = client.get(api).json()
+                branch = meta.get("default_branch") or "main"
+            zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
+            resp = client.get(zip_url)
+    except httpx.TimeoutException as exc:
+        raise ValueError("下载插件超时（网络较慢或不可达），请检查网络后重试") from exc
+    except httpx.TransportError as exc:
+        raise ValueError(f"无法连接插件源（网络错误）：{exc}") from exc
+    if resp.status_code == 404:
+        raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
+    if resp.status_code >= 400:
+        raise ValueError(f"下载插件失败（HTTP {resp.status_code}）")
     with _zipfile.ZipFile(_io.BytesIO(resp.content)) as zf:
         names = zf.namelist()
         top_dir = names[0].split("/")[0] if names and "/" in names[0] else ""
@@ -761,15 +795,21 @@ def fetch_community_manifest(url: str = DEFAULT_COMMUNITY_URL) -> Dict[str, Any]
     else:
         raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{manifest_path}"
 
-    with httpx.Client(timeout=60, follow_redirects=True,
-                      headers={"User-Agent": "lite-work-agent"}) as client:
-        resp = client.get(raw_url)
-        if resp.status_code != 200:
-            raise ValueError(f"社区源未找到 manifest.json（{resp.status_code}）")
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            raise ValueError(f"manifest.json 解析失败: {exc}")
+    timeout = httpx.Timeout(connect=8.0, read=20.0, write=10.0, pool=8.0)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True,
+                          headers={"User-Agent": "lite-work-agent"}) as client:
+            resp = client.get(raw_url)
+    except httpx.TimeoutException as exc:
+        raise ValueError("拉取社区清单超时（网络较慢或不可达），请检查网络后重试") from exc
+    except httpx.TransportError as exc:
+        raise ValueError(f"无法连接社区源（网络错误）：{exc}") from exc
+    if resp.status_code != 200:
+        raise ValueError(f"社区源未找到 manifest.json（{resp.status_code}）")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ValueError(f"manifest.json 解析失败: {exc}")
     if not isinstance(data, dict):
         raise ValueError("manifest.json 格式错误（应为 JSON 对象）")
     return {

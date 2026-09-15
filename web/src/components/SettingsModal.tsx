@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import type { InstallJobStatus, InstallPluginPayload, InstallSkillPayload } from "../api";
 import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, ModelMetaStatus, PluginInfo, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
 
@@ -98,6 +99,40 @@ function fmtAge(seconds: number | null): string {
   return `${Math.round(hours / 24)} 天前`;
 }
 
+/** 安装进度卡：步骤链 + 下载进度条（可续传下载时显示已下载/总字节）。 */
+function InstallProgressCard({ job }: { job: InstallJobStatus | null }) {
+  if (!job) return null;
+  const running = job.status === "running";
+  const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
+  const title = running ? "安装中…" : job.status === "done" ? "安装完成" : "安装失败";
+  return (
+    <div className={`install-progress ${job.status}`}>
+      <div className="install-progress-head">
+        <span>{job.kind === "skill" ? "技能" : "插件"} · {title}</span>
+        <span className="install-progress-pct">{job.percent}%</span>
+      </div>
+      <div className="install-progress-bar">
+        <div className={`install-progress-fill ${job.status}`} style={{ width: `${job.percent}%` }} />
+      </div>
+      <div className="install-progress-steps">
+        {job.steps.map((s, i) => (
+          <span key={`${s}-${i}`}
+            className={i < job.step ? "done" : i === job.step ? "active" : ""}>
+            {i < job.step ? "✓ " : i === job.step ? "● " : "○ "}{s}
+          </span>
+        ))}
+      </div>
+      <div className="install-progress-msg">
+        {job.message}
+        {running && job.bytes_total > 0
+          ? ` · ${mb(job.bytes_done)}/${mb(job.bytes_total)} MB`
+          : ""}
+        {job.error ? ` · ${job.error}` : ""}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsModal({
   onClose,
   onSaved,
@@ -170,6 +205,8 @@ export default function SettingsModal({
   const [pluginMsg, setPluginMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // 同名插件已存在时覆盖安装（更新）
   const [pluginOverwrite, setPluginOverwrite] = useState(false);
+  // 安装任务进度（步骤 + 下载进度条）
+  const [installJob, setInstallJob] = useState<InstallJobStatus | null>(null);
   // 内置插件元信息（只读展示 + 社区版本对比）
   const [builtinPlugins, setBuiltinPlugins] = useState<BuiltinPluginInfo[]>([]);
   const [community, setCommunity] = useState<CommunityManifest | null>(null);
@@ -284,13 +321,38 @@ export default function SettingsModal({
     return { updates, fresh };
   }, [community, plugins, builtinPlugins]);
 
+  // 后台安装任务：轮询进度快照直到完成/失败
+  const pollInstallJob = useCallback(async (jobId: string): Promise<InstallJobStatus> => {
+    for (;;) {
+      const s = await api.installJob(jobId);
+      setInstallJob(s);
+      if (s.status === "done") return s;
+      if (s.status === "error") throw new Error(s.error || "安装失败");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }, []);
+
+  const runInstallJob = useCallback(async (
+    kind: "plugin" | "skill",
+    payload: InstallPluginPayload | InstallSkillPayload,
+  ): Promise<InstallJobStatus> => {
+    setInstallJob({
+      id: "", kind, steps: [], status: "running", step: 0, message: "准备中…",
+      files_done: 0, files_total: 0, bytes_done: 0, bytes_total: 0, percent: 0, error: "",
+    });
+    const { job_id } = kind === "plugin"
+      ? await api.startInstallPlugin(payload as InstallPluginPayload)
+      : await api.startInstallSkill(payload as InstallSkillPayload);
+    return pollInstallJob(job_id);
+  }, [pollInstallJob]);
+
   const installCollabMode = useCallback(async (name: string, version?: string) => {
     const src = communitySrc(name);
     if (!src) return;
     setCollabBusy(name);
     setCollabMsg(null);
     try {
-      await api.importPlugin({ source: src, name: undefined, overwrite: true, version });
+      await runInstallJob("plugin", { source: src, name: undefined, overwrite: true, version });
       // 安装后立即拉取新模式列表并自动选中新装的模式（本地覆盖版 source=plugin）
       const r = await api.collabModes();
       setCollabModes(r.modes);
@@ -303,7 +365,7 @@ export default function SettingsModal({
     } finally {
       setCollabBusy(null);
     }
-  }, [communitySrc, refreshPlugins]);
+  }, [communitySrc, refreshPlugins, runInstallJob]);
 
   // 社区技能过滤：只显示「未安装」和「已安装但社区有更新版」的
   // （更新检测依赖 SKILL.md frontmatter 的 version 字段，社区技能补上后自动生效）
@@ -483,10 +545,11 @@ export default function SettingsModal({
     const scope = window.prompt("导入到哪个范围？输入 workspace（需已打开项目）或 user", "workspace");
     if (!scope) return;
     void skillAction(async () => {
-      const r = await api.importSkill({ source, zip_base64: zipBase64, scope, name: undefined });
-      const names = r.skills.map((s) => s.name).join(", ");
+      const job = await runInstallJob("skill", { source, zip_base64: zipBase64, scope, name: undefined });
+      const skills = (job.result as (import("../types").SkillInfo & { deps?: import("../types").SkillDepsReport })[]) ?? [];
+      const names = skills.map((s) => s.name).join(", ");
       const depsLines: string[] = [];
-      for (const s of r.skills as (import("../types").SkillInfo & { deps?: import("../types").SkillDepsReport })[]) {
+      for (const s of skills) {
         if (!s.deps) continue;
         const parts: string[] = [];
         if (s.deps.pip) parts.push(s.deps.pip.ok ? "pip ✅" : "pip ❌");
@@ -541,8 +604,9 @@ export default function SettingsModal({
 
   const handlePluginImport = (source: string, overwrite: boolean, version?: string) => {
     void pluginAction(async () => {
-      const r = await api.importPlugin({ source, name: undefined, overwrite, version });
-      return `已导入: ${r.plugins.map((p) => p.name).join(", ")}`;
+      const job = await runInstallJob("plugin", { source, name: undefined, overwrite, version });
+      const names = (job.result as { name: string }[] | undefined)?.map((p) => p.name).join(", ") ?? "";
+      return `已导入: ${names}`;
     });
   };
 
@@ -551,8 +615,9 @@ export default function SettingsModal({
     reader.onload = () => {
       const base64 = (reader.result as string).split(",")[1] ?? "";
       void pluginAction(async () => {
-        const r = await api.importPlugin({ zip_base64: base64, name: undefined, overwrite });
-        return `已导入: ${r.plugins.map((p) => p.name).join(", ")}`;
+        const job = await runInstallJob("plugin", { zip_base64: base64, name: undefined, overwrite });
+        const names = (job.result as { name: string }[] | undefined)?.map((p) => p.name).join(", ") ?? "";
+        return `已导入: ${names}`;
       });
     };
     reader.readAsDataURL(file);
@@ -1553,6 +1618,7 @@ export default function SettingsModal({
               </p>
 
               {pluginMsg && <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>{pluginMsg.text}</div>}
+              <InstallProgressCard job={installJob} />
 
               {/* -------- 工具栏：手动导入 + 社区更新检查 -------- */}
               <div className="plugin-toolbar">
@@ -1749,9 +1815,10 @@ export default function SettingsModal({
                               <button className="btn-update" disabled={pluginBusy || !srcUrl}
                                 title="覆盖更新（保留本地 .env 配置）"
                                 onClick={() => void pluginAction(async () => {
-                                  const r = await api.importSkill({ source: srcUrl, scope: "user", overwrite: true });
+                                  const job = await runInstallJob("skill", { source: srcUrl, scope: "user", overwrite: true });
                                   refreshSkills();
-                                  return `已更新技能: ${r.skills.map((s) => s.name).join(", ")}`;
+                                  const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
+                                  return `已更新技能: ${names}`;
                                 })}>更新</button>
                             </div>
                           </div>
@@ -1774,9 +1841,10 @@ export default function SettingsModal({
                             <div className="skill-item-actions">
                               <button className="btn-test" disabled={pluginBusy || !srcUrl}
                                 onClick={() => void pluginAction(async () => {
-                                  const r = await api.importSkill({ source: srcUrl, scope: "user" });
+                                  const job = await runInstallJob("skill", { source: srcUrl, scope: "user" });
                                   refreshSkills();
-                                  return `已安装技能: ${r.skills.map((s) => s.name).join(", ")}`;
+                                  const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
+                                  return `已安装技能: ${names}`;
                                 })}>安装</button>
                             </div>
                           </div>

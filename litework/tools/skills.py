@@ -585,6 +585,9 @@ class SkillsTools:
 
     def _copy_skill_dir(self, src: Path, scope: str, name: Optional[str],
                         overwrite: bool = False) -> Dict[str, Any]:
+        from .install_progress import STAGE_INSTALL, report
+
+        report(step=STAGE_INSTALL, message="安装技能…")
         meta = parse_frontmatter((src / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
         self._validate_meta(meta, src.name)
         skill_name = _safe_name(name or str(meta.get("name") or src.name))
@@ -691,7 +694,27 @@ class SkillsTools:
         if parsed.fragment:
             branch = parsed.fragment.strip().strip("/")
 
-        # 优先使用 git clone（稳健、支持大仓库）
+        # 子路径安装（社区机制 tree/{branch}/{dir}）优先「可续传」按文件下载：
+        # raw + Range + 持久缓存，慢网可断点续传、跨重试不重下（GitHub 的 zipball
+        # 不支持 Range，git clone 也不能续传）。失败再回退 git clone / zip。
+        if subpath:
+            ref = branch or parts[3] or "HEAD"
+            try:
+                from .gh_fetch import fetch_subpath, default_cache_root
+
+                cached = fetch_subpath(
+                    default_cache_root(), owner, repo, ref, subpath,
+                    on_progress=lambda d, t: logger.info("[Skills] 可续传下载 %s: %d/%d", subpath, d, t),
+                )
+                candidates = self._find_skill_dirs(Path(cached))
+                if candidates:
+                    return [self._copy_skill_dir(c, scope, name if len(candidates) == 1 else None, overwrite)
+                            for c in candidates]
+                logger.warning("[Skills] 可续传下载未找到技能目录，回退 git/zip: %s", subpath)
+            except Exception as exc:
+                logger.warning("[Skills] 可续传下载失败，回退 git/zip（%s）: %s", subpath, exc)
+
+        # 回退：git clone（稳健、支持大仓库）；无 git 时用 zipball 流式下载
         git = shutil.which("git")
         if git:
             return self._import_from_github_git(git, url, owner, repo, branch, subpath, scope, name, overwrite)
@@ -701,25 +724,32 @@ class SkillsTools:
 
         headers = {"User-Agent": "lite-work-agent", "Accept": "application/vnd.github+json"}
         api = f"https://api.github.com/repos/{owner}/{repo}"
-        with httpx.Client(timeout=120, follow_redirects=True, headers=headers) as client:
-            if branch:
-                ref_resp = client.get(f"{api}/git/ref/heads/{branch}")
-                if ref_resp.status_code != 200:
-                    tag_resp = client.get(f"{api}/git/ref/tags/{branch}")
-                    if tag_resp.status_code != 200:
-                        raise ValueError(f"分支或标签不存在: {branch}")
-            elif subpath:
-                meta = client.get(api).json()
-                branch = meta.get("default_branch") or "main"
-            zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
-            with client.stream("GET", zip_url) as resp:
-                if resp.status_code == 404:
-                    raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
-                resp.raise_for_status()
-                tmp_zip = Path(tempfile.mkdtemp(prefix="litework-gh-")) / "repo.zip"
-                with open(tmp_zip, "wb") as f:
-                    for chunk in resp.iter_bytes(chunk_size=1024 * 256):
-                        f.write(chunk)
+        timeout = httpx.Timeout(connect=8.0, read=120.0, write=10.0, pool=8.0)
+        try:
+            with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                if branch:
+                    ref_resp = client.get(f"{api}/git/ref/heads/{branch}")
+                    if ref_resp.status_code != 200:
+                        tag_resp = client.get(f"{api}/git/ref/tags/{branch}")
+                        if tag_resp.status_code != 200:
+                            raise ValueError(f"分支或标签不存在: {branch}")
+                elif subpath:
+                    meta = client.get(api).json()
+                    branch = meta.get("default_branch") or "main"
+                zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
+                with client.stream("GET", zip_url) as resp:
+                    if resp.status_code == 404:
+                        raise ValueError(f"仓库不存在或为私有: {owner}/{repo}（暂不支持私仓）")
+                    if resp.status_code >= 400:
+                        raise ValueError(f"下载技能失败（HTTP {resp.status_code}）")
+                    tmp_zip = Path(tempfile.mkdtemp(prefix="litework-gh-")) / "repo.zip"
+                    with open(tmp_zip, "wb") as f:
+                        for chunk in resp.iter_bytes(chunk_size=1024 * 256):
+                            f.write(chunk)
+        except httpx.TimeoutException as exc:
+            raise ValueError("下载技能超时（网络较慢或不可达），请检查网络后重试") from exc
+        except httpx.TransportError as exc:
+            raise ValueError(f"无法连接技能源（网络错误）：{exc}") from exc
         try:
             with zipfile.ZipFile(tmp_zip) as zf:
                 results = self._import_zip_buffer(zf, scope, name, overwrite)
@@ -750,12 +780,29 @@ class SkillsTools:
         tmp = Path(tempfile.mkdtemp(prefix="litework-git-"))
         target_dir = tmp / "repo"
         try:
-            r = subprocess.run(
-                clone_args + [str(target_dir)],
-                capture_output=True, text=True, timeout=300,
-            )
-            if r.returncode != 0:
-                raise ValueError(f"git clone 失败: {r.stderr[:500]}")
+            # git clone 不支持传输中续传（中断即丢临时 pack），但可自动重试
+            # 兜住瞬时抖动；重试前清掉半成品目录（git clone 要求目标不存在）。
+            import time as _time
+
+            last_err = ""
+            attempt = 0
+            while True:
+                attempt += 1
+                if target_dir.exists():
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                try:
+                    r = subprocess.run(
+                        clone_args + [str(target_dir)],
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    if r.returncode == 0:
+                        break
+                    last_err = (r.stderr or "")[:500]
+                except subprocess.TimeoutExpired:
+                    last_err = "git clone 超时"
+                if attempt >= 3:
+                    raise ValueError(f"git clone 失败（已重试 3 次）: {last_err}")
+                _time.sleep(min(2 ** attempt, 10))
 
             # 处理子路径
             skill_root = target_dir

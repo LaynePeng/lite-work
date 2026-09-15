@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ...app import AgentApp
+from ..install_jobs import InstallJobRegistry
 from ..tasks import TaskManager
 
 
@@ -37,6 +38,7 @@ class ServerContext:
     app: AgentApp
     tasks: TaskManager
     auth: TokenAuth
+    jobs: InstallJobRegistry
 
     def check_auth(self, request: Request) -> None:
         denied = self.auth.check(request)

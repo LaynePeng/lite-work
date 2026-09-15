@@ -6527,3 +6527,78 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-secondary);
   line-height: 1.8;
 }
+
+/* ---- 安装进度卡（步骤 + 下载进度条） ---- */
+.install-progress {
+  border: 1px solid var(--border-1, #3a3a3a);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--bg-2);
+}
+
+.install-progress.error {
+  border-color: #a3372f;
+}
+
+.install-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 6px;
+}
+
+.install-progress-pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.install-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-3, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+}
+
+.install-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #3b82f6;
+  transition: width 0.25s ease;
+}
+
+.install-progress-fill.done {
+  background: #22c55e;
+}
+
+.install-progress-fill.error {
+  background: #ef4444;
+}
+
+.install-progress-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.install-progress-steps .active {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.install-progress-steps .done {
+  color: #22c55e;
+}
+
+.install-progress-msg {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+

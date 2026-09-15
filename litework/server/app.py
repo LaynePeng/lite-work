@@ -33,6 +33,7 @@ from .routers import (
     create_workspace_router,
 )
 from .routers.context import ServerContext, TokenAuth
+from .install_jobs import InstallJobRegistry
 from .tasks import TaskManager
 
 logger = logging.getLogger("litework.server")
@@ -113,7 +114,7 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     fast_app = FastAPI(title="lite-work", version=VERSION, lifespan=_lifespan)
     auth = TokenAuth(token)
     tasks = TaskManager(app)
-    ctx = ServerContext(app=app, tasks=tasks, auth=auth)
+    ctx = ServerContext(app=app, tasks=tasks, auth=auth, jobs=InstallJobRegistry())
 
     # 审批门统一 resolve 回调：无论用户确认还是超时拒绝都广播 approval:resolved。
     # 此前超时路径只打日志，前端审批卡会永远挂着（「干一会就停止」的表象之一）。

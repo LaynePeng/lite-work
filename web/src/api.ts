@@ -5,10 +5,58 @@
 import type { AgentInfo, AppConfig, FileDiffResponse, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, OutputItem, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
 
 const TIMEOUT = 15000;
+// 联网类操作（社区清单拉取 / 插件·技能下载安装）走单独的长超时：
+// 慢网下载 zipball 合法耗时远超 15s。后端已把网络调用移出事件循环并设了
+// connect/read 超时兜底，这里给足余量，避免「后端还在下、前端先中断」。
+const NETWORK_TIMEOUT = 120000;
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
+/** 安装任务进度快照（/api/install/jobs/{id}）。 */
+export interface InstallJobStatus {
+  id: string;
+  kind: "plugin" | "skill";
+  steps: string[];
+  status: "running" | "done" | "error";
+  step: number;
+  message: string;
+  files_done: number;
+  files_total: number;
+  bytes_done: number;
+  bytes_total: number;
+  percent: number;
+  error: string;
+  result?: unknown;
+}
+
+export interface InstallPluginPayload {
+  source?: string;
+  zip_base64?: string;
+  name?: string;
+  overwrite?: boolean;
+  version?: string;
+}
+
+export interface InstallSkillPayload {
+  source?: string;
+  zip_base64?: string;
+  scope?: string;
+  name?: string;
+  overwrite?: boolean;
+}
+
+/** 把底层异常翻译成用户可读的中文提示（尤其 AbortError 的原始英文串）。 */
+function friendlyError(err: unknown, timeoutMs: number): Error {
+  if (err instanceof DOMException && err.name === "AbortError") {
+    return new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）：网络较慢或服务无响应，请检查网络后重试`);
+  }
+  if (err instanceof TypeError) {
+    return new Error("网络连接失败：请检查网络后重试");
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
@@ -24,6 +72,8 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
       throw new Error(`${res.status} ${detail}`);
     }
     return res.json() as Promise<T>;
+  } catch (err) {
+    throw friendlyError(err, timeoutMs);
   } finally {
     clearTimeout(timer);
   }
@@ -177,7 +227,7 @@ export const api = {
   importSkill: (payload: { source?: string; zip_base64?: string; scope: string; name?: string; overwrite?: boolean }) =>
     req<{ skills: import("./types").SkillInfo[] }>("/api/skills/import", {
       method: "POST", body: JSON.stringify(payload),
-    }),
+    }, NETWORK_TIMEOUT),
   updateSkill: (name: string, description: string, scope: string) =>
     req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}`, {
       method: "PUT", body: JSON.stringify({ description, scope }),
@@ -193,13 +243,22 @@ export const api = {
   plugins: () => req<{ plugins: import("./types").PluginInfo[] }>("/api/plugins"),
   pluginsBuiltin: () => req<{ plugins: import("./types").BuiltinPluginInfo[] }>("/api/plugins/builtin"),
   pluginsCommunity: (url?: string) =>
-    req<import("./types").CommunityManifest>(`/api/plugins/community${url ? `?url=${encodeURIComponent(url)}` : ""}`),
+    req<import("./types").CommunityManifest>(
+      `/api/plugins/community${url ? `?url=${encodeURIComponent(url)}` : ""}`, undefined, NETWORK_TIMEOUT),
   importPlugin: (payload: { source?: string; zip_base64?: string; name?: string; overwrite?: boolean; version?: string }) =>
     req<{ plugins: import("./types").PluginInfo[] }>("/api/plugins/import", {
       method: "POST", body: JSON.stringify(payload),
-    }),
+    }, NETWORK_TIMEOUT),
   deletePlugin: (name: string) =>
     req<{ ok: boolean; name: string; path: string }>(`/api/plugins/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // 后台安装任务（步骤 + 下载进度）：启动后返回 job_id，轮询 installJob 取进度
+  startInstallPlugin: (payload: InstallPluginPayload) =>
+    req<{ job_id: string }>("/api/install/plugin", { method: "POST", body: JSON.stringify(payload) }),
+  startInstallSkill: (payload: InstallSkillPayload) =>
+    req<{ job_id: string }>("/api/install/skill", { method: "POST", body: JSON.stringify(payload) }),
+  installJob: (id: string) =>
+    req<InstallJobStatus>(`/api/install/jobs/${encodeURIComponent(id)}`),
 
   // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（AGI 通用入口）
 
