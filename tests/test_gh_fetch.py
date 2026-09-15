@@ -115,3 +115,46 @@ def test_too_many_files_error_message():
     assert "1000" in str(err)
     assert err.count == 12480
     assert err.max_files == 1000
+
+
+def test_cached_files_not_double_counted(monkeypatch, tmp_path):
+    """缓存命中的文件只计一次（回归：双重计数导致 829/417）。"""
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    tree = {
+        "truncated": False,
+        "tree": [
+            {"type": "blob", "path": f"skills/x/f{i}.txt", "size": 10, "mode": "100644"}
+            for i in range(3)
+        ],
+    }
+    _patch_api(monkeypatch, tree)
+
+    downloads = []
+    done = []
+
+    def fake_download(owner, repo, commit, path, dest, expected_size, retries, on_bytes=None):
+        # 模拟真实 _download_one 的缓存命中行为：大小匹配时跳过早返回
+        if os.path.isfile(dest) and (expected_size is None or os.path.getsize(dest) == expected_size):
+            return
+        downloads.append(path)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write("0123456789")
+
+    monkeypatch.setattr(gh_fetch, "_download_one", fake_download)
+
+    # 第一次：预扫描无缓存，全部真实下载，每个文件 file_complete() 计一次
+    gh_fetch.fetch_subpath(str(tmp_path), "o", "r", "main", "skills/x",
+                           max_files=10, on_progress=lambda d, t: done.append((d, t)))
+    assert downloads == [f"skills/x/f{i}.txt" for i in range(3)]
+    assert done[-1] == (3, 3)  # 结束进度正好 3/3，无超计
+
+    # 第二次：预扫描全部缓存命中（files=1 预置），_work 应跳过 file_complete()
+    downloads.clear()
+    done.clear()
+    gh_fetch.fetch_subpath(str(tmp_path), "o", "r", "main", "skills/x",
+                           max_files=10, on_progress=lambda d, t: done.append((d, t)))
+    assert downloads == []  # 全部命中缓存，不再真实下载
+    assert done[-1] == (3, 3)  # 仍是 3/3，没有变成 6/3

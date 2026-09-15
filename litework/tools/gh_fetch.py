@@ -301,6 +301,11 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
 
     def _work(item) -> None:
         entry, dest = item
+        # 预扫描已计入完整缓存文件数（preset files=1），此处
+        # 跳过 file_complete() 避免双重计数（双倍计 829/417）。
+        already_cached = os.path.isfile(dest) and (
+            entry.get("size") is None or os.path.getsize(dest) == int(entry.get("size"))
+        )
         _download_one(owner, repo, commit, entry["path"], dest, entry.get("size"), retries,
                       on_bytes=tracker.add_bytes)
         if entry.get("mode") == "100755":
@@ -308,7 +313,8 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
                 os.chmod(dest, 0o755)
             except OSError:
                 pass
-        tracker.file_complete()
+        if not already_cached:
+            tracker.file_complete()
         if on_progress is not None:
             try:
                 on_progress(tracker.files_done, tracker.files_total)
