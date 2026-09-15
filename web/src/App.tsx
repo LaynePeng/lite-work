@@ -18,6 +18,7 @@ import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
 import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
+import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 
 interface StreamingState {
   items: WorkItem[];
@@ -581,16 +582,6 @@ export default function App() {
     []
   );
 
-  // 代码/文本类扩展名：文件树点击 → 内置 FileViewer 查看；其余（办公/媒体/压缩包等）
-  // → 调系统默认应用打开（覆盖不了那么多文件类型，交给系统）
-  const TEXT_LIKE_EXT = new Set([
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
-    ".css", ".scss", ".less", ".html", ".htm", ".xml", ".json", ".yaml", ".yml", ".toml",
-    ".md", ".markdown", ".txt", ".log", ".sh", ".bash", ".zsh", ".sql", ".rb", ".swift",
-    ".kt", ".svelte", ".vue", ".astro", ".ini", ".cfg", ".conf", ".env", ".gitignore",
-    ".puml", ".plantuml", ".mmd", ".mermaid", ".csv", ".tsv",
-  ]);
-
   // 双击目录/工作区根：在系统文件管理器中打开（Electron shell.openPath 对目录即打开 Finder/资源管理器）
   const openDirInSystem = useCallback(async (dirPath: string) => {
     const bridge = window.liteWork;
@@ -605,18 +596,23 @@ export default function App() {
     );
   }, [status?.workspace]);
 
-  const openFileTab = useCallback(async (filePath: string) => {
-    const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
-    const isTextLike = TEXT_LIKE_EXT.has(ext) || !filePath.includes(".");
-
-    // 非代码/文本文件：桌面端调系统默认应用打开
-    if (!isTextLike) {
-      const bridge = window.liteWork;
-      if (bridge?.openFile) {
-        const r = await bridge.openFile(filePath);
-        if (!r.ok) window.alert(`无法打开文件：${r.error ?? filePath}`);
+  // 打开文件页签：目标判定见 lib/fileOpen.ts（markdown 优先系统默认程序，
+  // 失败静默回退内置查看器；其余文本内置、非文本桌面走系统/浏览器提示下载）
+  const openFileTab = useCallback(async (filePath: string, opts?: { forceBuiltin?: boolean }) => {
+    const bridge = window.liteWork;
+    const target = resolveOpenTarget(filePath, {
+      hasBridge: !!bridge?.openFile,
+      forceBuiltin: opts?.forceBuiltin,
+    });
+    if (target === "system") {
+      const r = await bridge!.openFile!(filePath);
+      if (r.ok) return;
+      // markdown（文本类）：系统无默认程序 → 静默回退内置查看器
+      if (!isTextLikePath(filePath)) {
+        window.alert(`无法打开文件：${r.error ?? filePath}`);
         return;
       }
+    } else if (target === "unsupported") {
       window.alert(
         `「${baseName(filePath)}」不是文本类文件。\n` +
         "桌面应用中将调用系统默认程序打开；当前浏览器模式不支持，请下载后查看" +
@@ -2020,7 +2016,7 @@ export default function App() {
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
-        onFileOpen={(p) => void openFileTab(p)}
+        onFileOpen={(p, opts) => void openFileTab(p, opts)}
         onDirOpen={(p) => void openDirInSystem(p)}
       />
       </ErrorBoundary>

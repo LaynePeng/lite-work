@@ -9,12 +9,18 @@ import AppIcon from "./AppIcon";
 import TerminalPanel from "./TerminalPanel";
 import type { OutputItem, RecentProject, SessionInfo, TreeEntry } from "../types";
 import { baseName } from "../lib/path";
+import { isTextLikePath, SYSTEM_FIRST_EXT } from "../lib/fileOpen";
 
 export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
 
+export interface OpenFileOptions {
+  /** 强制用内置查看器（右键「用内置查看」），绕过 markdown 的系统优先规则 */
+  forceBuiltin?: boolean;
+}
+
 // ---------------------------------------------------------------- 目录树
 
-function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: string; revision: number; onFileOpen?: (path: string) => void; onDirOpen?: (path: string) => void }) {
+function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: string; revision: number; onFileOpen?: (path: string, opts?: OpenFileOptions) => void; onDirOpen?: (path: string) => void }) {
   const [dirs, setDirs] = useState<Map<string, TreeEntry[]>>(new Map());
   const [open, setOpen] = useState<Set<string>>(new Set([""]));
   const [branch, setBranch] = useState<string | null>(null);
@@ -114,6 +120,19 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
     setMenu(null);
     setRenamingPath(path);
     setRenameValue(name);
+  };
+
+  /** 右键「用系统默认程序打开」：桌面端 shell.openPath；浏览器提示不支持。 */
+  const openWithSystem = (path: string, name: string) => {
+    setMenu(null);
+    const bridge = window.liteWork;
+    if (bridge?.openFile) {
+      void bridge.openFile(path).then((r) => {
+        if (!r.ok) window.alert(`无法打开：${r.error ?? name}`);
+      });
+    } else {
+      window.alert("用系统默认程序打开仅支持桌面应用。");
+    }
   };
 
   /** 提交重命名：成功刷新目录树，失败提示（扩展名/重名等约束由后端返回）。 */
@@ -225,12 +244,26 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen }: { workspace: s
         <div className="file-tree">{renderNodes("", 0)}</div>
       )}
 
-      {/* 右键菜单：重命名 / 删除（工作区文件简单管理） */}
+      {/* 右键菜单：重命名 / 删除 / 打开方式（工作区文件简单管理） */}
       {menu && (
         <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
           <button className="context-menu-item" onClick={() => startRename(menu.path, menu.name)}>
             ✏ 重命名
           </button>
+          <button className="context-menu-item" onClick={() => openWithSystem(menu.path, menu.name)}>
+            🖥 用系统默认程序打开
+          </button>
+          {isTextLikePath(menu.path) && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                onFileOpen?.(menu.path, { forceBuiltin: true });
+                setMenu(null);
+              }}
+            >
+              👁 用内置查看
+            </button>
+          )}
           <button className="context-menu-item danger" onClick={() => removeFile(menu.path, menu.name)}>
             🗑 删除
           </button>
@@ -298,7 +331,18 @@ function OutputPreview({ revision }: { revision: number }) {
     if (revision > 0) void refresh();
   }, [revision, refresh]);
 
-  const openPreview = useCallback(async (path: string) => {
+  const openPreview = useCallback(async (path: string, opts?: OpenFileOptions) => {
+    // markdown：桌面端优先系统默认程序（与文件树同规则）；失败/浏览器静默回退内置预览
+    if (!opts?.forceBuiltin) {
+      const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+      if (SYSTEM_FIRST_EXT.has(ext)) {
+        const bridge = window.liteWork;
+        if (bridge?.openFile) {
+          const r = await bridge.openFile(path);
+          if (r.ok) return;
+        }
+      }
+    }
     setPreviewPath(path);
     setPreviewLoading(true);
     setPreviewError("");
@@ -503,11 +547,38 @@ function OutputPreview({ revision }: { revision: number }) {
         </div>
       )}
 
-      {/* 右键菜单：删除 / 重命名（产出物·素材文件的简单管理） */}
+      {/* 右键菜单：删除 / 重命名 / 打开方式（产出物·素材文件的简单管理） */}
       {menu && (
         <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
           <button className="context-menu-item" onClick={() => startRename(menu.item)}>
             ✏ 重命名
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              const it = menu.item;
+              setMenu(null);
+              const bridge = window.liteWork;
+              if (bridge?.openFile) {
+                void bridge.openFile(it.path).then((r) => {
+                  if (!r.ok) window.alert(`无法打开：${r.error ?? it.name}`);
+                });
+              } else {
+                window.alert("用系统默认程序打开仅支持桌面应用。");
+              }
+            }}
+          >
+            🖥 用系统默认程序打开
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              const it = menu.item;
+              setMenu(null);
+              void openPreview(it.path, { forceBuiltin: true });
+            }}
+          >
+            👁 用内置查看
           </button>
           <button className="context-menu-item danger" onClick={() => removeItem(menu.item)}>
             🗑 删除
@@ -639,7 +710,7 @@ export default function Sidebar({
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
-  onFileOpen?: (path: string) => void;
+  onFileOpen?: (path: string, opts?: OpenFileOptions) => void;
   onDirOpen?: (path: string) => void;
 }) {
   // 当前项目显示名：路径末段（兼容 / 与 \）；未打开项目时由 App 层保证不进入 sessions 视图
