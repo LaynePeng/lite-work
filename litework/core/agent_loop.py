@@ -810,13 +810,24 @@ class AgentLoop:
 
         duration_ms = int((time.time() - start_time) * 1000)
 
-        # 4. afterTool 管道（结果修饰）
+        # 4. afterTool 管道（结果修饰）：post-processing hook 不能无限等待——
+        # 卡住的 hook 会把整条工具链挂死（tool:after_execute 永不发出，前端
+        # 工具卡永远「运行中」）。兜底上限跟随该工具自身的 effective_timeout
+        # （工具允许跑多久，结果修饰就允许多久），不额外一刀切收紧。
         try:
-            post = await self.kernel.after_tool.run(
-                self.kernel.ctx,
-                {"toolName": tool_name, "result": result_text, "args": args},
+            post = await asyncio.wait_for(
+                self.kernel.after_tool.run(
+                    self.kernel.ctx,
+                    {"toolName": tool_name, "result": result_text, "args": args},
+                ),
+                timeout=effective_timeout,
             )
             result_text = post.get("result", result_text)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[AgentLoop] afterTool hook 超时（%.0fs，同工具上限），跳过结果修饰: %s",
+                effective_timeout, tool_name,
+            )
         except Exception:
             pass
 
@@ -1072,6 +1083,9 @@ class AgentLoop:
                 "obs_saved_tokens": self._mech_obs_saved_tokens,
                 "obs_packed": self._mech_obs_packed,
                 "reducer_saved_tokens": self._mech_reducer_saved_tokens,
+                # reducer 是 opt-in（config.reducer_model 为空即停用）：
+                # 前端靠这个字段区分「未启用」和「启用了但暂无节省」
+                "reducer_enabled": self.reducer_adapter is not None,
                 "compaction_reason": self._compaction_reason,
             },
             "task": {

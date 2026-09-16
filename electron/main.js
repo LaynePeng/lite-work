@@ -115,6 +115,18 @@ function createWindow(url) {
     shell.openExternal(target);
     return { action: "deny" };
   });
+  // 整个应用是"一个大 Chrome"：渲染层里的 <a href> 点击属于当前窗口导航
+  // （不走 setWindowOpenHandler），不拦截就会把整个应用页面替换成外部网页
+  // 且无法返回。应用自身来源之外的一切导航一律转交系统默认浏览器。
+  const appOrigin = (() => { try { return new URL(url).origin; } catch { return ""; } })();
+  window.webContents.on("will-navigate", (event, target) => {
+    let sameOrigin = false;
+    try { sameOrigin = !!appOrigin && new URL(target).origin === appOrigin; } catch { /* 非法 URL 也拦 */ }
+    if (sameOrigin) return;
+    event.preventDefault();
+    shell.openExternal(target);
+    writeLog("info", "外部链接已转交系统浏览器:", target);
+  });
   // preload 注入失败时输出错误，便于排查
   window.webContents.on("preload-error", (event, preloadPath, error) => {
     writeLog("error", `preload 加载失败: ${preloadPath}`, error.message);

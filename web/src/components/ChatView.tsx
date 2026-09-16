@@ -47,7 +47,28 @@ function ToolIcon({ name }: { name: string }) {
 function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{
+          // 链接点击 = Electron 当前窗口导航 = 整个应用被外部页面替换。
+          // 一律 preventDefault：http(s)/mailto 走 window.open（主进程
+          // setWindowOpenHandler 转交系统默认浏览器），其余链接忽略。
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              onClick={(e) => {
+                e.preventDefault();
+                const h = href ?? "";
+                if (/^(https?:|mailto:)/i.test(h)) window.open(h, "_blank");
+              }}
+              title={href}
+            >
+              {children}
+            </a>
+          ),
+        }}
+      >
         {text}
       </ReactMarkdown>
     </div>
@@ -55,6 +76,23 @@ function Markdown({ text }: { text: string }) {
 }
 
 // ---------------------------------------------------------------- 工具卡片
+
+/** 运行中工具的实时已用时：自驱动 1s 重渲染（只重渲染本组件，不拖动整棵聊天树）。
+ *  ≥60s 变黄提示「运行较久」——工具超时上限 120s，超时会被后端强制终止。 */
+function ToolElapsed({ since }: { since: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => tick((v) => v + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const sec = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  const slow = sec >= 60;
+  return (
+    <span className={`tool-status running ${slow ? "tool-slow" : ""}`} title={slow ? "运行较久：工具超时上限 120s，超时会被强制终止" : undefined}>
+      ⏱ {sec}s{slow ? " · 运行较久" : ""}
+    </span>
+  );
+}
 
 function ToolCard({ card }: { card: ToolCardInfo }) {
   const important = card.name === "execute_command" || card.name.startsWith("mcp_") || isFileDiff(card.result ?? "") || card.status === "error" || card.status === "cancelled";
@@ -76,7 +114,7 @@ function ToolCard({ card }: { card: ToolCardInfo }) {
         <ToolIcon name={card.name} />
         <span className="tool-name">{card.name}</span>
         <span className="tool-args-preview">{argsPreview.slice(0, 120)}</span>
-        {card.status === "running" && <span className="tool-status running">运行中…</span>}
+        {card.status === "running" && (card.startedAt ? <ToolElapsed since={card.startedAt} /> : <span className="tool-status running">运行中…</span>)}
         {card.status === "done" && <span className="tool-status done">✓ {card.durationMs !== undefined ? `${card.durationMs}ms` : "完成"}</span>}
         {card.status === "cancelled" && <span className="tool-status cancelled">已取消</span>}
         {card.status === "error" && <span className="tool-status error">执行异常</span>}
@@ -384,6 +422,8 @@ export default function ChatView({
   onStop,
   onApprove,
   currentAgent,
+  unfinished,
+  onContinue,
   foldTurns = FOLD_THRESHOLD,
   foldMessages = FOLD_MESSAGES,
 }: {
@@ -404,6 +444,10 @@ export default function ChatView({
   onStop: () => void;
   onApprove: (approvalId: string, approved: boolean, remember?: boolean) => void;
   currentAgent: string;
+  /** 任务结束时 TODO 仍有未完成项（展示「继续」按钮） */
+  unfinished?: boolean;
+  /** 点击「继续」按钮：续发推进指令 */
+  onContinue?: () => void;
   /** 展示折叠阈值（轮数）——可在设置中配置 */
   foldTurns?: number;
   /** 展示折叠阈值（消息条数）：高工具密度会话里 1 轮可含几十张工具卡片，
@@ -555,6 +599,15 @@ export default function ChatView({
                   <span className="subagent-record-task" title={r.task}>{r.task}</span>
                 </div>
               ))}
+            </div>
+          )}
+          {/* 自动继续（/continue）关闭时：任务结束且 TODO 有未完成项 → 手动续推按钮 */}
+          {unfinished && !running && onContinue && (
+            <div className="continue-row">
+              <button className="btn-continue" onClick={onContinue}
+                title="模型提前收尾但 TODO 仍有未完成项；点击继续推进（或 /continue on 开启自动续推）">
+                ⏭ 继续执行未完成的任务
+              </button>
             </div>
           )}
         </div>

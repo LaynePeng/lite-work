@@ -255,4 +255,28 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=404, detail="安装任务不存在")
         return snap
 
+    @router.post("/api/install/jobs/{job_id}/pause")
+    def install_job_pause(job_id: str, request: Request):
+        """暂停安装：下载线程停在协作检查点，断点保留，可 resume 继续。"""
+        ctx.check_auth(request)
+        if not ctx.jobs.request_pause(job_id):
+            raise HTTPException(status_code=409, detail="任务不在运行中，无法暂停")
+        return {"ok": True, "status": "paused"}
+
+    @router.post("/api/install/jobs/{job_id}/resume")
+    def install_job_resume(job_id: str, request: Request):
+        """恢复已暂停的安装。"""
+        ctx.check_auth(request)
+        if not ctx.jobs.request_resume(job_id):
+            raise HTTPException(status_code=409, detail="任务不在暂停状态")
+        return {"ok": True, "status": "running"}
+
+    @router.post("/api/install/jobs/{job_id}/cancel")
+    def install_job_cancel(job_id: str, request: Request):
+        """取消安装：worker 在下一个检查点退出，并清理下载缓存（含断点 .part）。"""
+        ctx.check_auth(request)
+        if not ctx.jobs.request_cancel(job_id):
+            raise HTTPException(status_code=409, detail="任务已结束，无法取消")
+        return {"ok": True, "status": "cancelling"}
+
     return router

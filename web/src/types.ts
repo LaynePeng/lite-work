@@ -166,6 +166,9 @@ export interface AppConfig {
   max_zip_size_mb?: number;
   /** triggers 匹配模式：substring | advanced */
   skill_trigger_mode?: "substring" | "advanced";
+  /** 证据收据 reducer：小模型名（空=停用）；provider 留空用当前默认供应商 */
+  reducer_model?: string;
+  reducer_provider?: string;
   /** 聊天区展示折叠阈值（轮数/消息数任一超限即折叠；数据不删，仅 UI 折叠） */
   chat_fold_turns?: number;
   chat_fold_messages?: number;
@@ -231,6 +234,8 @@ export interface ContextMechanisms {
   obs_packed: number;
   /** 证据收据：压缩省下的 tokens */
   reducer_saved_tokens: number;
+  /** 证据收据是否启用（opt-in：config.reducer_model 为空即停用） */
+  reducer_enabled?: boolean;
   /** 最近一次压缩决策理由（economics/window_protection/deferred_economic…） */
   compaction_reason: string | null;
 }
@@ -433,6 +438,8 @@ export interface ToolCardInfo {
   args: unknown;
   status: "running" | "done" | "cancelled" | "error";
   durationMs?: number;
+  /** 工具开始执行的本地时间戳（ms）：运行中卡片显示实时已用时 */
+  startedAt?: number;
   result?: string;
   callId?: string;
   subagent?: SubAgentProgress;
@@ -560,6 +567,11 @@ export interface ChatSessionState {
   loopEnabled?: boolean;
   loopMax?: number;
   loopCount?: number;
+  /** 自动继续（/continue）：任务结束后 TODO 有未完成项 → 自动续推（上限 N 轮） */
+  autoContinue?: boolean;
+  autoContinueCount?: number;
+  /** 任务结束时 TODO 仍有未完成项（未开 autoContinue 时展示「继续」按钮） */
+  unfinished?: boolean;
   pendingQueue: string[];
 }
 

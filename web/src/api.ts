@@ -18,7 +18,7 @@ export interface InstallJobStatus {
   id: string;
   kind: "plugin" | "skill";
   steps: string[];
-  status: "running" | "done" | "error";
+  status: "running" | "paused" | "cancelling" | "cancelled" | "done" | "error";
   step: number;
   message: string;
   files_done: number;
@@ -262,6 +262,11 @@ export const api = {
     req<{ job_id: string }>("/api/install/skill", { method: "POST", body: JSON.stringify(payload) }),
   installJob: (id: string) =>
     req<InstallJobStatus>(`/api/install/jobs/${encodeURIComponent(id)}`),
+  // 安装任务控制：pause=暂停（断点保留） / resume=继续 / cancel=取消并清理下载缓存
+  installJobControl: (id: string, action: "pause" | "resume" | "cancel") =>
+    req<{ ok: boolean; status: string }>(
+      `/api/install/jobs/${encodeURIComponent(id)}/${action}`, { method: "POST" }
+    ),
 
   // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（AGI 通用入口）
 

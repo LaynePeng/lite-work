@@ -34,7 +34,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
-from .install_progress import STAGE_CONNECT, STAGE_DOWNLOAD, STAGE_LIST, get_progress
+from .install_progress import (
+    STAGE_CONNECT,
+    STAGE_DOWNLOAD,
+    STAGE_LIST,
+    InstallCancelled,
+    InstallControl,
+    get_install_control,
+    get_progress,
+)
 
 logger = logging.getLogger("litework.gh_fetch")
 
@@ -113,11 +121,13 @@ def _api_get(client, url: str, token: str) -> Dict:
 
 def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
                   expected_size: Optional[int], retries: int,
-                  on_bytes: Optional[Callable[[int], None]] = None) -> None:
+                  on_bytes: Optional[Callable[[int], None]] = None,
+                  control: Optional[InstallControl] = None) -> None:
     """下载单个文件到 dest，支持断点续传（`.part` 累积 + Range）。
 
     - 目标已完整（大小匹配）→ 直接跳过；
-    - 失败按指数退避重试，重试时从已下载字节数继续（raw 支持 Range）。
+    - 失败按指数退避重试，重试时从已下载字节数继续（raw 支持 Range）；
+    - control（可选）：暂停/取消协作检查点，取消抛 InstallCancelled。
     """
     import httpx
 
@@ -130,7 +140,9 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
     last_exc: Optional[BaseException] = None
     for attempt in range(1, retries + 1):
         try:
-            _resume_download(url, part, expected_size, on_bytes)
+            if control is not None:
+                control.checkpoint()
+            _resume_download(url, part, expected_size, on_bytes, control=control)
             if os.path.isfile(part):
                 os.replace(part, dest)
             elif not os.path.isfile(dest):
@@ -139,6 +151,8 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
                 open(dest, "wb").close()
             return
         except Exception as exc:  # 网络/超时/不完整 → 退避重试
+            if isinstance(exc, InstallCancelled):
+                raise
             last_exc = exc
             if attempt < retries:
                 time.sleep(min(2 ** attempt, 10))
@@ -146,7 +160,8 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
 
 
 def _resume_download(url: str, part: str, expected_size: Optional[int],
-                     on_bytes: Optional[Callable[[int], None]] = None) -> None:
+                     on_bytes: Optional[Callable[[int], None]] = None,
+                     control: Optional[InstallControl] = None) -> None:
     import httpx
 
     offset = os.path.getsize(part) if os.path.isfile(part) else 0
@@ -171,6 +186,9 @@ def _resume_download(url: str, part: str, expected_size: Optional[int],
                     f.write(chunk)
                     if on_bytes is not None:
                         on_bytes(len(chunk))
+                    if control is not None:
+                        # 每个 chunk 一个协作检查点：暂停阻塞、取消立即中断
+                        control.checkpoint()
     if expected_size is not None and os.path.getsize(part) != expected_size:
         raise IOError(
             f"下载不完整: {url}（{os.path.getsize(part)}/{expected_size}）"
@@ -234,7 +252,8 @@ class _Tracker:
 def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str,
                   *, retries: int = 4, max_workers: int = 8,
                   max_files: Optional[int] = None,
-                  on_progress: Optional[Callable[[int, int], None]] = None) -> str:
+                  on_progress: Optional[Callable[[int, int], None]] = None,
+                  control: Optional[InstallControl] = None) -> str:
     """把仓库子目录抓到缓存，返回缓存中该子目录的本地路径。
 
     真正「可续」：文件级缓存 + 单文件 Range 续传，跨重试/重启不重复下载。
@@ -242,15 +261,23 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
 
     max_files：按文件下载的文件数上限（None → 环境变量/默认值）；
     超过抛 TooManyFilesError，调用方应回退 git clone / zipball 整包下载。
+
+    control：暂停/取消控制（None → 从 contextvar 取，见 install_progress）。
+    取消时抛 InstallCancelled，并**删除本 repo+commit 的下载缓存**——
+    用户明确要求重新来，断点不保留（区别于失败重试）。
     """
     import httpx
+    import shutil
 
     # 在后台线程入口捕获回调，显式传给下载 worker（contextvar 不跨线程）
     emit = get_progress()
+    ctrl = control if control is not None else get_install_control()
     subpath = subpath.strip("/")
     if emit is not None:
         emit({"step": STAGE_CONNECT, "message": "连接仓库…",
               "bytes_done": 0, "bytes_total": 0})
+    if ctrl is not None:
+        ctrl.checkpoint()
     token = _token()
     with httpx.Client(timeout=_timeout(), follow_redirects=True) as client:
         commit = _api_get(client, f"{_API_BASE}/repos/{owner}/{repo}/commits/{ref or 'HEAD'}", token).get("sha", "")
@@ -307,7 +334,7 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
             entry.get("size") is None or os.path.getsize(dest) == int(entry.get("size"))
         )
         _download_one(owner, repo, commit, entry["path"], dest, entry.get("size"), retries,
-                      on_bytes=tracker.add_bytes)
+                      on_bytes=tracker.add_bytes, control=ctrl)
         if entry.get("mode") == "100755":
             try:
                 os.chmod(dest, 0o755)
@@ -321,8 +348,15 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
             except Exception:
                 pass
 
-    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        futures = [pool.submit(_work, item) for item in work_items]
-        for fut in as_completed(futures):
-            fut.result()  # 任一失败即抛出（缓存保留，重试可从断点续）
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+            futures = [pool.submit(_work, item) for item in work_items]
+            for fut in as_completed(futures):
+                fut.result()  # 任一失败即抛出（失败重试保留缓存，可从断点续）
+    except InstallCancelled:
+        # 用户取消：删除该 repo+commit 的全部下载缓存（含 .part 断点），
+        # 「重新搞」从零开始。仅清本任务的缓存目录，不动其他任务/其他仓库。
+        shutil.rmtree(base, ignore_errors=True)
+        logger.info("[gh_fetch] 已取消并清理下载缓存: %s", base)
+        raise
     return target_root

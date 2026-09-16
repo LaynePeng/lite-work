@@ -52,6 +52,13 @@ class ToolRegistry:
             result: Any = handler(args)
             if asyncio.iscoroutine(result):
                 result = await result
+            elif callable(result):
+                # 同步 handler 一律丢线程池：阻塞实现（长 CPU / 同步 I/O /
+                # 卡住的子进程等待）不再冻住事件循环——否则 SSE 心跳、HTTP
+                # 服务全部无响应，且 agent_loop 的 wait_for 超时永远无法触发
+                # （事件循环线程被占住，超时协程得不到调度）。这是「调用工具
+                # 整个应用卡死」类问题的架构级兜底。
+                result = await asyncio.to_thread(result)
             return result
         except asyncio.CancelledError:
             raise

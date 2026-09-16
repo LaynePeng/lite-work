@@ -43,6 +43,11 @@ const OFFICE_TOUCH_TOOLS = new Set([
 // 低频即可（实时路径仍是 SSE approval:request 事件）。
 const PENDING_APPROVAL_POLL_MS = 30_000;
 
+// 自动继续（/continue）：任务结束后 TODO 有未完成项时的续推上限与提示词
+const AUTO_CONTINUE_MAX = 3;
+const CONTINUE_PROMPT =
+  "继续执行未完成的任务：对照 TODO 看板继续推进剩余项，不要重复已完成的部分。全部完成后输出最终总结。";
+
 let tabSeq = 0;
 const nextTabId = () => `tab_${++tabSeq}`;
 
@@ -1064,6 +1069,7 @@ export default function App() {
             name: ev.data.toolName,
             args: ev.data.args,
             status: "running",
+            startedAt: Date.now(), // 运行中卡片实时计时（卡死可观测）
           };
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
           // spawn_sub_agent / spawn_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
@@ -1249,22 +1255,45 @@ export default function App() {
           const goalDone = /\[GOAL[ _-]?COMPLETE\]/i.test(ev.data.content || "");
           if (goalDone) pushLog("🎯 模型宣告目标完成");
           const afterQueue = getChat(sid);
-          if (!afterQueue.loopEnabled) break;
-          const maxN = afterQueue.loopMax ?? 10;
-          if (goalDone || (afterQueue.loopCount ?? 0) >= maxN) {
-            patchChat(sid, { loopEnabled: false });
-            pushLog(goalDone ? "🔁 目标循环自动结束（目标已完成）" : `🔁 目标循环达到 ${maxN} 轮上限，已自动关闭`);
+          if (afterQueue.loopEnabled) {
+            const maxN = afterQueue.loopMax ?? 10;
+            if (goalDone || (afterQueue.loopCount ?? 0) >= maxN) {
+              patchChat(sid, { loopEnabled: false });
+              pushLog(goalDone ? "🔁 目标循环自动结束（目标已完成）" : `🔁 目标循环达到 ${maxN} 轮上限，已自动关闭`);
+              break;
+            }
+            const n = (afterQueue.loopCount ?? 0) + 1;
+            patchChat(sid, { loopCount: n });
+            pushLog(`🔁 目标循环：第 ${n}/${maxN} 轮自动推进`);
+            taskLauncherRef.current(
+              sid,
+              `[目标循环 第 ${n}/${maxN} 轮] 继续推进当前会话目标。基于已有进展继续工作；` +
+              "若目标已经完成，请直接输出最终总结并在回复中包含 [GOAL_COMPLETE] 标记，不要再调用工具。",
+              afterQueue.reasoningEffort,
+            );
             break;
           }
-          const n = (afterQueue.loopCount ?? 0) + 1;
-          patchChat(sid, { loopCount: n });
-          pushLog(`🔁 目标循环：第 ${n}/${maxN} 轮自动推进`);
-          taskLauncherRef.current(
-            sid,
-            `[目标循环 第 ${n}/${maxN} 轮] 继续推进当前会话目标。基于已有进展继续工作；` +
-            "若目标已经完成，请直接输出最终总结并在回复中包含 [GOAL_COMPLETE] 标记，不要再调用工具。",
-            afterQueue.reasoningEffort,
-          );
+          // 自动继续（/continue）：TODO 有未完成项 → 自动续推或展示「继续」按钮。
+          // 模型长任务常提前收尾（说"接下来我将…"就停），TODO 看板是最可靠的未完成信号。
+          const unfinishedTodos = (afterQueue.todos ?? []).filter((t) => t.status !== "completed");
+          if (unfinishedTodos.length === 0) {
+            patchChat(sid, { unfinished: false });
+            break;
+          }
+          if (afterQueue.autoContinue) {
+            const used = afterQueue.autoContinueCount ?? 0;
+            if (used >= AUTO_CONTINUE_MAX) {
+              patchChat(sid, { autoContinue: false, unfinished: true });
+              pushLog(`⏸ 自动继续达到 ${AUTO_CONTINUE_MAX} 轮上限，已停止（TODO 仍有 ${unfinishedTodos.length} 个未完成项）`);
+              break;
+            }
+            patchChat(sid, { autoContinueCount: used + 1, unfinished: false });
+            pushLog(`⏭ 自动继续：TODO 有 ${unfinishedTodos.length} 个未完成项，第 ${used + 1}/${AUTO_CONTINUE_MAX} 轮续推`);
+            taskLauncherRef.current(sid, CONTINUE_PROMPT, afterQueue.reasoningEffort);
+          } else {
+            patchChat(sid, { unfinished: true });
+            pushLog(`⏸ TODO 有 ${unfinishedTodos.length} 个未完成项：可点击「继续」推进，或 /continue on 开启自动续推`);
+          }
           break;
         }
         case "task:error": {
@@ -1693,6 +1722,46 @@ export default function App() {
     [activeSessionId, getChat, patchChat, pushLog]
   );
 
+  /** /continue：自动继续开关（任务结束后 TODO 有未完成项 → 自动续推）。 */
+  const runContinueCommand = useCallback(
+    (raw: string) => {
+      const sid = activeSessionId;
+      if (!sid) {
+        window.alert("当前没有会话，请先打开或新建会话。");
+        return;
+      }
+      const arg = raw.replace(/^\/continue\s*/i, "").trim().toLowerCase();
+      const chat = getChat(sid);
+      const say = (content: string) => {
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+      };
+      if (arg === "off" || arg === "stop" || arg === "关闭") {
+        patchChat(sid, { autoContinue: false, autoContinueCount: 0 });
+        say("⏭ 自动继续已关闭。");
+        pushLog("⏭ 自动继续已关闭");
+        return;
+      }
+      if (arg === "" || arg === "status" || arg === "状态") {
+        say(chat.autoContinue
+          ? `⏭ 自动继续已开启（本任务已续推 ${chat.autoContinueCount ?? 0}/${AUTO_CONTINUE_MAX} 轮）。关闭用 \`/continue off\`。`
+          : "⏭ 自动继续未开启。开启用 `/continue on`：任务结束后若 TODO 看板仍有未完成项，自动续发推进指令（避免模型提前收尾后需要手动输入「继续」）。");
+        return;
+      }
+      if (arg === "on" || arg === "开启") {
+        if (chat.loopEnabled) {
+          say("目标循环（/loop）运行中，无需叠加自动继续；先用 `/loop off` 关闭。");
+          return;
+        }
+        patchChat(sid, { autoContinue: true, autoContinueCount: 0 });
+        say(`⏭ 自动继续已开启（上限 ${AUTO_CONTINUE_MAX} 轮）：任务结束后若 TODO 有未完成项，自动续发推进指令；达到上限或 /continue off 停止。`);
+        pushLog(`⏭ 自动继续开启（上限 ${AUTO_CONTINUE_MAX} 轮）`);
+        return;
+      }
+      say("用法：`/continue on` 开启 · `/continue off` 关闭 · `/continue` 查看状态。");
+    },
+    [activeSessionId, getChat, patchChat, pushLog]
+  );
+
   // ------------------------------------------------------------ 手动压缩（面板环形 / /compact 命令）
 
   const compactNow = useCallback(async (sid: string, focus: string) => {
@@ -1783,6 +1852,10 @@ export default function App() {
       }
       if (trimmedCmd === "/loop" || trimmedCmd.startsWith("/loop ")) {
         runLoopCommand(prompt);
+        return;
+      }
+      if (trimmedCmd === "/continue" || trimmedCmd.startsWith("/continue ")) {
+        runContinueCommand(prompt);
         return;
       }
       let sid = activeTabId ? tabsRef.current.find((t) => t.id === activeTabId)?.sessionId : null;
@@ -1912,6 +1985,7 @@ export default function App() {
       running: true,
       streaming: { items: [] },
       error: null,
+      unfinished: false, // 新任务启动：清除上一任务的未完成提示（自动继续/手动继续均已接管）
     });
     cancelStreamFlush(targetSid);
     streamingRefs.current.set(targetSid, { items: [] });
@@ -2132,6 +2206,8 @@ export default function App() {
               onStop={stop}
               onApprove={(id, a) => void approve(id, a)}
               currentAgent={currentAgent}
+              unfinished={currentChat.unfinished}
+              onContinue={() => void send(CONTINUE_PROMPT)}
               foldTurns={uiConfig?.chat_fold_turns}
               foldMessages={uiConfig?.chat_fold_messages}
             />

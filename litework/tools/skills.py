@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.types import ToolDefinition
+from .install_progress import checkpoint
 
 logger = logging.getLogger("litework.tools.skills")
 
@@ -706,9 +707,9 @@ class SkillsTools:
         # 不支持 Range，git clone 也不能续传）。失败再回退 git clone / zip。
         if subpath:
             ref = branch or parts[3] or "HEAD"
-            try:
-                from .gh_fetch import TooManyFilesError, default_cache_root, fetch_subpath
+            from .gh_fetch import InstallCancelled, TooManyFilesError, default_cache_root, fetch_subpath
 
+            try:
                 cached = fetch_subpath(
                     default_cache_root(), owner, repo, ref, subpath,
                     on_progress=lambda d, t: logger.info("[Skills] 可续传下载 %s: %d/%d", subpath, d, t),
@@ -722,6 +723,8 @@ class SkillsTools:
                 # 大技能（如 ppt-master 12000+ 文件）：按文件续传请求数过多，
                 # 回退 git clone 单 pack 整包下载（不可续传，靠重试兜底）
                 logger.warning("[Skills] %s；改用 git clone 整包下载", exc)
+            except InstallCancelled:
+                raise  # 用户取消：不得回退到其他下载路径（缓存已在 fetch_subpath 清理）
             except Exception as exc:
                 logger.warning("[Skills] 可续传下载失败，回退 git/zip（%s）: %s", subpath, exc)
 
@@ -757,6 +760,7 @@ class SkillsTools:
                     with open(tmp_zip, "wb") as f:
                         for chunk in resp.iter_bytes(chunk_size=1024 * 256):
                             f.write(chunk)
+                            checkpoint()  # 取消/暂停检查点（取消时 tempdir 由 finally 清理）
         except httpx.TimeoutException as exc:
             raise ValueError("下载技能超时（网络较慢或不可达），请检查网络后重试") from exc
         except httpx.TransportError as exc:
@@ -798,6 +802,7 @@ class SkillsTools:
             last_err = ""
             attempt = 0
             while True:
+                checkpoint()  # 取消/暂停检查点（clone 单次不可中断，但重试间隙可退出）
                 attempt += 1
                 if target_dir.exists():
                     shutil.rmtree(target_dir, ignore_errors=True)

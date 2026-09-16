@@ -100,16 +100,44 @@ function fmtAge(seconds: number | null): string {
 }
 
 /** 安装进度卡：步骤链 + 下载进度条（可续传下载时显示已下载/总字节）。 */
-function InstallProgressCard({ job }: { job: InstallJobStatus | null }) {
+function InstallProgressCard({ job, onControl }: {
+  job: InstallJobStatus | null;
+  /** 暂停/继续/取消控制（由父组件接 API）；取消会清理下载缓存 */
+  onControl?: (action: "pause" | "resume" | "cancel") => void;
+}) {
   if (!job) return null;
   const running = job.status === "running";
+  const paused = job.status === "paused";
+  const cancelling = job.status === "cancelling";
   const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
-  const title = running ? "安装中…" : job.status === "done" ? "安装完成" : "安装失败";
+  const title = running ? "安装中…"
+    : paused ? "已暂停"
+    : job.status === "cancelling" ? "取消中…"
+    : job.status === "cancelled" ? "已取消"
+    : job.status === "done" ? "安装完成" : "安装失败";
   return (
     <div className={`install-progress ${job.status}`}>
       <div className="install-progress-head">
         <span>{job.kind === "skill" ? "技能" : "插件"} · {title}</span>
-        <span className="install-progress-pct">{job.percent}%</span>
+        <span className="install-progress-pct">
+          {job.percent}%
+          {(running || paused) && onControl && (
+            <>
+              {running && (
+                <button className="install-ctl-btn" title="暂停下载（断点保留，可继续）"
+                  onClick={() => onControl("pause")}>暂停</button>
+              )}
+              {paused && (
+                <button className="install-ctl-btn" title="从断点继续下载"
+                  onClick={() => onControl("resume")}>继续</button>
+              )}
+              {(running || paused) && (
+                <button className="install-ctl-btn danger" title="取消安装并删除已下载缓存"
+                  onClick={() => onControl("cancel")}>取消</button>
+              )}
+            </>
+          )}
+        </span>
       </div>
       <div className="install-progress-bar">
         <div className={`install-progress-fill ${job.status}`} style={{ width: `${job.percent}%` }} />
@@ -155,6 +183,10 @@ export default function SettingsModal({
   const [zipSaved, setZipSaved] = useState(false);
   // 综合设置：任务/工具/子 Agent 超时（秒）
   const [toolTimeout, setToolTimeout] = useState<number>(120);
+  // 证据收据 reducer（opt-in 小模型：空=停用）
+  const [reducerModel, setReducerModel] = useState("");
+  const [reducerProvider, setReducerProvider] = useState("");
+  const [reducerSaved, setReducerSaved] = useState(false);
   const [llmTimeout, setLlmTimeout] = useState<number>(300);
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
@@ -321,12 +353,14 @@ export default function SettingsModal({
     return { updates, fresh };
   }, [community, plugins, builtinPlugins]);
 
-  // 后台安装任务：轮询进度快照直到完成/失败
+  // 后台安装任务：轮询进度快照直到终态（done / cancelled 正常返回，error 抛出）。
+  // paused / cancelling 是中间态：继续轮询，让用户看到「已暂停 / 取消中…」的实时反馈
   const pollInstallJob = useCallback(async (jobId: string): Promise<InstallJobStatus> => {
     for (;;) {
       const s = await api.installJob(jobId);
       setInstallJob(s);
       if (s.status === "done") return s;
+      if (s.status === "cancelled") return s;
       if (s.status === "error") throw new Error(s.error || "安装失败");
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -343,8 +377,34 @@ export default function SettingsModal({
     const { job_id } = kind === "plugin"
       ? await api.startInstallPlugin(payload as InstallPluginPayload)
       : await api.startInstallSkill(payload as InstallSkillPayload);
-    return pollInstallJob(job_id);
+    try {
+      const s = await pollInstallJob(job_id);
+      // 终态短暂展示结果（全绿 ✓ / 已取消）后自动收起——技能安装不重启 Core，
+      // 卡片不会因页面刷新而消失，必须显式清理；id 守卫避免误清新任务
+      if (s.status === "done" || s.status === "cancelled") {
+        setTimeout(() => setInstallJob((cur) => (cur && cur.id === s.id ? null : cur)), 2500);
+      }
+      return s;
+    } catch (e) {
+      // 失败也收起（错误文本已由 pluginMsg/skillMsg 展示），避免卡片永久滞留
+      setTimeout(() => setInstallJob((cur) => (cur && cur.id === job_id ? null : cur)), 6000);
+      throw e;
+    }
   }, [pollInstallJob]);
+
+  /** 安装任务结果 → 用户可读文本；cancelled 返回中性提示（result 为空，不拼空名字） */
+  const jobDoneText = useCallback((job: InstallJobStatus, okPrefix: string): string => {
+    if (job.status === "cancelled") return "已取消安装，下载缓存已清理";
+    const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
+    return `${okPrefix}: ${names}`;
+  }, []);
+
+  /** 安装任务控制：暂停 / 继续 / 取消（取消会清理下载缓存并收口 cancelled 终态） */
+  const controlInstallJob = useCallback((action: "pause" | "resume" | "cancel") => {
+    const id = installJob?.id;
+    if (!id) return;
+    void api.installJobControl(id, action).catch(() => {});
+  }, [installJob]);
 
   const installCollabMode = useCallback(async (name: string, version?: string) => {
     const src = communitySrc(name);
@@ -492,6 +552,9 @@ export default function SettingsModal({
       // 聊天区折叠阈值
       if (typeof c.chat_fold_turns === "number" && c.chat_fold_turns > 0) setFoldTurns(c.chat_fold_turns);
       if (typeof c.chat_fold_messages === "number" && c.chat_fold_messages > 0) setFoldMessages(c.chat_fold_messages);
+      // 证据收据 reducer（opt-in 小模型）
+      if (typeof c.reducer_model === "string") setReducerModel(c.reducer_model);
+      if (typeof c.reducer_provider === "string") setReducerProvider(c.reducer_provider);
       // 多智能体配置
       if (typeof c.max_parallel_agents === "number" && c.max_parallel_agents > 0) setMaParallel(c.max_parallel_agents);
       if (typeof c.agent_total_limit === "number" && c.agent_total_limit > 0) setMaTotal(c.agent_total_limit);
@@ -546,6 +609,7 @@ export default function SettingsModal({
     if (!scope) return;
     void skillAction(async () => {
       const job = await runInstallJob("skill", { source, zip_base64: zipBase64, scope, name: undefined });
+      if (job.status === "cancelled") return jobDoneText(job, "已导入");
       const skills = (job.result as (import("../types").SkillInfo & { deps?: import("../types").SkillDepsReport })[]) ?? [];
       const names = skills.map((s) => s.name).join(", ");
       const depsLines: string[] = [];
@@ -605,8 +669,7 @@ export default function SettingsModal({
   const handlePluginImport = (source: string, overwrite: boolean, version?: string) => {
     void pluginAction(async () => {
       const job = await runInstallJob("plugin", { source, name: undefined, overwrite, version });
-      const names = (job.result as { name: string }[] | undefined)?.map((p) => p.name).join(", ") ?? "";
-      return `已导入: ${names}`;
+      return jobDoneText(job, "已导入");
     });
   };
 
@@ -616,8 +679,7 @@ export default function SettingsModal({
       const base64 = (reader.result as string).split(",")[1] ?? "";
       void pluginAction(async () => {
         const job = await runInstallJob("plugin", { zip_base64: base64, name: undefined, overwrite });
-        const names = (job.result as { name: string }[] | undefined)?.map((p) => p.name).join(", ") ?? "";
-        return `已导入: ${names}`;
+        return jobDoneText(job, "已导入");
       });
     };
     reader.readAsDataURL(file);
@@ -1048,6 +1110,22 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [toolTimeout, llmTimeout, subagentTimeout, maxSteps, onSaved]);
+
+  // 证据收据 reducer 保存（reducer adapter 每任务在 create_loop 重建 → 下个任务生效）
+  const saveReducerConfig = useCallback(async () => {
+    setReducerSaved(false);
+    try {
+      await api.updateConfig({
+        reducer_model: reducerModel.trim(),
+        reducer_provider: reducerProvider.trim(),
+      });
+      setReducerSaved(true);
+      setTimeout(() => setReducerSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [reducerModel, reducerProvider, onSaved]);
 
   // 多智能体配置保存（限额与行为，立即生效于下一个任务）
   const saveMaConfig = useCallback(async () => {
@@ -1618,7 +1696,7 @@ export default function SettingsModal({
               </p>
 
               {pluginMsg && <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>{pluginMsg.text}</div>}
-              <InstallProgressCard job={installJob} />
+              <InstallProgressCard job={installJob} onControl={controlInstallJob} />
 
               {/* -------- 工具栏：手动导入 + 社区更新检查 -------- */}
               <div className="plugin-toolbar">
@@ -1784,6 +1862,10 @@ export default function SettingsModal({
               {/* -------- 社区技能：只显示可更新 + 未安装（安装到用户级 ~/.agents/skills/） -------- */}
               {community && community.skills.length > 0 && (
                 <>
+                  {/* 技能安装进度卡就近渲染（此前只在插件 tab，社区技能更新时看不到反馈） */}
+                  {installJob && installJob.kind === "skill" && (
+                    <InstallProgressCard job={installJob} onControl={controlInstallJob} />
+                  )}
                   <div className="mcp-section-head" style={{ marginTop: 12 }}>
                     <span>
                       社区技能（可更新 {communitySkillsView.updates.length} · 未安装 {communitySkillsView.fresh.length}，装到 ~/.agents/skills/）
@@ -1817,8 +1899,7 @@ export default function SettingsModal({
                                 onClick={() => void skillAction(async () => {
                                   const job = await runInstallJob("skill", { source: srcUrl, scope: "user", overwrite: true });
                                   refreshSkills();
-                                  const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
-                                  return `已更新技能: ${names}`;
+                                  return jobDoneText(job, "已更新技能");
                                 })}>更新</button>
                             </div>
                           </div>
@@ -1843,8 +1924,7 @@ export default function SettingsModal({
                                 onClick={() => void skillAction(async () => {
                                   const job = await runInstallJob("skill", { source: srcUrl, scope: "user" });
                                   refreshSkills();
-                                  const names = (job.result as { name: string }[] | undefined)?.map((s) => s.name).join(", ") ?? "";
-                                  return `已安装技能: ${names}`;
+                                  return jobDoneText(job, "已安装技能");
                                 })}>安装</button>
                             </div>
                           </div>
@@ -2136,6 +2216,36 @@ export default function SettingsModal({
                   <button className="btn-test" onClick={saveZipSize}>
                     {zipSaved ? "已保存 ✓" : "保存"}
                   </button>
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>证据收据（大结果压缩，省成本）</span>
+                <button className="btn-test" onClick={() => void saveReducerConfig()}>
+                  {reducerSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                配置一个<b>便宜的小模型</b>：工具返回的大体积诊断类结果会先由它压缩成
+                「证据收据」再进上下文，省下主模型的输入 token（上下文面板可看节省量）。
+                留空 = 停用。供应商留空用当前默认；保存后<b>下一个任务生效</b>（无需重启）。
+              </p>
+              <div className="form-group">
+                <div className="form-row">
+                  <input
+                    className="form-input"
+                    placeholder="收据小模型名（如 deepseek-chat，留空停用）"
+                    value={reducerModel}
+                    onChange={(e) => setReducerModel(e.target.value)}
+                    style={{ flex: 2 }}
+                  />
+                  <input
+                    className="form-input"
+                    placeholder="供应商（可选，留空用默认）"
+                    value={reducerProvider}
+                    onChange={(e) => setReducerProvider(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
                 </div>
               </div>
 

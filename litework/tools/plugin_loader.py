@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.types import Plugin
+from .install_progress import checkpoint
 
 logger = logging.getLogger("litework.tools.plugin_loader")
 
@@ -689,9 +690,9 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
     # Range、git clone 不能续传，慢网一次抖动就得整包重下。子目录安装走此路径，
     # 失败再回退 zipball 全量下载。
     if subpath:
-        try:
-            from .gh_fetch import TooManyFilesError, default_cache_root, fetch_subpath
+        from .gh_fetch import InstallCancelled, TooManyFilesError, default_cache_root, fetch_subpath
 
+        try:
             cached = fetch_subpath(
                 default_cache_root(config_dir), owner, repo, branch or "HEAD", subpath,
                 on_progress=lambda d, t: logger.info("[PluginLoader] 可续传下载 %s: %d/%d", subpath, d, t),
@@ -706,6 +707,8 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
         except TooManyFilesError as exc:
             # 子目录文件数过多：按文件续传请求数不划算，回退 zipball 整包
             logger.warning("[PluginLoader] %s；改用 zipball 整包下载", exc)
+        except InstallCancelled:
+            raise  # 用户取消：不得回退到 zipball（缓存已在 fetch_subpath 清理）
         except Exception as exc:
             logger.warning("[PluginLoader] 可续传下载失败，回退 zipball（%s）: %s", subpath, exc)
 
@@ -720,6 +723,7 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
                 meta = client.get(api).json()
                 branch = meta.get("default_branch") or "main"
             zip_url = f"{api}/zipball/{branch}" if branch else f"{api}/zipball"
+            checkpoint()  # 取消/暂停检查点（zipball 单次请求不可中断，但排队前可退出）
             resp = client.get(zip_url)
     except httpx.TimeoutException as exc:
         raise ValueError("下载插件超时（网络较慢或不可达），请检查网络后重试") from exc
@@ -736,6 +740,7 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
         try:
             import shutil as _shutil
             for info in zf.infolist():
+                checkpoint()  # 解压循环：取消即时退出（tempdir 由 finally 清理）
                 if info.is_dir():
                     continue
                 rel = info.filename

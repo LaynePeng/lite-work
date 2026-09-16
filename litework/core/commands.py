@@ -37,6 +37,12 @@ BUILTIN_COMMANDS: List[Dict[str, str]] = [
         "kind": "builtin",
     },
     {
+        "name": "continue",
+        "description": "自动继续：任务结束后若 TODO 有未完成项自动续推（前端本地处理）",
+        "argsHint": "[on|off] · 查看状态用 /continue",
+        "kind": "builtin",
+    },
+    {
         "name": "help",
         "description": "显示可用命令（前端本地处理，不消耗 LLM）",
         "argsHint": "",

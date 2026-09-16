@@ -52,9 +52,12 @@ function sparkPoints(values: number[]): { line: string; lastX: number; lastY: nu
 /** 效率机制节省台账（v1.6.0）：观察打包 / 证据收据 / 压缩决策理由。 */
 function MechanismRows({ mechanisms }: { mechanisms?: ContextMechanisms }) {
   if (!mechanisms) return null;
-  const { obs_saved_tokens, obs_packed, reducer_saved_tokens, compaction_reason } = mechanisms;
+  const { obs_saved_tokens, obs_packed, reducer_saved_tokens, reducer_enabled, compaction_reason } = mechanisms;
+  const reducerText = reducer_saved_tokens > 0
+    ? fmt(reducer_saved_tokens)
+    : reducer_enabled === false ? "未启用" : "—";
   const has = obs_saved_tokens > 0 || reducer_saved_tokens > 0 || obs_packed > 0
-    || (compaction_reason && compaction_reason !== "pruned");
+    || (compaction_reason && compaction_reason !== "pruned") || reducer_enabled === false;
   if (!has) return null;
   return (
     <>
@@ -62,7 +65,7 @@ function MechanismRows({ mechanisms }: { mechanisms?: ContextMechanisms }) {
         机制节省（本任务）
       </div>
       <span>观察打包 / 收据</span>
-      <b>{obs_saved_tokens > 0 ? `${fmt(obs_saved_tokens)}（${obs_packed} 条）` : "—"} / {reducer_saved_tokens > 0 ? fmt(reducer_saved_tokens) : "—"}</b>
+      <b>{obs_saved_tokens > 0 ? `${fmt(obs_saved_tokens)}（${obs_packed} 条）` : "—"} / {reducerText}</b>
       {compaction_reason && (
         <span>压缩决策</span>
       )}
