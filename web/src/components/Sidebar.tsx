@@ -677,6 +677,7 @@ export default function Sidebar({
   onRemoveRecent,
   onTogglePin,
   onToggleKind,
+  onOpenWorktree,
   onBackToProjects,
   onOpenProjectNewWindow,
   onOpenSettings,
@@ -708,6 +709,8 @@ export default function Sidebar({
   onRemoveRecent: (path: string) => void;
   onTogglePin: (path: string) => void;
   onToggleKind?: (path: string, kind: "code" | "project") => void;
+  /** 在隔离工作树中打开项目（新会话 + worktree 模式） */
+  onOpenWorktree?: (path: string) => void;
   onBackToProjects: () => void;
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
@@ -823,6 +826,18 @@ export default function Sidebar({
                   </span>
                   <span className="recent-project-name">{p.name}</span>
                   <span className={`recent-project-kind ${p.kind}`}>{p.kind === "code" ? "代码" : "项目"}</span>
+                  {onOpenWorktree && (
+                    <button
+                      className="recent-project-worktree"
+                      title="在隔离工作树中打开（新会话：任务在独立分支+目录执行，主工作区不受影响）"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenWorktree(p.path);
+                      }}
+                    >
+                      🛡️
+                    </button>
+                  )}
                   <button
                     className="recent-project-kind-toggle"
                     title={p.kind === "code"

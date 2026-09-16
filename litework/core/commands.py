@@ -43,6 +43,12 @@ BUILTIN_COMMANDS: List[Dict[str, str]] = [
         "kind": "builtin",
     },
     {
+        "name": "worktree",
+        "description": "隔离工作树：任务在独立分支+目录中执行，主工作区不受影响；用法 /worktree on · /worktree off · /worktree 查状态",
+        "argsHint": "",
+        "kind": "builtin",
+    },
+    {
         "name": "help",
         "description": "显示可用命令（前端本地处理，不消耗 LLM）",
         "argsHint": "",

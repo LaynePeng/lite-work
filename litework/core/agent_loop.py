@@ -113,6 +113,10 @@ class AgentLoop:
         self.state = AgentStateTracker()
         self.abort_event: Optional[asyncio.Event] = None
         self.workspace: str = "."
+        # 隔离工作树模式：非 None 时本任务在 worktree 内执行，工具调用受边界检查
+        # （isolation_root = worktree 路径；main_workspace = 用户主工作区，仅供提示）
+        self.isolation_root: Optional[str] = None
+        self.main_workspace: Optional[str] = None
         # 截断落盘目录（第4/5课：超限工具输出保存到磁盘，上下文只放句柄）
         # 观察打包的归档也放在其 observations/ 子目录（须在 _register_obs_recall_tool 之前赋值）
         self.truncation_dir: Optional[str] = truncation_dir
@@ -762,6 +766,65 @@ class AgentLoop:
         finally:
             current_tool_call.reset(token)
 
+    def _worktree_isolation_violation(self, tool_name: str, args: Dict[str, Any]) -> Optional[str]:
+        """隔离工作树模式的工具边界检查（参考 Claude Code 的四层防护）。
+
+        - 文件类工具：路径参数必须落在 worktree 内；
+        - 命令类工具：cwd 必须在 worktree 内；命令文本不得出现主工作区路径，
+          不得设置 GIT_DIR / GIT_WORK_TREE / --git-dir / --work-tree 重定向。
+        返回违规说明（直接作为工具结果回给 LLM 自愈），合法返回 None。
+        """
+        root = self.isolation_root
+        if not root:
+            return None
+        try:
+            root_real = os.path.realpath(root)
+        except OSError:
+            return None
+
+        def _inside(path: str) -> bool:
+            try:
+                p = os.path.realpath(path if os.path.isabs(path) else os.path.join(root_real, path))
+            except OSError:
+                return False
+            return p == root_real or p.startswith(root_real + os.sep)
+
+        def _deny(what: str) -> str:
+            return (
+                f"[Worktree Isolation]: {what} 不在隔离工作树内。"
+                f"你只能在 {root} 内工作——主工作区不允许读写（隔离模式下改动需用户审查后合并）。"
+            )
+
+        # 层 1：文件类工具路径参数
+        for key in ("filePath", "path", "file", "dir", "directory"):
+            val = args.get(key)
+            if isinstance(val, str) and val.strip():
+                if not _inside(val):
+                    return _deny(f"路径 {val!r}")
+
+        # 层 2：命令 cwd
+        cwd = args.get("cwd")
+        if isinstance(cwd, str) and cwd.strip() and not _inside(cwd):
+            return _deny(f"工作目录 {cwd!r}")
+
+        # 层 3/4：命令文本里的主工作区路径与 git 目录重定向
+        cmd = args.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            main = self.main_workspace
+            if main:
+                try:
+                    main_real = os.path.realpath(main)
+                except OSError:
+                    main_real = main
+                if main_real and main_real in cmd:
+                    return _deny(f"命令引用了主工作区路径 {main_real!r}")
+            upper = cmd.upper()
+            if "GIT_DIR=" in upper or "GIT_WORK_TREE=" in upper:
+                return _deny("命令设置了 GIT_DIR / GIT_WORK_TREE 重定向")
+            if "--GIT-DIR" in upper or "--WORK-TREE" in upper:
+                return _deny("命令使用了 --git-dir / --work-tree 重定向")
+        return None
+
     async def _execute_tool_call_inner(self, call: ToolCall, stats: Dict[str, Any]) -> str:
         tool_name = call.name
 
@@ -776,6 +839,12 @@ class AgentLoop:
         ok, args, error = safe_json_parse(call.arguments)
         if not ok:
             return f"[Harness Defense]: {error}"
+
+        # 2.5 隔离工作树边界检查：禁止越过 worktree 触碰主工作区
+        violation = self._worktree_isolation_violation(tool_name, args)
+        if violation:
+            stats["blocked"] += 1
+            return violation
 
         # 3. beforeTool 安全管道（SecurityPlugin 等）
         hook_data = {"toolName": tool_name, "args": args, "cancel": False, "reason": ""}

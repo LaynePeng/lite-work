@@ -971,6 +971,102 @@ class AgentApp:
         from .tools.skills import SkillsTools
         return SkillsTools(self.workspace).update_skill(name, description, scope)
 
+    # ------------------------------------------------------------ 隔离工作树（Web/API 薄封装）
+
+    def worktree_manager(self) -> Any:
+        """当前工作区的 worktree 管理器（无状态，现取现用）。"""
+        from .tools.worktree_manager import WorktreeManager
+
+        return WorktreeManager(self.workspace)
+
+    def session_worktree_enabled(self, session_id: str) -> bool:
+        """会话是否启用了隔离工作树（metadata.worktree，默认关）。"""
+        snapshot = self.session_store.load(session_id)
+        if snapshot is None:
+            return False
+        return bool((snapshot.metadata or {}).get("worktree"))
+
+    def set_session_worktree(self, session_id: str, enabled: bool) -> Dict[str, Any]:
+        """开启/关闭会话的隔离工作树（metadata 持久化）。
+
+        开启前校验：必须是 git 仓库（否则 worktree 不可用）。关闭时若有未合并
+        worktree，交由前端提示用户处理（这里只翻开关，不擅自丢弃改动）。
+        """
+        snapshot = self.session_store.load(session_id)
+        if snapshot is None:
+            return {"ok": False, "reason": "会话不存在"}
+        mgr = self.worktree_manager()
+        if enabled and not mgr.is_git_repo():
+            return {"ok": False, "reason": "当前项目不是 git 仓库，隔离工作树不可用"}
+        metadata = dict(snapshot.metadata)
+        if enabled:
+            metadata["worktree"] = True
+        else:
+            metadata.pop("worktree", None)
+        self.session_store.save(session_id, snapshot.messages, metadata)
+        # 关闭模式时：worktree 若**无改动**直接清理（空壳无保留价值，避免遗留堆积）；
+        # 有改动则保留——用户仍需评审卡「合并 / 丢弃」，不擅自丢数据
+        if not enabled:
+            st = self.worktree_status(session_id)
+            if st.get("exists") and not st.get("files"):
+                self.worktree_manager().cleanup(session_id)
+        return {"ok": True, "enabled": enabled}
+
+    def worktree_status(self, session_id: str) -> Dict[str, Any]:
+        """会话 worktree 状态（前端轮询：变更文件/行数/分支）。"""
+        mgr = self.worktree_manager()
+        st = mgr.status(session_id)
+        st["enabled"] = self.session_worktree_enabled(session_id)
+        return st
+
+    def worktree_diff(self, session_id: str) -> str:
+        """worktree 改动的人类可读 diff（评审卡「查看 diff」）。"""
+        return self.worktree_manager().diff_text(session_id)
+
+    def worktree_merge(self, session_id: str) -> Dict[str, Any]:
+        """合并 worktree 改动回主工作区（成功则清理 worktree + 分支）。"""
+        mgr = self.worktree_manager()
+        result = mgr.merge(session_id)
+        if result.get("ok"):
+            mgr.cleanup(session_id)
+        return result
+
+    def worktree_discard(self, session_id: str) -> Dict[str, Any]:
+        """丢弃 worktree（删目录 + 分支，主工作区不动）。"""
+        return self.worktree_manager().discard(session_id)
+
+    def worktree_list_active(self) -> List[Dict[str, Any]]:
+        """磁盘上所有活跃 worktree（侧边栏/恢复展示）。"""
+        return self.worktree_manager().list_active()
+
+    def worktree_clean(self, include_dirty: bool = False,
+                       name: Optional[str] = None) -> Dict[str, Any]:
+        """清理遗留 worktree。
+
+        - name 指定时只清该一个（有改动需 include_dirty=True，否则归入 kept）；
+        - 不指定 name 时遍历全部：默认只删**无改动**的空壳（没有保留价值）；
+        - include_dirty=True 连有改动的也删（用户明确要求；主工作区不受影响）。
+
+        返回 {"removed": [names], "kept": [names]}。
+        """
+        mgr = self.worktree_manager()
+        removed: List[str] = []
+        kept: List[str] = []
+        targets = mgr.list_active()
+        if name:
+            targets = [t for t in targets if t["name"] == name]
+            if not targets:
+                return {"removed": [], "kept": []}
+        for item in targets:
+            nm = item["name"]
+            has_changes = bool(item.get("files"))
+            if has_changes and not include_dirty:
+                kept.append(nm)
+                continue
+            mgr.cleanup(nm)
+            removed.append(nm)
+        return {"removed": removed, "kept": kept}
+
     # ------------------------------------------------------------ 后台命令（Web/API 薄封装）
 
     def background_tasks(self) -> List[Dict[str, Any]]:
@@ -1389,13 +1485,16 @@ class AgentApp:
             os.remove(path)
         return {"ok": True, "id": agent_id}
 
-    def create_agent_registry(self, agent_id: str) -> ToolRegistry:
+    def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None) -> ToolRegistry:
         """按 Agent 配置裁剪工具集（职责域模型，参考 OpenCode：plan 只读、build 全量）。
 
         domains → allowed/permissions 换算：域 allow/ask 的工具进白名单，
         ask 同时进 permissions（审批门），deny 进 permissions（双保险拦截）。
         plan 的「plan」域默认 deny 保证通用写工具不进入白名单（create_kernel
         的写工具 handler 仅在 registry.has() 时绑定，天然与工具面一致）。
+
+        workspace：隔离工作树模式时传入 worktree 路径——所有工具插件以 worktree
+        为工作区构建，Agent 的读写/命令全部落在隔离副本内（默认 None = 主工作区）。
         """
         from .core.permissions import domains_to_allowed_and_permissions
 
@@ -1408,11 +1507,13 @@ class AgentApp:
             allowed=allowed,
             exclude=None,
             permissions=permissions,
+            workspace=workspace,
         )
 
     def create_loop(self, kernel: Kernel, registry: ToolRegistry, agent_id: Optional[str] = None,
                     model_override: Optional[Dict[str, str]] = None,
-                    reasoning_effort_override: Optional[str] = None) -> AgentLoop:
+                    reasoning_effort_override: Optional[str] = None,
+                    workspace: Optional[str] = None) -> AgentLoop:
         profile = self.get_agent(agent_id)
         adapter = self.adapter
         # reasoning_effort override 语义："off" = 显式关闭（覆盖 provider 默认）；
@@ -1484,7 +1585,11 @@ class AgentApp:
         for _ad in (adapter, reducer_adapter):
             if _ad is not None and hasattr(_ad, "idle_timeout"):
                 _ad.idle_timeout = _idle
-        loop.workspace = self.workspace or "."  # 未打开项目时退回库默认值
+        loop.workspace = workspace or self.workspace or "."  # 工作树隔离时指向 worktree
+        # 隔离工作树模式：记录 worktree 边界 + 主工作区（工具调用越界检查用）
+        if workspace:
+            loop.isolation_root = workspace
+            loop.main_workspace = self.workspace
         # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）
         loop.agent_manager_factory = lambda sid: self.agent_manager(sid, create=False)
         return loop

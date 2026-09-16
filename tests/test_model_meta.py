@@ -98,15 +98,17 @@ def test_models_dev_index_keeps_provider_dimension(tmp_path):
     assert svc.get_pricing("deepseek-v4-flash", provider_id="tinfoil")["input_per_mtok"] == 0.3
     assert svc.get_context_window("deepseek-v4-flash", provider_id="deepseek") == 128_000
     assert svc.get_context_window("deepseek-v4-flash", provider_id="tinfoil") == 1_000_000
-    # 未收录的 provider（自定义中转）→ 定价不冒充他人报价，交回配置回退价
-    assert svc.get_pricing("deepseek-v4-flash", provider_id="custom_x") is None
+    # 未收录的 provider（自定义中转）→ 按模型名回退到**官方厂商**条目
+    # （deepseek 段命中官方价；不取转售商 tinfoil 的 0.3）。这是为了网关用户
+    # 「切换对话框模型」能反映到计费单价，而非所有模型都落回同一个静态价。
+    assert svc.get_pricing("deepseek-v4-flash", provider_id="custom_x")["input_per_mtok"] == 0.15
     # 窗口是「模型级」属性：未收录的 provider 仍可用裸模型名兜底（避免误判为 128k）
     assert svc.get_context_window("deepseek-v4-flash", provider_id="custom_x") == 1_000_000
     # registry 侧同样按 provider 解析
     r = LLMRegistry(config_dir=str(tmp_path))
     assert r.get_context_window("deepseek", "deepseek-v4-flash") == 128_000
     assert r.get_model_pricing("deepseek", "deepseek-v4-flash")["input_per_mtok"] == 0.15
-    assert r.get_model_pricing("custom_x", "deepseek-v4-flash") is None
+    assert r.get_model_pricing("custom_x", "deepseek-v4-flash")["input_per_mtok"] == 0.15
     assert r.get_context_window("custom_x", "deepseek-v4-flash") == 1_000_000
 
 
@@ -133,6 +135,33 @@ def test_vendored_model_id_does_not_shadow_official_price(tmp_path):
     assert svc.get_pricing("deepseek-v4-flash", provider_id="deepseek")["cache_hit_per_mtok"] == 0.003
     # 用 vendored 全名配置的客户端也能拿到官方数据（同名键）
     assert svc.get_pricing("deepseek/deepseek-v4-flash")["input_per_mtok"] == 0.15
+
+
+def test_gateway_provider_falls_back_to_official_vendor_by_model_name(tmp_path):
+    """网关/自定义实例（custom_*）：provider 精确键缺失时按模型名匹配官方厂商价。
+
+    回归：自定义中转聚合多家模型，models.dev 没有 custom_* 的 provider 条目，
+    于是所有模型都落回全局静态价——表现为「切了对话框模型，计费仍按默认模型的价」。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        "deepseek": {"models": {"deepseek-v4-flash": {
+            "cost": {"input": 0.15, "output": 0.6, "cache_read": 0.003},
+            "limit": {"context": 1_000_000}}}},
+        "z-ai": {"models": {"glm-5.3": {
+            "cost": {"input": 1.4, "output": 4.4, "cache_read": 0.26},
+            "limit": {"context": 200_000}}}},
+        # 转售商在官方段之前：只认官方厂商段，不得取到转售价
+        "somegateway": {"models": {"z-ai/glm-5.3": {
+            "cost": {"input": 99.0, "output": 99.0, "cache_read": 9.9}}}},
+    }), encoding="utf-8")
+    svc = ModelMetaService(str(cache))
+    # custom_* 供应商：按模型名命中官方厂商
+    assert svc.get_pricing("glm-5.3", provider_id="custom_123")["input_per_mtok"] == 1.4
+    assert svc.get_pricing("deepseek-v4-flash", provider_id="custom_123")["input_per_mtok"] == 0.15
+    assert svc.get_context_window("glm-5.3", provider_id="custom_123") == 200_000
+    # 未知模型：仍返回 None（调用方回退配置价）
+    assert svc.get_pricing("totally-unknown-model", provider_id="custom_123") is None
 
 
 def test_model_meta_status_reports_cache(tmp_path):

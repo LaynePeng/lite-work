@@ -60,6 +60,9 @@ class TaskHandle:
         self.skill_extra: Optional[str] = None
         self.skill_names: List[str] = []
         self.skill_ask_names: List[str] = []
+        # 隔离工作树模式：任务实际工作区（None = 主工作区）
+        self.workspace: Optional[str] = None
+        self.worktree_name: Optional[str] = None
 
     # ------------------------------------------------------------ SSE 订阅
 
@@ -228,10 +231,22 @@ class TaskHandle:
                         note = f"[技能 {name!r} 需要确认，已被操作员拒绝]"
                         self.skill_extra = (extra + ("\n\n" if extra else "") + note) if extra else note
             system_prompt = SystemPromptBuilder.build(
-                self.app.workspace or "", self.registry.get_tools(), agent_prompt=agent_prompt,
+                self.workspace or self.app.workspace or "", self.registry.get_tools(),
+                agent_prompt=agent_prompt,
                 skill_extra=getattr(self, "skill_extra", None),
                 skill_index=self._filtered_skill_index(),
             )
+            # 隔离工作树模式：明确告知 Agent 它在隔离副本里干活（改动不会被主工作区看到）
+            if self.worktree_name:
+                wt_path = self.workspace or ""
+                system_prompt += (
+                    "\n\n## 隔离工作树模式\n"
+                    f"你正在一个**隔离工作树**中工作（路径：{wt_path}，分支："
+                    f"worktree-{self.worktree_name}）。这是主工作区的一个 git worktree 副本：\n"
+                    "- 你的所有读写、命令执行都发生在该目录内，**不会影响用户的主工作区**；\n"
+                    "- 不要试图操作主工作区的路径，也不要切换分支或 checkout；\n"
+                    "- 完成后正常结束任务即可——用户会在界面上审查你的变更，自行决定合并或丢弃。"
+                )
             # 会话目标（/goal）：注入每个任务的系统提示——长程目标跨任务持续生效
             goal = self._session_goal()
             if goal:
@@ -513,9 +528,22 @@ class TaskManager:
     def start(self, session_id: str, prompt: str, agent_id: Optional[str] = None,
               reasoning_effort: Optional[str] = None) -> TaskHandle:
         task_id = uuid.uuid4().hex[:12]
+        # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）
+        task_workspace: Optional[str] = None
+        worktree_name: Optional[str] = None
+        if self.app.session_worktree_enabled(session_id):
+            created = self.app.worktree_manager().create(session_id)
+            if created.get("ok"):
+                task_workspace = created["path"]
+                worktree_name = session_id
+            else:
+                # git 不可用/创建失败：降级主工作区（不中断任务）
+                logger.warning("[Task] worktree 不可用，降级主工作区: %s", created.get("reason"))
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
-        registry = self.app.create_agent_registry(agent_id or "build")
-        kernel = self.app.create_kernel(session_id, registry=registry)
+        # workspace：隔离时所有工具插件以 worktree 为工作区构建
+        registry = self.app.create_agent_registry(agent_id or "build", workspace=task_workspace)
+        kernel = self.app.create_kernel(session_id, registry=registry,
+                                        security_workspace=task_workspace)
         # 权限收敛（P3）：编排者身份挂 kernel——spawn_agent handler 读取其 profile，
         # 编排者 deny 的工具对子 Agent 强制 deny（子权限永不超过父）
         kernel.orchestrator_agent_id = agent_id or "build"
@@ -531,11 +559,14 @@ class TaskManager:
             model_override = None
         loop = self.app.create_loop(kernel, registry, agent_id=agent_id,
                                     model_override=model_override,
-                                    reasoning_effort_override=reasoning_effort)
+                                    reasoning_effort_override=reasoning_effort,
+                                    workspace=task_workspace)
         loop.parallel_tool_calls = str(self.app.config.get("parallel_tool_calls", "auto")).lower()
 
         handle = TaskHandle(task_id, kernel, registry, loop, self.app)
         handle.agent_id = agent_id or "build"
+        handle.workspace = task_workspace
+        handle.worktree_name = worktree_name
         handle.skill_extra, handle.skill_names, handle.skill_ask_names = self._resolve_skill_extra(prompt)
         self.tasks[task_id] = handle
         handle.task = asyncio.get_event_loop().create_task(handle.run(prompt))

@@ -152,6 +152,29 @@ async def test_session_model_override(live_client):
     assert r.status_code == 400
 
 
+async def test_session_worktree_endpoints(live_client):
+    """隔离工作树端点：git 仓库可开启/查状态/丢弃；非 git 仓库拒绝开启。"""
+    c, app, _ = live_client
+    r = await c.post("/api/sessions", json={"name": "隔离会话"})
+    sid = r.json()["session_id"]
+
+    # 测试工作区不是 git 仓库 → 开启应被拒绝（400）
+    r = await c.post(f"/api/sessions/{sid}/worktree", json={"enabled": True})
+    assert r.status_code == 400
+    assert "git" in r.json()["detail"]
+
+    assert app.session_worktree_enabled(sid) is False
+
+    # 状态端点：未创建时 exists=False
+    r = await c.get(f"/api/sessions/{sid}/worktree")
+    assert r.status_code == 200
+    assert r.json()["exists"] is False
+
+    # 丢弃（幂等，不报错）
+    r = await c.post(f"/api/sessions/{sid}/worktree/discard")
+    assert r.status_code == 200
+
+
 def test_default_config_dir_is_stable_across_workspaces(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()

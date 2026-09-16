@@ -572,7 +572,22 @@ export interface ChatSessionState {
   autoContinueCount?: number;
   /** 任务结束时 TODO 仍有未完成项（未开 autoContinue 时展示「继续」按钮） */
   unfinished?: boolean;
+  /** 隔离工作树（/worktree）：任务在独立 worktree 执行，主工作区不受影响 */
+  worktreeEnabled?: boolean;
+  /** worktree 变更状态（评审卡数据源；任务结束时轮询刷新） */
+  worktreeStatus?: WorktreeStatus | null;
   pendingQueue: string[];
+}
+
+/** 隔离工作树状态（GET /api/sessions/{id}/worktree）。 */
+export interface WorktreeStatus {
+  exists: boolean;
+  enabled?: boolean;
+  branch?: string;
+  path?: string;
+  files?: { status: string; path: string }[];
+  adds?: number;
+  dels?: number;
 }
 
 // ---------------------------------------------------------------- 后台命令

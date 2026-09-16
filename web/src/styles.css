@@ -550,6 +550,25 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   opacity: 1;
 }
 
+/* 在隔离工作树中打开：hover 显示 */
+.recent-project-worktree {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.recent-project-item:hover .recent-project-worktree {
+  opacity: 1;
+}
+
+.recent-project-worktree:hover {
+  color: #22c55e;
+}
+
 .recent-project-item:hover .recent-project-remove {
   opacity: 1;
 }
@@ -1429,6 +1448,93 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 11px;
   color: var(--accent);
 }
+
+/* 隔离工作树横幅（任务在独立 worktree 中执行） */
+.worktree-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: -14px auto 16px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, #22c55e 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, #22c55e 8%, transparent);
+  font-size: 12px;
+  color: var(--text-1);
+}
+.worktree-banner .worktree-icon { flex: none; }
+.worktree-banner .worktree-text { flex: 1; min-width: 0; font-family: var(--font-mono); }
+.worktree-banner .worktree-text small {
+  margin-left: 8px;
+  font-family: inherit;
+  color: var(--text-2);
+}
+
+/* 隔离工作树评审卡：任务结束有待处理变更 */
+.worktree-review {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, #22c55e 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #22c55e 6%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.worktree-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+.worktree-review-stat { font-family: var(--font-mono); color: var(--text-2); font-weight: 500; }
+.worktree-review-files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-1);
+}
+.worktree-file { display: flex; gap: 8px; }
+.worktree-file-status {
+  flex: none;
+  min-width: 16px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.worktree-file-more { color: var(--text-2); }
+.worktree-review-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.btn-merge, .btn-discard {
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-merge {
+  background: color-mix(in srgb, #22c55e 18%, transparent);
+  border-color: #22c55e;
+  color: #22c55e;
+}
+.btn-merge:hover { background: #22c55e; color: #fff; }
+.btn-discard {
+  background: transparent;
+  border-color: var(--border-1, #3a3a3a);
+  color: var(--text-2);
+}
+.btn-discard:hover { border-color: #ef4444; color: #ef4444; }
 
 /* 待发送队列（固定在输入框上方，不随对话滚动） */
 .pending-queue {

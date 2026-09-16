@@ -119,6 +119,28 @@ export const api = {
     req<{ ok: boolean; mode: string | null }>(`/api/sessions/${id}/collab`, {
       method: "POST", body: JSON.stringify({ mode }),
     }),
+  // 隔离工作树（/worktree）：任务在独立 worktree 执行，主工作区不受影响
+  setSessionWorktree: (id: string, enabled: boolean) =>
+    req<{ ok: boolean; enabled: boolean }>(`/api/sessions/${id}/worktree`, {
+      method: "POST", body: JSON.stringify({ enabled }),
+    }),
+  worktreeStatus: (id: string) =>
+    req<import("./types").WorktreeStatus>(`/api/sessions/${id}/worktree`),
+  worktreeDiff: (id: string) =>
+    req<{ diff: string }>(`/api/sessions/${id}/worktree/diff`),
+  worktreeMerge: (id: string) =>
+    req<{ ok: boolean; merged?: number; files?: string[] }>(
+      `/api/sessions/${id}/worktree/merge`, { method: "POST" }),
+  worktreeDiscard: (id: string) =>
+    req<{ ok: boolean }>(`/api/sessions/${id}/worktree/discard`, { method: "POST" }),
+  // 遗留 worktree：列出 / 清理（默认只清无改动的空壳）
+  worktreeList: () =>
+    req<{ worktrees: (import("./types").WorktreeStatus & { name: string })[] }>("/api/worktrees"),
+  worktreeClean: (includeDirty = false, name?: string) =>
+    req<{ removed: string[]; kept: string[] }>("/api/worktrees/clean", {
+      method: "POST",
+      body: JSON.stringify({ include_dirty: includeDirty, ...(name ? { name } : {}) }),
+    }),
   deleteSession: (id: string) =>
     req<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   cleanupSessions: () =>

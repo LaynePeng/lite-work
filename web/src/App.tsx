@@ -68,6 +68,8 @@ const EMPTY_CHAT: ChatSessionState = {
   todos: [],
   pendingQuestions: [],
   pendingQueue: [],
+  worktreeEnabled: false,
+  worktreeStatus: null,
 };
 
 /** Agents 看板 reducer：subagent 事件 → 看板卡片更新（右面板 Agents tab 数据源）。
@@ -702,6 +704,14 @@ export default function App() {
         if (typeof snap?.metadata?.collab_mode === "string" && snap.metadata.collab_mode) {
           initial.collabMode = snap.metadata.collab_mode;
         }
+        // 隔离工作树（/worktree）：从 metadata 恢复开关；无论开关与否都拉一次
+        // 变更状态——关闭模式后遗留的 worktree 也要能看到评审卡（合并/丢弃）
+        if (snap?.metadata?.worktree === true) {
+          initial.worktreeEnabled = true;
+        }
+        void api.worktreeStatus(sid).then((st) => {
+          if (st.exists) patchChat(sid, { worktreeStatus: st });
+        }).catch(() => {});
         // 从会话 metadata 恢复子 Agent 归档卡片（跨页面刷新保留）
         if (snap?.metadata?.subagent_records) {
           const restored = (snap.metadata.subagent_records as any[]).map((r) => ({
@@ -949,6 +959,39 @@ export default function App() {
       setErrorPublic((e as Error).message);
     }
   }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, refreshRecentProjects, refreshSessions]);
+
+  /** 在隔离工作树中打开项目：切换项目 → 新建会话 → 开启 worktree 模式。 */
+  const openWorktreeSession = useCallback(async (path: string) => {
+    try {
+      const res = await api.openProject(path);
+      if (!res.ok) return;
+      setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
+      notifyElectronWorkspace(res.workspace);
+      changeSidebarTab("sessions");
+      setProjectsView("sessions");
+      void refreshRecentProjects();
+      closeStream();
+      setChatStates({});
+      chatStatesRef.current = {};
+      // 新建会话并开启隔离工作树（任务将在独立分支+目录中执行）
+      const { session_id } = await api.createSession();
+      const r = await api.setSessionWorktree(session_id, true);
+      if (!r.ok) {
+        setErrorPublic("当前项目不是 git 仓库，隔离工作树不可用");
+        setTimeout(() => setErrorPublic(null), 4000);
+        newChatTab();
+      } else {
+        patchChat(session_id, { ...EMPTY_CHAT, worktreeEnabled: true });
+        openSessionTab(session_id, "🛡️ 隔离工作树");
+        setSuccess("已在新会话中开启隔离工作树");
+        setTimeout(() => setSuccess(null), 4000);
+      }
+      await refreshSessions(res.workspace);
+    } catch (e) {
+      setErrorPublic((e as Error).message);
+    }
+  }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, openSessionTab,
+      patchChat, refreshRecentProjects, refreshSessions]);
 
   const removeRecentProject = useCallback(async (path: string) => {
     try {
@@ -1225,6 +1268,12 @@ export default function App() {
             const snap = await api.getSession(sid);
             if (snap) patchChat(sid, { messages: snap.messages ?? [] });
           })();
+          // 隔离工作树：任务结束刷新变更状态 → 聊天区出现评审卡（合并/丢弃）
+          if (getChat(sid).worktreeEnabled) {
+            void api.worktreeStatus(sid)
+              .then((st) => patchChat(sid, { worktreeStatus: st.exists ? st : null }))
+              .catch(() => {});
+          }
           void refreshSessions();
           // 竞态收口：入队成功但任务在注入前结束的补充指令（仍带 queued 标记），
           // 前插到待发送队列由下方重发兜底，避免丢消息；同时清掉标记（即将作为
@@ -1762,6 +1811,189 @@ export default function App() {
     [activeSessionId, getChat, patchChat, pushLog]
   );
 
+  // ------------------------------------------------------------ 隔离工作树（/worktree）
+
+  /** 拉取 worktree 变更状态（评审卡数据源）。 */
+  const syncWorktree = useCallback(async (sid: string) => {
+    try {
+      const st = await api.worktreeStatus(sid);
+      patchChat(sid, { worktreeStatus: st.exists ? st : null });
+      return st;
+    } catch {
+      return null;
+    }
+  }, [patchChat]);
+
+  /** /worktree on|off|status：切换隔离工作树（任务在独立 worktree 执行）。 */
+  const runWorktreeCommand = useCallback(
+    async (raw: string) => {
+      const arg = raw.replace(/^\/worktree\s*/i, "").trim().toLowerCase();
+      const [sub, ...restParts] = arg.split(/\s+/);
+      const rest = restParts.join(" ").trim();
+
+      /** 列出遗留 worktree（项目级，无需会话）。 */
+      const doList = async () => {
+        const { worktrees } = await api.worktreeList().catch(() => ({ worktrees: [] }));
+        if (worktrees.length === 0) {
+          pushLog("🛡️ 当前项目没有遗留的隔离工作树");
+          return;
+        }
+        const names = worktrees.map((w) => `${w.name}(${w.files?.length ?? 0} 变更)`).join("、");
+        pushLog(`🛡️ 遗留隔离工作树 ${worktrees.length} 个：${names} —— 清理用 /worktree clean <名字>`);
+      };
+
+      // list / clean 是**项目级**操作（不依赖某个会话）：留到会话分支之前，
+      // 空 tab（还没有会话）时也能用——否则遗留 worktree 无从清理
+      if (sub === "list" || sub === "列表") {
+        await doList();
+        return;
+      }
+      if (sub === "clean" || sub === "清理") {
+        // clean            → 清所有无改动的
+        // clean list       → 等价 list（防误输，别当成名为 list 的 worktree）
+        // clean all        → 全清（含改动）
+        // clean <name>     → 只清指定那一个
+        if (!rest) {
+          const r = await api.worktreeClean().catch(() => ({ removed: [], kept: [] }));
+          pushLog(`🛡️ 已清理 ${r.removed.length} 个无改动的隔离工作树${r.kept.length ? `（保留 ${r.kept.length} 个有改动的：${r.kept.join("、")}）` : ""}`);
+          return;
+        }
+        if (rest === "list" || rest === "列表") {
+          await doList();
+          return;
+        }
+        if (rest === "all" || rest === "全部") {
+          if (!window.confirm("确定丢弃所有遗留隔离工作树的改动？此操作不可恢复（主工作区不受影响）。")) return;
+          const r = await api.worktreeClean(true).catch(() => ({ removed: [], kept: [] }));
+          pushLog(`🛡️ 已清理全部 ${r.removed.length} 个隔离工作树（含改动）`);
+          return;
+        }
+        const name = rest;
+        const st = await api.worktreeStatus(name).catch(() => null);
+        if (!st?.exists) {
+          const { worktrees } = await api.worktreeList().catch(() => ({ worktrees: [] }));
+          const hint = worktrees.length
+            ? `现有：${worktrees.map((w) => w.name).join("、")}`
+            : "当前没有遗留工作树";
+          pushLog(`✗ 未找到隔离工作树「${name}」——${hint}`);
+          return;
+        }
+        const hasChanges = (st.files?.length ?? 0) > 0;
+        if (hasChanges && !window.confirm(
+          `「${name}」有 ${st.files?.length} 个文件变更，确定丢弃？此操作不可恢复（主工作区不受影响）。`)) return;
+        await api.worktreeClean(true, name).catch(() => {});
+        pushLog(`🛡️ 已清理隔离工作树 ${name}${hasChanges ? "（含改动）" : ""}`);
+        return;
+      }
+
+      const sid = activeSessionId;
+      if (!sid) {
+        window.alert("当前没有会话，请先打开或新建会话。");
+        return;
+      }
+      const chat = getChat(sid);
+      const say = (content: string) => {
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+      };
+      if (sub === "off" || sub === "关闭") {
+        await api.setSessionWorktree(sid, false).catch(() => {});
+        patchChat(sid, { worktreeEnabled: false });
+        // 关闭模式不等于丢弃改动：拉一次状态，让遗留 worktree 的评审卡继续可操作
+        const st = await api.worktreeStatus(sid).catch(() => null);
+        if (st?.exists && (st.files?.length ?? 0) > 0) {
+          patchChat(sid, { worktreeStatus: st });
+          say(`🛡️ 隔离工作树已关闭（后续任务回到主工作区）。\n\n⚠️ 仍有未处理的 worktree 变更（${st.files?.length ?? 0} 个文件），下方评审卡可继续「合并 / 丢弃」；不处理则一直保留在磁盘上。`);
+        } else {
+          patchChat(sid, { worktreeStatus: null });
+          say("🛡️ 隔离工作树已关闭（后续任务回到主工作区）。");
+        }
+        pushLog("🛡️ 隔离工作树已关闭");
+        return;
+      }
+      if (sub === "" || sub === "status" || sub === "状态") {
+        const st = await api.worktreeStatus(sid).catch(() => null);
+        if (!st || !st.exists) {
+          say(chat.worktreeEnabled
+            ? "🛡️ 隔离工作树已开启（本会话任务将在独立工作树执行）。关闭用 `/worktree off`。"
+            : "🛡️ 隔离工作树未开启。开启用 `/worktree on`：任务在独立分支 + 目录中执行，主工作区不受影响，结束后你可审查变更再决定合并或丢弃。");
+          return;
+        }
+        say(`🛡️ 隔离工作树：分支 ${st.branch} · 变更 ${st.files?.length ?? 0} 个文件（+${st.adds ?? 0} / -${st.dels ?? 0}）。可在下方评审卡「合并 / 丢弃」。`);
+        return;
+      }
+      if (sub === "on" || sub === "开启") {
+        // 先看有没有遗留的 worktree：有则复用（保留上次未处理的改动），提示用户
+        const prev = await api.worktreeStatus(sid).catch(() => null);
+        const r = await api.setSessionWorktree(sid, true).catch((e) => ({ ok: false, reason: (e as Error).message }));
+        if (!(r as { ok?: boolean }).ok) {
+          say(`⚠️ 无法开启隔离工作树：${(r as { reason?: string }).reason || "当前项目不是 git 仓库"}`);
+          return;
+        }
+        patchChat(sid, { worktreeEnabled: true });
+        if (prev?.exists) {
+          if (prev.files && prev.files.length > 0) {
+            patchChat(sid, { worktreeStatus: prev });
+            say(`🛡️ 隔离工作树已开启（**复用上次遗留的工作树**：分支 ${prev.branch}，已有 ${prev.files.length} 个文件变更）。\n\n后续任务在同一分支继续；下方评审卡可合并或丢弃。`);
+          } else {
+            say("🛡️ 隔离工作树已开启（复用了上次遗留的空工作树）。");
+          }
+        } else {
+          say("🛡️ 隔离工作树已开启：本会话的任务将在独立分支 + 目录（.lite-work/worktrees/）中执行，**主工作区不受影响**。任务结束后你可审查变更，决定「合并」或「丢弃」。");
+        }
+        pushLog("🛡️ 隔离工作树已开启");
+        return;
+      }
+      say("用法：`/worktree on` 开启 · `/worktree off` 关闭 · `/worktree` 查状态 · `/worktree list` 列出遗留 · `/worktree clean` 清无改动的 · `/worktree clean <名字>` 清单个 · `/worktree clean all` 全清。");
+    },
+    [activeSessionId, getChat, patchChat, pushLog]
+  );
+
+  /** 评审卡：查看 diff（日志面板输出）。 */
+  const handleWorktreeDiff = useCallback(async (sid: string) => {
+    try {
+      const { diff } = await api.worktreeDiff(sid);
+      if (!diff.trim()) {
+        pushLog("🛡️ 隔离工作树无改动");
+        return;
+      }
+      const preview = diff.length > 4000 ? `${diff.slice(0, 4000)}\n…（已截断，完整 diff 见 .lite-work/worktrees/_patches/）` : diff;
+      pushLog(`🛡️ 隔离工作树变更 diff:\n${preview}`);
+    } catch (e) {
+      pushLog(`✗ 读取 diff 失败: ${(e as Error).message}`);
+    }
+  }, [pushLog]);
+
+  /** 评审卡：合并回主工作区（成功则清理 worktree + 分支）。 */
+  const handleWorktreeMerge = useCallback(async (sid: string) => {
+    try {
+      const r = await api.worktreeMerge(sid);
+      patchChat(sid, { worktreeStatus: null });
+      pushLog(`🛡️ 已合并 ${r.merged ?? 0} 个文件到主工作区（worktree 已清理）`);
+      const t = tabsRef.current.find((t) => t.sessionId === sid);
+      if (t) setSuccess("隔离工作树已合并到主工作区");
+      setTimeout(() => setSuccess(null), 2500);
+    } catch (e) {
+      pushLog(`✗ 合并失败: ${(e as Error).message}（补丁已保存，可手动 git apply）`);
+      const t = tabsRef.current.find((t) => t.sessionId === sid);
+      if (t) setErrorPublic(`合并冲突：${(e as Error).message}`);
+    }
+  }, [patchChat, pushLog]);
+
+  /** 评审卡：丢弃 worktree（删目录 + 分支，主工作区毫发无伤）。 */
+  const handleWorktreeDiscard = useCallback(async (sid: string) => {
+    if (!window.confirm("确定丢弃隔离工作树的全部改动？此操作不可恢复（主工作区不受影响）。")) return;
+    try {
+      await api.worktreeDiscard(sid);
+      patchChat(sid, { worktreeStatus: null });
+      pushLog("🛡️ 隔离工作树已丢弃");
+      const t = tabsRef.current.find((t) => t.sessionId === sid);
+      if (t) setSuccess("隔离工作树已丢弃");
+      setTimeout(() => setSuccess(null), 2500);
+    } catch (e) {
+      pushLog(`✗ 丢弃失败: ${(e as Error).message}`);
+    }
+  }, [patchChat, pushLog]);
+
   // ------------------------------------------------------------ 手动压缩（面板环形 / /compact 命令）
 
   const compactNow = useCallback(async (sid: string, focus: string) => {
@@ -1856,6 +2088,10 @@ export default function App() {
       }
       if (trimmedCmd === "/continue" || trimmedCmd.startsWith("/continue ")) {
         runContinueCommand(prompt);
+        return;
+      }
+      if (trimmedCmd === "/worktree" || trimmedCmd.startsWith("/worktree ")) {
+        void runWorktreeCommand(prompt);
         return;
       }
       let sid = activeTabId ? tabsRef.current.find((t) => t.id === activeTabId)?.sessionId : null;
@@ -2136,6 +2372,7 @@ export default function App() {
         onRemoveRecent={(path) => void removeRecentProject(path)}
         onTogglePin={(path) => void togglePinProject(path)}
         onToggleKind={(path, kind) => void toggleProjectKind(path, kind)}
+        onOpenWorktree={(path) => void openWorktreeSession(path)}
         onBackToProjects={backToProjects}
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
@@ -2208,6 +2445,11 @@ export default function App() {
               currentAgent={currentAgent}
               unfinished={currentChat.unfinished}
               onContinue={() => void send(CONTINUE_PROMPT)}
+              worktreeEnabled={currentChat.worktreeEnabled}
+              worktreeStatus={currentChat.worktreeStatus ?? null}
+              onWorktreeDiff={() => activeSessionId && void handleWorktreeDiff(activeSessionId)}
+              onWorktreeMerge={() => activeSessionId && void handleWorktreeMerge(activeSessionId)}
+              onWorktreeDiscard={() => activeSessionId && void handleWorktreeDiscard(activeSessionId)}
               foldTurns={uiConfig?.chat_fold_turns}
               foldMessages={uiConfig?.chat_fold_messages}
             />

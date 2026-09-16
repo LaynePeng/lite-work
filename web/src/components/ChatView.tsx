@@ -9,7 +9,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { DiffPre, DiffStats, isFileDiff } from "./FileDiff";
 import AppIcon from "./AppIcon";
-import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem } from "../types";
+import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem, WorktreeStatus } from "../types";
 import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
 import { agentIconOf } from "../lib/agentMeta";
 
@@ -424,6 +424,11 @@ export default function ChatView({
   currentAgent,
   unfinished,
   onContinue,
+  worktreeEnabled,
+  worktreeStatus,
+  onWorktreeDiff,
+  onWorktreeMerge,
+  onWorktreeDiscard,
   foldTurns = FOLD_THRESHOLD,
   foldMessages = FOLD_MESSAGES,
 }: {
@@ -448,6 +453,13 @@ export default function ChatView({
   unfinished?: boolean;
   /** 点击「继续」按钮：续发推进指令 */
   onContinue?: () => void;
+  /** 隔离工作树：会话已开启（任务在独立 worktree 执行） */
+  worktreeEnabled?: boolean;
+  /** 隔离工作树变更状态（非空 → 展示评审卡） */
+  worktreeStatus?: WorktreeStatus | null;
+  onWorktreeDiff?: () => void;
+  onWorktreeMerge?: () => void;
+  onWorktreeDiscard?: () => void;
   /** 展示折叠阈值（轮数）——可在设置中配置 */
   foldTurns?: number;
   /** 展示折叠阈值（消息条数）：高工具密度会话里 1 轮可含几十张工具卡片，
@@ -572,6 +584,15 @@ export default function ChatView({
               )}
             </div>
           )}
+          {worktreeEnabled && (
+            <div className="worktree-banner" title={worktreeStatus?.path}>
+              <span className="worktree-icon">🛡️</span>
+              <span className="worktree-text">
+                隔离工作树{worktreeStatus?.branch ? ` · ${worktreeStatus.branch}` : ""}
+                <small>改动不会影响主工作区，结束后可审查合并或丢弃</small>
+              </span>
+            </div>
+          )}
           {foldFrom > 0 && (
             <button
               className="folded-divider"
@@ -608,6 +629,41 @@ export default function ChatView({
                 title="模型提前收尾但 TODO 仍有未完成项；点击继续推进（或 /continue on 开启自动续推）">
                 ⏭ 继续执行未完成的任务
               </button>
+            </div>
+          )}
+          {/* 隔离工作树评审卡：任务结束有待处理变更 → 查看 diff / 合并 / 丢弃 */}
+          {worktreeStatus?.exists && !running && (
+            <div className="worktree-review">
+              <div className="worktree-review-head">
+                <span className="worktree-review-title">🛡️ 隔离工作树变更待处理</span>
+                <span className="worktree-review-stat">
+                  {worktreeStatus.files?.length ?? 0} 个文件
+                  {typeof worktreeStatus.adds === "number" && (
+                    <> · <span className="diff-add">+{worktreeStatus.adds}</span> <span className="diff-del">−{worktreeStatus.dels ?? 0}</span></>
+                  )}
+                </span>
+              </div>
+              {worktreeStatus.files && worktreeStatus.files.length > 0 && (
+                <div className="worktree-review-files">
+                  {worktreeStatus.files.slice(0, 12).map((f) => (
+                    <span key={f.path} className="worktree-file" title={f.path}>
+                      <b className="worktree-file-status">{f.status}</b>{f.path}
+                    </span>
+                  ))}
+                  {worktreeStatus.files.length > 12 && (
+                    <span className="worktree-file-more">…还有 {worktreeStatus.files.length - 12} 个</span>
+                  )}
+                </div>
+              )}
+              <div className="worktree-review-actions">
+                <button className="btn-test" onClick={onWorktreeDiff}>查看 diff</button>
+                <button className="btn-merge" onClick={onWorktreeMerge} title="把变更应用回主工作区并清理工作树">
+                  ✓ 合并到主工作区
+                </button>
+                <button className="btn-discard" onClick={onWorktreeDiscard} title="删除工作树与分支，主工作区不受影响">
+                  ✗ 丢弃
+                </button>
+              </div>
             </div>
           )}
         </div>

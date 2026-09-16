@@ -39,6 +39,17 @@ class SessionCollabRequest(BaseModel):
     mode: Optional[str] = None
 
 
+class SessionWorktreeRequest(BaseModel):
+    """会话隔离工作树开关（/worktree）：持久化到 metadata，任务在独立 worktree 执行。"""
+    enabled: bool = True
+
+
+class WorktreeCleanRequest(BaseModel):
+    """遗留 worktree 清理：name 指定单个（不填=全部）；include_dirty=true 连有改动的也删。"""
+    name: Optional[str] = None
+    include_dirty: bool = False
+
+
 async def _shutdown_session_agents(app, session_id: str) -> None:
     """停止该会话全部后台子 Agent（会话删除时防泄漏）。"""
     try:
@@ -246,6 +257,60 @@ def create_router(ctx: ServerContext) -> APIRouter:
             metadata.pop("collab_mode", None)
         app.session_store.save(session_id, snapshot.messages, metadata)
         return {"ok": True, "mode": mode or None}
+
+    # ------------------------------------------------------------ 隔离工作树
+
+    @router.post("/api/sessions/{session_id}/worktree")
+    async def set_session_worktree(session_id: str, payload: SessionWorktreeRequest, request: Request):
+        """开启/关闭会话的隔离工作树（/worktree on|off）。
+
+        开启后，该会话的任务在独立分支 worktree-<sid> + 目录
+        .lite-work/worktrees/<sid> 中执行，主工作区不受影响。
+        """
+        ctx.check_auth(request)
+        result = app.set_session_worktree(session_id, bool(payload.enabled))
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("reason", "无法切换隔离工作树"))
+        return result
+
+    @router.get("/api/sessions/{session_id}/worktree")
+    async def worktree_status(session_id: str, request: Request):
+        """worktree 状态：是否启用 + 变更文件/增删行数/分支（评审卡数据源）。"""
+        ctx.check_auth(request)
+        return app.worktree_status(session_id)
+
+    @router.get("/api/sessions/{session_id}/worktree/diff")
+    async def worktree_diff(session_id: str, request: Request):
+        """worktree 改动的人类可读 unified diff（评审卡「查看 diff」）。"""
+        ctx.check_auth(request)
+        return {"diff": app.worktree_diff(session_id)}
+
+    @router.post("/api/sessions/{session_id}/worktree/merge")
+    async def worktree_merge(session_id: str, request: Request):
+        """合并 worktree 改动回主工作区（成功清理 worktree + 分支）。"""
+        ctx.check_auth(request)
+        result = app.worktree_merge(session_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("reason", "合并失败"))
+        return result
+
+    @router.post("/api/sessions/{session_id}/worktree/discard")
+    async def worktree_discard(session_id: str, request: Request):
+        """丢弃 worktree（删目录 + 分支，主工作区毫发无伤）。"""
+        ctx.check_auth(request)
+        return app.worktree_discard(session_id)
+
+    @router.get("/api/worktrees")
+    async def list_worktrees(request: Request):
+        """列出当前项目磁盘上所有活跃 worktree（遗留清理用）。"""
+        ctx.check_auth(request)
+        return {"worktrees": app.worktree_list_active()}
+
+    @router.post("/api/worktrees/clean")
+    async def clean_worktrees(payload: WorktreeCleanRequest, request: Request):
+        """清理遗留 worktree：默认只删无改动的；include_dirty=true 全删（可指定单个 name）。"""
+        ctx.check_auth(request)
+        return app.worktree_clean(include_dirty=bool(payload.include_dirty), name=payload.name)
 
     @router.get("/api/sessions/{session_id}/agents")
     async def list_session_agents(session_id: str, request: Request):
