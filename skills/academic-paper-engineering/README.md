@@ -14,8 +14,11 @@
 | # | 能力 | 需要 | 缺失时的表现 |
 | --- | --- | --- | --- |
 | ① | Markdown / LaTeX → 可编译 LaTeX 工程 | Python **3.9+**、PyYAML | 不可用（核心能力） |
-| ② | DOCX / PDF / PPTX / XLSX 输入解析 | 额外 **LibreOffice**（命令行 `soffice`） | 仅这些输入不可用，其余正常 |
+| ②a | DOCX / PDF / PPTX / XLSX 输入**解析** | 纯 Python：`python-docx` / `pymupdf` / `openpyxl` / `python-pptx` | 对应格式不可用，其余正常 |
+| ②b | 旧格式转换 / xlsx 公式重算 / pptx 缩略图（可选增强） | **LibreOffice**（命令行 `soffice`） | 见下方降级路径，不影响 ②a |
 | ③ | 本地编译出 PDF | 额外 **TeX 发行版**（`pdflatex`/`xelatex` + `bibtex`） | **自动跳过编译，仍交付 LaTeX 工程** |
+
+> ②a **不需要 LibreOffice** —— 四类输入都是纯 Python 解析。LibreOffice 只服务于 ②b。
 
 **动手前先自检**（会逐项报告并给出针对性的安装指引）：
 
@@ -30,9 +33,33 @@ cd "<技能目录>" && python3 scripts/selfcheck.py
 
 - **方案 A（本地编译）**：安装 TeX 发行版后在工程目录执行 `pdflatex main.tex`（重复 2–3 次解析交叉引用）
   - macOS: `brew install --cask mactex-no-gui`（或 `mactex`，约 5GB）
+  - macOS（无 Homebrew，用 MacPorts）：
+    ```bash
+    sudo port install texlive-latex-extra texlive-xetex texlive-lang-chinese \
+         texlive-publishers latexmk dvisvgm
+    ```
   - Windows: MiKTeX <https://miktex.org/download> 或 TeX Live
   - Linux: `sudo apt install texlive-full` / `sudo dnf install texlive-scheme-full`
 - **方案 B（免安装）**：把整个 LaTeX 工程目录打包上传到 [Overleaf](https://www.overleaf.com) 直接编译。
+
+中文排版走 `xelatex` + `ctex` + `fandol` 字体（MacPorts 的 `texlive-lang-chinese` 已含）。
+
+### 没有 LibreOffice 怎么办？
+
+②a（四类输入解析）不受影响；只有 ②b 的几个可选动作需要它。降级路径：
+
+| ②b 动作 | 没有 LibreOffice 时 |
+| --- | --- |
+| legacy `.doc` / `.rtf` → docx | macOS 系统自带：`textutil -convert docx file.doc` |
+| docx → PDF（视觉检查） | `pandoc -o out.pdf in.docx`（需已装 TeX） |
+| 接受 Word 修订 | `pandoc --track-changes=accept -o out.docx in.docx`（近似，段落合并场景有差异） |
+| xlsx 公式重算 / pptx 缩略图 | 无替代，需 LibreOffice |
+
+安装 LibreOffice 后，把 CLI 放进 PATH（macOS）：
+
+```bash
+sudo ln -sf /Applications/LibreOffice.app/Contents/MacOS/soffice /usr/local/bin/soffice
+```
 
 ## 支持的模板
 

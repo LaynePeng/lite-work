@@ -128,6 +128,76 @@ def test_create_reuses_existing_worktree(tmp_path):
     mgr.cleanup("reuse")
 
 
+# ---------------------------------------------------------------- git 原生合并
+
+def _log(cwd: str) -> str:
+    return _git(cwd, "log", "--oneline").stdout
+
+
+def test_harvest_commits_changes_to_branch(tmp_path):
+    """收割 = 把改动提交到分支（不再生成 patch），分支上留下真实提交。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("feat")["path"]
+    with open(os.path.join(wt, "README.md"), "w", encoding="utf-8") as f:
+        f.write("# demo\n\nworktree edit\n")
+
+    h = mgr.harvest("feat")
+    assert h["committed"] is True
+    assert h["commits"] >= 1
+    # 分支上有 lite-work 提交，且工作区干净（改动已提交）
+    assert "lite-work" in _log(wt)
+    assert _git(wt, "status", "--porcelain").stdout.strip() == ""
+    mgr.cleanup("feat")
+
+
+def test_merge_creates_merge_commit_and_marks_merged(tmp_path):
+    """合并走真实 git merge --no-ff：产生可追溯的 merge commit。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("feat")["path"]
+    with open(os.path.join(wt, "new.txt"), "w", encoding="utf-8") as f:
+        f.write("from worktree\n")
+
+    m = mgr.merge("feat")
+    assert m["ok"] is True and m["merged"] == 1
+    # 主工作区拿到文件 + 历史里有 merge commit
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "from worktree\n"
+    assert "lite-work: 合并隔离工作树" in _log(str(tmp_path))
+    # 分支已并入 → 可判定为已合并（AI 合并收尾据此清理）
+    assert mgr.is_branch_merged("feat") is True
+    assert mgr.has_merge_in_progress() is False
+    mgr.cleanup("feat")
+
+
+def test_merge_conflict_keeps_state_and_abort(tmp_path):
+    """冲突：返回冲突文件、保持合并中状态；abort_merge 回退到合并前。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("conflict")["path"]
+    # worktree 与主工作区同时改同一文件的同一行
+    with open(os.path.join(wt, "README.md"), "w", encoding="utf-8") as f:
+        f.write("worktree version\n")
+    mgr.harvest("conflict")
+    with open(tmp_path / "README.md", "w", encoding="utf-8") as f:
+        f.write("main version\n")
+    _git(str(tmp_path), "commit", "-aqm", "main change")
+
+    m = mgr.merge("conflict")
+    assert m["ok"] is False
+    assert m["conflicts"] == ["README.md"]
+    assert mgr.has_merge_in_progress() is True
+    # 冲突现场保留（文件带冲突标记），worktree 未丢
+    assert os.path.isdir(wt)
+
+    # 放弃合并 → 回到合并前（主分支内容为 main version）
+    a = mgr.abort_merge()
+    assert a["ok"] is True
+    assert mgr.has_merge_in_progress() is False
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "main version\n"
+    mgr.cleanup("conflict")
+
+
 # ---------------------------------------------------------------- 依赖 symlink
 
 def test_dependencies_symlinked_into_worktree(tmp_path):
@@ -192,8 +262,8 @@ def test_dep_symlinks_excluded_from_harvest_and_merge(tmp_path):
 
     files = [p for _, p in mgr.harvest("deps")["files"]]
     assert files == ["README.md"], f"依赖 symlink 混入变更列表: {files}"
-    # patch 里不得出现 .venv
-    assert ".venv" not in mgr.harvest("deps")["patch"]
+    # 依赖 symlink 不得进入提交内容（diff 里不能出现 .venv）
+    assert ".venv" not in mgr.diff_text("deps")
 
     m = mgr.merge("deps")
     assert m["ok"] and m["merged"] == 1
@@ -233,25 +303,24 @@ def test_list_active(tmp_path):
     mgr.cleanup("b")
 
 
-def test_stash_and_pop(tmp_path):
-    _init_repo(tmp_path)
-    mgr = WorktreeManager(str(tmp_path))
-    mgr.stash_workspace("lw-auto")
-    # 干净工作区：stash 应返回 False
-    assert mgr.stash_workspace("lw-auto-2") is False
-    # 有改动时 stash 成功，pop 恢复
-    (tmp_path / "wip.txt").write_text("wip", encoding="utf-8")
-    assert mgr.stash_workspace("lw-auto-3") is True
-    assert not (tmp_path / "wip.txt").exists()
-    assert mgr.pop_stash() is True
-    assert (tmp_path / "wip.txt").exists()
-
-
 # ---------------------------------------------------------------- 遗留管理（app 层）
 
 def _make_app(tmp_path):
     from litework.app import AgentApp
     return AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lc"))
+
+
+def test_enable_creates_worktree_eagerly(tmp_path):
+    """开启隔离模式应立即创建 worktree（而非等第一个任务）——否则 /worktree list 为空。"""
+    _init_repo(tmp_path)
+    app = _make_app(tmp_path)
+    app.session_store.save("s1", [])
+    r = app.set_session_worktree("s1", True)
+    assert r["ok"] is True
+    assert r["worktree"] and r["worktree"]["branch"] == "worktree-s1"
+    # 磁盘上立刻可见 + list 能查到
+    assert os.path.isdir(tmp_path / ".lite-work/worktrees/s1")
+    assert [w["name"] for w in app.worktree_overview()["worktrees"]] == ["s1"]
 
 
 def test_off_cleans_empty_worktree_keeps_dirty(tmp_path):
@@ -299,8 +368,158 @@ def test_worktree_clean_default_keeps_dirty(tmp_path):
     assert not os.path.isdir(wt)
 
 
+def test_merge_worktree_prompt_mentions_branch_and_conflicts():
+    """AI 合并任务的提示词：给出分支名、要求 git merge、冲突要解决而非放弃。"""
+    from litework.server.tasks import _merge_worktree_prompt
+
+    p = _merge_worktree_prompt("sess-1", "尽量保守")
+    assert "worktree-sess-1" in p
+    assert "git merge --no-ff" in p
+    assert "冲突" in p and "merge --abort" in p
+    assert "尽量保守" in p
+
+
+def test_ai_merge_task_runs_in_main_workspace(tmp_path):
+    """AI 合并任务必须落在主工作区（隔离模式开启时也要绕过），并注入合并指令。"""
+    import asyncio
+
+    from litework.server.tasks import TaskManager
+    from tests.conftest import MockLLMAdapter
+
+    _init_repo(tmp_path)
+    app = _make_app(tmp_path)
+    app._mock_adapter = MockLLMAdapter([("done", [])])
+    sid = "merge-sess"
+    app.session_store.save(sid, [])
+    app.set_session_worktree(sid, True)   # 隔离模式开启
+    assert app.session_worktree_enabled(sid) is True
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        tm = TaskManager(app)
+        h = tm.start(sid, "请合并", agent_id="build", merge_worktree=sid)
+        # 合并任务不做隔离：工作区为主工作区，loop 隔离根为空
+        assert h.workspace is None
+        assert h.worktree_name is None
+        assert h.loop.isolation_root is None
+        assert h.merge_worktree == sid
+        h.task.cancel()
+        loop.run_until_complete(asyncio.gather(h.task, return_exceptions=True))
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+def test_resume_restores_worktree_from_existing_branch(tmp_path):
+    """「回到之前的 worktree」：目录被删但分支还在 → 挂回原分支（真恢复）。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("resume")["path"]
+    with open(os.path.join(wt, "wip.txt"), "w", encoding="utf-8") as f:
+        f.write("work in progress\n")
+    mgr.harvest("resume")  # 提交到分支
+    # 模拟目录被手工删除（分支仍在）
+    import shutil as _sh
+    _sh.rmtree(wt)
+    mgr._git(str(tmp_path), "worktree", "prune")
+    assert not os.path.isdir(wt)
+    assert mgr.branch_exists("resume") is True
+
+    r = mgr.create("resume")
+    assert r["ok"] is True and r["restored"] is True
+    # 之前的提交还在（不是新建的空工作树）
+    assert os.path.isfile(os.path.join(r["path"], "wip.txt"))
+    assert "lite-work" in _log(r["path"])
+    mgr.cleanup("resume")
+
+
+def test_create_fresh_when_branch_gone(tmp_path):
+    """分支与目录都没了 → 新建（restored=False），不会误报为恢复。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    r = mgr.create("fresh")
+    assert r["ok"] is True and r["restored"] is False
+    mgr.cleanup("fresh")
+
+
+def test_task_start_clears_flag_when_worktree_unavailable(tmp_path):
+    """隔离模式开启但 worktree 既不能建也不能恢复 → 清除标记（不静默降级）。"""
+    import asyncio
+    import subprocess
+
+    from litework.server.tasks import TaskManager
+    from tests.conftest import MockLLMAdapter
+
+    _init_repo(tmp_path)
+    app = _make_app(tmp_path)
+    app._mock_adapter = MockLLMAdapter([("done", [])])
+    sid = "gone-sess"
+    app.session_store.save(sid, [])
+    app.set_session_worktree(sid, True)
+    # 破坏 git：删掉 .git → create 与 branch_exists 都失败
+    import shutil as _sh
+    _sh.rmtree(os.path.join(str(tmp_path), ".git"))
+    assert app.session_worktree_enabled(sid) is True
+
+    loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+    try:
+        tm = TaskManager(app)
+        h = tm.start(sid, "干活", agent_id="build")
+        # 隔离失效 → 标记被清除，任务回落主工作区（工作区为 None）
+        assert h.workspace is None
+        assert app.session_worktree_enabled(sid) is False
+        h.task.cancel()
+        loop.run_until_complete(asyncio.gather(h.task, return_exceptions=True))
+    finally:
+        loop.close(); asyncio.set_event_loop(None)
+
+
+def test_new_untracked_files_visible_with_line_counts(tmp_path):
+    """回归：新文件必须出现在变更列表（git diff 不含未跟踪文件），且行数计入 +。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("newfiles")["path"]
+    with open(os.path.join(wt, "brand_new.txt"), "w", encoding="utf-8") as f:
+        f.write("l1\nl2\nl3\n")
+
+    st = mgr.status("newfiles")
+    paths = {f["path"]: f["status"] for f in st["files"]}
+    assert "brand_new.txt" in paths, f"新文件应从 status ?? 补回: {paths}"
+    assert paths["brand_new.txt"] == "A"
+    assert st["adds"] >= 3, f"新文件行数应计入 adds: {st}"
+    mgr.cleanup("newfiles")
+
+
+def test_status_does_not_stage_worktree_index(tmp_path):
+    """回归：status() 是只读操作，不得把文件偷偷 add 进 worktree 索引。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("nostage")["path"]
+    with open(os.path.join(wt, "x.txt"), "w", encoding="utf-8") as f:
+        f.write("hello\n")
+
+    mgr.status("nostage")   # 之前这里会执行 git add -A
+    staged = _git(wt, "diff", "--cached", "--name-only").stdout.strip()
+    assert staged == "", f"status() 不应改动暂存区，却有: {staged}"
+    mgr.cleanup("nostage")
+
+
+def test_binary_untracked_not_line_counted(tmp_path):
+    """二进制/超大未跟踪文件仍出现在列表，但不计行数（adds 不因它暴涨）。"""
+    _init_repo(tmp_path)
+    mgr = WorktreeManager(str(tmp_path))
+    wt = mgr.create("bin")["path"]
+    with open(os.path.join(wt, "blob.bin"), "wb") as f:
+        f.write(b"\x00\x01\x02" * 100)
+
+    st = mgr.status("bin")
+    assert any(f["path"] == "blob.bin" for f in st["files"])
+    assert st["adds"] == 0, f"二进制不应计行数: {st}"
+    mgr.cleanup("bin")
+
+
 def test_worktree_clean_single_name(tmp_path):
-    """按名字只清一个：其余保留；有改动的需 include_dirty 才删。"""
     _init_repo(tmp_path)
     app = _make_app(tmp_path)
     mgr = app.worktree_manager()

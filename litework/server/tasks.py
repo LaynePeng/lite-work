@@ -15,7 +15,6 @@ from ..app import AgentApp
 from ..core.agent_loop import AgentLoop
 from ..core.context_manager import patch_dangling_tool_calls
 from ..core.system_prompt import SystemPromptBuilder
-from ..core.types import Message
 
 logger = logging.getLogger("litework.tasks")
 
@@ -25,8 +24,31 @@ EVENT_FORWARD = {
     "task:done", "task:error", "stats:update", "subagent:completed",
     "context:stats", "subagent:started", "subagent:progress", "skill:loaded",
     "todo:updated", "question:request", "question:resolved",
-    "agent:closed",
+    "agent:closed", "worktree:merge",
 }
+
+
+def _merge_worktree_prompt(name: str, user_prompt: str) -> str:
+    """AI 合并任务的提示词：让 Agent 在主工作区把隔离工作树分支合并回来。
+
+    用户不必手动解决冲突——这正是「让 AI 合并」的意义（与真实开发中让 Claude
+    合并分支的做法一致）。约定：分支名 worktree-<name>，用 --no-ff 保留来源。
+    """
+    branch = f"worktree-{name}"
+    lines = [
+        f"[隔离工作树合并] 请把分支 `{branch}` 合并回当前分支，并处理可能出现的冲突。",
+        "",
+        f"1. 先确认当前分支与工作区状态：`git status`、`git branch --show-current`；",
+        f"2. 执行合并：`git merge --no-ff -m \"lite-work: 合并隔离工作树（{name}）\" {branch}`；",
+        "3. 若产生冲突：逐个打开冲突文件，理解双方意图后正确解决（保留双方有效改动、"
+        "删掉冲突标记），再 `git add <文件>`，最后用上面的信息 `git commit` 完成合并提交；",
+        "   —— 不要用 `git merge --abort` 一弃了之；确实无法解决时，保留冲突现场并在总结里说明原因；",
+        "4. 合并后用 `git status` 与 `git log --oneline -3` 自检：不得残留未合并路径或冲突标记；",
+        "5. 只做合并与冲突解决，不要顺手改动无关文件，也不要 push。",
+    ]
+    if user_prompt:
+        lines += ["", "（用户附加说明：" + user_prompt + "）"]
+    return "\n".join(lines)
 
 
 class TaskHandle:
@@ -63,6 +85,10 @@ class TaskHandle:
         # 隔离工作树模式：任务实际工作区（None = 主工作区）
         self.workspace: Optional[str] = None
         self.worktree_name: Optional[str] = None
+        # AI 合并任务：待合并的 worktree 名（非 None 时任务结束后校验并清理）
+        self.merge_worktree: Optional[str] = None
+        # 已广播过的冲突文件列表（去重，避免同一集合反复推送）
+        self._merge_conflicts_seen: List[str] = []
 
     # ------------------------------------------------------------ SSE 订阅
 
@@ -162,6 +188,19 @@ class TaskHandle:
                     self.kernel.session_id, (payload or {}).get("task") or {}
                 )
                 payload = {**(payload or {}), "session": session_stats}
+            # AI 合并任务：每次命令执行后探测是否出现冲突 → 实时广播（前端显示解决进度）
+            if (self.merge_worktree and event_name == "tool:after_execute"
+                    and (payload or {}).get("toolName") == "execute_command"):
+                try:
+                    mgr = self.app.worktree_manager()
+                    if mgr.has_merge_in_progress():
+                        conflicts = mgr.merge_conflicts()
+                        if conflicts and conflicts != self._merge_conflicts_seen:
+                            self._merge_conflicts_seen = conflicts
+                            self._emit_merge_phase("conflicts", conflicts=conflicts,
+                                                   message="AI 正在解决冲突")
+                except Exception:  # noqa: BLE001 - 探测失败不影响任务
+                    pass
             if event_name in EVENT_FORWARD:
                 self._forward_event({"type": event_name, "data": payload})
 
@@ -203,6 +242,9 @@ class TaskHandle:
     async def run(self, prompt: str) -> None:
         self._subscribe_events()
         self.running = True
+        # AI 合并任务：开场广播 started（前端显示合并进度条）
+        if self.merge_worktree:
+            self._emit_merge_phase("started", message="正在合并隔离工作树分支…")
         todo_plugin = getattr(self.app, "todo_plugin", None)
         if todo_plugin is not None:
             todo_plugin.bind(self.kernel.session_id, self.kernel.events)
@@ -303,6 +345,10 @@ class TaskHandle:
         finally:
             self.running = False
             self.done = True
+            # AI 合并任务收尾：校验合并是否真正完成（分支已并入主分支、无进行中的合并），
+            # 成功则自动清理 worktree 与分支；仍有冲突则保留现场并提示用户
+            if self.merge_worktree:
+                self._finalize_merge_worktree(self.merge_worktree)
             if todo_plugin is not None:
                 todo_plugin.unbind(self.kernel.session_id)
             # 任务结束：清差分基线，下个任务的统计从 0 重新起算
@@ -355,6 +401,48 @@ class TaskHandle:
             return SkillsTools(self.app.workspace).read_skill(name)
         except Exception:
             return None
+
+    def _emit_merge_phase(self, phase: str, *, conflicts: Optional[List[str]] = None,
+                          files: int = 0, commits: int = 0, message: str = "") -> None:
+        """广播合并阶段事件（前端显示合并进度条）。"""
+        name = self.merge_worktree or ""
+        self._forward_event({"type": "worktree:merge", "data": {
+            "name": name,
+            "branch": f"worktree-{name}" if name else "",
+            "phase": phase,
+            "conflicts": conflicts or [],
+            "files": files,
+            "commits": commits,
+            "message": message,
+        }})
+
+    def _finalize_merge_worktree(self, name: str) -> None:
+        """AI 合并任务结束后的校验与收尾（在主工作区执行）。"""
+        try:
+            mgr = self.app.worktree_manager()
+            if mgr.has_merge_in_progress():
+                conflicts = mgr.merge_conflicts()
+                self._emit_merge_phase("conflicts", conflicts=conflicts,
+                                       message="主工作区仍有冲突待解决")
+                logger.info("[Task] AI 合并未完成，仍有 %d 个冲突文件", len(conflicts))
+                return
+            if mgr.is_branch_merged(name):
+                # 合并成功：读一次变更摘要 → 清理 worktree + 分支 → 关闭会话隔离开关
+                # （否则 metadata 仍为 worktree=true，下个任务会再建一个工作树）
+                st = mgr.status(name)
+                files = len(st.get("files") or [])
+                commits = int(st.get("commits") or 0)
+                mgr.cleanup(name)
+                self.app.set_session_worktree(self.kernel.session_id, False)
+                self._emit_merge_phase("merged", files=files, commits=commits,
+                                       message="已合并并清理工作树")
+                logger.info("[Task] AI 合并完成，已清理 worktree %s", name)
+            else:
+                self._emit_merge_phase("failed",
+                                       message=f"分支 worktree-{name} 尚未并入当前分支")
+        except Exception:  # noqa: BLE001 - 收尾失败不应影响任务结束
+            logger.exception("[Task] AI 合并收尾失败")
+            self._emit_merge_phase("failed", message="合并收尾时发生异常，请检查 git 状态")
 
     def _session_goal(self) -> Optional[str]:
         """会话目标（/goal 设置，存于 session metadata）。"""
@@ -526,19 +614,35 @@ class TaskManager:
         self.tasks: Dict[str, TaskHandle] = {}
 
     def start(self, session_id: str, prompt: str, agent_id: Optional[str] = None,
-              reasoning_effort: Optional[str] = None) -> TaskHandle:
+              reasoning_effort: Optional[str] = None,
+              merge_worktree: Optional[str] = None) -> TaskHandle:
         task_id = uuid.uuid4().hex[:12]
-        # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）
+        # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）。
+        # 例外：merge_worktree（AI 合并任务）必须落在**主工作区**——它要把分支
+        # 合并回主分支并解决冲突，隔离执行会自我矛盾。
         task_workspace: Optional[str] = None
         worktree_name: Optional[str] = None
-        if self.app.session_worktree_enabled(session_id):
-            created = self.app.worktree_manager().create(session_id)
+        # 会话快照只读一次（C2）：worktree 开关、历史消息、模型覆盖都取自同一份，
+        # 避免同一任务里把 session 文件读 2~3 遍（大历史下是纯浪费的 I/O）
+        snapshot = self.app.session_store.load(session_id)
+        metadata: Dict[str, Any] = (snapshot.metadata if snapshot else None) or {}
+        if merge_worktree:
+            pass
+        elif metadata.get("worktree"):
+            mgr = self.app.worktree_manager()
+            created = mgr.create(session_id)
             if created.get("ok"):
                 task_workspace = created["path"]
                 worktree_name = session_id
+                if created.get("restored"):
+                    logger.info("[Task] 已恢复会话 %s 的隔离工作树（分支 %s）",
+                                session_id, created.get("branch"))
             else:
-                # git 不可用/创建失败：降级主工作区（不中断任务）
-                logger.warning("[Task] worktree 不可用，降级主工作区: %s", created.get("reason"))
+                # 既不能建也不能恢复（git 不可用/分支被删）→ 隔离模式失效：
+                # 清除标记，避免"界面说隔离、任务其实在主工作区"的静默隔离丢失
+                logger.warning("[Task] worktree 不可用，已关闭该会话的隔离模式: %s",
+                               created.get("reason"))
+                self.app.set_session_worktree(session_id, False)
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         # workspace：隔离时所有工具插件以 worktree 为工作区构建
         registry = self.app.create_agent_registry(agent_id or "build", workspace=task_workspace)
@@ -549,12 +653,11 @@ class TaskManager:
         kernel.orchestrator_agent_id = agent_id or "build"
         # 多轮对话：加载该 session 已落盘的历史消息到上下文，
         # 避免每轮新建 kernel 时从空上下文开始、落盘覆盖上一轮对话
-        snapshot = self.app.session_store.load(session_id)
         if snapshot and snapshot.messages:
             # 顺手治愈历史中的悬空 tool_calls（旧版本/中断遗留）：补占位结果，
             # 否则每轮 repair 都丢弃该消息（丢上下文 + 反复击穿 prompt cache）
             kernel.ctx.messages = patch_dangling_tool_calls(list(snapshot.messages))
-        model_override = (snapshot.metadata.get("model") if snapshot else None) or None
+        model_override = metadata.get("model") or None
         if not isinstance(model_override, dict):
             model_override = None
         loop = self.app.create_loop(kernel, registry, agent_id=agent_id,
@@ -567,6 +670,9 @@ class TaskManager:
         handle.agent_id = agent_id or "build"
         handle.workspace = task_workspace
         handle.worktree_name = worktree_name
+        handle.merge_worktree = merge_worktree
+        if merge_worktree:
+            prompt = _merge_worktree_prompt(merge_worktree, prompt)
         handle.skill_extra, handle.skill_names, handle.skill_ask_names = self._resolve_skill_extra(prompt)
         self.tasks[task_id] = handle
         handle.task = asyncio.get_event_loop().create_task(handle.run(prompt))

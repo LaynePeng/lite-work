@@ -30,7 +30,6 @@ from .install_progress import checkpoint
 logger = logging.getLogger("litework.tools.plugin_loader")
 
 # 插件搜索目录（相对于用户家目录）
-USER_PLUGIN_DIR = ".lite-work/plugins"
 
 # 社区插件默认源（manifest.json 根）
 DEFAULT_COMMUNITY_URL = "https://github.com/laynepeng/lite-work-plugins"
@@ -312,7 +311,8 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
 
 
 def _find_plugin_classes(module: object) -> List[type]:
-    """从模块中找出 Plugin/ToolPlugin 子类（排除基类自身）。"""
+    """从模块中找出 Plugin 子类（排除各基类自身）。"""
+    from ..llm.pricing_provider import PricingProvider
     from ..orchestration.collab_policy import CollabModePlugin
     from ..tools.plugin import ToolPlugin
 
@@ -321,10 +321,11 @@ def _find_plugin_classes(module: object) -> List[type]:
         obj = getattr(module, name)
         if not isinstance(obj, type):
             continue
-        # 只要 Plugin 子类（ToolPlugin / CollabModePlugin 也是 Plugin 子类）；
-        # 基类自身排除——用户模块 import 基类时不实例化
+        # 只要 Plugin 子类（ToolPlugin / CollabModePlugin / PricingProvider 也是）；
+        # 基类自身排除——插件模块 import 基类时不实例化
         if (issubclass(obj, Plugin) and obj is not Plugin
-                and obj is not ToolPlugin and obj is not CollabModePlugin):
+                and obj is not ToolPlugin and obj is not CollabModePlugin
+                and obj is not PricingProvider):
             classes.append(obj)
     return classes
 
@@ -350,9 +351,13 @@ def load_plugins(config_dir: str) -> List[Plugin]:
                 continue
             seen_names.add(name)
 
-            # 目录插件：先安装依赖
+            # 目录插件：先安装依赖。依赖失败不应让整个加载中断——
+            # 该插件后续 import 大概率失败，由下面的 mod None 分支跳过并记日志。
             if desc["is_dir"]:
-                _install_plugin_deps(desc["path"])
+                try:
+                    _install_plugin_deps(desc["path"])
+                except Exception as exc:
+                    logger.warning("[PluginLoader] 插件 %s 依赖安装失败: %s", name, exc)
 
             mod = _load_module(desc["spec_path"], f"litework_plugin_{name}")
             if mod is None:
@@ -386,11 +391,16 @@ def builtin_plugins_root() -> str:
                         "builtin_plugins")
 
 
-def load_collab_builtin() -> List[Any]:
-    """加载内置协作模式包（与社区包同格式，仅加载一次）。"""
-    global _collab_builtin_cache
-    if _collab_builtin_cache is not None:
-        return _collab_builtin_cache
+def load_builtin_plugins() -> List[Any]:
+    """加载内置插件目录（litework/builtin_plugins/）下全部 Plugin 子类，仅加载一次。
+
+    与社区包同一套格式与发现逻辑：工具插件 / 协作模式插件 / 定价数据源插件都在
+    这里实例化，调用方按基类过滤（见下面的 load_tool_builtin / load_collab_builtin
+    / load_pricing_builtin 三个封装）。
+    """
+    global _builtin_plugins_cache
+    if _builtin_plugins_cache is not None:
+        return _builtin_plugins_cache
     root = builtin_plugins_root()
     plugins: List[Any] = []
     for desc in _discover_plugin_modules(root):
@@ -402,11 +412,40 @@ def load_collab_builtin() -> List[Any]:
                 plugins.append(cls())
             except Exception as exc:
                 logger.warning("[PluginLoader] 实例化内置插件 %s 失败: %s", desc["name"], exc)
-    _collab_builtin_cache = plugins
+    _builtin_plugins_cache = plugins
     return plugins
 
 
-_collab_builtin_cache: Optional[List[Any]] = None
+_builtin_plugins_cache: Optional[List[Any]] = None
+
+
+def load_tool_builtin() -> List[Any]:
+    """内置工具插件（ToolPlugin 子类）。
+
+    定价插件既是 ToolPlugin 又是 PricingProvider，会同时出现在本列表与
+    load_pricing_builtin() 中——两处返回同一缓存实例。
+    """
+    from .plugin import ToolPlugin
+
+    return [p for p in load_builtin_plugins() if isinstance(p, ToolPlugin)]
+
+
+def load_collab_builtin() -> List[Any]:
+    """加载内置协作模式包（与社区包同格式，仅加载一次）。
+
+    内置目录里还有其他类型的插件（定价插件等），这里只取协作模式插件——
+    否则调用方按协作模式访问 mode_name 会 AttributeError。
+    """
+    from ..orchestration.collab_policy import CollabModePlugin
+
+    return [p for p in load_builtin_plugins() if isinstance(p, CollabModePlugin)]
+
+
+def load_pricing_builtin() -> List[Any]:
+    """加载内置定价数据源插件（与社区包同格式，仅加载一次）。"""
+    from ..llm.pricing_provider import PricingProvider
+
+    return [p for p in load_builtin_plugins() if isinstance(p, PricingProvider)]
 
 
 def find_plugin_icon(name: str, *roots: str) -> Optional[str]:
@@ -447,17 +486,25 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
         name = desc["name"]
         # 目录插件先解依赖（wheels 解压幂等；与 load_plugins 同路径，
         # 保证元信息读取时插件模块能正常 import 其依赖）
+        dep_error = ""
         if desc["is_dir"]:
-            _install_plugin_deps(desc["path"])
+            try:
+                _install_plugin_deps(desc["path"])
+            except Exception as exc:
+                dep_error = f"依赖安装失败: {exc}"
+                logger.warning("[PluginLoader] 插件 %s 依赖安装失败: %s", name, exc)
         tools: List[str] = []
         removed: List[str] = []
         description = ""
         version = ""
+        load_error = dep_error
         # 插件类别：collab=协作模式（进模式选择器，不注册工具）/ tool=工具插件。
         # 类继承判定（isinstance），与安装入口无关——任何来源装的协作模式包
         # 都会被正确分流到协作模式的处理路径。
         kind = "tool"
         mod = _load_module(desc["spec_path"], f"litework_plugin_meta_{name}")
+        if mod is None:
+            load_error = load_error or "模块导入失败（依赖缺失或代码有误，详见 lite-work.log）"
         if mod is not None:
             classes = _find_plugin_classes(mod)
             for cls in classes:
@@ -477,8 +524,9 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
                     ver = getattr(instance, "version", "")
                     if isinstance(ver, str) and ver:
                         version = ver
-                except Exception:
-                    pass
+                except Exception as exc:
+                    load_error = load_error or f"实例化失败: {exc}"
+                    logger.warning("[PluginLoader] 实例化插件 %s 失败: %s", name, exc)
         # 合并 installed.json 中的版本信息
         rec = installed.get(name, {})
         src = rec.get("source", "")
@@ -494,6 +542,8 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
             "version": version,
             "source": src,
             "kind": kind,
+            # 加载失败原因（空=正常）；前端插件页显示"⚠ 加载失败：原因"而非整页挂掉
+            "error": load_error,
         })
     return out
 

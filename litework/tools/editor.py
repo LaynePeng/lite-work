@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import difflib
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from ..core.types import ToolDefinition
 

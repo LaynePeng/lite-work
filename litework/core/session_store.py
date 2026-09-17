@@ -9,7 +9,7 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .types import Message
 
@@ -55,6 +55,12 @@ class SessionStore:
     def __init__(self, storage_dir: str = "./.lite-work/sessions") -> None:
         self.storage_dir = os.path.abspath(storage_dir)
         os.makedirs(self.storage_dir, exist_ok=True)
+        # 会话列表缓存：文件名 → ((inode, mtime_ns, size), 解析后的 JSON)。
+        # `list()` 要读取并解析**每个**会话文件（含完整消息历史），会话一多纯属浪费。
+        # 键含 inode：`save()` 走 os.replace 写临时文件，每次保存都是新 inode，
+        # 即使文件系统 mtime 粒度粗或两次保存同毫秒也不会误判为「未变化」。
+        # 只读不写盘（不改文件、不排序写回），因此不会引起列表抖动或写竞态。
+        self._list_cache: Dict[str, Tuple[Tuple[int, int, int], Dict[str, Any]]] = {}
 
     def _file_path(self, session_id: str) -> str:
         safe_id = session_id.replace("/", "_").replace("\\", "_")
@@ -93,18 +99,46 @@ class SessionStore:
             return None
 
     def list(self) -> List[Dict[str, Any]]:
+        """会话快照列表（未变的文件复用缓存解析结果）。
+
+        返回值是浅拷贝：调用方可以随意在顶层加字段，不会污染缓存（嵌套的
+        messages/metadata 仍共享——请勿就地修改，列表接口本就契约只读）。
+        """
         snapshots: List[Dict[str, Any]] = []
-        for fname in os.listdir(self.storage_dir):
+        try:
+            names = os.listdir(self.storage_dir)
+        except OSError:
+            return []
+        live = set()
+        for fname in names:
             if not fname.endswith(".json"):
                 continue
+            live.add(fname)
             path = os.path.join(self.storage_dir, fname)
             try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            key = (st.st_ino, st.st_mtime_ns, st.st_size)
+            hit = self._list_cache.get(fname)
+            if hit is not None and hit[0] == key:
+                snapshots.append(hit[1])
+                continue
+            try:
                 with open(path, "r", encoding="utf-8") as f:
-                    snapshots.append(json.load(f))
+                    data = json.load(f)
             except Exception:
                 logger.exception("[SessionStore] Error reading session file %s", fname)
+                continue
+            if not isinstance(data, dict):
+                continue
+            self._list_cache[fname] = (key, data)
+            snapshots.append(data)
+        # 清掉已删除会话的缓存条目，避免缓存无界增长
+        for gone in [k for k in self._list_cache if k not in live]:
+            self._list_cache.pop(gone, None)
         snapshots.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
-        return snapshots
+        return [dict(s) for s in snapshots]
 
     def delete(self, session_id: str) -> bool:
         path = self._file_path(session_id)

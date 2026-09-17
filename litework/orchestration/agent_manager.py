@@ -61,7 +61,6 @@ def extract_fork_messages(messages: List[Any], spec: str) -> List[Any]:
     return eligible[-n:] if n > 0 else []
 
 # 状态机：pending → running → (completed | errored | timeout) ；close 可从任意态进入 closed
-FINAL_STATUSES = frozenset({"completed", "errored", "timeout", "closed"})
 
 
 @dataclass

@@ -4,6 +4,15 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# PyMuPDF ≥1.24 的模块名是 pymupdf，fitz 仅为过渡别名（新版会提示弃用）；两者都要兼容。
+try:
+    import pymupdf as _fitz
+except ImportError:  # noqa: BLE001 - 旧版 PyMuPDF
+    try:
+        import fitz as _fitz
+    except ImportError:
+        _fitz = None
+
 
 class PdfParser:
     """解析 .pdf 格式的学术文档"""
@@ -45,15 +54,14 @@ class PdfParser:
 
     def _extract_text(self, path: Path):
         """提取 PDF 全文"""
-        try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(str(path))
+        if _fitz is not None:
+            doc = _fitz.open(str(path))
             self.ir["metadata"]["page_count"] = len(doc)
             self._text = ""
             for page in doc:
                 self._text += page.get_text()
             doc.close()
-        except ImportError:
+        else:
             try:
                 from PyPDF2 import PdfReader
                 reader = PdfReader(str(path))
@@ -67,8 +75,9 @@ class PdfParser:
     def _extract_metadata(self, path: Path):
         """提取 PDF 元数据"""
         try:
-            import fitz
-            doc = fitz.open(str(path))
+            if _fitz is None:
+                return
+            doc = _fitz.open(str(path))
             meta = doc.metadata
             if meta.get("title"):
                 self.ir["title"]["text"] = meta["title"]

@@ -4,12 +4,104 @@
 """办公场景：文件上传 / 产出物下载与预览（AGI 通用入口）。"""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ...tools.office import OUTPUT_DIR_NAME, UPLOADS_DIR_NAME
 from .context import ServerContext
+
+# ——— 产出物收件箱：按类型分组 + 只留最新版本 ———
+#
+# Agent 会在 产出物/ 下按类型建子目录（图表/演示/报告/表格数据/论文/专利…），
+# 产出带 `_vN` 版本号的文件，并把旧版挪进 `归档/`、过程文件放进 `中间产物/`。
+# 收件箱只呈现「每类的最新交付物」：跳过归档/中间产物，按 (类型, 基名, 扩展名)
+# 折叠版本，保留版本号最大的那一个——新版本产出后自动替换旧条目。
+
+# 不视为交付物的目录（归档 / 过程产物 / 工具元数据）
+_SKIP_DIRS = {"归档", "中间产物", ".git", "__pycache__", "node_modules", ".DS_Store"}
+# 视为交付物的扩展名（LaTeX 中间产物 .aux/.log/.toc 等不算）
+_DELIVERABLE_EXTS = {
+    ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf",
+    ".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp",
+    ".md", ".txt", ".csv", ".html", ".zip", ".mmd", ".puml",
+}
+# 目录自身索引不算交付物
+_SKIP_FILES = {"INDEX.md", "index.md"}
+# 版本号：`_v1` / `-v2` / `v1.2` / `（3）` / `(3)`
+_VER_RE = re.compile(r"(?:[_\-\s]*[vV](\d+(?:\.\d+)?)|[（(](\d+)[)）])\s*$")
+
+
+def _split_version(stem: str) -> tuple:
+    """拆出「基名 + 版本号」：('专利简报_v1' → ('专利简报', 1.0))；无版本号 → (stem, 0)。"""
+    m = _VER_RE.search(stem)
+    if not m:
+        return stem, 0.0
+    ver = m.group(1) or m.group(2) or "0"
+    try:
+        return stem[:m.start()].strip(" _-"), float(ver)
+    except ValueError:
+        return stem, 0.0
+
+
+def _collect_deliverables(base: str, rel_base: str, source: str) -> list:
+    """收集 base 目录下的交付物（跳过归档/中间产物，折叠版本，只留最新）。
+
+    返回条目列表：{name, path, source, category, size, mtime, ext, version}。
+    category = 一级子目录名（根目录下的散文件归入「未分类」）。
+    """
+    import os as _os
+    from datetime import datetime
+
+    out: list = []
+    if not _os.path.isdir(base):
+        return out
+    # 一层子目录 = 类型；根目录散文件 = 未分类。更深一层若非跳过目录，归入其一级类型。
+    for root, dirs, files in _os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+        rel_root = _os.path.relpath(root, base)
+        parts = [] if rel_root == "." else rel_root.split(_os.sep)
+        category = parts[0] if parts else "未分类"
+        for name in files:
+            if name.startswith(".") or name in _SKIP_FILES:
+                continue
+            ext = _os.path.splitext(name)[1].lower()
+            if ext not in _DELIVERABLE_EXTS:
+                continue
+            full = _os.path.join(root, name)
+            try:
+                st = _os.stat(full)
+            except OSError:
+                continue
+            stem = name[: -len(ext)] if ext else name
+            base_name, ver = _split_version(stem)
+            out.append({
+                "name": name,
+                "path": f"{rel_base}/{_os.path.relpath(full, base)}".replace("\\", "/"),
+                "source": source,
+                "category": category,
+                "ext": ext.lstrip("."),
+                "version": ver,
+                "size": st.st_size,
+                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "_key": (category, base_name.lower(), ext),
+            })
+    return out
+
+
+def _latest_per_item(entries: list) -> dict:
+    """按 (类型, 基名, 扩展名) 折叠版本，只保留版本号最大的一条。"""
+    best: dict = {}
+    for e in entries:
+        k = e["_key"]
+        cur = best.get(k)
+        if cur is None or e["version"] > cur["version"] or (
+            e["version"] == cur["version"] and e["mtime"] > cur["mtime"]
+        ):
+            best[k] = e
+    return best
 
 
 class RenameRequest(BaseModel):
@@ -103,43 +195,44 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/outputs")
     async def list_outputs(request: Request = None):
-        """列出工作区 产出物/（Agent 交付物）与 素材/（用户上传素材）下的文件。
+        """产出物收件箱数据：按类型分组 + 只留每项的最新版本。
 
-        供侧边栏「产出物」Tab 展示：文件名/相对路径/大小/修改时间/来源。
+        - 类型 = 产出物/ 下的一级子目录（图表/演示/报告/…）；根目录散文件归「未分类」；
+        - 跳过「归档/」「中间产物/」等目录与非交付物扩展名（.aux/.log/…）；
+        - 同一 (类型, 基名, 扩展名) 只保留版本号最大的那条（_v2 覆盖 _v1）——
+          新版本产出后收件箱自动呈现最新版，旧版不显示（仍在 归档/ 里）。
+        - 素材/ 同样处理，归入 source=uploads 的分组。
+        返回 {groups: [{name, source, items: [...]}], total}（空分组不返回）。
         """
         if request:
             ctx.check_auth(request)
         import os as _os
-        from datetime import datetime
 
         workspace = ctx.require_workspace()
-        items = []
-        for source, rel_dir in (("outputs", OUTPUT_DIR_NAME), ("uploads", UPLOADS_DIR_NAME)):
-            base = _os.path.join(workspace, rel_dir)
-            if not _os.path.isdir(base):
-                continue
-            try:
-                entries = sorted(_os.listdir(base))
-            except OSError:
-                continue
-            for name in entries:
-                full = _os.path.join(base, name)
-                if not _os.path.isfile(full):
-                    continue
-                try:
-                    stat = _os.stat(full)
-                except OSError:
-                    continue
-                items.append({
-                    "name": name,
-                    "path": f"{rel_dir}/{name}".replace("\\", "/"),
-                    "source": source,
-                    "size": stat.st_size,
-                    "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                })
-        # 新产出的排前面
-        items.sort(key=lambda x: str(x["mtime"]), reverse=True)
-        return {"items": items}
+        entries = []
+        entries += _collect_deliverables(
+            _os.path.join(workspace, OUTPUT_DIR_NAME), OUTPUT_DIR_NAME, "outputs")
+        entries += _collect_deliverables(
+            _os.path.join(workspace, UPLOADS_DIR_NAME), UPLOADS_DIR_NAME, "uploads")
+
+        # 折叠版本：每项只留最新
+        latest = _latest_per_item(entries)
+        items = list(latest.values())
+        for it in items:
+            it.pop("_key", None)
+        # 分组：先产出物类型，再素材；组内按时间倒序（最新在前）
+        groups: dict = {}
+        for it in items:
+            key = ("outputs", it["category"]) if it["source"] == "outputs" else ("uploads", it["category"])
+            groups.setdefault(key, []).append(it)
+        out = []
+        for (source, category), gi in groups.items():
+            gi.sort(key=lambda x: str(x["mtime"]), reverse=True)
+            out.append({"name": category, "source": source, "items": gi})
+        # 组间排序：最新产出在前（产出物/素材同等对待，谁新谁前）
+        out.sort(key=lambda g: str(g["items"][0]["mtime"]), reverse=True)
+        total = sum(len(g["items"]) for g in out)
+        return {"groups": out, "total": total}
 
     @router.get("/api/outputs/zip")
     async def download_outputs_zip(include_uploads: bool = False, request: Request = None):

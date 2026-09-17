@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from ..core.agent_loop import AgentLoop
 from ..core.system_prompt import FINAL_REPORT_REQUIREMENT, SystemPromptBuilder
-from ..core.types import Message, ToolDefinition, header_context
+from ..core.types import ToolDefinition, header_context
 
 logger = logging.getLogger("litework.orchestration")
 
@@ -246,11 +246,18 @@ class SubAgentRunner:
                         provider_id or "unknown",
                     )
 
+        # 计费单价与上下文窗口：子 Agent 常用不同模型（模型路由），此前不传
+        # pricing → 落到 AgentLoop 的兜底档（$2/$8，OpenAI 档），DeepSeek 等
+        # 供应商的成本会算错数倍；窗口同理（默认 128K 会让压缩阈值失真）。
+        sub_provider = getattr(adapter, "provider_id", "") or self.app.llm_registry.active
+        sub_model = getattr(adapter, "model", "") or ""
         loop = AgentLoop(
             kernel=sub_kernel,
             adapter=adapter,  # 模型路由：per-agent 覆盖
             registry=registry,
             session_store=None,  # 子 Agent 不落盘
+            pricing=self.app.resolve_pricing(sub_provider, sub_model),
+            context_window=self.app.llm_registry.get_context_window(sub_provider, sub_model),
             max_steps=max_steps,
             tool_timeout=float(self.app.config.get("tool_timeout", 120)),
             llm_timeout=float(self.app.config.get("llm_timeout", 300)),

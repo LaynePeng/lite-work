@@ -59,7 +59,7 @@ lite-work 的交互是 **「POST 一个任务 → SSE 订阅事件流 → HTTP �
 ┌────────┐  POST /api/chat        ┌──────────┐   GET /api/tasks/{id}/events (SSE)
 │  你的   │ ─────────────────────▶ │  Core    │ ────────────────────────────────▶ 事件帧…
 │  UI    │  POST /api/approve     │ (FastAPI)│
-│        │  POST /api/tasks/stop  └──────────┘
+│        │  POST /api/tasks/{id}/stop  └────┘
 └────────┘
 ```
 
@@ -194,7 +194,6 @@ async function send(sessionId, prompt, onEvent) {
 | `GET /api/sessions` | 会话列表（含自动推导标题：自定义 name > 首条用户消息） |
 | `POST /api/sessions` | 新建会话 `{name?, workspace?}` → `{session_id}` |
 | `GET /api/sessions/{id}` | 会话快照（messages + metadata），**UI 恢复历史用它** |
-| `PATCH /api/sessions/{id}` | 更新名称/元数据 |
 | `DELETE /api/sessions/{id}` | 删除会话（同时停掉其后台子 Agent） |
 | `POST /api/compact` | 手动压缩 `{session_id, focus?}` |
 | `GET /api/todos?session_id=` | 会话 TODO 看板 |
@@ -214,11 +213,12 @@ UI 可以完整恢复看板与上下文面板。
 | | `POST /api/projects/create` | 新建项目（可选 git init） |
 | LLM | `GET /api/llm/providers` / `GET,POST /api/llm/config` | 供应商元数据与配置 |
 | | `POST /api/llm/test` | 测连接（返回 ok/消息/延迟） |
-| | `GET /api/model-meta`、`POST /api/model-meta/refresh` | 模型元数据缓存 |
-| 安全 | `GET /api/security/summary` 等 | 审批/技能权限/黑白名单管理 |
+| | `GET /api/model-meta` | 定价数据源状态：`{models_dev, provider, sources[]}`（是否有缓存 / 多久前 / 是否过期，过期前端提示手动同步） |
+| | `POST /api/model-meta/refresh` `{source}` | 手动同步**单个**源（`models_dev` 或定价插件声明的官方源如 `deepseek`/`kimi`）；前端逐源调用以呈现同步步骤 |
+| 安全 | `GET,POST /api/security`、`GET,POST /api/mcp` | 安全规则 / MCP 服务配置 |
 | 技能 | `GET /api/skills` 等 | 技能列表/加载/权限 |
 | Agent | `GET /api/agents` 等 | 多 Agent 看板/协作模式选择器 |
-| 文件 | `GET /api/fs/read`、`POST /api/fs/write` | 文件读写（受安全层约束） |
+| 文件 | `GET /api/fs/read`、`GET /api/fs/list`、`GET /api/workspace/tree-json` | 文件读取与目录树（受安全层约束） |
 | 配置 | `GET,POST /api/config` | 全局配置（max_steps、pricing…） |
 
 （完整签名以 `litework/server/routers/` 各文件为准，路由均以 `/api` 前缀。）

@@ -23,11 +23,16 @@ beforeEach(() => {
   (api.commands as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ commands: [] });
   (api.skills as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ skills: [] });
   (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-    items: [
-      { name: "报表.xlsx", path: "素材/报表.xlsx", source: "uploads", size: 2048, mtime: "2026-01-01 10:00" },
-      { name: "数据.csv", path: "素材/数据.csv", source: "uploads", size: 512, mtime: "2026-01-01 10:00" },
-      { name: "报告.docx", path: "产出物/报告.docx", source: "outputs", size: 4096, mtime: "2026-01-01 10:00" },
+    groups: [
+      { name: "素材", source: "uploads", items: [
+        { name: "报表.xlsx", path: "素材/报表.xlsx", source: "uploads", size: 2048, mtime: "2026-01-01 10:00" },
+        { name: "数据.csv", path: "素材/数据.csv", source: "uploads", size: 512, mtime: "2026-01-01 10:00" },
+      ] },
+      { name: "报告", source: "outputs", items: [
+        { name: "报告.docx", path: "产出物/报告/报告.docx", source: "outputs", size: 4096, mtime: "2026-01-01 10:00" },
+      ] },
     ],
+    total: 3,
   });
 });
 

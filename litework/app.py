@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from .core.agent_loop import AgentLoop
 from .core.agent_profile import AgentProfile, AgentRegistry
@@ -17,6 +18,7 @@ from .core.kernel import Kernel
 from .core.session_store import SessionStore
 from .core.types import Plugin
 from .llm.base import BaseLLMAdapter
+from .llm.model_meta import CACHE_TTL_SECONDS as MODEL_META_TTL
 from .llm.registry import LLMRegistry
 from .mcp import MCPManager
 from .security.approval import ApprovalGate
@@ -84,12 +86,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "skill_trigger_mode": "substring",
     # 并行工具执行："auto"（只读轮并行/含写类整轮串行）| "always" | "never"
     "parallel_tool_calls": "auto",
-    # 定价（每 M token，美元）：仅作 models.dev 无该模型数据时的回退。
-    # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash 峰值价：缓存未命中输入
-    # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页）。真实价格优先取 models.dev
-    # 的 per-model 数据（同步成功后自动生效）。cache_hit 缺省按 input 的 10% 折算
-    # （Anthropic 0.1x 惯例），显式给出则不再折算。
+    # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
+    # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
+    # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页，USD）。DeepSeek 分时计费由
+    # 定价插件 pricing-plugin 处理（空闲时段自动按半价档估算）。cache_hit 缺省按
+    # input 的 10% 折算（Anthropic 0.1x 惯例），显式给出则不再折算。
     "pricing": {"input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006},
+    # 按模型覆盖价（最高优先级）：官方改价/抓取失败时的逃生门。键为
+    # "provider/model" 或裸 "model"；值 {"input_per_mtok", "output_per_mtok",
+    # "cache_hit_per_mtok", 可选 "off_peak": {同结构}}。
+    "pricing_overrides": {},
     # 效率机制（v1.6.0，SoL-Pi 存活机制的适配）：
     # observation_pack      大工具结果「先全文后占位符」，obs_recall 分页召回
     # compaction_economics  压缩经济学决策（写入成本+缓存债 vs 剩余轮数收益）
@@ -110,6 +116,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 # 时说明用户从未自定义，按新默认迁移，否则「预估成本」会一直偏高一个数量级。
 LEGACY_DEFAULT_PRICING: Dict[str, Any] = {"input_per_mtok": 1.6, "output_per_mtok": 4.8}
 
+# DeepSeek 家族模型名（models.dev 上挂的是空闲价，不作为定价依据）
+_DEEPSEEK_FAMILY_RE = re.compile(r"^deepseek", re.I)
+
 # deepseek 官方现行模型名与历史别名（旧名仍受理，单按 Flash 计费）
 DEEPSEEK_CURRENT_MODEL = "deepseek-flash"
 DEEPSEEK_LEGACY_MODEL = "deepseek-v4-flash"
@@ -117,21 +126,12 @@ DEEPSEEK_LEGACY_MODEL = "deepseek-v4-flash"
 # 手动压缩时 head 摘要输入字符上限（超过则只保留最近部分）
 MAX_SUMMARY_CHARS = 180_000
 
-TOOL_NAMES = [
-    "read_file", "write_file", "list_dir", "file_tree",
-    "search_code", "get_file_outline", "read_focused_symbol",
-    "apply_search_replace", "apply_unified_diff",
-    "execute_command", "check_command", "git_status", "git_diff", "git_log",
-    "git_commit", "git_branch", "review_code",
-        "webfetch", "webfetch_batch", "load_skill",
-    # 办公工具（AGI 通用入口）
-    "docx_create", "xlsx_create", "pptx_create", "pdf_create",
-    "data_analyze", "chart_make",
-    # 读取已有办公文件（调研/参考）
-    "docx_read", "xlsx_read", "pptx_read", "pdf_read",
-    # OCR 识别（图片/PDF/PPT 内嵌图片文字提取）
-    "ocr_image", "ocr_document", "ocr_pptx",
-]
+# 已安装插件列表的缓存 TTL（秒）：装/删/覆盖会主动失效，这里只兜底"外部手改插件目录"
+PLUGIN_LIST_TTL = 5.0
+
+# 全量工具名列表缓存 TTL（秒）：create_agent_registry 每任务都要「全量工具名」，
+# 原先为此把整套插件构造两遍（一次取名、一次带过滤）。插件/MCP 变更会主动失效。
+TOOL_NAMES_TTL = 60.0
 
 
 class AgentApp:
@@ -160,6 +160,10 @@ class AgentApp:
         self.approval_gate = ApprovalGate(timeout_seconds=600)
         self.question_gate = QuestionGate(timeout_seconds=600)
         self.llm_registry = LLMRegistry(config_dir=self.config_dir)
+        # 定价数据源插件（官方价格 + 分时规则；价目表与数据源都在插件里，
+        # 主程序只做发现/转发 + config 回退价）。懒加载 + 结果缓存。
+        self._pricing_provider: Optional[Any] = None
+        self._pricing_provider_loaded = False
         self.agent_registry = AgentRegistry()
         self._context_session_stats: Dict[str, Dict[str, Any]] = {}
         # 任务内统计的差分基线（context:stats 每轮推送全量，需减去上次快照才是增量）
@@ -171,6 +175,11 @@ class AgentApp:
         self.todo_plugin = TodoPlugin(
             storage_dir=os.path.join(self.config_dir, "todo_boards"))
         self._local_plugins: Optional[List[Plugin]] = None
+        # 插件列表缓存 (monotonic_ts, data)：装/删/覆盖经 _invalidate_plugin_cache 失效，
+        # 外部手改插件目录靠 TTL 兜底（见 PLUGIN_LIST_TTL）
+        self._plugins_list_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
+        # 全量工具名缓存 (monotonic_ts, names)
+        self._tool_names_cache: Optional[Tuple[float, List[str]]] = None
         self._shell_plugin: Optional[ShellPlugin] = None
         self.approval_gate = ApprovalGate(
             timeout_seconds=self.config.get("approval_timeout", 600)
@@ -191,10 +200,20 @@ class AgentApp:
         # 引擎 node_modules 不拷贝（数百 MB），通过 LITEWORK_SKILLS_SOURCE
         # 指向安装包内置位置，渲染脚本子进程自动继承。
         try:
-            from .tools.skills import _builtin_skills_dir, sync_builtin_skills_to_user
+            from .tools.skills import (
+                _builtin_skills_dir,
+                sync_builtin_skills_to_user,
+                use_builtin_skill_python,
+            )
             builtin_dir = _builtin_skills_dir()
             if builtin_dir is not None:
                 os.environ.setdefault("LITEWORK_SKILLS_SOURCE", str(builtin_dir))
+            # 技能解释器：随包 CPython（可通过 _internal 拿到 PyYAML/pymupdf/
+            # python-docx/openpyxl/python-pptx 等），前置进 PATH 后技能脚本里的
+            # `python3` 直接命中它 —— 与用户系统 Python 的版本/已装包无关。
+            skill_python = use_builtin_skill_python()
+            if skill_python is not None:
+                logger.info("[App] 技能解释器就绪：%s", skill_python)
             n = sync_builtin_skills_to_user()
             if n:
                 logger.info("[App] 已安装/升级 %d 个内置技能到 ~/.agents/skills/", n)
@@ -246,17 +265,31 @@ class AgentApp:
             if getattr(record, "status", "") == "running"
         )
 
+    def _ensure_local_plugins(self) -> List[Plugin]:
+        """懒加载本地插件（失败也缓存为空，避免坏插件让每次请求重试或 500）。
+
+        装/删/覆盖经 _invalidate_plugin_cache 清缓存后下次重新加载。
+        """
+        if self._local_plugins is None:
+            from .tools.plugin_loader import load_plugins
+
+            try:
+                self._local_plugins = load_plugins(self.config_dir)
+            except Exception:
+                logger.exception("[App] 本地插件加载失败，本次按无本地插件处理")
+                self._local_plugins = []
+        return self._local_plugins
+
     def collab_modes(self) -> List["Plugin"]:
         """协作模式插件：litework/builtin_plugins/ 内置 v1.0.0，
         ~/.lite-work/plugins/ 同名包覆盖（社区更新机制）。"""
-        from .tools.plugin_loader import load_plugins, load_collab_builtin
+        from .tools.plugin_loader import load_collab_builtin
 
-        if self._local_plugins is None:
-            self._local_plugins = load_plugins(self.config_dir)
+        local_plugins = self._ensure_local_plugins()
         from .orchestration.collab_policy import CollabModePlugin
 
         local = [
-            p for p in self._local_plugins
+            p for p in local_plugins
             if isinstance(p, CollabModePlugin) and p.mode_name
         ]
         for p in local:
@@ -547,7 +580,6 @@ class AgentApp:
 
     def _engine_preinstall_worker(self) -> None:
         import subprocess
-        import time as _time
         import shutil as _shutil
 
         script = os.path.join(os.path.expanduser("~"), ".agents", "skills",
@@ -562,7 +594,7 @@ class AgentApp:
         # 全局锁放在 ~/.agents/skills/ 下（跨实例/跨 config_dir 共享，真正防并发）
         lock = os.path.join(os.path.expanduser("~"), ".agents", "skills",
                             self.ENGINE_PREINSTALL_LOCK)
-        now = _time.time()
+        now = time.time()
         try:
             if os.path.isfile(lock):
                 age = now - os.path.getmtime(lock)
@@ -615,7 +647,9 @@ class AgentApp:
         self.config["mcp_servers"] = servers
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
-        return await self.mcp_manager.reload(servers)
+        result = await self.mcp_manager.reload(servers)
+        self._tool_names_cache = None  # MCP 工具集变了 → 全量工具名缓存失效
+        return result
 
     # ------------------------------------------------------------ LLM
 
@@ -710,21 +744,106 @@ class AgentApp:
     def llm_provider_meta(self) -> List[Dict[str, Any]]:
         return self.llm_registry.provider_meta()
 
-    def resolve_pricing(self, provider_id: str, model: str) -> Dict[str, float]:
-        """解析计费单价（每 M token，美元）：models.dev per-model 优先，回退 config 定价。
+    # ------------------------------------------------------------ 计费单价
 
-        回退价（设置 → 定价）是全局标量，对未收录模型/自定义实例只能给粗略估计；
-        统一在此解析，保证面板展示的单价与实际成本估算用的是同一份。
+    _PRICE_KEYS = ("input_per_mtok", "output_per_mtok", "cache_hit_per_mtok")
+
+    def _pricing_override(self, provider_id: str, model: str) -> Optional[Dict[str, Any]]:
+        """用户级按模型覆盖价（config.pricing_overrides）。
+
+        键可用 "provider/model" 或裸 "model"（对所有供应商下同名模型生效）。
+        值为 {"input_per_mtok", "output_per_mtok", "cache_hit_per_mtok"}，
+        分时供应商可再带 "off_peak": {同结构}。官方改价、同步失败、或官方页
+        改版抓不到时的最后逃生门（无需改代码）。
         """
-        pricing = dict(self.config.get("pricing") or DEFAULT_CONFIG["pricing"])
-        model_pricing = self.llm_registry.get_model_pricing(provider_id, model)
-        if model_pricing:
-            pricing.update(model_pricing)
-        return pricing
+        overrides = self.config.get("pricing_overrides") or {}
+        if not isinstance(overrides, dict):
+            return None
+        bare = (model or "").rsplit("/", 1)[-1].strip().lower()
+        for key in (f"{provider_id}/{model}".strip().lower(), (model or "").strip().lower(), bare):
+            hit = overrides.get(key)
+            if isinstance(hit, dict):
+                return hit
+        return None
 
-    def refresh_model_meta(self) -> bool:
-        """同步 models.dev 模型元数据（启动时调用，失败静默降级）。"""
-        return self.llm_registry.refresh_models_dev()
+    @classmethod
+    def _apply_prices(cls, target: Dict[str, Any], src: Dict[str, Any]) -> None:
+        """把价格字段（含可选 off_peak 档）拷进 target。"""
+        for k in cls._PRICE_KEYS:
+            v = src.get(k)
+            if isinstance(v, (int, float)):
+                target[k] = float(v)
+        op = src.get("off_peak")
+        if isinstance(op, dict):
+            clean = {k: float(op[k]) for k in cls._PRICE_KEYS
+                     if isinstance(op.get(k), (int, float))}
+            if clean:
+                target["off_peak"] = clean
+        window = src.get("peak_window")
+        if isinstance(window, dict) and window:
+            target["peak_window"] = window
+
+    def resolve_pricing(self, provider_id: str, model: str) -> Dict[str, Any]:
+        """解析计费单价（每 M token，美元）+ 来源元信息（面板对账用）。
+
+        优先级（分层理由见 llm/pricing_provider.py 与定价插件）：
+          ① 用户覆盖 pricing_overrides（provider/model 或裸 model）
+          ② 官方定价（抓取缓存 → 内置快照），按**模型指纹**辨认：自定义中转的
+             `vendor/deepseek/xxx` 也能认出并套用 DeepSeek 官方价
+          ③ models.dev per-model（**DeepSeek 家族除外**：它挂的是空闲价，
+             会让成本系统性少算一半）
+          ④ 配置里的全局回退价（pricing 段）
+
+        返回值除三个单价外含：off_peak（分时档，若有）、source（official:xxx /
+        snapshot:xxx / override / models.dev / config）、source_age_seconds、stale
+        —— AgentLoop 据此在计价时刻选档，前端据此提示「定价数据已过期」。
+        """
+        pricing: Dict[str, Any] = dict(
+            self.config.get("pricing") or DEFAULT_CONFIG["pricing"])
+        meta: Dict[str, Any] = {
+            "source": "config", "source_age_seconds": None, "stale": False}
+
+        override = self._pricing_override(provider_id, model)
+        if override:
+            self._apply_prices(pricing, override)
+            return {**pricing, "source": "override",
+                    "source_age_seconds": None, "stale": False}
+
+        provider = self.pricing_provider()
+        official = None
+        if provider is not None:
+            try:
+                official = provider.lookup(model)
+            except Exception:
+                logger.warning("[App] 定价插件查询失败，回退后续来源", exc_info=True)
+        if official:
+            self._apply_prices(pricing, official)
+            return {**pricing, "source": official.get("source") or "official",
+                    "source_age_seconds": official.get("source_age_seconds"),
+                    "stale": bool(official.get("stale"))}
+
+        # DeepSeek 家族的 models.dev 定价不可信（挂的是空闲价，会让成本系统性
+        # 少算一半）→ 宁可回退 config，也不采用。插件缺失时同样适用。
+        is_deepseek_family = bool(_DEEPSEEK_FAMILY_RE.match(
+            (model or "").rsplit("/", 1)[-1].strip()))
+        if not is_deepseek_family:
+            model_pricing = self.llm_registry.get_model_pricing(provider_id, model)
+            if model_pricing:
+                pricing.update(model_pricing)
+                age = self.model_meta_status().get("age_seconds")
+                meta = {"source": "models.dev", "source_age_seconds": age,
+                        "stale": bool(age is not None and age > MODEL_META_TTL)}
+        return {**pricing, **meta}
+
+    def refresh_model_meta(self, force: bool = True) -> bool:
+        """同步 models.dev 模型元数据（手动触发；启动不再自动联网）。
+
+        force=True（默认）：用户点「同步」/ 调 /api/model-meta/refresh 时**强制
+        联网拉取**，绕过 7 天 TTL 挡板——否则缓存未过期时点了同步也只返回旧缓存，
+        时间戳永远停在旧值（表象：「怎么点都显示 N 天前」）。
+        """
+        return self.llm_registry.refresh_models_dev(force=force)
+
 
     def model_meta_status(self) -> Dict[str, Any]:
         """models.dev 元数据缓存状态（设置页「模型元数据」区展示）。
@@ -736,6 +855,75 @@ class AgentApp:
         if svc is None:
             return {"cached": False, "models": 0, "age_seconds": None}
         return svc.status()
+
+    def pricing_provider(self) -> Optional[Any]:
+        """当前生效的定价数据源插件（本地同名包覆盖内置；未装返回 None）。
+
+        价目表、抓取地址、解析逻辑、分时窗口全部在插件里（内置副本：
+        litework/builtin_plugins/pricing-plugin/），因此改价/改源/加供应商
+        只需更新插件，不必升级主程序。主程序只在插件缺失/不识别该模型时
+        回退 models.dev 与 config 定价。
+        """
+        if self._pricing_provider_loaded:
+            return self._pricing_provider
+        self._pricing_provider_loaded = True
+        try:
+            from .llm.pricing_provider import PricingProvider
+            from .tools.plugin_loader import load_pricing_builtin
+
+            try:
+                local = [p for p in self._ensure_local_plugins()
+                         if isinstance(p, PricingProvider)]
+            except Exception:
+                local = []
+            for p in local:
+                p._is_local_override = True
+            shadowed = {p.name for p in local}
+            candidates = local + [p for p in load_pricing_builtin()
+                                  if p.name not in shadowed]
+            if candidates:
+                candidates[0].configure(self.config_dir)
+                self._pricing_provider = candidates[0]
+        except Exception:
+            logger.warning("[App] 定价插件装载失败，回退 models.dev/config 定价",
+                           exc_info=True)
+            self._pricing_provider = None
+        return self._pricing_provider
+
+    def pricing_status(self) -> Dict[str, Any]:
+        """设置页「模型元数据与定价」：models.dev + 定价插件各数据源状态。
+
+        价格来源不自动联网同步，因此把「有没有缓存 / 多久前 / 是否过期」全部
+        暴露给前端，过期时提示用户手动同步（建议不强制）。插件未安装时按
+        「未安装」呈现，价格只剩 models.dev / config 回退。
+        """
+        md = self.model_meta_status()
+        age = md.get("age_seconds")
+        models_dev = {**md, "stale": bool(age is None or age > MODEL_META_TTL)}
+        provider = self.pricing_provider()
+        if provider is None:
+            return {"models_dev": models_dev, "provider": None, "sources": []}
+        return {
+            "models_dev": models_dev,
+            "provider": {
+                "name": provider.name,
+                "version": provider.version,
+                "description": provider.description,
+                "source": "plugin" if getattr(provider, "_is_local_override", False)
+                          else "builtin",
+            },
+            "sources": provider.status(),
+        }
+
+    def sync_pricing(self, source_id: str) -> Dict[str, Any]:
+        """手动同步单个来源："models_dev" 或定价插件声明的数据源。"""
+        if source_id in ("models_dev", "models.dev"):
+            ok = self.refresh_model_meta()
+            return {"ok": bool(ok), **self.pricing_status()["models_dev"]}
+        provider = self.pricing_provider()
+        if provider is None:
+            return {"ok": False, "error": "未安装定价插件（设置 → 插件）"}
+        return provider.sync(source_id)
 
     # ------------------------------------------------------------ 上下文统计
 
@@ -796,7 +984,7 @@ class AgentApp:
             shell = ShellPlugin(ws, timeout_seconds=shell_timeout)
             if workspace_override is None:
                 self._shell_plugin = shell
-        return [
+        plugins: List[Plugin] = [
             FileSystemPlugin(ws),
             CodebasePlugin(ws),
             ASTPlugin(ws),
@@ -813,6 +1001,13 @@ class AgentApp:
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
         ]
+        # 内置目录（litework/builtin_plugins/）里的工具插件（如定价插件 pricing-plugin）
+        # 与上面硬编码的内置插件同样进内核装配与插件页元信息；按 name 去重。
+        from .tools.plugin_loader import load_tool_builtin
+
+        known = {p.name for p in plugins}
+        plugins.extend(p for p in load_tool_builtin() if p.name not in known)
+        return plugins
 
     def tool_plugins(self, workspace: Optional[str] = None) -> List[Plugin]:
         """Cordis 风格工具插件清单（空间解耦：工具能力全部由插件提供）。
@@ -822,14 +1017,11 @@ class AgentApp:
         本地插件只加载一次（缓存），避免每次建内核重复 import。
         workspace（P3）：worktree 隔离时以指定目录构建内置插件实例。
         """
-        if self._local_plugins is None:
-            from .tools.plugin_loader import load_plugins
-
-            self._local_plugins = load_plugins(self.config_dir)
-        local_names = {p.name for p in self._local_plugins}
+        local_plugins = self._ensure_local_plugins()
+        local_names = {p.name for p in local_plugins}
         plugins: List[Plugin] = [
             p for p in self._builtin_plugins(workspace) if p.name not in local_names]
-        plugins.extend(self._local_plugins)
+        plugins.extend(local_plugins)
         return plugins
 
     @staticmethod
@@ -1004,13 +1196,21 @@ class AgentApp:
         else:
             metadata.pop("worktree", None)
         self.session_store.save(session_id, snapshot.messages, metadata)
+        # 开启时**立即创建** worktree（而非等第一个任务）：用户开完就能在
+        # /worktree list 看到、横幅能显示分支；任务侧仍复用同一个（create 幂等）
+        if enabled:
+            created = mgr.create(session_id)
+            return {
+                "ok": True, "enabled": True,
+                "worktree": {"branch": created.get("branch"), "path": created.get("path")}
+                if created.get("ok") else None,
+            }
         # 关闭模式时：worktree 若**无改动**直接清理（空壳无保留价值，避免遗留堆积）；
         # 有改动则保留——用户仍需评审卡「合并 / 丢弃」，不擅自丢数据
-        if not enabled:
-            st = self.worktree_status(session_id)
-            if st.get("exists") and not st.get("files"):
-                self.worktree_manager().cleanup(session_id)
-        return {"ok": True, "enabled": enabled}
+        st = self.worktree_status(session_id)
+        if st.get("exists") and not st.get("files"):
+            self.worktree_manager().cleanup(session_id)
+        return {"ok": True, "enabled": False}
 
     def worktree_status(self, session_id: str) -> Dict[str, Any]:
         """会话 worktree 状态（前端轮询：变更文件/行数/分支）。"""
@@ -1035,9 +1235,30 @@ class AgentApp:
         """丢弃 worktree（删目录 + 分支，主工作区不动）。"""
         return self.worktree_manager().discard(session_id)
 
-    def worktree_list_active(self) -> List[Dict[str, Any]]:
-        """磁盘上所有活跃 worktree（侧边栏/恢复展示）。"""
-        return self.worktree_manager().list_active()
+    def worktree_abort_merge(self) -> Dict[str, Any]:
+        """放弃进行中的合并（`git merge --abort`）：主工作区回到合并前状态。"""
+        return self.worktree_manager().abort_merge()
+
+    def worktree_conflicts(self) -> Dict[str, Any]:
+        """主工作区当前合并冲突文件列表（非合并中为空）。"""
+        mgr = self.worktree_manager()
+        return {"in_progress": mgr.has_merge_in_progress(), "conflicts": mgr.merge_conflicts()}
+
+    def worktree_overview(self) -> Dict[str, Any]:
+        """项目级工作树总览（侧边栏「文件」面板底部区块）。
+
+        返回当前分支、主工作区 HEAD，以及每个 worktree 的变更/落后状态——
+        让用户在多会话场景下看到「谁在隔离、谁落后于主分支」。
+        未打开项目 / 非 git 仓库：main_branch 返回空串（前端显示「非 git 仓库」）。
+        """
+        mgr = self.worktree_manager()
+        if not mgr.is_git_repo():
+            return {"main_branch": "", "main_head": "", "worktrees": []}
+        return {
+            "main_branch": mgr._main_branch(),
+            "main_head": (mgr._git(mgr._ws, "rev-parse", "HEAD").stdout or "").strip(),
+            "worktrees": mgr.list_active(),
+        }
 
     def worktree_clean(self, include_dirty: bool = False,
                        name: Optional[str] = None) -> Dict[str, Any]:
@@ -1084,8 +1305,22 @@ class AgentApp:
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 
     def plugins_list(self) -> List[Dict[str, Any]]:
+        """已安装插件列表（带 TTL 缓存）。
+
+        列表会 import 插件模块、解 wheels——成本高，且坏插件可能拖慢请求。
+        设置页每次打开/安装后都会拉，缓存避免重复付出该成本；失败结果同样缓存
+        （防止坏插件让每次请求都重试）。装/删/覆盖走 _invalidate_plugin_cache。
+        """
+
+        cache = self._plugins_list_cache
+        now = time.monotonic()
+        if cache is not None and now - cache[0] < PLUGIN_LIST_TTL:
+            return cache[1]
         from .tools.plugin_loader import list_plugins
-        return list_plugins(self.config_dir)
+
+        data = list_plugins(self.config_dir)
+        self._plugins_list_cache = (now, data)
+        return data
 
     def _invalidate_plugin_cache(self) -> None:
         """清空已加载插件实例缓存：安装/删除/覆盖后立即生效。
@@ -1094,6 +1329,8 @@ class AgentApp:
         缓存失效后无需重启 Core，下一条消息即可用上新工具集。
         """
         self._local_plugins = None
+        self._plugins_list_cache = None
+        self._tool_names_cache = None
 
     def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
                            overwrite: bool = False) -> List[Dict[str, Any]]:
@@ -1103,13 +1340,6 @@ class AgentApp:
         # zip 上传无更新源 URL，记录占位来源以保持列表一致（版本从插件自身读取）
         for r in results:
             record_installed(self.config_dir, r["name"], "", "zip-upload")
-        self._invalidate_plugin_cache()
-        return results
-
-    def plugins_import(self, source: str, name: Optional[str] = None,
-                       overwrite: bool = False) -> List[Dict[str, Any]]:
-        from .tools.plugin_loader import import_source
-        results = import_source(self.config_dir, source, name, overwrite)
         self._invalidate_plugin_cache()
         return results
 
@@ -1123,11 +1353,8 @@ class AgentApp:
         """列出内置插件元信息（name/description/tools/version/是否被用户版覆盖）。"""
         from . import __version__ as _app_version
 
-        if self._local_plugins is None:
-            from .tools.plugin_loader import load_plugins
-
-            self._local_plugins = load_plugins(self.config_dir)
-        local_names = {p.name for p in self._local_plugins}
+        local_plugins = self._ensure_local_plugins()
+        local_names = {p.name for p in local_plugins}
 
         results: List[Dict[str, Any]] = []
         for p in self._builtin_plugins():
@@ -1485,6 +1712,21 @@ class AgentApp:
             os.remove(path)
         return {"ok": True, "id": agent_id}
 
+    def _all_tool_names(self) -> List[str]:
+        """全量工具名列表（带 TTL 缓存）。
+
+        只为拿到「有哪些工具」而构建整套插件代价过高（每任务一次），缓存复用；
+        插件安装/删除、MCP 变更会主动失效，外部手改插件目录靠 TTL 兜底。
+        """
+
+        cache = self._tool_names_cache
+        now = time.monotonic()
+        if cache is not None and now - cache[0] < TOOL_NAMES_TTL:
+            return cache[1]
+        names = [t.name for t in self.build_registry().get_tools()]
+        self._tool_names_cache = (now, names)
+        return names
+
     def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None) -> ToolRegistry:
         """按 Agent 配置裁剪工具集（职责域模型，参考 OpenCode：plan 只读、build 全量）。
 
@@ -1499,7 +1741,7 @@ class AgentApp:
         from .core.permissions import domains_to_allowed_and_permissions
 
         profile = self.get_agent(agent_id)
-        all_names = [t.name for t in self.build_registry().get_tools()]
+        all_names = self._all_tool_names()
         allowed, permissions = domains_to_allowed_and_permissions(
             profile.domains, all_names, profile.extra_tools
         )

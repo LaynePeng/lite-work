@@ -20,15 +20,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .system_prompt import FINAL_REPORT_REQUIREMENT  # noqa: F401  # 兼容旧导入方（测试断言）
 
 logger = logging.getLogger("litework.agent")
 
 # 工具权限取值
-PERM_DENY = "deny"
-PERM_ALLOW = "allow"
-PERM_ASK = "ask"
-
 
 def parse_frontmatter(text: str):
     """解析 Markdown 文件的 YAML frontmatter（--- 包裹的头部）。
@@ -378,15 +373,8 @@ class AgentRegistry:
         return [a.id for a in self._agents.values()
                 if a.mode in ("primary", "all") and not a.hidden]
 
-    def list_subagents(self) -> List[str]:
-        return [a.id for a in self._agents.values()
-                if a.mode in ("subagent", "all") and not a.hidden]
-
     def all(self) -> Dict[str, AgentProfile]:
         return dict(self._agents)
-
-    def to_config(self) -> Dict[str, Any]:
-        return {aid: p.to_dict() for aid, p in self._agents.items()}
 
     # ------------------------------------------------------------ 加载自定义
 

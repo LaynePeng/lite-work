@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -19,6 +19,11 @@ VERSION = __version__
 
 class ConfigUpdateRequest(BaseModel):
     updates: Dict[str, Any]
+
+
+class SyncRequest(BaseModel):
+    """手动同步的数据源：models_dev 或定价插件声明的官方源（deepseek/kimi…）。"""
+    source: str = "models_dev"
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -74,24 +79,31 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/model-meta")
     async def model_meta(request: Request):
-        """models.dev 元数据缓存状态（设置页展示同步情况）。"""
-        ctx.check_auth(request)
-        return app.model_meta_status()
+        """定价数据源状态（设置页「模型元数据与定价」展示同步情况）。
 
-    @router.post("/api/model-meta/refresh")
-    async def refresh_model_meta(request: Request):
-        """手动同步 models.dev 元数据（离线启动后无缓存时的兜底入口）。
-
-        拉取是阻塞 IO → 丢到线程执行避免卡住事件循环；返回同步后的缓存状态
-        与当前会话生效模型的计费单价，便于直接和账单对账。
+        分两组：models_dev（上下文窗口 + 无官方源供应商的定价）与各官方定价源
+        （deepseek / kimi）。每项含 cached / models / age_seconds / stale，
+        过期时前端提示「建议同步」（不强制、不自动联网）。
         """
         ctx.check_auth(request)
-        ok = await asyncio.to_thread(app.refresh_model_meta)
+        return app.pricing_status()
+
+    @router.post("/api/model-meta/refresh")
+    async def refresh_model_meta(request: Request,
+                                 payload: Optional[SyncRequest] = None):
+        """手动同步**单个**数据源（source: models_dev | deepseek | kimi）。
+
+        前端逐源调用以呈现同步步骤（每步完成即可回显该源状态）。拉取是阻塞
+        IO → 丢到线程执行避免卡住事件循环；返回同步结果与当前生效模型的计费
+        单价，便于直接和账单对账。
+        """
+        ctx.check_auth(request)
+        source = (payload.source if payload else "") or "models_dev"
+        result = await asyncio.to_thread(app.sync_pricing, source)
         active = app.llm_registry.active
         model = app.llm_registry.get_active_provider_settings().get("model", "")
         return {
-            "ok": bool(ok),
-            **app.model_meta_status(),
+            **result,
             "pricing": pricing_payload(app.resolve_pricing(active, model)),
         }
 

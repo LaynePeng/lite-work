@@ -14,8 +14,9 @@ lite-work 采用 **Cordis 风格插件架构**（空间解耦）：内核 `Kerne
 |---|---|---|
 | 工具插件 | `litework.tools.plugin.ToolPlugin` | 给 Agent 注册可调用的工具 |
 | 协作模式插件 | `litework.orchestration.collab_policy.CollabModePlugin` | 多 Agent 协作玩法（进模式选择器） |
+| 定价数据源插件 | `litework.llm.pricing_provider.PricingProvider`（同时是 `ToolPlugin`） | 模型计费单价 / 分时档；内置 `pricing-plugin` 随应用发布 |
 
-两者共用同一套安装 / 发现 / 治理机制（安装、版本、覆盖回退、删除）。
+三者共用同一套安装 / 发现 / 治理机制（安装、版本、覆盖回退、删除）。
 
 ## 2. 安装位置与加载机制
 

@@ -40,6 +40,58 @@ def test_skill_index_and_load(tmp_path):
     assert str(tmp_path / ".agents" / "skills" / "review") in result
 
 
+def test_skills_snapshot_cache_invalidates_on_change(tmp_path):
+    """C3 回归：技能快照带签名缓存，但新增/编辑/删除必须立即可见（不返回陈旧数据）。"""
+    import litework.tools.skills as skills_mod
+
+    skills_mod.invalidate_skills_cache()
+    _make_skill(tmp_path, "alpha", description="Alpha workflow")
+    tools = SkillsTools(str(tmp_path))
+    first = tools.list_skills()
+    assert {s["name"] for s in first} >= {"alpha"}
+
+    # 1) 缓存命中：内容相同不重新解析（返回等值副本）
+    again = tools.list_skills()
+    assert [s["name"] for s in again] == [s["name"] for s in first]
+
+    # 2) 新增技能 → 立即可见
+    _make_skill(tmp_path, "beta", description="Beta workflow")
+    names2 = {s["name"] for s in SkillsTools(str(tmp_path)).list_skills()}
+    assert {"alpha", "beta"} <= names2, f"新增技能未立即生效: {names2}"
+
+    # 3) 编辑描述（覆写已有 SKILL.md）→ 立即生效
+    (tmp_path / ".agents" / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: Alpha v2\n---\n\nbody\n", encoding="utf-8")
+    descs = {s["name"]: s["description"]
+             for s in SkillsTools(str(tmp_path)).list_skills()}
+    assert descs["alpha"] == "Alpha v2", f"编辑未生效: {descs}"
+
+    # 4) 删除技能 → 立即消失
+    import shutil
+    shutil.rmtree(tmp_path / ".agents" / "skills" / "beta")
+    names3 = {s["name"] for s in SkillsTools(str(tmp_path)).list_skills()}
+    assert "beta" not in names3, f"删除未生效: {names3}"
+    skills_mod.invalidate_skills_cache()
+
+
+def test_skills_cache_result_is_copy(tmp_path):
+    """缓存不得被调用方的就地修改污染（app.skills_list 会补 permission 字段）。"""
+    import litework.tools.skills as skills_mod
+
+    skills_mod.invalidate_skills_cache()
+    _make_skill(tmp_path, "gamma", description="Gamma workflow")
+    tools = SkillsTools(str(tmp_path))
+    out = tools.list_skills()
+    for s in out:
+        if s["name"] == "gamma":
+            s["permission"] = "deny"
+            s["description"] = "被调用方改坏了"
+    fresh = {s["name"]: s for s in tools.list_skills()}
+    assert "permission" not in fresh["gamma"], "缓存被调用方污染了"
+    assert fresh["gamma"]["description"] == "Gamma workflow"
+    skills_mod.invalidate_skills_cache()
+
+
 def test_builtin_skills_visible_in_any_workspace(tmp_path):
     """产品内置技能随包分发：任意 workspace（含用户新建的空项目）都能发现。
 

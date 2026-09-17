@@ -117,13 +117,17 @@ class ModelMetaService:
 
     # ------------------------------------------------------------ 加载/刷新
 
-    def refresh(self) -> bool:
+    def refresh(self, force: bool = False) -> bool:
         """刷新 models.dev 元数据（缓存未过期时纯本地读盘，不发网络请求）。
 
         TTL 挡板：磁盘缓存存在且 mtime 距今不足 CACHE_TTL_SECONDS → 直接加载
         缓存并返回，网络零开销；过期或缺失才真正拉取（失败静默降级内置表）。
+
+        force=True：跳过 TTL 挡板，强制联网拉取。**用户手动点「同步」必须走这条**
+        —— 否则缓存未满 7 天时点了同步也只返回旧缓存，时间戳永远停在旧值
+        （表象：「怎么点都显示 6 天前」）。
         """
-        if self.cache_path and os.path.exists(self.cache_path):
+        if not force and self.cache_path and os.path.exists(self.cache_path):
             try:
                 fresh = time.time() - os.path.getmtime(self.cache_path) <= CACHE_TTL_SECONDS
             except OSError:

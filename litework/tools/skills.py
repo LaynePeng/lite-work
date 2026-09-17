@@ -13,7 +13,6 @@ lite-work 扩展 `triggers`（逗号分隔关键词，命中自动注入）。�
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
 import re
@@ -23,7 +22,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.types import ToolDefinition
 from .install_progress import checkpoint
@@ -159,6 +158,64 @@ def _builtin_skills_dir() -> Optional[Path]:
     return None
 
 
+# 随包分发的技能解释器目录名（python-build-standalone，见 scripts/package-backend.mjs）
+SKILL_PYTHON_DIRNAME = "skill-python"
+
+
+def _builtin_skill_python() -> Optional[Path]:
+    """定位随包分发的技能解释器可执行文件；未随包分发时返回 None。
+
+    打包态落点由 PyInstaller --add-data 决定（_MEIPASS/_internal），开发态看
+    仓库根是否放了 release/skill-python/python（构建脚本的缓存位置）。
+    """
+    candidates: List[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / SKILL_PYTHON_DIRNAME)
+        candidates.append(Path(meipass) / "_internal" / SKILL_PYTHON_DIRNAME)
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / SKILL_PYTHON_DIRNAME)
+        candidates.append(exe_dir / "_internal" / SKILL_PYTHON_DIRNAME)
+        # PyInstaller 6 的 onedir：可执行文件与 _internal 同级
+        candidates.append(exe_dir / "_internal" / ".." / SKILL_PYTHON_DIRNAME)
+    root = Path(__file__).resolve().parent.parent.parent
+    candidates.append(root / "release" / SKILL_PYTHON_DIRNAME / "python")
+    candidates.append(root / SKILL_PYTHON_DIRNAME)
+    for base in candidates:
+        for rel in ("bin/python3", "python3", "python.exe", "bin/python"):
+            exe = base / rel
+            if exe.is_file():
+                return exe
+    return None
+
+
+def use_builtin_skill_python() -> Optional[Path]:
+    """把随包技能解释器接入子进程环境；返回解释器路径（没有则 None）。
+
+    做两件事（幂等）：
+    - `LITEWORK_SKILL_PYTHON` 指向该解释器，SKILL.md 里可用它显式调用；
+    - **打包态**把解释器所在 bin 前置进 PATH —— 技能脚本里的 `python3 ...` 直接
+      命中它，从而与用户系统 Python 的版本/已装包无关，离线可用。
+
+    开发态默认不动 PATH（仍走系统 python3，保持 npm run dev 的既有行为）；
+    需要验证打包行为时设 `LITEWORK_SKILL_PYTHON_FORCE=1`。
+    未随包分发（旧包）时返回 None，行为与旧版一致。
+    """
+    exe = _builtin_skill_python()
+    if exe is None:
+        return None
+    os.environ.setdefault("LITEWORK_SKILL_PYTHON", str(exe))
+    force = os.environ.get("LITEWORK_SKILL_PYTHON_FORCE") == "1"
+    if not (getattr(sys, "frozen", False) or force):
+        return exe
+    bindir = str(exe.parent)
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    if bindir not in parts:
+        os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
+    return exe
+
+
 # 内置技能安装到用户级目录的标记文件（内容为安装时的产品版本）
 BUILTIN_SKILL_MARKER = ".litework-builtin"
 
@@ -217,8 +274,48 @@ def sync_builtin_skills_to_user() -> int:
             marker.write_text(__version__, encoding="utf-8")
             installed += 1
     except Exception:
+        if installed:
+            invalidate_skills_cache()
         return installed
+    if installed:
+        invalidate_skills_cache()
     return installed
+
+
+# 技能快照缓存：`list_skills()` 要遍历所有技能根、逐个读 SKILL.md 解析 frontmatter，
+# 而它处在热路径上（每轮 System Prompt 技能索引、每任务工具白名单、命令面板、API）。
+# 用「根目录下各 SKILL.md 的 (名字, mtime_ns, size) 签名」做键：
+# 新增/删除/改名/编辑技能都会改变签名 → 自动失效，无需手工埋点；内容不变则零解析。
+SKILLS_CACHE_MAX = 32
+_SKILLS_CACHE: Dict[str, Tuple[Tuple[Any, ...], List[Dict[str, Any]]]] = {}
+
+
+def _skills_signature(roots: List[Dict[str, Any]]) -> Tuple[Any, ...]:
+    sig: List[Any] = []
+    for root in roots:
+        base = root["path"]
+        sig.append((str(base), root["scope"]))
+        if not base.is_dir():
+            continue
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            continue
+        for skill_dir in entries:
+            skill_file = skill_dir / "SKILL.md"
+            try:
+                st = skill_file.stat()
+            except OSError:
+                continue
+            if st.st_size == 0:
+                continue
+            sig.append((skill_dir.name, st.st_mtime_ns, st.st_size))
+    return tuple(sig)
+
+
+def invalidate_skills_cache() -> None:
+    """清空技能快照缓存（安装/删除/同步内置技能后调用；签名一般已能自动失效）。"""
+    _SKILLS_CACHE.clear()
 
 
 class SkillsTools:
@@ -264,7 +361,23 @@ class SkillsTools:
         return found
 
     def list_skills(self) -> List[Dict[str, Any]]:
-        """结构化技能列表：名称/描述/scope/路径/可写性。"""
+        """结构化技能列表（带签名缓存，见模块顶部 _SKILLS_CACHE）。
+
+        返回的每个 dict 都是副本：调用方（app.skills_list 会补 permission 字段）
+        可以随意改，不会污染缓存。
+        """
+        key = str(self.workspace or "")
+        sig = _skills_signature(self.roots)
+        hit = _SKILLS_CACHE.get(key)
+        if hit is not None and hit[0] == sig:
+            return [dict(d) for d in hit[1]]
+        out = self._list_skills_uncached()
+        _SKILLS_CACHE[key] = (sig, out)
+        if len(_SKILLS_CACHE) > SKILLS_CACHE_MAX:
+            _SKILLS_CACHE.pop(next(iter(_SKILLS_CACHE)))
+        return [dict(d) for d in out]
+
+    def _list_skills_uncached(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         seen: set = set()
         for root in self.roots:

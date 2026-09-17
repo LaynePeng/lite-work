@@ -426,8 +426,12 @@ export default function ChatView({
   onContinue,
   worktreeEnabled,
   worktreeStatus,
+  worktreeConflicts,
+  worktreeMerge,
   onWorktreeDiff,
   onWorktreeMerge,
+  onWorktreeAiMerge,
+  onWorktreeAbortMerge,
   onWorktreeDiscard,
   foldTurns = FOLD_THRESHOLD,
   foldMessages = FOLD_MESSAGES,
@@ -457,8 +461,17 @@ export default function ChatView({
   worktreeEnabled?: boolean;
   /** 隔离工作树变更状态（非空 → 展示评审卡） */
   worktreeStatus?: WorktreeStatus | null;
+  /** 合并冲突文件列表（合并中状态下展示） */
+  worktreeConflicts?: string[];
+  /** AI 合并进度（worktree:merge 事件） */
+  worktreeMerge?: { phase: string; conflicts: string[]; files: number; commits: number; message: string } | null;
   onWorktreeDiff?: () => void;
+  /** 直接 git merge（--no-ff） */
   onWorktreeMerge?: () => void;
+  /** 交给 AI 合并（含冲突解决） */
+  onWorktreeAiMerge?: () => void;
+  /** 放弃进行中的合并（git merge --abort） */
+  onWorktreeAbortMerge?: () => void;
   onWorktreeDiscard?: () => void;
   /** 展示折叠阈值（轮数）——可在设置中配置 */
   foldTurns?: number;
@@ -631,41 +644,118 @@ export default function ChatView({
               </button>
             </div>
           )}
-          {/* 隔离工作树评审卡：任务结束有待处理变更 → 查看 diff / 合并 / 丢弃 */}
-          {worktreeStatus?.exists && !running && (
-            <div className="worktree-review">
-              <div className="worktree-review-head">
-                <span className="worktree-review-title">🛡️ 隔离工作树变更待处理</span>
-                <span className="worktree-review-stat">
-                  {worktreeStatus.files?.length ?? 0} 个文件
-                  {typeof worktreeStatus.adds === "number" && (
-                    <> · <span className="diff-add">+{worktreeStatus.adds}</span> <span className="diff-del">−{worktreeStatus.dels ?? 0}</span></>
-                  )}
-                </span>
-              </div>
-              {worktreeStatus.files && worktreeStatus.files.length > 0 && (
-                <div className="worktree-review-files">
-                  {worktreeStatus.files.slice(0, 12).map((f) => (
-                    <span key={f.path} className="worktree-file" title={f.path}>
-                      <b className="worktree-file-status">{f.status}</b>{f.path}
-                    </span>
-                  ))}
-                  {worktreeStatus.files.length > 12 && (
-                    <span className="worktree-file-more">…还有 {worktreeStatus.files.length - 12} 个</span>
-                  )}
-                </div>
+          {/* AI 合并进度条：started → conflicts → merged / failed */}
+          {worktreeMerge && (
+            <div className={`worktree-merge-strip phase-${worktreeMerge.phase}`}>
+              <span className="wtm-icon">
+                {worktreeMerge.phase === "merged" ? "✅"
+                  : worktreeMerge.phase === "failed" ? "✗"
+                  : worktreeMerge.phase === "conflicts" ? "⚠" : "🛡️"}
+              </span>
+              <span className="wtm-text">
+                {worktreeMerge.phase === "started" && "正在合并隔离工作树（Agent 执行 git merge）…"}
+                {worktreeMerge.phase === "conflicts" && (
+                  <>发现 {worktreeMerge.conflicts.length} 个冲突，AI 正在逐个解决
+                    {worktreeMerge.conflicts.length > 0 && (
+                      <small>{worktreeMerge.conflicts.slice(0, 6).join("、")}{worktreeMerge.conflicts.length > 6 ? " …" : ""}</small>
+                    )}</>
+                )}
+                {worktreeMerge.phase === "merged" && (
+                  <>已合并到主分支（{worktreeMerge.files} 个文件{worktreeMerge.commits ? ` / ${worktreeMerge.commits} 个提交` : ""}），工作树已清理</>
+                )}
+                {worktreeMerge.phase === "failed" && (
+                  <>合并未完成：{worktreeMerge.message || "请检查 git 状态"}
+                    <small>可继续对话让 AI 解决，或点「放弃合并」</small></>
+                )}
+              </span>
+              {(worktreeMerge.phase === "started" || worktreeMerge.phase === "conflicts") && (
+                <span className="wtm-spinner" />
               )}
-              <div className="worktree-review-actions">
-                <button className="btn-test" onClick={onWorktreeDiff}>查看 diff</button>
-                <button className="btn-merge" onClick={onWorktreeMerge} title="把变更应用回主工作区并清理工作树">
-                  ✓ 合并到主工作区
-                </button>
-                <button className="btn-discard" onClick={onWorktreeDiscard} title="删除工作树与分支，主工作区不受影响">
-                  ✗ 丢弃
-                </button>
-              </div>
             </div>
           )}
+          {/* 隔离工作树评审卡：任务结束有待处理变更 → AI 合并 / 直接合并 / 丢弃 */}
+          {worktreeStatus?.exists && !running && (() => {
+            const changed = (worktreeStatus.files?.length ?? 0) > 0
+              || (worktreeConflicts?.length ?? 0) > 0;
+            return (
+              <div className="worktree-review">
+                <div className="worktree-review-head">
+                  <span className="worktree-review-title">🛡️ 隔离工作树</span>
+                  <span className="worktree-review-stat">
+                    {worktreeStatus.branch ? `${worktreeStatus.branch} · ` : ""}
+                    {changed
+                      ? <>{worktreeStatus.files?.length ?? 0} 个文件
+                        {typeof worktreeStatus.adds === "number" && (
+                          <> · <span className="diff-add">+{worktreeStatus.adds}</span> <span className="diff-del">−{worktreeStatus.dels ?? 0}</span></>
+                        )}
+                        {worktreeStatus.commits ? ` · ${worktreeStatus.commits} 个提交` : ""}</>
+                      : "尚无改动"}
+                    {worktreeStatus.main_branch ? ` · 合并到 ${worktreeStatus.main_branch}` : ""}
+                  </span>
+                </div>
+                {worktreeStatus.behind && (
+                  <div className="worktree-behind" title="其他会话的合并让主分支前进了，本工作树基于旧的提交">
+                    ⚠ 主分支已前进（其他会话合并过）：合并时可能需要解决冲突——推荐用「🤖 让 AI 合并」。
+                  </div>
+                )}
+                {!changed && (
+                  <div className="worktree-review-idle">
+                    工作树已就绪；本会话任务都在这里执行，产物会出现在此卡，可审查后合并或丢弃。
+                  </div>
+                )}
+                {changed && worktreeStatus.files && worktreeStatus.files.length > 0 && (
+                  <div className="worktree-review-files">
+                    {worktreeStatus.files.slice(0, 12).map((f) => (
+                      <span key={f.path} className="worktree-file" title={f.path}>
+                        <b className="worktree-file-status">{f.status}</b>{f.path}
+                      </span>
+                    ))}
+                    {worktreeStatus.files.length > 12 && (
+                      <span className="worktree-file-more">…还有 {worktreeStatus.files.length - 12} 个</span>
+                    )}
+                  </div>
+                )}
+                {worktreeConflicts && worktreeConflicts.length > 0 && (
+                  <div className="worktree-conflicts">
+                    <div className="worktree-conflicts-head">⚠ 合并冲突（{worktreeConflicts.length} 个文件）</div>
+                    <div className="worktree-review-files">
+                      {worktreeConflicts.map((p) => (
+                        <span key={p} className="worktree-file" title={p}>
+                          <b className="worktree-file-status">U</b>{p}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="worktree-conflicts-hint">
+                      让 AI 继续解决冲突（推荐），或放弃本次合并回到合并前状态。
+                    </div>
+                  </div>
+                )}
+                {changed && (
+                  <div className="worktree-review-actions">
+                    <button className="btn-test" onClick={onWorktreeDiff}>查看 diff</button>
+                    <button className="btn-discard" onClick={onWorktreeDiscard} title="删除工作树与分支，主工作区不受影响">
+                      ✗ 丢弃
+                    </button>
+                    {worktreeConflicts && worktreeConflicts.length > 0 ? (
+                      <button className="btn-abort-merge" onClick={onWorktreeAbortMerge}
+                        title="git merge --abort：主工作区回到合并前状态">
+                        放弃合并
+                      </button>
+                    ) : (
+                      <button className="btn-merge-manual" onClick={onWorktreeMerge}
+                        title="直接执行 git merge --no-ff（冲突时再交给 AI 或放弃）">
+                        直接合并
+                      </button>
+                    )}
+                    <button className="btn-merge" onClick={onWorktreeAiMerge}
+                      title="交给 AI：执行 git merge，遇到冲突逐个解决并完成合并提交">
+                      🤖 让 AI 合并
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -799,5 +889,3 @@ export function QuestionBar({
 }
 
 // 导出供 App 使用
-export { ToolCard, Markdown };
-export type { RenderTurn };

@@ -1,0 +1,23 @@
+\documentclass[border=4pt]{standalone}
+
+% --- packages (mirror these in user.meta.json "requires") ---
+\usepackage{tikz}
+
+% --- palette (canonical source: reference/color-palettes/color-palettes.md; light variant) ---
+\definecolor{otblue}{HTML}{0072B2}
+\definecolor{otorange}{HTML}{E69F00}
+\definecolor{otteal}{HTML}{009E73}
+\definecolor{otpurple}{HTML}{CC79A7}
+\definecolor{otgray}{HTML}{5A5A5A}
+
+\begin{document}
+\begin{tikzpicture}[line width=0.9pt]
+  % head
+  \filldraw[draw=otblue!75!black, fill=otblue!20] (0,1.30) circle[radius=0.45];
+  % shoulders / torso: smooth rounded shoulders, flat base, small gap below head
+  \filldraw[draw=otblue!75!black, fill=otblue!20]
+    (-0.95,0)
+      .. controls (-0.95,0.58) and (-0.55,0.80) .. (0,0.80)
+      .. controls (0.55,0.80) and (0.95,0.58) .. (0.95,0) -- cycle;
+\end{tikzpicture}
+\end{document}

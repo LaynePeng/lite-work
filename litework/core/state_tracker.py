@@ -36,7 +36,6 @@ READONLY_TOOLS = frozenset({
 })
 READONLY_LOOP_THRESHOLD = 6
 # 有副作用/未知工具：严格阈值（含 MCP 等动态工具，安全默认）
-STRICT_LOOP_THRESHOLD = 3
 
 
 class AgentStateTracker:

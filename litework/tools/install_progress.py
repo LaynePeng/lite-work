@@ -60,7 +60,6 @@ STAGE_CONNECT = 0    # 连接仓库 / 解析来源
 STAGE_LIST = 1       # 列出文件
 STAGE_DOWNLOAD = 2   # 下载文件（带字节进度）
 STAGE_INSTALL = 3    # 安装 / 解依赖
-STAGE_DONE = 4       # 完成
 
 PLUGIN_STEPS = ["连接仓库", "列出文件", "下载文件", "安装插件", "完成"]
 SKILL_STEPS = ["连接仓库", "列出文件", "下载文件", "安装技能", "完成"]

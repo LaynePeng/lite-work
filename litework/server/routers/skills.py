@@ -12,8 +12,6 @@ uvicorn 事件循环。此前写成 `async def` 却在事件循环里跑阻塞 I
 """
 from __future__ import annotations
 
-import base64
-import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -79,27 +77,6 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @router.post("/api/skills/import")
-    def import_skill(payload: SkillImportRequest, request: Request):
-        ctx.check_auth(request)
-        try:
-            if payload.zip_base64:
-                # 检查 zip 大小（base64 编码膨胀约 1.33 倍）
-                max_bytes = app.config.get("max_zip_size_mb", 20) * 1024 * 1024
-                raw_size = len(payload.zip_base64) * 3 // 4
-                if raw_size > max_bytes:
-                    max_mb = max_bytes // (1024 * 1024)
-                    raise ValueError(f"zip 文件过大（{raw_size / 1024 / 1024:.1f}MB），上限为 {max_mb}MB")
-                data = base64.b64decode(payload.zip_base64)
-                return {"skills": app.skills_import_zip(data, payload.scope, payload.name, payload.overwrite)}
-            if payload.source:
-                return {"skills": app.skills_import(payload.source, payload.scope, payload.name, payload.overwrite)}
-            raise ValueError("需要 source（目录/zip/GitHub URL）或 zip_base64")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-
     @router.put("/api/skills/{name}")
     def update_skill(name: str, payload: SkillUpdateRequest, request: Request):
         ctx.check_auth(request)
@@ -144,44 +121,6 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
-
-    @router.post("/api/plugins/import")
-    def import_plugin(payload: PluginImportRequest, request: Request):
-        ctx.check_auth(request)
-        try:
-            if payload.zip_base64:
-                import base64 as _base64
-                raw = _base64.b64decode(payload.zip_base64)
-                return {"plugins": app.plugins_import_zip(raw, payload.name, payload.overwrite)}
-            if payload.source:
-                return {"plugins": app.plugins_install(
-                    payload.source, payload.name, payload.overwrite, payload.version)}
-            raise ValueError("需要 source（目录/zip/GitHub URL）或 zip_base64")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-
-    @router.get("/api/plugins/{name}/icon")
-    def plugin_icon(name: str, request: Request = None):
-        """插件图标（icon.svg/png/...，目录插件可选自带）。
-
-        前端 <img> 加载失败自行回退默认图标；404 即无图标。
-        """
-        if request:
-            ctx.check_auth(request)
-        from ...tools.plugin_loader import find_plugin_icon
-
-        icon_path = find_plugin_icon(name, os.path.join(app.config_dir, "plugins"))
-        if icon_path is None:
-            raise HTTPException(status_code=404, detail="插件无图标")
-        import mimetypes
-
-        media_type, _ = mimetypes.guess_type(icon_path)
-        from fastapi.responses import FileResponse
-
-        return FileResponse(icon_path, media_type=media_type or "application/octet-stream",
-                            headers={"Cache-Control": "max-age=3600"})
 
     @router.delete("/api/plugins/{name}")
     def delete_plugin(name: str, request: Request):

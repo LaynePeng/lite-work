@@ -62,13 +62,52 @@ def test_outputs_listing(client_and_workspace):
     _make_outputs(ws)
     r = client.get("/api/outputs")
     assert r.status_code == 200
-    items = r.json()["items"]
+    body = r.json()
+    groups = body["groups"]
+    # 平铺写入 产出物/ 根目录 → 归入「未分类」一组
+    assert len(groups) == 1
+    assert groups[0]["name"] == "未分类"
+    assert groups[0]["source"] == "outputs"
+    items = groups[0]["items"]
     names = {i["name"] for i in items}
     assert {"文档.docx", "表格.xlsx", "演示.pptx", "图表.png", "报告.pdf"} <= names
+    assert body["total"] == len(items)
     for i in items:
         assert i["source"] == "outputs"
         assert i["path"].startswith("产出物/")
         assert i["size"] > 0
+        assert "category" in i and "ext" in i
+
+
+def test_outputs_inbox_groups_by_dir_and_keeps_latest_version(client_and_workspace):
+    """收件箱：按类型目录分组、只留最新版本、跳过 归档/中间产物/构建产物。"""
+    client, ws = client_and_workspace
+    base = os.path.join(ws, "产出物")
+    os.makedirs(os.path.join(base, "图表", "中间产物"), exist_ok=True)
+    os.makedirs(os.path.join(base, "图表", "归档"), exist_ok=True)
+    os.makedirs(os.path.join(base, "演示"), exist_ok=True)
+    # 图表：同一交付物两个版本 + 一份 LaTeX 中间产物 + 归档旧版
+    _write(os.path.join(base, "图表", "系统框图_v1.png"), b"a")
+    _write(os.path.join(base, "图表", "系统框图_v2.png"), b"bb")
+    _write(os.path.join(base, "图表", "系统框图_v2.aux"), b"x")
+    _write(os.path.join(base, "图表", "中间产物", "tmp.png"), b"x")
+    _write(os.path.join(base, "图表", "归档", "系统框图_v0.png"), b"x")
+    _write(os.path.join(base, "演示", "简报_v3.pptx"), b"ppt")
+
+    body = client.get("/api/outputs").json()
+    by_group = {g["name"]: g for g in body["groups"]}
+    assert set(by_group) == {"图表", "演示"}
+    # 只留 v2（v1 不出现），.aux 与 归档/中间产物 均不出现
+    chart_names = [i["name"] for i in by_group["图表"]["items"]]
+    assert chart_names == ["系统框图_v2.png"]
+    assert by_group["图表"]["items"][0]["version"] == 2.0
+    assert [i["name"] for i in by_group["演示"]["items"]] == ["简报_v3.pptx"]
+
+
+def _write(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 # ---------------------------------------------------------------- /api/files/preview

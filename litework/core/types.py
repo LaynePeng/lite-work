@@ -105,18 +105,8 @@ class Context:
 
 # ---------------------------------------------------------------- 中间件
 
-NextFn = Callable[["Context", Any], "Any"]
 Middleware = Callable[[Context, Any, Callable], Any]
 
-
-class NextMiddleware:
-    """包装 next 调用的辅助类，兼容异步/同步中间件。"""
-
-    def __init__(self, fn: Callable) -> None:
-        self._fn = fn
-
-    def __call__(self, data: Any = None) -> Any:
-        return self._fn(data)
 
 
 # ---------------------------------------------------------------- 插件

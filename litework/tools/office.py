@@ -113,7 +113,40 @@ def _ensure_output_dir(workspace: str, subdir=None):
         subdir = os.path.join(OUTPUT_DIR_NAME, subdir)
     out_dir = os.path.join(os.path.abspath(workspace), subdir)
     os.makedirs(out_dir, exist_ok=True)
+    _ensure_ignored(workspace)
     return out_dir
+
+
+def _ensure_ignored(workspace: str) -> None:
+    """把 产出物/ 与 素材/ 追加到项目 .gitignore（仅 git 仓库；幂等）。
+
+    这两个目录是**运行时产物**，不应进版本库。缺少 ignore 条目时，Agent 产物
+    会以未跟踪文件出现在 `git status` 里，有被误提交的风险。只在缺失且项目确为
+    git 仓库时追加，失败静默（不影响产物落盘）。
+    """
+    ws = os.path.abspath(workspace)
+    if not os.path.isdir(os.path.join(ws, ".git")):
+        return
+    path = os.path.join(ws, ".gitignore")
+    try:
+        existing = ""
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+        lines = {ln.strip() for ln in existing.splitlines()}
+        missing = [n for n in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)
+                   if f"{n}/" not in lines and n not in lines]
+        if not missing:
+            return
+        with open(path, "a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            if "# lite-work 运行时产物（不纳入版本库）" not in existing:
+                f.write("# lite-work 运行时产物（不纳入版本库）\n")
+            for n in missing:
+                f.write(f"{n}/\n")
+    except OSError:
+        pass
 
 
 def _safe_filename(name: str) -> str:

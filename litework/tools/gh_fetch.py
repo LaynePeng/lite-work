@@ -129,7 +129,6 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
     - 失败按指数退避重试，重试时从已下载字节数继续（raw 支持 Range）；
     - control（可选）：暂停/取消协作检查点，取消抛 InstallCancelled。
     """
-    import httpx
 
     url = f"{_RAW_BASE}/{owner}/{repo}/{commit}/{quote(path)}"
     part = dest + ".part"

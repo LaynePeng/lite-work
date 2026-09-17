@@ -1,0 +1,35 @@
+\documentclass[border=4pt]{standalone}
+
+% --- packages (mirror these in model.meta.json "requires") ---
+\usepackage{tikz}
+
+% --- palette (canonical source: reference/color-palettes/color-palettes.md; light variant) ---
+\definecolor{otblue}{HTML}{0072B2}
+\definecolor{otorange}{HTML}{E69F00}
+\definecolor{otteal}{HTML}{009E73}
+\definecolor{otpurple}{HTML}{CC79A7}
+\definecolor{otgray}{HTML}{5A5A5A}
+
+% four-point "AI sparkle" (concave star), unit radius 1: #1,#2 centre, #3 scale
+\newcommand{\sparkle}[3]{%
+  \begin{scope}[shift={(#1,#2)}, scale=#3]
+    \filldraw[draw=otorange!85!black, fill=otorange!75, line join=round]
+      (0,1) .. controls (0.16,0.16) and (0.16,0.16) .. (1,0)
+      .. controls (0.16,-0.16) and (0.16,-0.16) .. (0,-1)
+      .. controls (-0.16,-0.16) and (-0.16,-0.16) .. (-1,0)
+      .. controls (-0.16,0.16) and (-0.16,0.16) .. (0,1) -- cycle;
+  \end{scope}%
+}
+
+\begin{document}
+\begin{tikzpicture}
+  % soft rounded badge: light tint surface, primary-blue rounded outline
+  \filldraw[draw=otblue!70!black, fill=otblue!8, line width=1.8pt, rounded corners=11pt]
+    (0,0) rectangle (2.6,2.6);
+  % "AI" wordmark — clean sans-serif, primary blue
+  \node[font=\sffamily\bfseries, scale=2, text=otblue!88!black] at (1.18,1.28) {AI};
+  % twin sparkles tucked into the top-right (modern "AI" motif)
+  \sparkle{2.04}{2.0}{0.4}
+  \sparkle{2.26}{1.46}{0.15}
+\end{tikzpicture}
+\end{document}

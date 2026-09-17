@@ -1,0 +1,27 @@
+\documentclass[border=4pt]{standalone}
+
+% --- packages (mirror these in cloud.meta.json "requires") ---
+\usepackage{tikz}
+
+% --- palette (canonical source: reference/color-palettes/color-palettes.md; light variant) ---
+\definecolor{otblue}{HTML}{0072B2}
+\definecolor{otorange}{HTML}{E69F00}
+\definecolor{otteal}{HTML}{009E73}
+\definecolor{otpurple}{HTML}{CC79A7}
+\definecolor{otgray}{HTML}{5A5A5A}
+
+\begin{document}
+\begin{tikzpicture}
+  % Solid flat cloud: a flat rounded base plus overlapping bumps, all the same
+  % fill so the union reads as one seamless silhouette (modern flat-icon style).
+  % A clip keeps the bottom edge straight where the bumps overhang the base.
+  \begin{scope}
+    \clip (-1.55,-0.45) rectangle (1.9,1.3);
+    \fill[otblue, rounded corners=0.4cm] (-1.25,-0.45) rectangle (1.7,0.35);
+    \fill[otblue] (-0.8,0.02) circle[radius=0.5];   % left bump
+    \fill[otblue] (-0.1,0.42) circle[radius=0.55];  % center-left bump
+    \fill[otblue] (0.65,0.18) circle[radius=0.72];  % big center-right bump
+    \fill[otblue] (1.25,-0.04) circle[radius=0.46]; % right bump
+  \end{scope}
+\end{tikzpicture}
+\end{document}

@@ -15,7 +15,6 @@ from typing import (
     Any,
     Dict,
     List,
-    NotRequired,
     Optional,
     TypedDict,
     Union,
@@ -116,7 +115,7 @@ class ContextStatsPayload(TypedDict):
     context_window: int
     task: Dict[str, Any]
     # 实际计费单价（每 M token，美元）：面板展示成本依据（models.dev 或配置回退价）
-    pricing: Dict[str, float]
+    pricing: Dict[str, Any]
     # 效率机制节省台账：观察打包 / 证据收据 / 压缩决策理由（v1.6.0）
     mechanisms: Dict[str, Any]
 
@@ -192,6 +191,21 @@ class AgentSpawnedPayload(TypedDict):
 
 class AgentClosedPayload(TypedDict):
     agentId: str
+
+
+class WorktreeMergePayload(TypedDict):
+    """隔离工作树合并的阶段事件（前端据此显示合并进度条）。
+
+    phase: started（开始合并）/ conflicts（发现冲突，解决中）/ merged（已合并）/
+           failed（未完成）
+    """
+    name: str
+    branch: str
+    phase: str
+    conflicts: List[str]
+    files: int
+    commits: int
+    message: str
 
 
 class OpenPayload(TypedDict, total=False):
@@ -336,6 +350,7 @@ class TypedEventBus:
         "chat:queued": ChatQueuedPayload,
         "agent:spawned": AgentSpawnedPayload,
         "agent:closed": AgentClosedPayload,
+        "worktree:merge": WorktreeMergePayload,
     }
 
     def __init__(self, strict: Optional[bool] = None) -> None:

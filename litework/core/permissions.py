@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 # 职责域定义（顺序决定 UI 展示顺序）
 DOMAIN_ORDER = ["read", "plan", "edit", "execute", "git_write", "web", "office", "collab", "interactive", "misc"]

@@ -69,6 +69,3 @@ class QuestionGate:
             "options": list(entry["options"]),
             "created_at": entry["created_at"],
         }
-
-    def pending_count(self) -> int:
-        return len(self._pending)

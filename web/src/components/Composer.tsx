@@ -69,7 +69,6 @@ export default function Composer({
   onSelectAgent: (id: string) => void;
   onSend: (prompt: string) => void;
   onStop: () => void;
-  kind?: never;
   llmConfig: LLMConfig | null;
   providerMeta?: LLMProviderMeta[];
   sessionModel: SessionModel | null;
@@ -372,15 +371,16 @@ export default function Composer({
         const [cmdResp, skillResp, outResp] = await Promise.all([
           api.commands().catch(() => ({ commands: [] })),
           api.skills().catch(() => ({ skills: [] })),
-          api.outputs().catch(() => ({ items: [] })),
+          api.outputs().catch(() => ({ groups: [], total: 0 })),
         ]);
         if (!cancelled) {
           setCommands(cmdResp.commands);
           setSkills(skillResp.skills);
           // # 只引用「素材/」（用户上传的分析素材），不含 Agent 产出物
           setMaterials(
-            outResp.items
-              .filter((i) => i.source === "uploads")
+            outResp.groups
+              .filter((g) => g.source === "uploads")
+              .flatMap((g) => g.items)
               .map((i) => ({ name: i.name, path: i.path, size: i.size }))
           );
         }

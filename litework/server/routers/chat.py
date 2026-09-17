@@ -24,10 +24,9 @@ class ChatRequest(BaseModel):
     task_id: Optional[str] = None
     agent_id: Optional[str] = None
     reasoning_effort: Optional[str] = None
-
-
-class StopRequest(BaseModel):
-    task_id: str
+    # 隔离工作树合并任务：指定 worktree 名 → 在主工作区起任务，由 Agent 执行
+    # git merge 并解决冲突（该任务不做隔离，必须落在主工作区）
+    merge_worktree: Optional[str] = None
 
 
 class ApproveRequest(BaseModel):
@@ -63,7 +62,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
             handle.queue_input(prompt)
             return {"task_id": handle.task_id, "queued": True}
         handle = tasks.start(session_id, prompt, agent_id=payload.agent_id,
-                               reasoning_effort=payload.reasoning_effort)
+                               reasoning_effort=payload.reasoning_effort,
+                               merge_worktree=payload.merge_worktree)
         return {"task_id": handle.task_id}
 
     @router.get("/api/tasks/{task_id}/events")

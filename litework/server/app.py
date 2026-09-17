@@ -11,7 +11,6 @@ import asyncio
 import logging
 import os
 import sys
-import threading
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
@@ -60,29 +59,6 @@ def _build_cors_origins() -> list[str]:
 # ---------------------------------------------------------------- 应用工厂
 
 
-def _refresh_model_meta_with_retry(
-    app: AgentApp, stop: threading.Event, delays: tuple[float, ...] = (0.0, 15.0, 60.0),
-) -> bool:
-    """后台同步 models.dev 元数据，失败按 delays 退避重试。
-
-    同步失败（启动时离线 / 瞬时网络故障）若直接放弃，本进程整个生命周期都会用
-    配置里的回退价估算成本（缓存命中价可差一个数量级），因此做有限次重试。
-
-    stop 由 lifespan 在关闭时 set：等待可被打断，进程退出时不会因为非守护线程
-    还在 sleep 而拖慢关闭（shutdown_default_executor 会等线程结束）。
-    """
-    for delay in delays:
-        if delay and stop.wait(delay):
-            return False
-        try:
-            if app.refresh_model_meta():
-                return True
-        except Exception:
-            logger.debug("[Server] models.dev 元数据同步失败，稍后重试", exc_info=True)
-    logger.info("[Server] models.dev 元数据同步未成功（可在设置 → 综合设置里手动同步）")
-    return False
-
-
 def create_app(app: AgentApp, token: Optional[str] = None,
                cors_origins: Optional[list[str]] = None) -> FastAPI:
     """组装 FastAPI 应用。
@@ -93,23 +69,14 @@ def create_app(app: AgentApp, token: Optional[str] = None,
 
     @asynccontextmanager
     async def _lifespan(_fast_app: FastAPI):
-        # models.dev 元数据同步：启动零网络等待，进入系统后在后台线程刷新。
-        # 缓存未过期（7 天）时后台任务也只是读盘；查询侧永远走缓存/内置表，
-        # 刷新结果落盘后自然生效——任何时刻都不阻塞启动与用户操作。
-        # 失败会退避重试（离线启动 → 恢复网络后仍能自动补上）。
-        import asyncio as _asyncio
-
-        stop = threading.Event()
-        _refresh_task = _asyncio.create_task(
-            _asyncio.to_thread(_refresh_model_meta_with_retry, app, stop)
-        )
+        # 模型元数据与官方定价：**启动不联网**。查询侧只读本地缓存（models.dev
+        # / 官方定价 / 内置快照），任何时刻都不阻塞启动；缓存过期由前端提示
+        # 「建议同步」，用户在设置 → 综合设置里手动触发（见 meta 路由）。
         await app.mcp_manager.start()
         try:
             yield
         finally:
-            # 先唤醒退避等待（线程不可强杀，但可让它立刻返回），再取消任务
-            stop.set()
-            _refresh_task.cancel()
+            pass
 
     fast_app = FastAPI(title="lite-work", version=VERSION, lifespan=_lifespan)
     auth = TokenAuth(token)

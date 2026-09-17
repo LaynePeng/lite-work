@@ -19,7 +19,7 @@ import time
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .compaction_economics import cache_write_read_ratio, decide_compaction
+from .compaction_economics import decide_compaction
 from .context_manager import ContextManager, patch_dangling_tool_calls, repair_tool_call_pairs
 from .json_repair import safe_json_parse
 from .observation_pack import (
@@ -32,6 +32,7 @@ from .system_prompt import SystemPromptBuilder
 from .token_counter import TokenCounter
 from .truncator import truncate_tool_output
 from .types import Message, ToolCall, ToolDefinition, header_context
+from ..llm.pricing_provider import is_off_peak_now
 from ..tools.todos import current_session_id, current_root_session_id
 
 logger = logging.getLogger("litework.agentloop")
@@ -62,17 +63,32 @@ def cache_price_of(pricing: Dict[str, float]) -> float:
     return float(configured or 0)
 
 
-def pricing_payload(pricing: Optional[Dict[str, float]]) -> Dict[str, float]:
-    """面板/接口统一口径的计费单价（每 M token，美元）。
+def pricing_payload(pricing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """面板/接口统一口径的计费单价（每 M token，美元）+ 来源元信息。
 
-    成本估算完全由这三个单价决定，因此随统计一起下发，供前端直接展示对账。
+    成本估算完全由这几个单价决定，因此随统计一起下发，供前端直接展示对账：
+    - off_peak / off_peak_active：分时供应商（DeepSeek）的空闲档与当前是否生效；
+    - source / source_age_seconds / stale：价格来源与新鲜度，过期时前端提示去
+      设置页手动同步（不自动联网）。
     """
     p = pricing or {}
-    return {
+    out: Dict[str, Any] = {
         "input_per_mtok": float(p.get("input_per_mtok", 0) or 0),
         "output_per_mtok": float(p.get("output_per_mtok", 0) or 0),
         "cache_hit_per_mtok": cache_price_of(p),
+        "source": str(p.get("source") or ""),
+        "source_age_seconds": p.get("source_age_seconds"),
+        "stale": bool(p.get("stale")),
     }
+    off_peak = p.get("off_peak")
+    if isinstance(off_peak, dict) and off_peak:
+        out["off_peak"] = {
+            "input_per_mtok": float(off_peak.get("input_per_mtok", 0) or 0),
+            "output_per_mtok": float(off_peak.get("output_per_mtok", 0) or 0),
+            "cache_hit_per_mtok": cache_price_of(off_peak),
+        }
+        out["off_peak_active"] = is_off_peak_now(p)
+    return out
 
 
 class AgentLoop:
@@ -88,7 +104,7 @@ class AgentLoop:
         llm_timeout: float = 180.0,
         llm_retries: int = 2,
         token_budget: int = 48000,
-        pricing: Optional[Dict[str, float]] = None,
+        pricing: Optional[Dict[str, Any]] = None,
         auto_approve: bool = False,
         context_window: Optional[int] = None,
         truncation_dir: Optional[str] = None,
@@ -108,7 +124,9 @@ class AgentLoop:
         # LLM 瞬时故障（超时/网络/限流/5xx）的自动重试次数
         self.llm_retries = max(0, int(llm_retries))
         self.auto_approve = auto_approve
-        self.pricing = pricing or {"input_per_mtok": 2.0, "output_per_mtok": 8.0}
+        # 定价字典可携带 off_peak 档与来源元信息（见 app.resolve_pricing）
+        self.pricing: Dict[str, Any] = pricing or {
+            "input_per_mtok": 2.0, "output_per_mtok": 8.0}
         self.context_window = context_window or 128_000
         self.state = AgentStateTracker()
         self.abort_event: Optional[asyncio.Event] = None
@@ -195,11 +213,6 @@ class AgentLoop:
             _recall,
         )
         logger.info("[AgentLoop] 已注册 obs_recall（观察打包归档目录: %s）", root)
-
-    def request_stop(self) -> None:
-        if self.abort_event:
-            self.abort_event.set()
-        self.state.status = AgentStatus.STOPPED
 
     def _check_abort(self) -> bool:
         return bool(self.abort_event and self.abort_event.is_set())
@@ -463,7 +476,7 @@ class AgentLoop:
                 context_window=self.context_window,
                 current_turn=int(stats.get("turns", 0) or 0),
                 max_turns=self.max_steps,
-                pricing=self.pricing,
+                pricing=self._pricing_now(),
             )
             self._compaction_reason = decision.reason
             if decision.compact:
@@ -1073,14 +1086,27 @@ class AgentLoop:
             except Exception:
                 logger.exception("[AgentLoop] 会话落盘失败")
 
+    def _pricing_now(self) -> Dict[str, Any]:
+        """按**计价时刻**的分时窗口选档（高峰 / 空闲半价）。
+
+        任务可能跨越高峰与空闲的边界（一天里两次高峰窗口），因此不能在建 loop
+        时定死单价——每次计价都按当前时刻判断。无 off_peak 档时原样返回。
+        """
+        if is_off_peak_now(self.pricing):
+            off_peak = self.pricing.get("off_peak")
+            if isinstance(off_peak, dict):
+                return {**self.pricing, **off_peak}
+        return self.pricing
+
     def _cache_price(self) -> float:
-        return cache_price_of(self.pricing)
+        return cache_price_of(self._pricing_now())
 
     def _cost_of(self, miss: int, hit: int, output_tokens: int) -> float:
         """按「未命中输入 / 命中输入 / 输出」三段计价（每 M token 单价）。"""
-        return (miss / 1_000_000 * float(self.pricing.get("input_per_mtok", 0) or 0)
-                + hit / 1_000_000 * self._cache_price()
-                + output_tokens / 1_000_000 * float(self.pricing.get("output_per_mtok", 0) or 0))
+        p = self._pricing_now()
+        return (miss / 1_000_000 * float(p.get("input_per_mtok", 0) or 0)
+                + hit / 1_000_000 * cache_price_of(p)
+                + output_tokens / 1_000_000 * float(p.get("output_per_mtok", 0) or 0))
 
     def _estimate_cost(self, stats: Dict[str, Any]) -> float:
         """缓存感知的成本估算（本任务累计口径）。

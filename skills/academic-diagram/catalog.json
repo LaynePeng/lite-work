@@ -1,0 +1,2879 @@
+[
+  {
+    "author": "OpenTikZ contributors",
+    "description": "FlashAttention, three-panel homage after Dao et al., 2022. Left: the GPU memory hierarchy as a banded triangle (SRAM 19 TB/s / HBM 1.5 TB/s / DRAM 12.8 GB/s) showing the bandwidth-vs-size trade-off. Center: the IO-aware dataflow — Q, K^T and V tiles streamed from HBM, copied block-by-block into SRAM (outer loop over K/V, inner loop over Q), where the QK^T block and softmax are fused before sm(QK^T)V is written back to HBM. Right: the GPT-2 attention runtime, a stacked PyTorch bar (Matmul/Mask/Softmax/Dropout/Matmul) versus FlashAttention's single fused kernel.",
+    "domain": [
+      "ml",
+      "systems"
+    ],
+    "featured": true,
+    "id": "flash-attention",
+    "license": "CC0-1.0",
+    "name": "FlashAttention (IO-aware attention)",
+    "path": "examples/flash-attention",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "calc",
+      "decorations.pathreplacing",
+      "positioning",
+      "amsmath"
+    ],
+    "tags": [
+      "flash attention",
+      "attention",
+      "transformer",
+      "gpu",
+      "memory hierarchy",
+      "sram",
+      "hbm",
+      "dram",
+      "tiling",
+      "kernel fusion",
+      "io-aware",
+      "kqv"
+    ],
+    "type": "example",
+    "venue": [
+      "NeurIPS",
+      "ICLR",
+      "ICML"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Block-level GAN overview: a low-dimensional latent bar feeds the generator G (expanding trapezoid) producing generated fake images, while a high-dimensional sample-space stack supplies real images; both feed the discriminator D (compressing trapezoid) that outputs a real/fake decision. Parametric sizes, colors, and labels.",
+    "domain": [
+      "ml"
+    ],
+    "featured": true,
+    "id": "gan",
+    "license": "CC0-1.0",
+    "name": "Generative Adversarial Network (GAN)",
+    "path": "examples/gan",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "positioning"
+    ],
+    "tags": [
+      "gan",
+      "generative",
+      "adversarial",
+      "generator",
+      "discriminator",
+      "latent space",
+      "real fake",
+      "architecture",
+      "deep learning"
+    ],
+    "type": "example",
+    "venue": [
+      "NeurIPS",
+      "ICML",
+      "CVPR",
+      "ICLR"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Low-rank adaptation (LoRA), two-panel homage after Hu et al., 2021. During training: a frozen pretrained weight W feeds Wx in parallel with a trainable low-rank update B·A (rank-r bottleneck, A=N(0,sigma^2), B=0) feeding BAx, summed to h. After training: the adapter is folded into a single merged weight matrix W_merged, shown as a bar–square–bar stack. Center column gives h = Wx + BAx = (W + BA)x.",
+    "domain": [
+      "ml"
+    ],
+    "featured": true,
+    "id": "lora",
+    "license": "CC0-1.0",
+    "name": "LoRA (low-rank adaptation)",
+    "path": "examples/lora",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "calc",
+      "decorations.pathreplacing",
+      "positioning",
+      "amsmath",
+      "amssymb"
+    ],
+    "tags": [
+      "lora",
+      "low-rank adaptation",
+      "fine-tuning",
+      "peft",
+      "frozen weights",
+      "adapter",
+      "transformer",
+      "merged weights"
+    ],
+    "type": "example",
+    "venue": [
+      "NeurIPS",
+      "ICLR",
+      "ICML"
+    ]
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Anthropic brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "anthropic",
+    "license": "CC0-1.0",
+    "name": "Anthropic",
+    "path": "icons/brands/anthropic",
+    "preview": "anthropic.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "anthropic",
+      "brand",
+      "claude",
+      "company",
+      "llm",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "arXiv brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "arxiv",
+    "license": "CC0-1.0",
+    "name": "arXiv",
+    "path": "icons/brands/arxiv",
+    "preview": "arxiv.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "arxiv",
+      "brand",
+      "logo",
+      "papers",
+      "preprint",
+      "publishing"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Attention block with query/key/value inputs and an output.",
+    "domain": [
+      "ml"
+    ],
+    "id": "attention",
+    "license": "CC0-1.0",
+    "name": "Attention block",
+    "path": "icons/ml/attention",
+    "preview": "attention.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "positioning"
+    ],
+    "tags": [
+      "attention",
+      "transformer",
+      "self-attention",
+      "qkv",
+      "query key value",
+      "block"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Claude brand mark (Anthropic), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "claude",
+    "license": "CC0-1.0",
+    "name": "Claude",
+    "path": "icons/brands/claude",
+    "preview": "claude.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "anthropic",
+      "assistant",
+      "brand",
+      "claude",
+      "llm",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Cloud icon for internet / cloud services.",
+    "domain": [
+      "systems"
+    ],
+    "id": "cloud",
+    "license": "CC0-1.0",
+    "name": "Cloud",
+    "path": "icons/systems/cloud",
+    "preview": "cloud.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "cloud",
+      "internet",
+      "saas",
+      "remote",
+      "hosting",
+      "infrastructure"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A container drawn as an isometric slatted cube, for deployment and packaging diagrams.",
+    "domain": [
+      "systems"
+    ],
+    "id": "container",
+    "license": "CC0-1.0",
+    "name": "Container",
+    "path": "icons/systems/container",
+    "preview": "container.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "container",
+      "docker",
+      "box",
+      "deployment",
+      "package",
+      "microservice"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A convolution: a sliding kernel window over a feature-map grid producing an output cell.",
+    "domain": [
+      "ml"
+    ],
+    "id": "convolution",
+    "license": "CC0-1.0",
+    "name": "Convolution",
+    "path": "icons/ml/convolution",
+    "preview": "convolution.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta"
+    ],
+    "tags": [
+      "convolution",
+      "cnn",
+      "kernel",
+      "filter",
+      "feature-map",
+      "stride",
+      "vision"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "CPU / processor chip icon with pins and a labelled core.",
+    "domain": [
+      "systems"
+    ],
+    "id": "cpu",
+    "license": "CC0-1.0",
+    "name": "CPU",
+    "path": "icons/systems/cpu",
+    "preview": "cpu.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "cpu",
+      "processor",
+      "chip",
+      "compute",
+      "hardware",
+      "core"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Classic cylinder database / datastore icon with stripe bands.",
+    "domain": [
+      "systems"
+    ],
+    "id": "database",
+    "license": "CC0-1.0",
+    "name": "Database",
+    "path": "icons/systems/database",
+    "preview": "database.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "database",
+      "db",
+      "datastore",
+      "storage",
+      "sql",
+      "persistence",
+      "cylinder"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Tabular dataset icon: a small table with a header row.",
+    "domain": [
+      "ml"
+    ],
+    "id": "dataset",
+    "license": "CC0-1.0",
+    "name": "Dataset / table",
+    "path": "icons/ml/dataset",
+    "preview": "dataset.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "dataset",
+      "data",
+      "table",
+      "samples",
+      "features",
+      "spreadsheet",
+      "tabular"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "DeepSeek brand mark (whale), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "deepseek",
+    "license": "CC0-1.0",
+    "name": "DeepSeek",
+    "path": "icons/brands/deepseek",
+    "preview": "deepseek.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "deepseek",
+      "llm",
+      "logo",
+      "model"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A hard disk drive: enclosure with a platter, spindle hub, and read/write arm.",
+    "domain": [
+      "systems"
+    ],
+    "id": "disk",
+    "license": "CC0-1.0",
+    "name": "Disk / storage",
+    "path": "icons/systems/disk",
+    "preview": "disk.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "disk",
+      "storage",
+      "hdd",
+      "drive",
+      "persistence",
+      "hardware"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Docker brand mark (whale with containers), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "docker",
+    "license": "CC0-1.0",
+    "name": "Docker",
+    "path": "icons/brands/docker",
+    "preview": "docker.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "container",
+      "deployment",
+      "devops",
+      "docker",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "An embedding vector drawn as a bracketed column of weighted cells.",
+    "domain": [
+      "ml"
+    ],
+    "id": "embedding",
+    "license": "CC0-1.0",
+    "name": "Embedding vector",
+    "path": "icons/ml/embedding",
+    "preview": "embedding.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "embedding",
+      "vector",
+      "representation",
+      "latent",
+      "feature",
+      "encoding"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Git brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "git",
+    "license": "CC0-1.0",
+    "name": "Git",
+    "path": "icons/brands/git",
+    "preview": "git.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "branch",
+      "brand",
+      "git",
+      "logo",
+      "vcs",
+      "version control"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "GitHub brand mark (Octocat silhouette), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "github",
+    "license": "CC0-1.0",
+    "name": "GitHub",
+    "path": "icons/brands/github",
+    "preview": "github.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "code hosting",
+      "github",
+      "logo",
+      "open source",
+      "repository"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "GitHub Copilot brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "github-copilot",
+    "license": "CC0-1.0",
+    "name": "GitHub Copilot",
+    "path": "icons/brands/github-copilot",
+    "preview": "github-copilot.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "coding assistant",
+      "copilot",
+      "github",
+      "github-copilot",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Google brand mark (G), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "google",
+    "license": "CC0-1.0",
+    "name": "Google",
+    "path": "icons/brands/google",
+    "preview": "google.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "company",
+      "google",
+      "logo",
+      "search"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Google Cloud brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "google-cloud",
+    "license": "CC0-1.0",
+    "name": "Google Cloud",
+    "path": "icons/brands/google-cloud",
+    "preview": "google-cloud.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "cloud",
+      "gcp",
+      "google-cloud",
+      "infrastructure",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Google Colab brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "google-colab",
+    "license": "CC0-1.0",
+    "name": "Google Colab",
+    "path": "icons/brands/google-colab",
+    "preview": "google-colab.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "colab",
+      "google-colab",
+      "gpu",
+      "logo",
+      "notebook"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Google Gemini brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "google-gemini",
+    "license": "CC0-1.0",
+    "name": "Google Gemini",
+    "path": "icons/brands/google-gemini",
+    "preview": "google-gemini.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "gemini",
+      "google-gemini",
+      "llm",
+      "logo",
+      "model"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Google Scholar brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "google-scholar",
+    "license": "CC0-1.0",
+    "name": "Google Scholar",
+    "path": "icons/brands/google-scholar",
+    "preview": "google-scholar.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "citations",
+      "google-scholar",
+      "logo",
+      "papers",
+      "search"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "GPU / graphics-card icon with a fan and gold edge connector.",
+    "domain": [
+      "systems"
+    ],
+    "id": "gpu",
+    "license": "CC0-1.0",
+    "name": "GPU",
+    "path": "icons/systems/gpu",
+    "preview": "gpu.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "gpu",
+      "graphics card",
+      "accelerator",
+      "compute",
+      "hardware",
+      "cuda"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Hugging Face brand mark (smiling face), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "huggingface",
+    "license": "CC0-1.0",
+    "name": "Hugging Face",
+    "path": "icons/brands/huggingface",
+    "preview": "huggingface.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "hub",
+      "huggingface",
+      "logo",
+      "ml",
+      "models",
+      "nlp"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "IEEE brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "ieee",
+    "license": "CC0-1.0",
+    "name": "IEEE",
+    "path": "icons/brands/ieee",
+    "preview": "ieee.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "ieee",
+      "logo",
+      "papers",
+      "publisher",
+      "standards"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Jupyter brand mark (three moons), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "jupyter",
+    "license": "CC0-1.0",
+    "name": "Jupyter",
+    "path": "icons/brands/jupyter",
+    "preview": "jupyter.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "jupyter",
+      "logo",
+      "notebook",
+      "python",
+      "tooling"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Kaggle brand mark (k), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "kaggle",
+    "license": "CC0-1.0",
+    "name": "Kaggle",
+    "path": "icons/brands/kaggle",
+    "preview": "kaggle.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "competition",
+      "dataset",
+      "kaggle",
+      "logo",
+      "ml"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Keras brand mark (K), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "keras",
+    "license": "CC0-1.0",
+    "name": "Keras",
+    "path": "icons/brands/keras",
+    "preview": "keras.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "deep learning",
+      "framework",
+      "keras",
+      "logo",
+      "ml"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Kubernetes brand mark (helm wheel), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "kubernetes",
+    "license": "CC0-1.0",
+    "name": "Kubernetes",
+    "path": "icons/brands/kubernetes",
+    "preview": "kubernetes.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "container",
+      "devops",
+      "k8s",
+      "kubernetes",
+      "logo",
+      "orchestration"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "LangChain brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "langchain",
+    "license": "CC0-1.0",
+    "name": "LangChain",
+    "path": "icons/brands/langchain",
+    "preview": "langchain.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "agents",
+      "ai",
+      "brand",
+      "framework",
+      "langchain",
+      "llm",
+      "logo"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "LaTeX wordmark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "latex",
+    "license": "CC0-1.0",
+    "name": "LaTeX",
+    "path": "icons/brands/latex",
+    "preview": "latex.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "latex",
+      "logo",
+      "tex",
+      "typesetting",
+      "writing"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Stacked feature maps representing a network layer / tensor.",
+    "domain": [
+      "ml"
+    ],
+    "id": "layer",
+    "license": "CC0-1.0",
+    "name": "Layer / feature maps",
+    "path": "icons/ml/layer",
+    "preview": "layer.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "layer",
+      "feature map",
+      "tensor",
+      "conv",
+      "activation",
+      "stack",
+      "channels"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Linux brand mark (Tux the penguin), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "linux",
+    "license": "CC0-1.0",
+    "name": "Linux",
+    "path": "icons/brands/linux",
+    "preview": "linux.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "linux",
+      "logo",
+      "operating system",
+      "os",
+      "penguin",
+      "tux"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A training-loss curve descending to a converged minimum on loss-vs-epoch axes.",
+    "domain": [
+      "ml"
+    ],
+    "id": "loss",
+    "license": "CC0-1.0",
+    "name": "Loss curve",
+    "path": "icons/ml/loss",
+    "preview": "loss.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta"
+    ],
+    "tags": [
+      "loss",
+      "objective",
+      "training",
+      "convergence",
+      "optimization",
+      "curve"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A grid of binary digits in curly braces, for raw data / encoded tensors / bit matrices.",
+    "domain": [
+      "ml"
+    ],
+    "id": "matrix",
+    "license": "CC0-1.0",
+    "name": "Binary matrix",
+    "path": "icons/ml/matrix",
+    "preview": "matrix.svg",
+    "requires": [
+      "tikz",
+      "decorations.pathreplacing"
+    ],
+    "tags": [
+      "matrix",
+      "binary",
+      "bits",
+      "data",
+      "encoding",
+      "tensor"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Model Context Protocol (MCP) brand mark, official color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "mcp",
+    "license": "CC0-1.0",
+    "name": "Model Context Protocol",
+    "path": "icons/brands/mcp",
+    "preview": "mcp.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "agents",
+      "ai",
+      "brand",
+      "llm",
+      "logo",
+      "mcp",
+      "model context protocol",
+      "protocol"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Meta brand mark (infinity loop), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "meta",
+    "license": "CC0-1.0",
+    "name": "Meta",
+    "path": "icons/brands/meta",
+    "preview": "meta.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "company",
+      "llama",
+      "logo",
+      "meta",
+      "social"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Mistral AI brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "mistral",
+    "license": "CC0-1.0",
+    "name": "Mistral AI",
+    "path": "icons/brands/mistral",
+    "preview": "mistral.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "llm",
+      "logo",
+      "mistral",
+      "mistral ai",
+      "model"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A handset representing a mobile or edge device, for client- and edge-side blocks.",
+    "domain": [
+      "systems"
+    ],
+    "id": "mobile",
+    "license": "CC0-1.0",
+    "name": "Mobile / edge device",
+    "path": "icons/systems/mobile",
+    "preview": "mobile.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "mobile",
+      "phone",
+      "edge",
+      "device",
+      "client",
+      "on-device"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A generic model: a rounded box marked with an AI sparkle, for use as a black-box network.",
+    "domain": [
+      "ml"
+    ],
+    "id": "model",
+    "license": "CC0-1.0",
+    "name": "Model",
+    "path": "icons/ml/model",
+    "preview": "model.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "model",
+      "network",
+      "ai",
+      "checkpoint",
+      "weights",
+      "black-box"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A small network topology: a central hub linked to four peer nodes.",
+    "domain": [
+      "systems"
+    ],
+    "id": "network",
+    "license": "CC0-1.0",
+    "name": "Network",
+    "path": "icons/systems/network",
+    "preview": "network.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "network",
+      "topology",
+      "nodes",
+      "hub",
+      "graph",
+      "connectivity"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Single artificial neuron / perceptron with weighted inputs and one output.",
+    "domain": [
+      "ml"
+    ],
+    "id": "neuron",
+    "license": "CC0-1.0",
+    "name": "Neuron",
+    "path": "icons/ml/neuron",
+    "preview": "neuron.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta"
+    ],
+    "tags": [
+      "neuron",
+      "perceptron",
+      "unit",
+      "node",
+      "neural network",
+      "activation"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "NumPy brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "numpy",
+    "license": "CC0-1.0",
+    "name": "NumPy",
+    "path": "icons/brands/numpy",
+    "preview": "numpy.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "array",
+      "brand",
+      "logo",
+      "numpy",
+      "python",
+      "scientific computing"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "NVIDIA brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "nvidia",
+    "license": "CC0-1.0",
+    "name": "NVIDIA",
+    "path": "icons/brands/nvidia",
+    "preview": "nvidia.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "company",
+      "cuda",
+      "gpu",
+      "hardware",
+      "logo",
+      "nvidia"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Ollama brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "ollama",
+    "license": "CC0-1.0",
+    "name": "Ollama",
+    "path": "icons/brands/ollama",
+    "preview": "ollama.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "llm",
+      "local inference",
+      "logo",
+      "ollama",
+      "tooling"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "ORCID brand mark (iD), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "orcid",
+    "license": "CC0-1.0",
+    "name": "ORCID",
+    "path": "icons/brands/orcid",
+    "preview": "orcid.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "identity",
+      "logo",
+      "orcid",
+      "publishing",
+      "researcher id"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Overleaf brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "overleaf",
+    "license": "CC0-1.0",
+    "name": "Overleaf",
+    "path": "icons/brands/overleaf",
+    "preview": "overleaf.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "editor",
+      "latex",
+      "logo",
+      "overleaf",
+      "writing"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "pandas brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "pandas",
+    "license": "CC0-1.0",
+    "name": "pandas",
+    "path": "icons/brands/pandas",
+    "preview": "pandas.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "data analysis",
+      "dataframe",
+      "logo",
+      "pandas",
+      "python"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Perplexity brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "perplexity",
+    "license": "CC0-1.0",
+    "name": "Perplexity",
+    "path": "icons/brands/perplexity",
+    "preview": "perplexity.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "assistant",
+      "brand",
+      "llm",
+      "logo",
+      "perplexity",
+      "search"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Python brand mark (two snakes), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "python",
+    "license": "CC0-1.0",
+    "name": "Python",
+    "path": "icons/brands/python",
+    "preview": "python.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "language",
+      "logo",
+      "programming",
+      "python",
+      "snake"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "PyTorch brand mark (flame), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "pytorch",
+    "license": "CC0-1.0",
+    "name": "PyTorch",
+    "path": "icons/brands/pytorch",
+    "preview": "pytorch.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "deep learning",
+      "framework",
+      "logo",
+      "ml",
+      "pytorch"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A FIFO message queue: buffered items with enqueue and dequeue arrows.",
+    "domain": [
+      "systems"
+    ],
+    "id": "queue",
+    "license": "CC0-1.0",
+    "name": "Message queue",
+    "path": "icons/systems/queue",
+    "preview": "queue.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta"
+    ],
+    "tags": [
+      "queue",
+      "fifo",
+      "buffer",
+      "message",
+      "kafka",
+      "pipeline",
+      "broker"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Qwen brand mark (Alibaba), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "qwen",
+    "license": "CC0-1.0",
+    "name": "Qwen",
+    "path": "icons/brands/qwen",
+    "preview": "qwen.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "alibaba",
+      "brand",
+      "llm",
+      "logo",
+      "model",
+      "qwen"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Reddit brand mark (Snoo), official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "reddit",
+    "license": "CC0-1.0",
+    "name": "Reddit",
+    "path": "icons/brands/reddit",
+    "preview": "reddit.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "community",
+      "forum",
+      "logo",
+      "reddit",
+      "social"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "scikit-learn brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "scikit-learn",
+    "license": "CC0-1.0",
+    "name": "scikit-learn",
+    "path": "icons/brands/scikit-learn",
+    "preview": "scikit-learn.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "logo",
+      "machine learning",
+      "ml",
+      "python",
+      "scikit-learn",
+      "sklearn"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Semantic Scholar brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "semantic-scholar",
+    "license": "CC0-1.0",
+    "name": "Semantic Scholar",
+    "path": "icons/brands/semantic-scholar",
+    "preview": "semantic-scholar.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "citations",
+      "logo",
+      "papers",
+      "search",
+      "semantic-scholar"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A rack-style server icon: stacked rack units with status LEDs and ventilation slits. Parametric unit count.",
+    "domain": [
+      "systems"
+    ],
+    "id": "server",
+    "license": "CC0-1.0",
+    "name": "Server",
+    "path": "icons/systems/server",
+    "preview": "server.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "server",
+      "rack",
+      "compute",
+      "infrastructure",
+      "datacenter",
+      "hardware"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "TensorFlow brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "tensorflow",
+    "license": "CC0-1.0",
+    "name": "TensorFlow",
+    "path": "icons/brands/tensorflow",
+    "preview": "tensorflow.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "deep learning",
+      "framework",
+      "logo",
+      "ml",
+      "tensorflow"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "A user/client avatar: head and shoulders silhouette, for system actors and endpoints.",
+    "domain": [
+      "systems"
+    ],
+    "id": "user",
+    "license": "CC0-1.0",
+    "name": "User",
+    "path": "icons/systems/user",
+    "preview": "user.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "user",
+      "client",
+      "person",
+      "actor",
+      "human",
+      "account"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "vLLM brand mark, official two-tone colors (yellow + blue).",
+    "domain": [
+      "brands"
+    ],
+    "id": "vllm",
+    "license": "CC0-1.0",
+    "name": "vLLM",
+    "path": "icons/brands/vllm",
+    "preview": "vllm.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "ai",
+      "brand",
+      "inference",
+      "llm",
+      "logo",
+      "serving",
+      "vllm"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "description": "Weights & Biases brand mark, official brand color.",
+    "domain": [
+      "brands"
+    ],
+    "id": "wandb",
+    "license": "CC0-1.0",
+    "name": "Weights & Biases",
+    "path": "icons/brands/wandb",
+    "preview": "wandb.svg",
+    "requires": [
+      "tikz",
+      "svg.path"
+    ],
+    "tags": [
+      "brand",
+      "experiment tracking",
+      "logo",
+      "mlops",
+      "wandb",
+      "weights and biases"
+    ],
+    "type": "icon"
+  },
+  {
+    "author": "Daniel Huang",
+    "composed_of": [
+      "claude",
+      "mcp",
+      "github",
+      "arxiv",
+      "google-scholar"
+    ],
+    "description": "LLM agent tool-use stack with brand logos: user to an LLM core to MCP servers fanning out to swappable tool cards.",
+    "domain": [
+      "ml",
+      "brands"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "Structural colors only via the five palette names; brand marks keep their official brand\\* colors (exception documented in icons/brands/README.md).",
+        "Node names user/llm/mcp/t1..t3 are stable API — never rename them.",
+        "svg.path ignores TikZ unit-vector options (x=, y=): position/size logo pics only via shift/scale.",
+        "The file must stay standalone-compilable."
+      ],
+      "node_naming": "user, llm, mcp; tool cards t1..t3 top-to-bottom; logos are pics named pic<brand>",
+      "operations": [
+        {
+          "id": "relabel-cards",
+          "summary": "Change any card or edge text via the label \\def parameters only."
+        },
+        {
+          "id": "swap-tool-logo",
+          "summary": "Replace a tool card's logo: swap the \\pic call's pic<brand> name and inline the new brand's \\definecolor + pic definition from icons/brands/<brand>/."
+        },
+        {
+          "id": "add-tool-card",
+          "summary": "Duplicate the t3 block as t4 with yshift=-2*(\\cardh+\\toolgap), add a flow edge from mcp to t4.west, and a \\tooldlabel parameter."
+        },
+        {
+          "id": "resize-cards",
+          "summary": "Scale all cards via \\cardw/\\cardh; keep pic scale ~0.26-0.3 so logos stay inside cards."
+        },
+        {
+          "id": "recolor-structure",
+          "summary": "Change card fills/arrows via the five palette names (tints allowed); never touch the brand\\* colors."
+        }
+      ],
+      "parameters": [
+        {
+          "default": "2.4",
+          "meaning": "card width",
+          "name": "\\cardw",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.9",
+          "meaning": "logo-card height",
+          "name": "\\cardh",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.45",
+          "meaning": "vertical gap between tool cards",
+          "name": "\\toolgap",
+          "type": "length-cm"
+        },
+        {
+          "default": "User",
+          "meaning": "label of the user card",
+          "name": "\\userlabel",
+          "type": "text"
+        },
+        {
+          "default": "Claude",
+          "meaning": "label of the LLM-core card",
+          "name": "\\llmlabel",
+          "type": "text"
+        },
+        {
+          "default": "MCP servers",
+          "meaning": "label of the protocol card",
+          "name": "\\mcplabel",
+          "type": "text"
+        },
+        {
+          "default": "GitHub",
+          "meaning": "label of the top tool card (t1)",
+          "name": "\\toolalabel",
+          "type": "text"
+        },
+        {
+          "default": "arXiv",
+          "meaning": "label of the middle tool card (t2)",
+          "name": "\\toolblabel",
+          "type": "text"
+        },
+        {
+          "default": "Scholar",
+          "meaning": "label of the bottom tool card (t3)",
+          "name": "\\toolclabel",
+          "type": "text"
+        },
+        {
+          "default": "chat",
+          "meaning": "user-to-LLM edge label",
+          "name": "\\chatlabel",
+          "type": "text"
+        },
+        {
+          "default": "tool calls",
+          "meaning": "LLM-to-MCP edge label",
+          "name": "\\calllabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "card",
+        "cardlabel",
+        "flow",
+        "elabel"
+      ]
+    },
+    "id": "agent-mcp-stack",
+    "license": "CC0-1.0",
+    "name": "Agent Tool-Use Stack (MCP)",
+    "path": "templates/agent-mcp-stack",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "svg.path",
+      "positioning",
+      "arrows.meta"
+    ],
+    "tags": [
+      "llm",
+      "agent",
+      "mcp",
+      "tools",
+      "tool use",
+      "claude",
+      "brands",
+      "logo"
+    ],
+    "type": "template"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "composed_of": [
+      "dataset",
+      "gpu",
+      "server"
+    ],
+    "description": "Editable data-parallel training figure composing the dataset, gpu, and server icons: a training-data source shards batches to GPU workers that exchange gradients and weights with a parameter server. Parametric spacing and labels.",
+    "domain": [
+      "ml",
+      "systems"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "the data/gradient/weight flows must stay in distinct palette colors (gray data, purple gradients, teal dashed weights)",
+        "every worker added to the layout must also appear in the gradient/weight sync \\foreach list",
+        "colors only via the five palette names (tints/shades allowed); never inline hex or stock colors"
+      ],
+      "node_naming": "fixed semantic names: (data) source; GPU workers (w1)(w2)(w3) top-to-bottom; (ps) parameter server. New workers continue the w<n> sequence and are positioned at (\\colsep, k*\\rowsep)",
+      "operations": [
+        {
+          "id": "rename-node",
+          "summary": "edit the matching label macro (\\datalabel, \\worker*label, \\pslabel, \\titlelabel)"
+        },
+        {
+          "id": "add-worker",
+          "summary": "declare \\node[icon] (w4) at (\\colsep, k*\\rowsep) {\\gpupic} plus its slbl label, then add it to the sync \\foreach list and a data edge from (data.east)"
+        },
+        {
+          "id": "change-spacing",
+          "summary": "edit \\colsep (stage gap) or \\rowsep (worker gap); the server and title positions are derived from \\colsep/\\rowsep"
+        },
+        {
+          "id": "swap-icon",
+          "summary": "replace a node body picture macro (\\datasetpic, \\gpupic, \\serverpic) with another icon sub-picture adapted from icons/"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette name in the data/grad/wts styles or an icon macro; keep distinct flows (data/gradient/weight) in distinct colors; never inline hex"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "4.6",
+          "meaning": "horizontal gap between the three stages (data -> workers -> server)",
+          "name": "\\colsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "2.5",
+          "meaning": "vertical gap between adjacent GPU workers",
+          "name": "\\rowsep",
+          "type": "length-cm"
+        },
+        {
+          "meaning": "data-source label",
+          "name": "\\datalabel",
+          "type": "text"
+        },
+        {
+          "meaning": "top GPU worker label",
+          "name": "\\workeronelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "middle GPU worker label",
+          "name": "\\workertwolabel",
+          "type": "text"
+        },
+        {
+          "meaning": "bottom GPU worker label",
+          "name": "\\workerthreelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "parameter-server label",
+          "name": "\\pslabel",
+          "type": "text"
+        },
+        {
+          "meaning": "label on the data-sharding edge",
+          "name": "\\batchlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "gradient-flow label (math allowed)",
+          "name": "\\gradlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "weight-flow label (math allowed)",
+          "name": "\\weightlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "figure title",
+          "name": "\\titlelabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "icon",
+        "slbl",
+        "data",
+        "grad",
+        "wts"
+      ]
+    },
+    "featured": true,
+    "id": "distributed-training",
+    "license": "CC0-1.0",
+    "name": "Distributed data-parallel training",
+    "path": "templates/distributed-training",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "positioning"
+    ],
+    "tags": [
+      "distributed training",
+      "data parallel",
+      "parameter server",
+      "gpu",
+      "gradients",
+      "synchronization",
+      "system diagram"
+    ],
+    "type": "template",
+    "venue": [
+      "NeurIPS",
+      "MLSys",
+      "OSDI"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Block-level encoder-decoder 'hourglass': input block, encoder trapezoid narrowing to a latent bottleneck z, decoder trapezoid widening to an output block. Parametric sizes and labels.",
+    "domain": [
+      "ml"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "preserve the node names (input) (enc) (z) (dec) (output)",
+        "keep each trapezoid's inner-edge height equal to \\latentH so encoder/decoder stay flush with z",
+        "colors only via the five palette names (tints/shades allowed); never inline hex or stock colors"
+      ],
+      "node_naming": "fixed semantic node names: (input) (enc) (z) (dec) (output); (enc)/(dec) are the centre text nodes, not the trapezoid paths",
+      "operations": [
+        {
+          "id": "rename-part",
+          "summary": "edit the matching label macro; no layout change needed"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette name in the encoder/decoder \\filldraw or the latentblk style; never a hex/stock color"
+        },
+        {
+          "id": "resize",
+          "summary": "\\blockH/\\blockW for I/O blocks, \\trapW for trapezoid length, \\latentH/\\latentW for the bottleneck, \\gap for spacing"
+        },
+        {
+          "id": "add-cross-attention",
+          "summary": "place a palette-colored block with positioning above (z) that (enc) feeds and that feeds (dec); connect with flow arrows; keep (enc)/(z)/(dec) intact"
+        },
+        {
+          "id": "add-stage",
+          "summary": "insert another running edge pair after the relevant part, push later edges along by its width + \\gap, draw the node and an extra flow arrow; keep every part centred on y=0"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "3.0",
+          "meaning": "height of the input/output blocks; also each trapezoid's wide (outer) edge",
+          "name": "\\blockH",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.1",
+          "meaning": "height of the bottleneck z; also each trapezoid's narrow (inner) edge, so shapes meet z flush",
+          "name": "\\latentH",
+          "type": "length-cm"
+        },
+        {
+          "default": "2.6",
+          "meaning": "width of the encoder/decoder trapezoids",
+          "name": "\\trapW",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.0",
+          "meaning": "width of the input/output blocks",
+          "name": "\\blockW",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.9",
+          "meaning": "width of the bottleneck z",
+          "name": "\\latentW",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.9",
+          "meaning": "horizontal gap between parts (also the arrow length)",
+          "name": "\\gap",
+          "type": "length-cm"
+        },
+        {
+          "meaning": "input block label (math allowed)",
+          "name": "\\inputlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "encoder trapezoid label",
+          "name": "\\encoderlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "bottleneck label drawn inside z (keep short, e.g. $z$)",
+          "name": "\\latentlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "decoder trapezoid label",
+          "name": "\\decoderlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "output block label (math allowed)",
+          "name": "\\outputlabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "ioblock",
+        "trap",
+        "latentblk",
+        "lbl",
+        "flow"
+      ]
+    },
+    "id": "encoder-decoder",
+    "license": "CC0-1.0",
+    "name": "Encoder-decoder (bottleneck)",
+    "path": "templates/encoder-decoder",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "positioning"
+    ],
+    "tags": [
+      "encoder",
+      "decoder",
+      "autoencoder",
+      "seq2seq",
+      "bottleneck",
+      "latent",
+      "representation learning",
+      "architecture"
+    ],
+    "type": "template",
+    "venue": [
+      "NeurIPS",
+      "ICML",
+      "CVPR",
+      "ACL"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Standard flowchart: terminal pills (start/end), process rectangles, a decision diamond with Yes/No branches, and a retry loop. Parametric spacing and labels.",
+    "domain": [
+      "general"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "preserve the node names (start) (read) (check) (proc) (end) (error) and the per-role styles terminal/process/decision",
+        "label every decision's outgoing edges (Yes/No or equivalent)",
+        "colors only via the five palette names (tints/shades allowed); never inline hex or stock colors"
+      ],
+      "node_naming": "fixed semantic node names: (start) (read) (check) (proc) (end) (error); give any new node a clear semantic name",
+      "operations": [
+        {
+          "id": "rename-step",
+          "summary": "edit the matching label macro"
+        },
+        {
+          "id": "add-process-step",
+          "summary": "insert a process node below=of the previous one and re-point the surrounding flow arrows"
+        },
+        {
+          "id": "add-decision",
+          "summary": "add a decision node and route its two outgoing flow arrows, labelling each branch"
+        },
+        {
+          "id": "change-shape",
+          "summary": "swap a node's style: process<->decision<->terminal (give a decision a ? label)"
+        },
+        {
+          "id": "add-io-step",
+          "summary": "use a trapezium (slanted box) for an I/O step; shapes.geometric is already loaded"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette name in the relevant style; never a hex/stock color"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "0.95",
+          "meaning": "vertical gap between steps (tikz node distance)",
+          "name": "\\rowsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "2.4",
+          "meaning": "minimum process/terminal width",
+          "name": "\\boxminw",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.95",
+          "meaning": "minimum box height",
+          "name": "\\boxminh",
+          "type": "length-cm"
+        },
+        {
+          "meaning": "start terminal label",
+          "name": "\\startlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "first process label",
+          "name": "\\readlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "decision diamond label",
+          "name": "\\checklabel",
+          "type": "text"
+        },
+        {
+          "meaning": "main process label",
+          "name": "\\proclabel",
+          "type": "text"
+        },
+        {
+          "meaning": "end terminal label",
+          "name": "\\endlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "error-branch process label",
+          "name": "\\errorlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "decision Yes-edge label",
+          "name": "\\yeslabel",
+          "type": "text"
+        },
+        {
+          "meaning": "decision No-edge label",
+          "name": "\\nolabel",
+          "type": "text"
+        },
+        {
+          "meaning": "retry loop edge label",
+          "name": "\\looplabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "base",
+        "terminal",
+        "process",
+        "decision",
+        "flow",
+        "loop",
+        "elabel"
+      ]
+    },
+    "id": "flowchart",
+    "license": "CC0-1.0",
+    "name": "Flowchart (decision + loop)",
+    "path": "templates/flowchart",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "positioning",
+      "shapes.geometric",
+      "shapes.misc"
+    ],
+    "tags": [
+      "flowchart",
+      "decision",
+      "diamond",
+      "process",
+      "control flow",
+      "algorithm",
+      "branch",
+      "loop"
+    ],
+    "type": "template",
+    "venue": []
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "composed_of": [
+      "cloud",
+      "server",
+      "gpu",
+      "database"
+    ],
+    "description": "Editable deployment figure composing the cloud, server, gpu, and database icons: client requests flow over the internet through a load balancer to GPU-backed inference nodes that read from a feature store, with a dashed inference-cluster boundary. Parametric spacing and labels.",
+    "domain": [
+      "systems",
+      "ml"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "the request path (req, solid) and feature reads (read, teal dashed) must stay visually distinct",
+        "the (cluster) boundary node must be drawn in the on-background-layer scope after the nodes it fits, so it sits behind them",
+        "any inference node inside the boundary must be added to the (cluster) fit=(...) list",
+        "colors only via the five palette names (tints/shades allowed); never inline hex or stock colors"
+      ],
+      "node_naming": "fixed semantic names along the request path: (client) (cloud) (lb); inference nodes (node1)(node2) with their labels (n1lab)(n2lab); (db) feature store; (cluster) dashed boundary box. New nodes get role-based names and join the (cluster) fit list if inside the boundary",
+      "operations": [
+        {
+          "id": "rename-node",
+          "summary": "edit the matching label macro (\\clientlabel, \\lblabel, \\node*label, \\storelabel, \\titlelabel)"
+        },
+        {
+          "id": "add-inference-node",
+          "summary": "declare \\node[nodebox] (node3) at (3*\\colsep, y) {\\serverpic\\hspace{4pt}\\gpupic} plus its slbl label, route a req edge from (lb.east) and a read edge to (db.west), then add the node and its label to the (cluster) fit list"
+        },
+        {
+          "id": "change-spacing",
+          "summary": "edit \\colsep (stage gap) or \\rowsep (node offset); node and store x-positions are multiples of \\colsep, title position is derived from \\colsep/\\rowsep"
+        },
+        {
+          "id": "swap-icon",
+          "summary": "replace a node body picture macro (\\cloudpic, \\serverpic, \\gpupic, \\dbpic) with another icon sub-picture adapted from icons/"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette name in the req/read styles or an icon macro; keep request vs feature-read flows in distinct colors; never inline hex"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "3.0",
+          "meaning": "horizontal gap between request-path stages (client -> cloud -> lb -> nodes -> store)",
+          "name": "\\colsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.5",
+          "meaning": "vertical offset of the two stacked inference nodes from the centerline",
+          "name": "\\rowsep",
+          "type": "length-cm"
+        },
+        {
+          "meaning": "client box label",
+          "name": "\\clientlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "label under the cloud",
+          "name": "\\internetlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "load-balancer label (use \\\\ for two lines)",
+          "name": "\\lblabel",
+          "type": "text"
+        },
+        {
+          "meaning": "top inference-node label",
+          "name": "\\nodeonelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "bottom inference-node label",
+          "name": "\\nodetwolabel",
+          "type": "text"
+        },
+        {
+          "meaning": "feature-store label",
+          "name": "\\storelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "label on the feature-read edges",
+          "name": "\\featurelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "dashed inference-cluster boundary label",
+          "name": "\\clusterlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "figure title",
+          "name": "\\titlelabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "icon",
+        "compbox",
+        "nodebox",
+        "slbl",
+        "req",
+        "read"
+      ]
+    },
+    "featured": true,
+    "id": "inference-serving",
+    "license": "CC0-1.0",
+    "name": "Model inference serving",
+    "path": "templates/inference-serving",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "backgrounds",
+      "fit",
+      "positioning",
+      "shapes.symbols"
+    ],
+    "tags": [
+      "inference",
+      "serving",
+      "deployment",
+      "load balancer",
+      "gpu",
+      "cloud",
+      "feature store",
+      "system diagram"
+    ],
+    "type": "template",
+    "venue": [
+      "OSDI",
+      "NSDI",
+      "MLSys"
+    ]
+  },
+  {
+    "author": "Daniel Huang",
+    "composed_of": [
+      "vllm",
+      "nvidia",
+      "deepseek",
+      "qwen",
+      "mistral"
+    ],
+    "description": "LLM inference serving stack with brand logos: users to a vLLM engine on a GPU cluster, serving swappable model cards.",
+    "domain": [
+      "systems",
+      "brands"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "Structural colors only via the five palette names; brand marks keep their official brand\\* colors (exception documented in icons/brands/README.md).",
+        "Node names users/engine/gpus/m1..m3 are stable API — never rename them.",
+        "svg.path ignores TikZ unit-vector options (x=, y=): position/size logo pics only via shift/scale.",
+        "The file must stay standalone-compilable."
+      ],
+      "node_naming": "users, engine, gpus; model cards m1..m3 top-to-bottom; logos are pics named pic<brand>",
+      "operations": [
+        {
+          "id": "relabel-cards",
+          "summary": "Change any card or edge text via the label \\def parameters only."
+        },
+        {
+          "id": "swap-model-logo",
+          "summary": "Replace a model card's logo: swap the \\pic call's pic<brand> name and inline the new brand's \\definecolor + pic definition from icons/brands/<brand>/."
+        },
+        {
+          "id": "add-model-card",
+          "summary": "Duplicate the m3 block as m4 with yshift=-2*(\\cardh+\\modelgap), add a flow edge from m4.west to engine.south east side, and a \\modeldlabel parameter."
+        },
+        {
+          "id": "resize-cards",
+          "summary": "Scale all cards via \\cardw/\\cardh; keep pic scale ~0.28-0.3 so logos stay inside cards."
+        },
+        {
+          "id": "recolor-structure",
+          "summary": "Change card fills/arrows via the five palette names (tints allowed); never touch the brand\\* colors."
+        }
+      ],
+      "parameters": [
+        {
+          "default": "2.5",
+          "meaning": "card width",
+          "name": "\\cardw",
+          "type": "length-cm"
+        },
+        {
+          "default": "2.0",
+          "meaning": "logo-card height",
+          "name": "\\cardh",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.5",
+          "meaning": "vertical gap between model cards",
+          "name": "\\modelgap",
+          "type": "length-cm"
+        },
+        {
+          "default": "Users",
+          "meaning": "label of the client card",
+          "name": "\\userslabel",
+          "type": "text"
+        },
+        {
+          "default": "vLLM engine",
+          "meaning": "label of the serving-engine card",
+          "name": "\\enginelabel",
+          "type": "text"
+        },
+        {
+          "default": "GPU cluster",
+          "meaning": "label of the hardware card",
+          "name": "\\gpuslabel",
+          "type": "text"
+        },
+        {
+          "default": "DeepSeek",
+          "meaning": "label of the top model card (m1)",
+          "name": "\\modelalabel",
+          "type": "text"
+        },
+        {
+          "default": "Qwen",
+          "meaning": "label of the middle model card (m2)",
+          "name": "\\modelblabel",
+          "type": "text"
+        },
+        {
+          "default": "Mistral",
+          "meaning": "label of the bottom model card (m3)",
+          "name": "\\modelclabel",
+          "type": "text"
+        },
+        {
+          "default": "prompts /",
+          "meaning": "upper request-edge label",
+          "name": "\\reqlabel",
+          "type": "text"
+        },
+        {
+          "default": "completions",
+          "meaning": "lower request-edge label",
+          "name": "\\resplabel",
+          "type": "text"
+        },
+        {
+          "default": "PagedAttention",
+          "meaning": "engine-to-GPU edge label",
+          "name": "\\kernellabel",
+          "type": "text"
+        },
+        {
+          "default": "weights",
+          "meaning": "model-to-engine edge label",
+          "name": "\\weightslabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "card",
+        "cardlabel",
+        "flow",
+        "elabel"
+      ]
+    },
+    "id": "llm-serving-stack",
+    "license": "CC0-1.0",
+    "name": "LLM Serving Stack",
+    "path": "templates/llm-serving-stack",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "svg.path",
+      "positioning",
+      "arrows.meta"
+    ],
+    "tags": [
+      "llm",
+      "serving",
+      "inference",
+      "vllm",
+      "gpu",
+      "deployment",
+      "models",
+      "brands",
+      "logo"
+    ],
+    "type": "template"
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "Parametric fully-connected feed-forward neural network. Layer count and neurons-per-layer are set by a single list at the top of the file.",
+    "domain": [
+      "ml"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "\\layersizes and \\layerlabels stay equal length",
+        "preserve the L<layer>-<neuron> node-naming scheme",
+        "do not remove the \\pgfdeclarelayer{edges} / \\pgfsetlayers lines or edges draw over the neurons"
+      ],
+      "node_naming": "L<layer>-<neuron>, both 1-based, e.g. (L1-1), (L2-3)",
+      "operations": [
+        {
+          "id": "add-layer",
+          "summary": "append a count to \\layersizes AND a label to \\layerlabels (keep equal length); insert mid-network by adding at the same position in both lists"
+        },
+        {
+          "id": "remove-layer",
+          "summary": "delete one entry from each list at the same position"
+        },
+        {
+          "id": "resize-layer",
+          "summary": "edit one entry in \\layersizes only (the label list is unchanged)"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette color name used by the neuron style (and otgray in edge/layerlabel for tints); never a hex or stock color"
+        },
+        {
+          "id": "resize-spacing",
+          "summary": "\\neuronsize for node size, \\neuronsep (vertical) and \\layersep (horizontal) for spacing"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "{4,6,6,2}",
+          "invariant": "same length as \\layerlabels",
+          "meaning": "neuron count per layer; the number of entries is the number of layers (layer 1 is leftmost)",
+          "name": "\\layersizes",
+          "type": "list<int>"
+        },
+        {
+          "default": "{Input,Hidden,Hidden,Output}",
+          "invariant": "same length as \\layersizes",
+          "meaning": "one label per layer",
+          "name": "\\layerlabels",
+          "type": "list<text>"
+        },
+        {
+          "default": "2.4",
+          "meaning": "horizontal distance between layers",
+          "name": "\\layersep",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.1",
+          "meaning": "vertical distance between neurons within a layer",
+          "name": "\\neuronsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.8",
+          "meaning": "neuron diameter",
+          "name": "\\neuronsize",
+          "type": "length-cm"
+        }
+      ],
+      "styles": [
+        "neuron",
+        "edge",
+        "layerlabel"
+      ]
+    },
+    "id": "neural-net",
+    "license": "CC0-1.0",
+    "name": "Feed-forward neural network",
+    "path": "templates/neural-net",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz"
+    ],
+    "tags": [
+      "neural network",
+      "mlp",
+      "feedforward",
+      "fully connected",
+      "deep learning",
+      "architecture",
+      "layers"
+    ],
+    "type": "template",
+    "venue": [
+      "NeurIPS",
+      "ICML",
+      "CVPR"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "The classic ResNet residual learning building block (He et al.): a stack of weight layers forming F(x), an identity skip connection that re-enters at a summation node, and a final activation. The number of weight layers is driven by a single list at the top of the file.",
+    "domain": [
+      "ml"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "\\branchlabels has at least one entry",
+        "preserve the wl<i> / xlabel / sum / out node-naming scheme",
+        "keep the identity skip connection running from the input line into the sum node (the residual shortcut is the point of the figure)"
+      ],
+      "node_naming": "wl<i> for weight-layer boxes (1-based, top to bottom, e.g. wl1, wl2); xlabel for the input; sum for the addition node; out for the output coordinate",
+      "operations": [
+        {
+          "id": "add-weight-layer",
+          "summary": "append a label to \\branchlabels (the relu between layers and the wl<i> naming follow automatically); insert mid-branch by adding at the desired position in the list"
+        },
+        {
+          "id": "remove-weight-layer",
+          "summary": "delete one entry from \\branchlabels (keep at least one)"
+        },
+        {
+          "id": "relabel-activation",
+          "summary": "change \\actlabel (e.g. relu -> GELU); it applies to every inter-layer arrow and the post-sum arrow"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette color name used by the wlayer style (e.g. otblue -> otteal) and/or otgray in flow/skip/addop; never a hex or stock color"
+        },
+        {
+          "id": "resize-spacing",
+          "summary": "\\blockw and \\blockh size the boxes; \\blocksep sets vertical spacing; \\skipbow controls how far the identity path bows right"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "{weight layer,weight layer}",
+          "invariant": "at least one entry",
+          "meaning": "labels of the weight-layer boxes in the residual branch, top to bottom; the number of entries is the number of stacked layers",
+          "name": "\\branchlabels",
+          "type": "list<text>"
+        },
+        {
+          "default": "relu",
+          "meaning": "activation label shown between consecutive weight layers and after the summation",
+          "name": "\\actlabel",
+          "type": "text"
+        },
+        {
+          "default": "$\\mathbf{x}$",
+          "meaning": "top input label",
+          "name": "\\inputlabel",
+          "type": "text"
+        },
+        {
+          "default": "$\\mathcal{F}(\\mathbf{x})$",
+          "meaning": "side label naming the residual branch",
+          "name": "\\residuallabel",
+          "type": "text"
+        },
+        {
+          "default": "$\\mathcal{F}(\\mathbf{x})+\\mathbf{x}$",
+          "meaning": "side label at the summation node",
+          "name": "\\outputlabel",
+          "type": "text"
+        },
+        {
+          "default": "$\\mathbf{x}$",
+          "meaning": "upper label on the identity skip path",
+          "name": "\\skiplabel",
+          "type": "text"
+        },
+        {
+          "default": "identity",
+          "meaning": "lower label on the identity skip path",
+          "name": "\\identitylabel",
+          "type": "text"
+        },
+        {
+          "default": "1.8",
+          "meaning": "vertical centre-to-centre distance between stages",
+          "name": "\\blocksep",
+          "type": "length-cm"
+        },
+        {
+          "default": "3.0",
+          "meaning": "weight-layer box width",
+          "name": "\\blockw",
+          "type": "length-cm"
+        },
+        {
+          "default": "0.9",
+          "meaning": "weight-layer box height",
+          "name": "\\blockh",
+          "type": "length-cm"
+        },
+        {
+          "default": "2.7",
+          "meaning": "how far right the identity skip connection bows out",
+          "name": "\\skipbow",
+          "type": "length-cm"
+        }
+      ],
+      "styles": [
+        "wlayer",
+        "addop",
+        "flow",
+        "skip",
+        "actlbl",
+        "sidelbl"
+      ]
+    },
+    "id": "resnet-block",
+    "license": "CC0-1.0",
+    "name": "ResNet residual block",
+    "path": "templates/resnet-block",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta"
+    ],
+    "tags": [
+      "resnet",
+      "residual block",
+      "residual learning",
+      "skip connection",
+      "identity shortcut",
+      "deep learning",
+      "architecture",
+      "cnn"
+    ],
+    "type": "template",
+    "venue": [
+      "CVPR",
+      "NeurIPS",
+      "ICML"
+    ]
+  },
+  {
+    "author": "OpenTikZ contributors",
+    "description": "General system architecture diagram: external client, process boxes (gateway/services), datastore cylinders (database/cache), branching connections, and a dashed subsystem group box. Multiple component types, parametric spacing.",
+    "domain": [
+      "systems"
+    ],
+    "edit_contract": {
+      "invariants": [
+        "the group node must come after the nodes it fits, inside the on-background-layer scope, so it sits behind them",
+        "preserve semantic node names; give new components clear role-based names",
+        "colors only via the five palette names (tints/shades allowed); never inline hex or stock colors"
+      ],
+      "node_naming": "fixed semantic node names: (client) (gateway) (svc1) (svc2) (db) (cache) (backend); give new components clear role-based names",
+      "operations": [
+        {
+          "id": "rename-component",
+          "summary": "edit the matching label macro"
+        },
+        {
+          "id": "add-component",
+          "summary": "declare a node with its role style, positioned relative to an existing node, then connect with link; add it to the group fit list if it belongs to the subsystem"
+        },
+        {
+          "id": "change-type",
+          "summary": "swap a node's style to change its role: process<->store<->external"
+        },
+        {
+          "id": "add-connection",
+          "summary": "add \\draw[link] (a) -- (b); use <-> for two-way, -|/|- for orthogonal routing"
+        },
+        {
+          "id": "resize-subsystem",
+          "summary": "adjust the group inner sep (padding) or change which nodes are in its fit=(...) list"
+        },
+        {
+          "id": "recolor",
+          "summary": "change the palette name in the relevant style; keep distinct roles in distinct colors; never a hex/stock color"
+        }
+      ],
+      "parameters": [
+        {
+          "default": "1.1",
+          "meaning": "vertical node distance between components",
+          "name": "\\rowsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.5",
+          "meaning": "horizontal node distance between components",
+          "name": "\\colsep",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.9",
+          "meaning": "minimum process/external box width",
+          "name": "\\boxminw",
+          "type": "length-cm"
+        },
+        {
+          "default": "1.0",
+          "meaning": "minimum box height",
+          "name": "\\boxminh",
+          "type": "length-cm"
+        },
+        {
+          "meaning": "external client label",
+          "name": "\\clientlabel",
+          "type": "text"
+        },
+        {
+          "meaning": "gateway label (use \\\\ for two lines)",
+          "name": "\\gatewaylabel",
+          "type": "text"
+        },
+        {
+          "meaning": "first service label",
+          "name": "\\svconelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "second service label",
+          "name": "\\svctwolabel",
+          "type": "text"
+        },
+        {
+          "meaning": "database cylinder label",
+          "name": "\\dblabel",
+          "type": "text"
+        },
+        {
+          "meaning": "cache cylinder label",
+          "name": "\\cachelabel",
+          "type": "text"
+        },
+        {
+          "meaning": "subsystem group box label",
+          "name": "\\grouplabel",
+          "type": "text"
+        }
+      ],
+      "styles": [
+        "comp",
+        "external",
+        "process",
+        "store",
+        "cachestore",
+        "link",
+        "group"
+      ]
+    },
+    "id": "system-block-diagram",
+    "license": "CC0-1.0",
+    "name": "System block diagram",
+    "path": "templates/system-block-diagram",
+    "preview": "preview.svg",
+    "requires": [
+      "tikz",
+      "arrows.meta",
+      "backgrounds",
+      "fit",
+      "positioning",
+      "shapes.geometric"
+    ],
+    "tags": [
+      "system",
+      "architecture",
+      "block diagram",
+      "microservices",
+      "components",
+      "database",
+      "cache",
+      "data flow"
+    ],
+    "type": "template",
+    "venue": [
+      "NSDI",
+      "OSDI",
+      "SOSP",
+      "SIGCOMM"
+    ]
+  }
+]

@@ -107,6 +107,29 @@ describe("ToolPanel · 上下文面板（仪表 + 账单 + 平铺明细）", () 
     expect(textOf(container)).toContain("$0.15 / $0.6 / $0.003");
   });
 
+  it("空闲时段：顶部单价显示空闲档（半价）而非高峰价", () => {
+    const offpeak: ContextStats = {
+      ...STATS,
+      pricing: {
+        input_per_mtok: 0.3, output_per_mtok: 1.2, cache_hit_per_mtok: 0.006,
+        off_peak: { input_per_mtok: 0.15, output_per_mtok: 0.6, cache_hit_per_mtok: 0.003 },
+        off_peak_active: true,
+      },
+    };
+    const { container } = render(
+      <ToolPanel contextStats={offpeak} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    const price = container.querySelector(".ctx2-price")?.textContent ?? "";
+    expect(price).toContain("空闲·半价");
+    // 顶部「已生效单价」= 空闲档，不再显示高峰 $0.3/$1.2
+    expect(price).toContain("$0.15/$0.6");
+    expect(price).not.toContain("$0.3/$1.2");
+    // 明细区仍给出两档 + 当前生效档
+    expect(textOf(container)).toContain("高峰全价");
+    expect(textOf(container)).toContain("空闲半价");
+    expect(textOf(container)).toContain("当前生效档");
+  });
+
   it("空闲态：无任务时状态 chip 显示「空闲」且趋势图隐藏（无历史）", () => {
     const { container } = render(
       <ToolPanel contextStats={STATS} mcpServers={[]} tools={[]} todos={[]} />

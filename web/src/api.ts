@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import type { AgentInfo, AppConfig, FileDiffResponse, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, OutputItem, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
+import type { AgentInfo, AppConfig, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
 
 const TIMEOUT = 15000;
 // 联网类操作（社区清单拉取 / 插件·技能下载安装）走单独的长超时：
@@ -121,21 +121,28 @@ export const api = {
     }),
   // 隔离工作树（/worktree）：任务在独立 worktree 执行，主工作区不受影响
   setSessionWorktree: (id: string, enabled: boolean) =>
-    req<{ ok: boolean; enabled: boolean }>(`/api/sessions/${id}/worktree`, {
-      method: "POST", body: JSON.stringify({ enabled }),
-    }),
+    req<{ ok: boolean; enabled: boolean; worktree?: { branch?: string; path?: string } | null }>(
+      `/api/sessions/${id}/worktree`, { method: "POST", body: JSON.stringify({ enabled }) }),
   worktreeStatus: (id: string) =>
     req<import("./types").WorktreeStatus>(`/api/sessions/${id}/worktree`),
   worktreeDiff: (id: string) =>
     req<{ diff: string }>(`/api/sessions/${id}/worktree/diff`),
   worktreeMerge: (id: string) =>
-    req<{ ok: boolean; merged?: number; files?: string[] }>(
+    req<{ ok: boolean; merged?: number; files?: string[]; conflicts?: string[] }>(
       `/api/sessions/${id}/worktree/merge`, { method: "POST" }),
+  worktreeAbortMerge: () =>
+    req<{ ok: boolean; reason?: string }>("/api/worktrees/abort-merge", { method: "POST" }),
+  worktreeConflicts: () =>
+    req<{ in_progress: boolean; conflicts: string[] }>("/api/worktrees/conflicts"),
   worktreeDiscard: (id: string) =>
     req<{ ok: boolean }>(`/api/sessions/${id}/worktree/discard`, { method: "POST" }),
-  // 遗留 worktree：列出 / 清理（默认只清无改动的空壳）
+  // 遗留 worktree：列出（含当前分支与落后状态）/ 清理（默认只清无改动的空壳）
   worktreeList: () =>
-    req<{ worktrees: (import("./types").WorktreeStatus & { name: string })[] }>("/api/worktrees"),
+    req<{
+      worktrees: (import("./types").WorktreeStatus & { name: string })[];
+      main_branch?: string;
+      main_head?: string;
+    }>("/api/worktrees"),
   worktreeClean: (includeDirty = false, name?: string) =>
     req<{ removed: string[]; kept: string[] }>("/api/worktrees/clean", {
       method: "POST",
@@ -158,24 +165,24 @@ export const api = {
     ),
   readFile: (path: string) =>
     req<FileReadResponse>(`/api/fs/read?path=${encodeURIComponent(path)}`),
-  fileDiff: (path: string) =>
-    req<FileDiffResponse>(`/api/workspace/diff?path=${encodeURIComponent(path)}`),
   setWorkspace: (path: string) =>
     req<{ ok: boolean; workspace: string }>("/api/workspace", {
       method: "POST", body: JSON.stringify({ path }),
     }),
-  security: () => req<Record<string, unknown>>("/api/security"),
   mcpStatus: () => req<MCPStatus>("/api/mcp"),
   updateMcpServers: (servers: Record<string, MCPServerConfig>) =>
     req<{ ok: boolean; servers: MCPServerStatus[] }>("/api/mcp", {
       method: "POST", body: JSON.stringify({ servers }),
     }),
 
-  chat: (sessionId: string, prompt: string, agentId?: string, reasoningEffort?: string) => {
+  chat: (sessionId: string, prompt: string, agentId?: string, reasoningEffort?: string,
+         mergeWorktree?: string) => {
     const body: Record<string, unknown> = { session_id: sessionId, prompt };
     // agent_id 始终发送：区分「显式选 build」与「未指定」，Agent 切换检测依赖它
     if (agentId) body.agent_id = agentId;
     if (reasoningEffort) body.reasoning_effort = reasoningEffort;
+    // AI 合并任务：指定 worktree 名 → 后端在主工作区起任务执行 git merge + 解决冲突
+    if (mergeWorktree) body.merge_worktree = mergeWorktree;
     return req<{ task_id: string; queued?: boolean }>("/api/chat", {
       method: "POST", body: JSON.stringify(body),
     });
@@ -210,11 +217,12 @@ export const api = {
       method: "POST", body: JSON.stringify({ provider_id: providerId, overrides }),
     }),
 
-  // models.dev 元数据：缓存状态 + 手动同步（离线启动后无缓存时的兜底入口）
-  modelMeta: () => req<import("./types").ModelMetaStatus>("/api/model-meta"),
-  refreshModelMeta: () =>
-    req<import("./types").ModelMetaStatus & { ok: boolean; pricing: import("./types").ContextPricing }>(
-      "/api/model-meta/refresh", { method: "POST" }
+  // 定价数据源状态（models.dev + 定价插件各官方源）；同步为**逐源**调用，
+  // 前端据此逐步呈现「同步中 → 成功/失败」（不自动联网）
+  pricingStatus: () => req<import("./types").PricingStatus>("/api/model-meta"),
+  syncPricing: (source: string) =>
+    req<import("./types").PricingSourceStatus & { ok: boolean; error?: string; pricing: import("./types").ContextPricing }>(
+      "/api/model-meta/refresh", { method: "POST", body: JSON.stringify({ source }) }
     ),
 
   contextStats: (sessionId: string) =>
@@ -249,10 +257,6 @@ export const api = {
     req<{ ok: boolean; name: string; path: string }>("/api/skills/create", {
       method: "POST", body: JSON.stringify({ name, description, scope }),
     }),
-  importSkill: (payload: { source?: string; zip_base64?: string; scope: string; name?: string; overwrite?: boolean }) =>
-    req<{ skills: import("./types").SkillInfo[] }>("/api/skills/import", {
-      method: "POST", body: JSON.stringify(payload),
-    }, NETWORK_TIMEOUT),
   updateSkill: (name: string, description: string, scope: string) =>
     req<{ ok: boolean }>(`/api/skills/${encodeURIComponent(name)}`, {
       method: "PUT", body: JSON.stringify({ description, scope }),
@@ -270,10 +274,6 @@ export const api = {
   pluginsCommunity: (url?: string) =>
     req<import("./types").CommunityManifest>(
       `/api/plugins/community${url ? `?url=${encodeURIComponent(url)}` : ""}`, undefined, NETWORK_TIMEOUT),
-  importPlugin: (payload: { source?: string; zip_base64?: string; name?: string; overwrite?: boolean; version?: string }) =>
-    req<{ plugins: import("./types").PluginInfo[] }>("/api/plugins/import", {
-      method: "POST", body: JSON.stringify(payload),
-    }, NETWORK_TIMEOUT),
   deletePlugin: (name: string) =>
     req<{ ok: boolean; name: string; path: string }>(`/api/plugins/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
@@ -306,7 +306,7 @@ export const api = {
   fileRawUrl: (path: string) =>
     `/api/files/raw?path=${encodeURIComponent(path)}`,
   outputs: () =>
-    req<{ items: OutputItem[] }>("/api/outputs"),
+    req<{ groups: import("./types").OutputGroup[]; total: number }>("/api/outputs"),
   filePreview: (path: string) =>
     req<FilePreviewResponse>(`/api/files/preview?path=${encodeURIComponent(path)}`),
   outputsZipUrl: (includeUploads = false) =>

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Tuple
+from typing import Any, Tuple
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$")
 

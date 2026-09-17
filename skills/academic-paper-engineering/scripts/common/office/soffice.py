@@ -17,11 +17,21 @@ callers that build their own argv (they must pass -env:UserInstallation too).
 
 import contextlib
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
+
+SOFFICE_MISSING_HINT = (
+    "soffice not found on PATH. LibreOffice is an OPTIONAL dependency of this "
+    "skill (only the ②b extras need it: xlsx formula recalc / pptx thumbnails / "
+    "legacy .doc-.ppt conversion). Degraded alternatives: `textutil -convert docx` "
+    "for legacy .doc/.rtf and `pandoc` for docx→PDF or accepting tracked changes — "
+    "no alternative for xlsx recalc and pptx thumbnails. Plain DOCX/PDF/PPTX/XLSX "
+    "parsing does NOT need LibreOffice."
+)
 
 
 def get_soffice_env() -> dict:
@@ -36,6 +46,10 @@ def get_soffice_env() -> dict:
 
 
 def run_soffice(args: Iterable[str], **kwargs) -> subprocess.CompletedProcess:
+    # 明确报错而不是让 subprocess 抛裸 FileNotFoundError：LibreOffice 是可选的，
+    # 未安装时调用方应走降级路径（见 SOFFICE_MISSING_HINT）。
+    if shutil.which("soffice") is None:
+        raise RuntimeError(SOFFICE_MISSING_HINT)
     args = list(args)
     with contextlib.ExitStack() as stack:
         if not any(str(a).startswith("-env:UserInstallation") for a in args):

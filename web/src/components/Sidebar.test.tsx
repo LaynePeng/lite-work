@@ -16,6 +16,9 @@ vi.mock("../api", () => ({
     filePreview: vi.fn(),
     clearOutputs: vi.fn(),
     workspaceTree: vi.fn(),
+    // 文件面板底部「隔离工作树」总览数据源（无工作树 → 空列表）
+    worktreeList: vi.fn(async () => ({ worktrees: [], main_branch: "main", main_head: "" })),
+    worktreeClean: vi.fn(),
     fileDownloadUrl: (p: string) => `/api/files/download?path=${encodeURIComponent(p)}`,
     fileRawUrl: (p: string) => `/api/files/raw?path=${encodeURIComponent(p)}`,
     outputsZipUrl: (includeUploads = false) =>
@@ -59,7 +62,7 @@ const baseProps = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [ITEM] });
+  (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ groups: [{ name: "产出物", source: "outputs", items: [ITEM] }], total: 1 });
   (api.deleteFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, path: ITEM.path });
   (api.renameFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
     ok: true, path: "素材/新报表.xlsx", name: "新报表.xlsx",

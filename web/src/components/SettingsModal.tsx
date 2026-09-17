@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { InstallJobStatus, InstallPluginPayload, InstallSkillPayload } from "../api";
-import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, ModelMetaStatus, PluginInfo, SkillInfo } from "../types";
+import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, PricingStatus, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
 
 // 职责域 UI 定义（与后端 core/permissions.py 的 DOMAIN_ORDER/DOMAIN_LABELS 对齐）
@@ -195,10 +195,11 @@ export default function SettingsModal({
   const [foldTurns, setFoldTurns] = useState<number>(500);
   const [foldMessages, setFoldMessages] = useState<number>(600);
   const [foldSaved, setFoldSaved] = useState(false);
-  // 综合设置：models.dev 模型元数据（上下文窗口 / 计费单价的来源）
-  const [metaStatus, setMetaStatus] = useState<ModelMetaStatus | null>(null);
-  const [metaBusy, setMetaBusy] = useState(false);
-  const [metaMsg, setMetaMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 综合设置：定价数据源状态（models.dev + 定价插件各官方源）。
+  // 同步是逐源手动触发的（不自动联网），因此每源单独维护「同步中/结果」。
+  const [pricing, setPricing] = useState<PricingStatus | null>(null);
+  const [syncBusy, setSyncBusy] = useState<string | null>(null);
+  const [syncResults, setSyncResults] = useState<Record<string, { ok: boolean; text: string }>>({});
   // 综合设置：多智能体限额与行为（docs/multi-agent-design.md §3）
   const [maParallel, setMaParallel] = useState<number>(4);
   const [maTotal, setMaTotal] = useState<number>(16);
@@ -221,6 +222,9 @@ export default function SettingsModal({
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
 
   // Skills 管理（独立于 LLM/MCP 配置，操作即时生效）
+  // 各区块"加载失败"可见状态（原实现静默 catch → 页面空白且无提示）
+  const [llmLoadError, setLlmLoadError] = useState<string>("");
+  const [mcpLoadError, setMcpLoadError] = useState<string>("");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillContent, setSkillContent] = useState<{ name: string; content: string } | null>(null);
   const [skillBusy, setSkillBusy] = useState(false);
@@ -278,7 +282,9 @@ export default function SettingsModal({
   const advRef = useRef<HTMLDetailsElement>(null);
 
   const refreshSkills = useCallback(() => {
-    api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
+    api.skills()
+      .then((r) => { setSkills(r.skills); setSkillMsg(null); })
+      .catch((e) => { setSkills([]); setSkillMsg({ ok: false, text: `技能列表加载失败：${(e as Error).message}` }); });
   }, []);
 
   const refreshPlugins = useCallback(() => {
@@ -288,7 +294,10 @@ export default function SettingsModal({
     ]).then(([u, b]) => {
       setPlugins(u.plugins);
       setBuiltinPlugins(b.plugins);
-    }).catch(() => { setPlugins([]); setBuiltinPlugins([]); });
+    }).catch((e) => {
+      setPlugins([]); setBuiltinPlugins([]);
+      setPluginMsg({ ok: false, text: `插件列表加载失败：${(e as Error).message}（可点下方"重试加载"）` });
+    });
   }, []);
 
   const fetchCommunity = useCallback(async (url?: string) => {
@@ -462,6 +471,8 @@ export default function SettingsModal({
       isLocal: boolean;
       updateTo?: string;
       kind?: "tool" | "collab";
+      /** 插件加载失败原因（透传自后端列表项） */
+      error?: string;
     }> = builtinPlugins.map((bp) => {
       const u = userByName.get(bp.name);
       return {
@@ -470,6 +481,7 @@ export default function SettingsModal({
         tools: u ? u.tools : bp.tools,
         removedTools: u?.removed_tools,
         effectiveVer: u?.version || bp.version,
+        error: u?.error || "",
         builtinVer: bp.version,
         source: u?.source,
         isLocal: !!u,
@@ -530,8 +542,8 @@ export default function SettingsModal({
     refreshSkills();
     refreshPlugins();
     refreshAgents();
-    // models.dev 元数据缓存状态（上下文窗口 / 计费单价的来源）
-    api.modelMeta().then(setMetaStatus).catch(() => setMetaStatus(null));
+    // 定价数据源状态（上下文窗口 / 计费单价的来源）
+    api.pricingStatus().then(setPricing).catch(() => setPricing(null));
     // 拉取技能权限规则（config.json 的 skill_permissions）与综合设置项
     api.config().then((c) => {
       const rules = c.skill_permissions || {};
@@ -771,6 +783,7 @@ export default function SettingsModal({
   // 拉取 LLM 配置并重置全部编辑态（初始化与保存成功后共用：
   // 保存后服务端返回最新配置，用它刷新本地 providers/editing，避免"重开设置才生效"）
   const refreshLLM = useCallback(() => {
+    setLlmLoadError("");
     Promise.all([api.llmProviders(), api.llmConfig()]).then(([p, c]) => {
       setProviders(p);
       setActiveProvider((cur) => (c.active && p.some((x) => x.id === cur) ? cur : c.active));
@@ -786,11 +799,28 @@ export default function SettingsModal({
       setEditing(edit);
       setHeadersText(texts);
       setModelsText(mtexts);
-    }).catch(() => {});
+      setLlmLoadError("");
+    }).catch((e) => {
+      setLlmLoadError(`模型配置加载失败：${(e as Error).message}`);
+    });
   }, []);
 
   useEffect(() => {
-    Promise.all([api.llmProviders(), api.llmConfig(), api.mcpStatus()]).then(([p, c, m]) => {
+    // 模型数据与 MCP 状态分开请求：MCP 挂了不应让"模型"页整页空白（原先同一个
+    // Promise.all + 静默 catch，任一失败就让模型页 load 不出来且无任何提示）
+    api.mcpStatus()
+      .then((m) => {
+        setMcpStatus(m.servers || []);
+        const cfg: Record<string, MCPServerConfig> = {};
+        for (const sv of m.servers || []) {
+          cfg[sv.name] = { command: sv.command, args: sv.args, enabled: sv.enabled };
+        }
+        setMcpServers(cfg);
+        setMcpLoadError("");
+      })
+      .catch((e) => setMcpLoadError(`MCP 状态加载失败：${(e as Error).message}`));
+
+    Promise.all([api.llmProviders(), api.llmConfig()]).then(([p, c]) => {
       setProviders(p);
       setActiveProvider(c.active);
       // 初始化编辑状态
@@ -806,14 +836,10 @@ export default function SettingsModal({
       setEditing(edit);
       setHeadersText(texts);
       setModelsText(mtexts);
-      // MCP：用运行状态初始化可编辑配置
-      setMcpStatus(m.servers || []);
-      const cfg: Record<string, MCPServerConfig> = {};
-      for (const s of m.servers || []) {
-        cfg[s.name] = { command: s.command, args: s.args, enabled: s.enabled };
-      }
-      setMcpServers(cfg);
-    }).catch(() => {});
+      setLlmLoadError("");
+    }).catch((e) => {
+      setLlmLoadError(`模型配置加载失败：${(e as Error).message}`);
+    });
   }, []);
 
   // ------------------------------------------------------------ MCP 编辑
@@ -1029,28 +1055,36 @@ export default function SettingsModal({
     }
   }, [onSaved]);
 
-  // 手动同步 models.dev 元数据（启动时离线的话，这里可以立刻补上；
-  // 同步成功后上下文窗口与计费单价都会切到该模型的真实数据）
+  // 手动同步：**逐源**执行（models.dev → 定价插件的各官方源），每步完成即回显
+  // 状态——同步过程本身就是要呈现的信息（哪一步成功/失败、索引了多少模型）。
+  // 不自动联网：过期时这里显示「建议同步」，由用户点按钮触发。
   const syncModelMeta = useCallback(async () => {
-    setMetaBusy(true);
-    setMetaMsg(null);
-    try {
-      const res = await api.refreshModelMeta();
-      setMetaStatus({ cached: res.cached, models: res.models, age_seconds: res.age_seconds });
-      if (res.ok) {
-        const price = `$${res.pricing.input_per_mtok} / $${res.pricing.output_per_mtok}`
-          + ` / 缓存命中 $${res.pricing.cache_hit_per_mtok}`;
-        setMetaMsg({ ok: true, text: `同步完成：已索引 ${res.models} 个模型；当前计费单价 ${price}（每 M tokens）` });
-        onSaved();
-      } else {
-        setMetaMsg({ ok: false, text: "同步失败（网络不可用或被拦截）——成本仍按回退定价估算，可稍后重试" });
+    if (syncBusy) return;
+    setSyncResults({});
+    const provider = pricing?.provider ?? null;
+    const steps: string[] = ["models_dev", ...((pricing?.sources ?? []).map((s) => s.id))];
+    let anyOk = false;
+    for (const source of steps) {
+      setSyncBusy(source);
+      try {
+        const res = await api.syncPricing(source);
+        if (res.ok) {
+          anyOk = true;
+          const n = res.models ?? 0;
+          const ms = res.elapsed_ms != null ? ` · ${res.elapsed_ms}ms` : "";
+          setSyncResults((prev) => ({ ...prev, [source]: { ok: true, text: `已更新 ${n} 个模型${ms}` } }));
+        } else {
+          setSyncResults((prev) => ({ ...prev, [source]: { ok: false, text: res.error || "同步失败" } }));
+        }
+        // 每步完成都刷新整页状态（成功后该源立即变为「已缓存」）
+        api.pricingStatus().then(setPricing).catch(() => {});
+      } catch (err) {
+        setSyncResults((prev) => ({ ...prev, [source]: { ok: false, text: (err as Error).message } }));
       }
-    } catch (err) {
-      setMetaMsg({ ok: false, text: `同步失败: ${(err as Error).message}` });
-    } finally {
-      setMetaBusy(false);
     }
-  }, [onSaved]);
+    setSyncBusy(null);
+    if (anyOk) onSaved();
+  }, [onSaved, pricing, syncBusy]);
 
   // 保存 zip 大小上限
   const saveZipSize = useCallback(async () => {
@@ -1202,6 +1236,12 @@ export default function SettingsModal({
 
           <div className="settings-panels">
             <div className={`settings-tabpanel ${activeTab === "llm" ? "active" : ""}`}>
+              {llmLoadError && (
+                <div className="settings-load-error">
+                  <span>⚠ {llmLoadError}</span>
+                  <button className="btn-test" onClick={() => refreshLLM()}>重试加载</button>
+                </div>
+              )}
               <div className="settings-section">
                 <h3>LLM 供应商</h3>
                 <div className="provider-selector">
@@ -1410,6 +1450,11 @@ export default function SettingsModal({
               )}
             </div>
             <div className={`settings-section settings-tabpanel ${activeTab === "mcp" ? "active" : ""}`}>
+              {mcpLoadError && (
+                <div className="settings-load-error">
+                  <span>⚠ {mcpLoadError}</span>
+                </div>
+              )}
               <div className="mcp-section-head">
                 <h3>MCP Server（stdio）</h3>
                 <button className="btn-test" onClick={addMcpServer}>＋ 添加</button>
@@ -1695,7 +1740,17 @@ export default function SettingsModal({
                 同名时覆盖内置版（删除本地版后自动回退）。
               </p>
 
-              {pluginMsg && <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>{pluginMsg.text}</div>}
+              {pluginMsg && (
+                <div className={`test-result ${pluginMsg.ok ? "ok" : "error"}`}>
+                  {pluginMsg.text}
+                  {!pluginMsg.ok && (
+                    <button className="btn-test" style={{ marginLeft: 8 }}
+                      onClick={() => { setPluginMsg(null); refreshPlugins(); }}>
+                      重试加载
+                    </button>
+                  )}
+                </div>
+              )}
               <InstallProgressCard job={installJob} onControl={controlInstallJob} />
 
               {/* -------- 工具栏：手动导入 + 社区更新检查 -------- */}
@@ -1757,6 +1812,9 @@ export default function SettingsModal({
                           </span>
                         )}
                         <span className="plugin-version">v{item.effectiveVer}</span>
+                        {item.error && (
+                          <span className="plugin-tag error-tag" title={item.error}>⚠ 加载失败</span>
+                        )}
                         {item.isLocal && item.builtinVer && (
                           <span className="plugin-tag builtin" title="删除本地版后回退到此版本">
                             内置 v{item.builtinVer}
@@ -2152,28 +2210,68 @@ export default function SettingsModal({
             <div className={`settings-section settings-tabpanel ${activeTab === "general" ? "active" : ""}`}>
               <h3>综合设置</h3>
               <div className="mcp-section-head">
-                <span>模型元数据（models.dev）</span>
+                <span>模型元数据与定价</span>
               </div>
               <p className="mcp-hint">
-                上下文窗口与「预估成本」的计费单价来自 models.dev 模型元数据库；
-                同步失败时回退到内置表与配置里的回退定价（成本可能偏差一个数量级）。
-                应用启动会自动同步一次，若当时离线（或想立即刷新价格），可在此手动重试。
+                上下文窗口来自 models.dev；计费单价按「定价插件 → models.dev → 配置回退价」
+                解析（DeepSeek 分时：高峰全价、空闲半价，计费时按当前时刻自动选档）。
+                <b>不自动联网</b>：数据过期时建议手动同步一次；同步过程逐源呈现。
               </p>
-              <div className="form-actions">
-                <button className="btn-test" onClick={() => void syncModelMeta()} disabled={metaBusy}>
-                  {metaBusy ? "同步中…" : "🔄 立即同步模型元数据"}
-                </button>
-                <span className="mcp-hint" style={{ marginLeft: 12 }}>
-                  {metaStatus
-                    ? (metaStatus.cached
-                      ? `已缓存 ${metaStatus.models} 个模型 · ${fmtAge(metaStatus.age_seconds)}`
-                      : "暂无缓存：成本按回退定价估算")
-                    : "状态读取中…"}
-                </span>
-              </div>
-              {metaMsg && (
-                <div className={`test-result ${metaMsg.ok ? "ok" : "error"}`}>{metaMsg.text}</div>
+              {pricing?.provider ? (
+                <p className="mcp-hint">
+                  定价插件：<b>{pricing.provider.name}</b> v{pricing.provider.version}
+                  <span className="plugin-tag" style={{ marginLeft: 6 }}>
+                    {pricing.provider.source === "plugin" ? "本地/社区版" : "内置"}
+                  </span>
+                  {pricing.provider.description ? ` · ${pricing.provider.description}` : ""}
+                </p>
+              ) : (
+                <p className="mcp-hint">未安装定价插件：DeepSeek/Kimi 等官方价不可用，成本按 models.dev 或配置回退价估算。</p>
               )}
+              <div className="pricing-sources">
+                {pricing && (
+                  <>
+                    <div className="pricing-source-row">
+                      <span className="pricing-source-name">models.dev（上下文窗口 / 通用定价）</span>
+                      <span className="pricing-source-state">
+                        {pricing.models_dev.cached
+                          ? `${pricing.models_dev.models} 个模型 · ${fmtAge(pricing.models_dev.age_seconds)}`
+                          : "暂无缓存"}
+                        {pricing.models_dev.stale && <span className="pricing-stale">建议同步</span>}
+                        {syncBusy === "models_dev" && <span className="pricing-syncing">同步中…</span>}
+                        {syncResults["models_dev"] && (
+                          <span className={syncResults["models_dev"].ok ? "pricing-ok" : "pricing-err"}>
+                            {syncResults["models_dev"].text}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    {(pricing.sources || []).map((src) => (
+                      <div className="pricing-source-row" key={src.id}>
+                        <span className="pricing-source-name" title={src.url}>{src.label}</span>
+                        <span className="pricing-source-state">
+                          {src.cached
+                            ? `${src.models} 个模型 · ${fmtAge(src.age_seconds)}`
+                            : `未同步（用内置快照${src.snapshot_date ? ` ${src.snapshot_date}` : ""}）`}
+                          {src.stale && <span className="pricing-stale">建议同步</span>}
+                          {syncBusy === src.id && <span className="pricing-syncing">同步中…</span>}
+                          {syncResults[src.id] && (
+                            <span className={syncResults[src.id].ok ? "pricing-ok" : "pricing-err"}>
+                              {syncResults[src.id].text}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+              <div className="form-actions">
+                <button className="btn-test" onClick={() => void syncModelMeta()} disabled={syncBusy !== null}>
+                  {syncBusy ? `同步中（${syncBusy}）…` : "🔄 立即同步定价数据"}
+                </button>
+                {syncBusy === "models_dev" && <span className="mcp-hint" style={{ marginLeft: 12 }}>正在拉取 models.dev…</span>}
+              </div>
 
               <div className="mcp-section-head" style={{ marginTop: 18 }}>
                 <span>会话缓存清理</span>

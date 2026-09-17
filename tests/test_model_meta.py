@@ -198,3 +198,45 @@ def test_models_dev_missing_cache_falls_back(tmp_path):
     # registry 仍可用内置表
     r = LLMRegistry(config_dir=str(tmp_path))
     assert r.get_context_window("deepseek", "deepseek-v4-flash") == 1_000_000
+
+
+def test_manual_refresh_forces_fetch_bypassing_ttl(tmp_path, monkeypatch):
+    """手动同步必须绕过 7 天 TTL：缓存未过期也要真正联网拉取。
+
+    旧实现 refresh() 命中 TTL 挡板直接返回旧缓存 → 用户点「同步」时间戳不变，
+    表现为「怎么点都显示 N 天前」。force=True 强制走 _fetch_and_store。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({"old/model": {"limit": {"context": 1}}}), encoding="utf-8")
+    svc = ModelMetaService(str(cache))
+
+    calls = {"n": 0}
+
+    def spy(self):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(ModelMetaService, "_fetch_and_store", spy)
+    # 未过期 + 未强制 → 纯本地读盘，不联网
+    assert svc.refresh() is True
+    assert calls["n"] == 0
+    # force=True → 绕过 TTL，真正拉取
+    assert svc.refresh(force=True) is True
+    assert calls["n"] == 1
+
+
+def test_refresh_models_dev_forwards_force(tmp_path):
+    """registry 层透传 force（AgentApp 手动同步 → registry → service）。"""
+    r = LLMRegistry(config_dir=str(tmp_path))
+    seen = {}
+
+    class _Fake:
+        def refresh(self, force=False):
+            seen["force"] = force
+            return True
+
+    r.meta_service = _Fake()  # type: ignore[assignment]
+    assert r.refresh_models_dev(force=True) is True
+    assert seen["force"] is True
+    assert r.refresh_models_dev() is True
+    assert seen["force"] is False

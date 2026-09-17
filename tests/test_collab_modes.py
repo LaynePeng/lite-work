@@ -39,7 +39,7 @@ def app_with_mode_plugin(tmp_path):
     pkg.mkdir(parents=True)
     (pkg / "plugin.py").write_text(MODE_PKG_PLUGIN, encoding="utf-8")
     (pkg / "recipe.md").write_text(MODE_RECIPE, encoding="utf-8")
-    # 插件自带 logo（icon.svg）：对话框选择器经 /api/plugins/{name}/icon 加载
+    # 插件自带 logo（icon.svg）：对话框选择器经 /api/collab/icon/{mode} 加载
     (pkg / "icon.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#4f8cff"/></svg>',
         encoding="utf-8",
@@ -192,22 +192,6 @@ def test_mode_plugin_installs_via_community_flow(tmp_path):
 
 
 # ---------------------------------------------------------------- 图标与会话级选择
-
-def test_plugin_icon_endpoint(app_with_mode_plugin):
-    """插件自带 icon.svg → /api/plugins/{name}/icon 返回图片；无图标 404；路径穿越被拒。"""
-    app = app_with_mode_plugin
-    fast = create_app(app, token=None)
-    with TestClient(fast) as client:
-        r = client.get("/api/plugins/collab-meeting/icon")
-        assert r.status_code == 200
-        assert "svg" in (r.headers.get("content-type") or "")
-        # 未安装的插件 → 404（前端回退默认图标）
-        r = client.get("/api/plugins/no-such-plugin/icon")
-        assert r.status_code == 404
-        # 路径穿越被安全校验拒绝
-        r = client.get("/api/plugins/..%2F..%2Fetc/icon")
-        assert r.status_code == 404
-
 
 def test_collab_modes_api_includes_icon_url(app_with_mode_plugin):
     app = app_with_mode_plugin

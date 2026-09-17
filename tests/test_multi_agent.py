@@ -121,6 +121,34 @@ async def test_manager_spawn_returns_immediately(tmp_path):
     assert "调研结论" in rec.summary
 
 
+async def test_subagent_loop_gets_resolved_pricing_and_window(tmp_path):
+    """子 Agent loop 必须带上按模型解析的定价与窗口。
+
+    此前不传 pricing → 落到 AgentLoop 兜底档（$2/$8，OpenAI 档），DeepSeek 等
+    供应商的成本会算错数倍；窗口同理（默认 128K 会让压缩阈值失真）。
+    """
+    app = _make_app(tmp_path)
+    app._mock_adapter.provider_id = "deepseek"
+    app._mock_adapter.model = "deepseek-flash"
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("调研 B", role="explorer")
+    assert r["ok"]
+    rec = mgr.get(r["agent_id"])
+    # spawn 只负责调度：协程体稍后才跑（run_task 里才挂 record.loop），等它就绪
+    for _ in range(200):
+        if rec.loop is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert rec.loop is not None, "子 Agent loop 未挂载到 record"
+    pricing = rec.loop.pricing
+    assert pricing["input_per_mtok"] == 0.3          # 官方峰值，而非 2.0 兜底
+    assert pricing["output_per_mtok"] == 1.2
+    assert pricing["off_peak"]["input_per_mtok"] == 0.15   # 分时档随子 Agent 生效
+    assert str(pricing["source"]).startswith("snapshot:deepseek")
+    assert rec.loop.context_window == 1_000_000      # 与主 Agent 同口径
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+
+
 async def test_manager_parallel_limit(tmp_path):
     app = _make_app(tmp_path)  # max_parallel=2
     mgr = app.agent_manager("s1")

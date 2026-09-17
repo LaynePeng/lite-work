@@ -19,6 +19,15 @@ function fmt(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : n.toLocaleString();
 }
 
+/** 价格数据年龄（秒）→ 「刚刚 / X 分钟前 / X 小时前 / X 天前」 */
+function fmtAge(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "未知";
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return `${Math.floor(seconds / 86400)} 天前`;
+}
+
 function pct(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   return `${(n * 100).toFixed(1)}%`;
@@ -90,6 +99,22 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
   const task = stats.task ?? ({} as ContextTaskStats);
   const session = stats.session ?? {};
   const pricing = stats.pricing;
+  // 当前生效档：分时供应商（DeepSeek）处于空闲时段时，实际计费按 off_peak 档
+  // （半价）。面板顶部的「已生效单价」必须显示这一档，否则会出现「标签写空闲·半价、
+  // 数字却是高峰全价」的错位（pricing.input/output 始终是高峰基准价）。
+  const effective = pricing
+    ? (pricing.off_peak && pricing.off_peak_active
+      ? {
+          input_per_mtok: pricing.off_peak.input_per_mtok,
+          output_per_mtok: pricing.off_peak.output_per_mtok,
+          cache_hit_per_mtok: pricing.off_peak.cache_hit_per_mtok,
+        }
+      : {
+          input_per_mtok: pricing.input_per_mtok,
+          output_per_mtok: pricing.output_per_mtok,
+          cache_hit_per_mtok: pricing.cache_hit_per_mtok,
+        })
+    : null;
   // 当前上下文水位 = 最近一次调用实际发出的 prompt（不是跨轮累加值）；
   // GET 刷新后无 task 段 → 回退会话压缩后水位（compact_session 写入）
   const prompt = task.last_prompt_tokens ?? task.prompt_tokens ?? session.last_prompt_tokens ?? 0;
@@ -118,8 +143,8 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
 
   // 缓存帮整个会话省下多少钱：命中部分按「未命中全价 − 命中折扣价」的差额
   // 口径 = 会话累计（session.cache_hit_tokens，跨任务加总），与「会话累计成本」一致
-  const saved = pricing && (session.cache_hit_tokens ?? 0) > 0
-    ? (session.cache_hit_tokens * (pricing.input_per_mtok - pricing.cache_hit_per_mtok)) / 1_000_000
+  const saved = effective && (session.cache_hit_tokens ?? 0) > 0
+    ? (session.cache_hit_tokens * (effective.input_per_mtok - effective.cache_hit_per_mtok)) / 1_000_000
     : null;
 
   // 环形仪表：r=32 → 周长 ≈ 201.06，dashoffset 控制进度
@@ -187,12 +212,27 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
       <div className="ctx2-card">
         <div className="ctx2-cardhead">
           <span className="ctx2-cardtitle">本会话累计成本</span>
-          {pricing && (
+          {effective && (
             <span
               className="ctx2-price"
-              title={`计费单价（每 M tokens）：输入 $${pricing.input_per_mtok} / 输出 $${pricing.output_per_mtok} / 缓存命中 $${pricing.cache_hit_per_mtok}`}
+              title={
+                `当前生效计费单价（每 M tokens）：输入 $${effective.input_per_mtok}`
+                + ` / 输出 $${effective.output_per_mtok} / 缓存命中 $${effective.cache_hit_per_mtok}`
+                + (pricing?.off_peak
+                  ? `\n分时（DeepSeek）：高峰全价 输入 $${pricing.input_per_mtok}`
+                    + ` / 输出 $${pricing.output_per_mtok}`
+                    + `；空闲半价 输入 $${pricing.off_peak.input_per_mtok}`
+                    + ` / 输出 $${pricing.off_peak.output_per_mtok}`
+                  : "")
+                + (pricing?.source ? `\n价格来源：${pricing.source}` : "")
+              }
             >
-              ${pricing.input_per_mtok}/${pricing.output_per_mtok} 每M
+              {pricing?.off_peak && (
+                <span className={`ctx2-tag ${pricing.off_peak_active ? "offpeak" : "peak"}`}>
+                  {pricing.off_peak_active ? "空闲·半价" : "高峰"}
+                </span>
+              )}
+              ${effective.input_per_mtok}/${effective.output_per_mtok} 每M
             </span>
           )}
         </div>
@@ -208,6 +248,11 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
             <b>{call.cost_estimate != null ? `$${call.cost_estimate.toFixed(4)}` : "—"}</b>
           </div>
         </div>
+        {pricing?.stale && (
+          <div className="ctx2-stalehint" title="价格数据不自动联网更新；可在 设置 → 综合设置 → 立即同步定价数据">
+            ⚠ 定价数据已过期，成本估算可能偏差——建议到「设置 → 综合设置」同步
+          </div>
+        )}
         {(task.cache_hit_rate != null || saved != null) && (
           <div className="ctx2-cachewrap">
             <div className="ctx2-meterrow"><span>缓存命中率（会话累计）</span><b>{pct(session.cache_hit_rate)}</b></div>
@@ -237,8 +282,23 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
         {pricing && (
           <>
             <div className="ctx2-ghead">计费单价（每 M tokens）</div>
-            <span>输入 / 输出 / 缓存命中</span>
-            <b>${pricing.input_per_mtok} / ${pricing.output_per_mtok} / ${pricing.cache_hit_per_mtok}</b>
+            {pricing.off_peak ? (
+              <>
+                <span>高峰全价（输入 / 输出 / 缓存命中）</span>
+                <b>${pricing.input_per_mtok} / ${pricing.output_per_mtok} / ${pricing.cache_hit_per_mtok}</b>
+                <span>空闲半价（输入 / 输出 / 缓存命中）</span>
+                <b>${pricing.off_peak.input_per_mtok} / ${pricing.off_peak.output_per_mtok} / ${pricing.off_peak.cache_hit_per_mtok}</b>
+                <span>当前生效档</span>
+                <b>{pricing.off_peak_active ? "空闲·半价" : "高峰·全价"}</b>
+              </>
+            ) : (
+              <>
+                <span>输入 / 输出 / 缓存命中</span>
+                <b>${pricing.input_per_mtok} / ${pricing.output_per_mtok} / ${pricing.cache_hit_per_mtok}</b>
+              </>
+            )}
+            <span>价格来源 / 更新</span>
+            <b>{pricing.source || "—"}{pricing.source_age_seconds != null ? ` · ${fmtAge(pricing.source_age_seconds)}` : ""}</b>
           </>
         )}
       </div>

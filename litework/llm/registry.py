@@ -20,101 +20,150 @@ PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "name": "DeepSeek",
         "kind": "openai",
         "default_base_url": "https://api.deepseek.com",
-        # 官方现行名（2026 起沿用）：旧名 deepseek-v4-flash 仍受理，按 Flash 计费
+        # 官方现行名（2026-09 定价页 MODEL 行只有这两个）：旧名 deepseek-v4-flash /
+        # vision-exp 已被官方下线，请求由 V4.1-Flash 承接并按 Flash 计费，故不再
+        # 出现在可选列表（旧配置仍能解析窗口与价格，见 context_windows /
+        # 定价插件 pricing-plugin 的别名表）。分时计费（高峰/空闲半价）见该插件。
         "default_model": "deepseek-flash",
-        "models": ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+        "models": ["deepseek-flash", "deepseek-v4-pro"],
         "env_key": "DEEPSEEK_API_KEY",
         "context_window": 1_000_000,
         "context_windows": {
             "deepseek-flash": 1_000_000,
             "deepseek-v4-pro": 1_000_000,
-            "deepseek-v4-flash-vision-exp": 1_000_000,
             # 历史别名：旧配置仍用旧名时也能解析出窗口（不再出现在模型列表里）
             "deepseek-v4-flash": 1_000_000,
+            "deepseek-v4-flash-vision-exp": 1_000_000,
         },
-        # 支持 reasoning_effort 的模型（官方 R1 系列 / 兼容推理模型）
-        "reasoning_models": ["deepseek-reasoner"],
+        # V4.1-Flash / V4-Pro 默认即思考模式（可在设置里收紧 effort）
+        "reasoning_models": ["deepseek-flash", "deepseek-v4-pro", "deepseek-reasoner"],
     },
     "openai": {
         "name": "OpenAI",
         "kind": "openai",
         "default_base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-4o",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
+        "default_model": "gpt-5.6",
+        "models": ["gpt-5.6", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "o4-mini"],
         "env_key": "OPENAI_API_KEY",
         "context_window": 128_000,
         "context_windows": {
+            "gpt-5.6": 1_050_000,
+            "gpt-5.6-luna": 1_050_000,
+            "gpt-5.5": 1_050_000,
+            "gpt-5.4-mini": 400_000,
+            "o4-mini": 200_000,
+            # 历史别名（老配置仍可解析窗口与价格）
             "gpt-4o": 128_000,
             "gpt-4o-mini": 128_000,
             "gpt-4.1": 1_047_576,
             "gpt-4.1-mini": 1_047_576,
             "o3-mini": 200_000,
         },
-        # 支持 reasoning_effort 的模型（o 系列推理模型）
-        "reasoning_models": ["o3-mini", "o3", "o4-mini", "o1", "o1-mini", "o1-preview", "gpt-5", "gpt-5-mini"],
+        # 支持 reasoning_effort 的模型（o 系列 / gpt-5 系列推理模型）
+        "reasoning_models": ["gpt-5.6", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini",
+                             "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o4-mini",
+                             "o1", "o1-mini", "o1-preview"],
     },
     "kimi": {
         "name": "Kimi (Moonshot)",
         "kind": "openai",
+        # 国内站端点（老用户配置不动）；计费单价取**国际站官方定价**
+        # （platform.kimi.ai，USD，见定价插件 pricing-plugin），与国内站
+        # CNY 价有约 7% 偏差，可在设置里用 pricing_overrides 覆盖。
         "default_base_url": "https://api.moonshot.cn/v1",
-        "default_model": "moonshot-v1-32k",
-        "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-k2-0711-preview"],
+        "default_model": "kimi-k3",
+        "models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"],
         "env_key": "MOONSHOT_API_KEY",
         "context_window": 262_144,
         "context_windows": {
+            "kimi-k3": 1_048_576,
+            "kimi-k2.7-code": 262_144,
+            "kimi-k2.7-code-highspeed": 262_144,
+            "kimi-k2.6": 262_144,
+            # 历史别名（老配置仍可解析窗口；价格按模型指纹归一到现行键）
             "moonshot-v1-8k": 8_192,
             "moonshot-v1-32k": 32_768,
             "moonshot-v1-128k": 131_072,
             "kimi-k2-0711-preview": 262_144,
         },
-        # 支持原生推理的模型（K2 系列）
-        "reasoning_models": ["kimi-k2-0711-preview", "kimi-k2-turbo-preview"],
+        # 支持原生推理的模型（K2/K3 系列）
+        "reasoning_models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed",
+                             "kimi-k2.6", "kimi-k2-0711-preview", "kimi-k2-turbo-preview"],
     },
     "qwen": {
         "name": "通义千问 (DashScope)",
         "kind": "openai",
         "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "default_model": "qwen-plus",
-        "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
+        "default_model": "qwen3.7-plus",
+        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen3.8-flash", "qwen-flash"],
         "env_key": "DASHSCOPE_API_KEY",
         "context_window": 131_072,
         "context_windows": {
+            "qwen3.8-max": 1_000_000,
+            "qwen3.7-plus": 1_000_000,
+            "qwen3.8-flash": 1_000_000,
+            "qwen-flash": 1_000_000,
+            # 历史别名（老配置仍可解析窗口）
             "qwen-plus": 131_072,
             "qwen-max": 131_072,
             "qwen-turbo": 131_072,
             "qwen-long": 1_000_000,
         },
         # 支持 thinking/reasoning 的模型（Qwen3 系列）
-        "reasoning_models": ["qwen3-max", "qwen3-plus", "qwen3-235b-a22b", "qwq-plus", "qwq-32b"],
+        "reasoning_models": ["qwen3.8-max", "qwen3.7-plus", "qwen3.8-flash",
+                             "qwen3-max", "qwen3-plus", "qwen3-235b-a22b",
+                             "qwq-plus", "qwq-32b"],
     },
     "glm": {
         "name": "智谱 GLM",
         "kind": "openai",
+        # 注意：智谱定价页是 JS SPA（无静态文本可抓），models.dev 也没有第一方
+        # 报价段，因此 GLM 的价格只能取 models.dev 的官方渠道商聚合价（粗略），
+        # 或用设置里的 pricing_overrides 手填官方价。
         "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "default_model": "glm-4-plus",
-        "models": ["glm-4-plus", "glm-4-flash", "glm-4-air", "glm-4-long"],
+        "default_model": "glm-5.3",
+        "models": ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-4.6"],
         "env_key": "ZHIPUAI_API_KEY",
         "context_window": 131_072,
         "context_windows": {
+            "glm-5.3": 1_000_000,
+            "glm-5.3-flash": 1_000_000,
+            "glm-5.2": 1_000_000,
+            "glm-4.6": 200_000,
+            # 历史别名（老配置仍可解析窗口）
             "glm-4-plus": 131_072,
             "glm-4-flash": 131_072,
             "glm-4-air": 131_072,
             "glm-4-long": 1_000_000,
         },
-        # 支持 thinking 的模型（GLM-4.5 / GLM-4.6 系列）
-        "reasoning_models": ["glm-4.5", "glm-4.5-air", "glm-4.6"],
+        # 支持 thinking 的模型（GLM-4.5 及以后）
+        "reasoning_models": ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-4.6",
+                             "glm-4.5", "glm-4.5-air"],
     },
     "anthropic": {
         "name": "Anthropic Claude",
         "kind": "anthropic",
         "default_base_url": "https://api.anthropic.com/v1",
-        "default_model": "claude-sonnet-4-20250514",
-        "models": ["claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219",
-                   "claude-3-5-sonnet-20241022", "claude-opus-4-20250514"],
+        "default_model": "claude-sonnet-5",
+        "models": ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5",
+                   "claude-fable-5-1"],
         "env_key": "ANTHROPIC_API_KEY",
         "context_window": 200_000,
-        # Anthropic 所有 Claude 3.7+/4 系列都支持扩展思考（extended thinking）
+        "context_windows": {
+            "claude-sonnet-5": 1_000_000,
+            "claude-opus-5": 1_000_000,
+            "claude-haiku-4-5": 200_000,
+            "claude-fable-5-1": 1_000_000,
+            # 历史别名（老配置仍可解析窗口与价格）
+            "claude-sonnet-4-20250514": 200_000,
+            "claude-opus-4-20250514": 200_000,
+            "claude-3-7-sonnet-20250219": 200_000,
+            "claude-3-5-sonnet-20241022": 200_000,
+        },
+        # Claude 3.7 起全系支持扩展思考（extended thinking）
         "reasoning_models": [
+            "claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5",
+            "claude-fable-5-1",
             "claude-sonnet-4-20250514", "claude-opus-4-20250514",
             "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022",
         ],
@@ -324,11 +373,14 @@ class LLMRegistry:
             return None
         return self.meta_service.get_pricing(model, provider_id=provider_id or self.active)
 
-    def refresh_models_dev(self) -> bool:
-        """同步 models.dev 元数据（失败静默降级到内置表）。"""
+    def refresh_models_dev(self, force: bool = False) -> bool:
+        """同步 models.dev 元数据（失败静默降级到内置表）。
+
+        force=True：绕过 TTL 挡板强制联网拉取（用户手动同步用）。
+        """
         if self.meta_service is None:
             return False
-        return self.meta_service.refresh()
+        return self.meta_service.refresh(force=force)
 
     # ------------------------------------------------------------ 适配器
 

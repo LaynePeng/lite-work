@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "note": "官方定价数据源与快照。改价：改本文件（或重新同步：设置 → 综合设置 → 同步）。主程序不含任何价目表。",
+  "ttl_seconds": 604800,
+  "sources": {
+    "deepseek": {
+      "label": "DeepSeek 官方定价",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "parser": "deepseek",
+      "snapshot_date": "2026-09-17",
+      "peak_window": {
+        "tz_offset_minutes": 0,
+        "days": [0, 1, 2, 3, 4],
+        "periods": [[60, 240], [360, 600]]
+      },
+      "models": {
+        "deepseek-flash": {
+          "peak": {"input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006},
+          "off_peak": {"input_per_mtok": 0.15, "output_per_mtok": 0.6, "cache_hit_per_mtok": 0.003}
+        },
+        "deepseek-v4-pro": {
+          "peak": {"input_per_mtok": 1.32, "output_per_mtok": 3.96, "cache_hit_per_mtok": 0.044},
+          "off_peak": {"input_per_mtok": 0.66, "output_per_mtok": 1.98, "cache_hit_per_mtok": 0.022}
+        }
+      }
+    },
+    "kimi": {
+      "label": "Kimi 官方定价（国际站）",
+      "url": "https://platform.kimi.ai/docs/pricing/chat.md",
+      "parser": "kimi",
+      "snapshot_date": "2026-09-17",
+      "models": {
+        "kimi-k3": {
+          "peak": {"cache_hit_per_mtok": 0.3, "input_per_mtok": 3.0, "output_per_mtok": 15.0}
+        },
+        "kimi-k2.7-code": {
+          "peak": {"cache_hit_per_mtok": 0.19, "input_per_mtok": 0.95, "output_per_mtok": 4.0}
+        },
+        "kimi-k2.7-code-highspeed": {
+          "peak": {"cache_hit_per_mtok": 0.38, "input_per_mtok": 1.9, "output_per_mtok": 8.0}
+        },
+        "kimi-k2.6": {
+          "peak": {"cache_hit_per_mtok": 0.16, "input_per_mtok": 0.95, "output_per_mtok": 4.0}
+        }
+      }
+    }
+  },
+  "fingerprints": [
+    ["^deepseek.*(?:[-_./]|^)pro(?:$|[-_.0-9])", "deepseek-v4-pro", "deepseek"],
+    ["^deepseek", "deepseek-flash", "deepseek"],
+    ["^kimi[-_.]?k2[-_.]?7[-_.]?code[-_.]?highspeed", "kimi-k2.7-code-highspeed", "kimi"],
+    ["^kimi[-_.]?k2[-_.]?7[-_.]?code", "kimi-k2.7-code", "kimi"],
+    ["^kimi[-_.]?k2[-_.]?6", "kimi-k2.6", "kimi"],
+    ["^kimi[-_.]?k3(?:$|[-_.0-9])", "kimi-k3", "kimi"]
+  ],
+  "aliases": {
+    "deepseek-v4-flash": "deepseek-flash",
+    "deepseek-v4-flash-vision-exp": "deepseek-flash",
+    "deepseek-v4.1-flash": "deepseek-flash",
+    "deepseek-chat": "deepseek-flash",
+    "deepseek-reasoner": "deepseek-flash",
+    "deepseek-v3": "deepseek-flash",
+    "deepseek-v3.2": "deepseek-flash",
+    "deepseek-v4.1-pro": "deepseek-v4-pro",
+    "deepseek-pro": "deepseek-v4-pro",
+    "kimi-k2-7-code": "kimi-k2.7-code",
+    "kimi-k2-7-code-highspeed": "kimi-k2.7-code-highspeed",
+    "kimi-k2-6": "kimi-k2.6"
+  }
+}

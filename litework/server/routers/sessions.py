@@ -302,15 +302,34 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/worktrees")
     async def list_worktrees(request: Request):
-        """列出当前项目磁盘上所有活跃 worktree（遗留清理用）。"""
+        """项目级工作树总览：当前分支 + 所有活跃 worktree（含落后状态）。"""
         ctx.check_auth(request)
-        return {"worktrees": app.worktree_list_active()}
+        ctx.require_workspace()
+        return app.worktree_overview()
 
     @router.post("/api/worktrees/clean")
     async def clean_worktrees(payload: WorktreeCleanRequest, request: Request):
         """清理遗留 worktree：默认只删无改动的；include_dirty=true 全删（可指定单个 name）。"""
         ctx.check_auth(request)
+        ctx.require_workspace()
         return app.worktree_clean(include_dirty=bool(payload.include_dirty), name=payload.name)
+
+    @router.post("/api/worktrees/abort-merge")
+    async def abort_merge(request: Request):
+        """放弃进行中的合并（合并冲突后回退主工作区到合并前状态）。"""
+        ctx.check_auth(request)
+        ctx.require_workspace()
+        result = app.worktree_abort_merge()
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("reason") or "放弃合并失败")
+        return result
+
+    @router.get("/api/worktrees/conflicts")
+    async def worktree_conflicts(request: Request):
+        """主工作区当前合并冲突文件列表（合并中状态）。"""
+        ctx.check_auth(request)
+        ctx.require_workspace()
+        return app.worktree_conflicts()
 
     @router.get("/api/sessions/{session_id}/agents")
     async def list_session_agents(session_id: str, request: Request):

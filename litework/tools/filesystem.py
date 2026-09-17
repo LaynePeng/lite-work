@@ -10,13 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pathspec
 
 from ..core.types import ToolDefinition
 
 TRUNCATE_LINES = 500
+
+# .gitignore 解析结果缓存：`_file_tree` 每次调用都要「读 .gitignore + 构造 PathSpec」，
+# 而 FileSystemTools 是按请求/按任务新建的（实例级缓存无效），故放在模块级。
+# 键含 (workspace, mtime_ns, size)：文件被编辑 → 签名变化 → 自动重建。
+GITIGNORE_CACHE_MAX = 32
+_GITIGNORE_CACHE: Dict[Tuple[str, Optional[int], Optional[int]], pathspec.PathSpec] = {}
 
 
 class FileSystemTools:
@@ -38,18 +44,32 @@ class FileSystemTools:
     # ------------------------------------------------------------ gitignore
 
     def _load_gitignore(self) -> pathspec.PathSpec:
+        """gitignore 规则（带模块级 mtime 缓存；PathSpec 只读复用，线程安全）。"""
+        gitignore_path = os.path.join(self.workspace, ".gitignore")
+        try:
+            st = os.stat(gitignore_path)
+            sig: Tuple[str, Optional[int], Optional[int]] = (
+                self.workspace, st.st_mtime_ns, st.st_size)
+        except OSError:
+            sig = (self.workspace, None, None)
+        cached = _GITIGNORE_CACHE.get(sig)
+        if cached is not None:
+            return cached
         patterns: List[str] = [
             ".git", "node_modules", "dist", "build", "coverage", ".venv", "venv",
             "__pycache__", "*.pyc", ".DS_Store", ".lite-work", "web/node_modules",
         ]
-        gitignore_path = os.path.join(self.workspace, ".gitignore")
-        if os.path.exists(gitignore_path):
+        if sig[1] is not None:
             try:
                 with open(gitignore_path, "r", encoding="utf-8") as f:
                     patterns.extend(l for l in f.read().splitlines() if l.strip() and not l.startswith("#"))
             except OSError:
                 pass
-        return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+        spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+        _GITIGNORE_CACHE[sig] = spec
+        if len(_GITIGNORE_CACHE) > GITIGNORE_CACHE_MAX:
+            _GITIGNORE_CACHE.pop(next(iter(_GITIGNORE_CACHE)))
+        return spec
 
     # ------------------------------------------------------------ 工具定义
 

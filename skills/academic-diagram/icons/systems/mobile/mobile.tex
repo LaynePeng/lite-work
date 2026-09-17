@@ -1,0 +1,22 @@
+\documentclass[border=4pt]{standalone}
+
+% --- packages (mirror these in mobile.meta.json "requires") ---
+\usepackage{tikz}
+
+% --- palette (canonical source: reference/color-palettes/color-palettes.md; light variant) ---
+\definecolor{otblue}{HTML}{0072B2}
+\definecolor{otorange}{HTML}{E69F00}
+\definecolor{otteal}{HTML}{009E73}
+\definecolor{otpurple}{HTML}{CC79A7}
+\definecolor{otgray}{HTML}{5A5A5A}
+
+\begin{document}
+\begin{tikzpicture}[line width=2pt]
+  % clean outlined handset (neutral structure color, no screen fill)
+  \draw[draw=otgray, rounded corners=7pt] (0,0) rectangle (1.6,2.9);
+  % earpiece speaker (rounded pill, centered near the top)
+  \draw[draw=otgray, line width=1.6pt, line cap=round] (0.62,2.55) -- (0.98,2.55);
+  % home button (solid dot, centered near the bottom)
+  \fill[otgray] (0.8,0.36) circle[radius=0.13];
+\end{tikzpicture}
+\end{document}

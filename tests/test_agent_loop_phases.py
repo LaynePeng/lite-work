@@ -191,9 +191,12 @@ async def test_context_stats_separates_last_call_from_task_total(tmp_path):
     single = 3_000 / 1e6 * 0.3 + 9_000 / 1e6 * 0.006 + 50 / 1e6 * 1.2
     assert abs(task["last"]["cost_estimate"] - round(single, 4)) < 1e-9
     assert abs(task["cost_estimate"] - round(single * 3, 4)) < 1e-9
-    # 计费单价随统计下发（面板展示成本依据）
-    assert events[-1]["pricing"] == {
-        "input_per_mtok": 0.3, "output_per_mtok": 1.2, "cache_hit_per_mtok": 0.006}
+    # 计费单价随统计下发（面板展示成本依据）；现还含来源/分时等元信息，
+    # 这里只断言三个单价字段（元信息由 pricing 相关测试单独覆盖）
+    pricing_payload_out = events[-1]["pricing"]
+    assert pricing_payload_out["input_per_mtok"] == 0.3
+    assert pricing_payload_out["output_per_mtok"] == 1.2
+    assert pricing_payload_out["cache_hit_per_mtok"] == 0.006
 
 
 async def test_context_stats_uses_estimate_not_total_without_usage(tmp_path):

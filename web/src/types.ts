@@ -15,15 +15,6 @@ export interface CollabMode {
   icon_url?: string | null;
 }
 
-/** 社区清单中的协作模式条目（kind === "collab"） */
-export interface CommunityCollabEntry {
-  name: string;
-  version?: string;
-  description?: string;
-  path?: string;
-  kind?: string;
-}
-
 export interface AgentInfo {
   id: string;
   mode: "primary" | "subagent";
@@ -139,6 +130,31 @@ export interface ModelMetaStatus {
   models: number;
   /** 缓存文件年龄（秒）；无缓存为 null */
   age_seconds: number | null;
+  /** 无缓存或超过 TTL（前端提示「建议同步」，不强制） */
+  stale?: boolean;
+}
+
+/** 定价插件里的单个官方数据源状态（同步步骤逐行呈现） */
+export interface PricingSourceStatus {
+  id: string;
+  label: string;
+  url: string;
+  cached: boolean;
+  models: number;
+  age_seconds: number | null;
+  stale: boolean;
+  snapshot_date?: string | null;
+  /** 同步中/刚完成的瞬时状态（仅前端维护） */
+  pending?: boolean;
+  error?: string | null;
+  elapsed_ms?: number;
+}
+
+export interface PricingStatus {
+  models_dev: ModelMetaStatus;
+  /** 定价插件信息；未安装为 null */
+  provider: { name: string; version: string; description: string; source: string } | null;
+  sources: PricingSourceStatus[];
 }
 
 export interface SessionModel {
@@ -224,6 +240,16 @@ export interface ContextPricing {
   input_per_mtok: number;
   output_per_mtok: number;
   cache_hit_per_mtok: number;
+  /** 价格来源：official:deepseek / snapshot:kimi / models.dev / override / config */
+  source?: string;
+  /** 价格数据年龄（秒）；内置快照/回退价为 null */
+  source_age_seconds?: number | null;
+  /** 数据已过期（前端提示去设置页同步） */
+  stale?: boolean;
+  /** 分时供应商的空闲档（DeepSeek：空闲时段半价） */
+  off_peak?: { input_per_mtok: number; output_per_mtok: number; cache_hit_per_mtok: number };
+  /** 当前是否处于空闲时段（按计价时刻判断） */
+  off_peak_active?: boolean;
 }
 
 /** 效率机制节省台账（本任务累计） */
@@ -323,6 +349,10 @@ export type SSEEvent =
   | { type: "task:error"; data: { message: string } }
   | { type: "stats:update"; data: Stats }
   | { type: "context:stats"; data: ContextStats }
+  | { type: "worktree:merge"; data: {
+      name: string; branch: string; phase: string;
+      conflicts: string[]; files: number; commits: number; message: string;
+    } }
   | { type: "subagent:started"; data: { task: string; role: string; subagentId?: string; callId?: string | null } }
   | { type: "subagent:progress"; data: SubAgentProgressEvent }
   | { type: "subagent:completed"; data: SubAgentCompletedData }
@@ -461,14 +491,6 @@ export interface FileReadResponse {
   diff: string;
 }
 
-// 文件 diff 响应（/api/workspace/diff）
-export interface FileDiffResponse {
-  path: string;
-  diff: string;
-  additions: number;
-  deletions: number;
-}
-
 // 产出物列表项（/api/outputs）
 export interface OutputItem {
   name: string;
@@ -476,6 +498,19 @@ export interface OutputItem {
   source: "outputs" | "uploads";
   size: number;
   mtime: string;
+  /** 类型分组名（产出物/ 下的一级子目录；根目录散文件为「未分类」） */
+  category?: string;
+  /** 扩展名（不含点）：docx / xlsx / png … */
+  ext?: string;
+  /** 版本号（来自文件名 `_vN`；无版本号为 0） */
+  version?: number;
+}
+
+/** 产出物收件箱分组（同类型聚合，只含每项最新版本）。 */
+export interface OutputGroup {
+  name: string;
+  source: "outputs" | "uploads";
+  items: OutputItem[];
 }
 
 // 产出物预览响应（/api/files/preview）
@@ -576,6 +611,10 @@ export interface ChatSessionState {
   worktreeEnabled?: boolean;
   /** worktree 变更状态（评审卡数据源；任务结束时轮询刷新） */
   worktreeStatus?: WorktreeStatus | null;
+  /** 合并冲突文件列表（AI/手动合并后主工作区仍有冲突时展示） */
+  worktreeConflicts?: string[];
+  /** AI 合并进度（worktree:merge 事件；merged/failed 后短暂保留再清理） */
+  worktreeMerge?: { phase: string; conflicts: string[]; files: number; commits: number; message: string } | null;
   pendingQueue: string[];
 }
 
@@ -586,8 +625,22 @@ export interface WorktreeStatus {
   branch?: string;
   path?: string;
   files?: { status: string; path: string }[];
+  /** 尚未提交的改动（harvest 会自动提交到分支） */
+  pending?: { status: string; path: string }[];
   adds?: number;
   dels?: number;
+  /** 分支上已有的提交数（相对基点） */
+  commits?: number;
+  /** 合并目标：主工作区当前分支（worktree 的改动会 merge 到这里） */
+  main_branch?: string;
+  /** 主工作区当前 HEAD */
+  main_head?: string;
+  /** 本 worktree 分支的基点 */
+  base?: string;
+  /** 本 worktree 分支的 tip（画分支树用） */
+  head?: string;
+  /** 主分支是否已前进（其他会话合并过 → 本分支基于旧提交，合并可能冲突） */
+  behind?: boolean;
 }
 
 // ---------------------------------------------------------------- 后台命令
@@ -620,14 +673,6 @@ export interface SkillDepsReport {
   pip?: { ok?: boolean; stdout?: string; stderr?: string; error?: string } | null;
   npm?: { ok?: boolean; stdout?: string; stderr?: string; error?: string } | null;
   env?: { ok?: boolean; action?: string; error?: string } | null;
-}
-
-export interface SkillImportResult {
-  ok: boolean;
-  name: string;
-  path: string;
-  scope: string;
-  deps?: SkillDepsReport;
 }
 
 export interface CommandInfo {
@@ -674,6 +719,8 @@ export interface PluginInfo {
   source?: string;
   /** 插件类别：collab=协作模式（进模式选择器，不注册工具）/ tool=工具插件 */
   kind?: "tool" | "collab";
+  /** 加载失败原因（空/缺省=正常）；列表仍返回，前端显示"⚠ 加载失败"而非整页挂掉 */
+  error?: string;
 }
 
 export interface BuiltinPluginInfo {

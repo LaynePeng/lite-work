@@ -2,17 +2,43 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [1.9.0] — 内置定价插件与随包技能解释器
 
 ### 新增
 - **文件 Tab 右键文件管理**：侧边栏「文件」页签的目录树支持右键 **重命名 / 删除** 文件
   （此前仅「产出物」面板可用）。重命名走行内编辑，交互与产出物面板一致。
+- **内置技能新增学术论文配图** `academic-diagram`（v0.1.1）：TikZ 架构图 / 神经网络图 /
+  算法流程图，73 个图标 + 9 个参数化模板，含 LaTeX 编译校验与 SVG 预览链路；
+- **随包技能解释器**：打包内置独立 CPython 3.14（`_internal/skill-python`），技能脚本的
+  `python3` 优先命中它，并通过 sitecustomize 复用 `_internal` 里随包收集的第三方包
+  （PyYAML / pymupdf / python-docx / python-pptx / lxml / Pillow / openpyxl / xlsxwriter）——
+  **用户机器无需安装 Python、无需联网 pip，装完即离线可用**；未随包分发时自动回退系统
+  `python3`，行为与旧版一致。
+- **内置定价插件 `pricing-plugin` 成为一等工具插件**：改写为 `ToolPlugin` + `PricingProvider`
+  双基类（`get_tools()` 为空，不向 Agent 暴露工具，仅供主程序按模型指纹计费），出现在
+  设置 → Plugins 的「已安装」列表（内置 v1.0.0，可随社区更新独立升级，同名本地包覆盖）；
+  内置插件发现统一为 `load_builtin_plugins()`（工具 / 协作模式 / 定价三类共用一套机制）。
 
 ### 变更
+- 内置技能 `academic-paper-engineering` 升级 **1.0.2**：能力分层修正（②a 四类输入解析为纯
+  Python，不需要 LibreOffice；②b 旧格式转换 / xlsx 重算 / pptx 缩略图为可选增强），
+  安装指引补 MacPorts / 官方 dmg 与 soffice 入 PATH，并写明 textutil / pandoc 降级路径；
+  同时补 PDF 解析的 PyMuPDF 兼容 import（pymupdf 优先、fitz 回退）；
+- PyInstaller 收集补充 `fitz` / `openpyxl` / `et_xmlfile` / `xlsxwriter` / `docx` / `pptx` /
+  `lxml` / `PIL` / `yaml`，保证随包技能解释器可离线 import；
 - `DELETE /api/files` 与 `POST /api/files/rename` 放开到**工作区内任意文件**（含嵌套目录下的
   源码文件），不再限定 `产出物/` `素材/`。底线保持不变：路径越界 `..` → 403、`.git/` 内部
   文件 → 403、删除仅限文件（目录 → 400）、重命名仅限同目录且不可改扩展名；
 - 补充后端用例（嵌套路径删除/重命名、目录与 `.git` 拒绝）与前端「文件」页签右键用例。
+
+### 修复
+- **models.dev 手动同步失效**：`refresh()` 的 7 天 TTL 挡板会短接手动同步——缓存未过期时
+  点「立即同步定价数据」也不联网，时间戳永远停在旧值（表现为「一直显示 N 天前」）。
+  现手动同步走 `force=True` 强制拉取（启动路径不联网、TTL 行为不变）。
+- **分时（空闲半价）展示与节省口径**：上下文面板顶部单价此前始终显示高峰基准价
+  （`pricing.input` 是 peak，空闲档在嵌套的 `off_peak`），出现「标签写空闲·半价、数字却是
+  全价」的错位；现按当前生效档展示，「缓存帮你省下」也改用生效档计算。后端计费本就按
+  计价时刻选档（`_pricing_now`），成本数字未受影响。
 
 ## [1.8.0] — 素材引用与产出物文件管理
 

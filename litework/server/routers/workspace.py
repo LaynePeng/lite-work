@@ -58,16 +58,6 @@ def create_router(ctx: ServerContext) -> APIRouter:
             for t in registry.get_tools()
         ]
 
-    @router.get("/api/workspace/tree")
-    async def workspace_tree(depth: int = 3, request: Request = None):
-        if request:
-            ctx.check_auth(request)
-        from ...tools.filesystem import FileSystemTools
-
-        workspace = ctx.require_workspace()
-        fs = FileSystemTools(workspace)
-        return {"workspace": workspace, "tree": fs._file_tree({"maxDepth": depth})}
-
     @router.get("/api/workspace/tree-json")
     async def workspace_tree_json(path: str = "", request: Request = None):
         """结构化目录树（侧边栏文件页签）：按路径懒加载 + git 状态字母。"""
@@ -386,23 +376,5 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "diff": diff_text,
         }
 
-    @router.get("/api/workspace/diff")
-    async def workspace_file_diff(path: str, request: Request = None):
-        """获取单个文件的 git diff（工作区 vs HEAD）。"""
-        if request:
-            ctx.check_auth(request)
-        workspace = ctx.require_workspace()
-        try:
-            proc = __import__("subprocess").run(
-                ["git", "-C", workspace, "diff", "HEAD", "--", path],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=10,
-            )
-            diff_text = proc.stdout if proc.returncode == 0 else ""
-        except Exception:
-            diff_text = ""
-        additions = len([l for l in diff_text.split("\n") if l.startswith("+") and not l.startswith("+++")])
-        deletions = len([l for l in diff_text.split("\n") if l.startswith("-") and not l.startswith("---")])
-        return {"path": path, "diff": diff_text, "additions": additions, "deletions": deletions}
 
     return router

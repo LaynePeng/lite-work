@@ -35,7 +35,8 @@ def _no_network_model_meta(monkeypatch):
         from litework.llm.model_meta import ModelMetaService
     except Exception:  # pragma: no cover - 导入失败不影响其他测试
         return
-    monkeypatch.setattr(ModelMetaService, "refresh", lambda self: False, raising=False)
+    # 只短路真正的网络下载即可：refresh() 的 TTL 判断本身不联网（缓存新鲜时纯读盘）。
+    # 保留真实 refresh() 实现，便于单测覆盖「force 绕过 TTL 强制拉取」的行为。
     monkeypatch.setattr(ModelMetaService, "_fetch_and_store", lambda self: False, raising=False)
 
 
