@@ -315,6 +315,22 @@ def test_read_skill_and_match_triggers(tmp_path):
     assert tools.match_skills("无关任务") == []
 
 
+def test_match_triggers_prefers_specific_phrase(tmp_path):
+    """通用词与具体短语同时命中时，只注入更具体的一方（同提示词不双注入）。"""
+    _make_skill(tmp_path, "generic", triggers="PPT, 幻灯片")
+    _make_skill(tmp_path, "specific", triggers="PPT初稿, 快速PPT")
+    tools = SkillsTools(str(tmp_path))
+    # 只留本用例的两个假技能，避免仓库内置技能（presentation 也有「PPT初稿」）干扰
+    only = [s for s in tools.list_skills() if s["name"] in ("generic", "specific")]
+    tools.list_skills = lambda: only
+    # 具体短语命中 → generic 的「PPT」是 specific「PPT初稿」的子串 → 丢弃 generic
+    assert [s["name"] for s in tools.match_skills("帮我写个 PPT初稿")] == ["specific"]
+    # 只有通用词命中 → 照常
+    assert [s["name"] for s in tools.match_skills("做个 PPT")] == ["generic"]
+    # 两个技能各命中互不包含的词条 → 都保留
+    assert sorted(s["name"] for s in tools.match_skills("快速PPT 幻灯片")) == ["generic", "specific"]
+
+
 # ---------------------------------------------------------------- 创建/删除
 
 def test_create_and_delete_skill(tmp_path):

@@ -463,16 +463,28 @@ class SkillsTools:
         """
         if mode == "advanced":
             return self._match_skills_advanced(prompt)
-        # substring 模式（默认）
+        # substring 模式（默认）：先记录每个技能命中的「最长」词条，
+        # 再按词条包含关系去重 —— 避免同一段提示词把「通用词」所属技能与
+        # 「具体短语」所属技能一起注入（如 PPT → ppt-master 与 PPT初稿 →
+        # presentation；流程图 → diagram-to-office 与 算法流程图 →
+        # academic-diagram）。规则：命中的词条是另一个命中词条的**真子串**时，
+        # 该技能判为不够具体、丢弃；没有更长词条兜底的长短语仍照常命中。
         lowered = (prompt or "").lower()
-        matched: List[Dict[str, Any]] = []
+        hits: List[Tuple[Dict[str, Any], List[str]]] = []
         for skill in self.list_skills():
             triggers = skill.get("triggers") or ""
-            for t in triggers.split(","):
-                t = t.strip().lower()
-                if t and t in lowered:
-                    matched.append(skill)
-                    break
+            found = [t.strip().lower() for t in triggers.split(",")
+                     if t.strip() and t.strip().lower() in lowered]
+            if found:
+                hits.append((skill, found))
+        matched: List[Dict[str, Any]] = []
+        for skill, trigs in hits:
+            # 该技能命中的**每个**词条都被别的技能用更长词条覆盖时才丢弃
+            if all(any(other is not skill and t != t2 and t in t2
+                       for other, other_trigs in hits for t2 in other_trigs)
+                   for t in trigs):
+                continue
+            matched.append(skill)
         return matched
 
     def _match_skills_advanced(self, prompt: str) -> List[Dict[str, Any]]:

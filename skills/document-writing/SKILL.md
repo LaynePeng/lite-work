@@ -1,7 +1,7 @@
 ---
 name: document-writing
 description: 文档写作：方案/通知/制度/说明书等正式文档撰写，排版生成 Word 或 PDF
-triggers: 写文档,写方案,写通知,写制度,起草,写报告,文档排版,文档美化,美化
+triggers: 写文档,写方案,写通知,写制度,起草,写报告
 version: "1.1.0"
 ---
 
