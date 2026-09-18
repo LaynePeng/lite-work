@@ -4,8 +4,9 @@
 """模型元数据：models.dev 缓存/降级 + 上下文窗口解析优先级。"""
 import json
 import os
+import time
 
-from litework.llm.model_meta import ModelMetaService
+from litework.llm.model_meta import CACHE_TTL_SECONDS, ModelMetaService
 from litework.llm.registry import LLMRegistry
 
 
@@ -223,6 +224,80 @@ def test_manual_refresh_forces_fetch_bypassing_ttl(tmp_path, monkeypatch):
     # force=True → 绕过 TTL，真正拉取
     assert svc.refresh(force=True) is True
     assert calls["n"] == 1
+
+
+def _set_cache_age(path, days: float) -> None:
+    """把缓存文件 mtime 调旧，模拟「超过 TTL 未同步」。"""
+    ts = time.time() - days * 86400
+    os.utime(str(path), (ts, ts))
+
+
+def test_expired_cache_still_resolves_window_and_price(tmp_path):
+    """缓存过期 ≠ 数据消失：过期缓存照用，窗口不许掉回 128K 兜底。
+
+    回归（用户报障）：models.dev 缓存满 7 天（CACHE_TTL_SECONDS）的那一刻，
+    过期缓存被整个丢弃 → 自定义中转的模型查不到窗口 → 静默回退供应商默认
+    128K。用户侧表现是长会话 token 预算从 ~1M 突降到 115200（0.9×128K），
+    随即 `Exceeded token budget`；设置页则显示「0 个模型」。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        "z-ai": {"models": {"glm-5.3": {
+            "cost": {"input": 1.4, "output": 4.4, "cache_read": 0.26},
+            "limit": {"context": 1_048_576}}}},
+    }), encoding="utf-8")
+    _set_cache_age(cache, days=8)          # 超过 7 天 TTL
+
+    svc = ModelMetaService(str(cache))
+    # 窗口与价格（含「按模型名回退官方厂商」的网关路径）都继续可用
+    assert svc.get_context_window("glm-5.3", provider_id="custom_9") == 1_048_576
+    assert svc.get_pricing("glm-5.3", provider_id="custom_9")["input_per_mtok"] == 1.4
+    # 状态仍报「有缓存」，年龄交给前端提示「建议同步」
+    st = svc.status()
+    assert st["cached"] is True
+    assert st["models"] > 0            # 索引条数（含 provider 限定键 + 裸名键）
+    assert st["age_seconds"] > CACHE_TTL_SECONDS
+
+    r = LLMRegistry(config_dir=str(tmp_path))
+    assert r.get_context_window("custom_9", "glm-5.3") == 1_048_576
+
+
+def test_expired_cache_survives_failed_sync(tmp_path):
+    """手动同步失败（离线/接口异常）不清空旧数据，过期缓存继续兜底。
+
+    conftest 的 autouse fixture 把 `_fetch_and_store` 短路成「失败」，正好等价于
+    断网时点「同步」：refresh 返回 False（前端提示同步失败），但窗口/价格解析
+    照旧——不能因为一次同步失败就把 1M 窗口打成 128K。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        "deepseek/deepseek-v4.1-flash": {"limit": {"context": 1_048_576}},
+    }), encoding="utf-8")
+    _set_cache_age(cache, days=30)
+
+    svc = ModelMetaService(str(cache))
+    assert svc.refresh(force=True) is False     # 同步确实失败
+    assert svc.get_context_window("deepseek-v4.1-flash") == 1_048_576
+    assert svc.status()["cached"] is True
+
+
+def test_expired_cache_without_force_still_fetches(tmp_path, monkeypatch):
+    """缓存过期时 refresh() 不得走「纯读盘」捷径，必须真正联网刷新。"""
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({"old/model": {"limit": {"context": 1}}}), encoding="utf-8")
+    _set_cache_age(cache, days=8)
+    svc = ModelMetaService(str(cache))
+
+    calls = []
+
+    def spy(self):
+        calls.append(1)
+        self._index = {"fresh/model": {"limit": {"context": 42}}}
+        return True
+
+    monkeypatch.setattr(ModelMetaService, "_fetch_and_store", spy)
+    assert svc.refresh() is True
+    assert calls == [1]
 
 
 def test_refresh_models_dev_forwards_force(tmp_path):

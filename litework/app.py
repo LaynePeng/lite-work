@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from .core.agent_loop import AgentLoop
 from .core.agent_profile import AgentProfile, AgentRegistry
-from .core.context_manager import ContextManager
+from .core.context_manager import ContextManager, repair_tool_call_pairs
 from .core.kernel import Kernel
 from .core.session_store import SessionStore
-from .core.types import Plugin
+from .core.types import Plugin, header_context
 from .llm.base import BaseLLMAdapter
 from .llm.model_meta import CACHE_TTL_SECONDS as MODEL_META_TTL
 from .llm.registry import LLMRegistry
@@ -919,7 +919,14 @@ class AgentApp:
         """手动同步单个来源："models_dev" 或定价插件声明的数据源。"""
         if source_id in ("models_dev", "models.dev"):
             ok = self.refresh_model_meta()
-            return {"ok": bool(ok), **self.pricing_status()["models_dev"]}
+            status = self.pricing_status()["models_dev"]
+            if not ok:
+                # 失败必须带原因（网络异常 / HTTP 状态 / 数据结构），否则用户
+                # 只看到「同步失败」无从排查——尤其「每天点都失败」的场景
+                svc = getattr(self.llm_registry, "meta_service", None)
+                status = {**status, "error": (
+                    getattr(svc, "last_error", "") or "同步失败（网络异常或接口超时）")}
+            return {"ok": bool(ok), **status}
         provider = self.pricing_provider()
         if provider is None:
             return {"ok": False, "error": "未安装定价插件（设置 → 插件）"}
@@ -1446,6 +1453,12 @@ class AgentApp:
         if not head or head_tokens <= 0:
             return {"ok": False, "reason": "没有可压缩的历史"}
 
+        # 摘要调用直连 adapter（不经 AgentLoop.run_task），必须自行注入
+        # custom_headers 模板上下文：否则 {conversation_id} 等模板展开为空、
+        # x-opencode-session 这类会话亲和头被丢弃，网关直接 400
+        # （opencode zen go 实测：MissingSessionID）。
+        header_context.set(self._summary_header_context(session_id))
+
         summary = await self._summarize_head(head, system, focus)
         if not summary:
             return {"ok": False, "reason": "摘要调用失败（LLM 未返回正文），会话保持不变"}
@@ -1455,7 +1468,14 @@ class AgentApp:
         ] + tail
         before_tokens = TokenCounter.count_messages_tokens(messages)
         after_tokens = TokenCounter.count_messages_tokens(compacted)
-        self.session_store.save(session_id, compacted, metadata=snapshot.metadata)
+        # 重新读盘取 metadata 再保存：摘要调用可能经 {conversation_id} 模板给
+        # 会话写入了 conversation_ids（get_or_create_conversation_id），直接用
+        # 开头加载的旧 snapshot.metadata 会把它覆盖掉。
+        fresh = self.session_store.load(session_id)
+        self.session_store.save(
+            session_id, compacted,
+            metadata=dict(fresh.metadata) if fresh is not None else snapshot.metadata,
+        )
 
         # 统计回写：面板立即反映压缩后水位（usage/费用等累计值不动）。
         # 必须使用与 accumulate_context_stats 一致的全字段默认值，
@@ -1478,6 +1498,26 @@ class AgentApp:
             "keep_turns": keep_turns,
             "summary": summary,
         }
+
+    def _summary_header_context(self, session_id: str) -> Dict[str, str]:
+        """手动压缩摘要调用的 custom_headers 模板上下文。
+
+        镜像 AgentLoop._build_header_context：conversation_id 仅在供应商
+        custom_headers 配置了 {conversation_id} 模板时惰性生成（按会话 ×
+        供应商落盘复用，与任务流拿到同一个 id，保证网关会话亲和）。
+        """
+        provider = getattr(self.adapter, "provider_id", "") or ""
+        ctx: Dict[str, str] = {
+            "session_id": session_id,
+            "workspace": self.workspace or "",
+            "model": getattr(self.adapter, "model", "") or "",
+            "provider": provider,
+        }
+        if any("{conversation_id}" in (v or "")
+               for v in getattr(self.adapter, "custom_headers", {}).values()):
+            ctx["conversation_id"] = self.session_store.get_or_create_conversation_id(
+                session_id, provider)
+        return ctx
 
     async def _summarize_head(self, head: List[Any], system: Any, focus: str = "") -> Optional[str]:
         """手动压缩摘要 LLM 调用（与自动压缩同口径：携带工具 schema）。
@@ -1505,6 +1545,14 @@ class AgentApp:
                 "[App] 手动压缩 head 超长（%d 字符），仅摘要最近 %d 条（约 %d 字符）",
                 total_chars, len(selected), sum(len(m.content or "") for m in selected),
             )
+        # 软截断的刀口可能落在 assistant(tool_calls)+tool 原子对中间（selected
+        # 以无主 tool 消息开头），且 compact 直接读盘、不经任务加载路径的
+        # patch_dangling_tool_calls——两种残留都会被 API 以 400 拒绝
+        # （DeepSeek: Messages with role 'tool' must be a response to a
+        # preceding message with 'tool_calls'），修复后再发。
+        selected = repair_tool_call_pairs(selected)
+        if not selected:
+            return None
         instruction = (
             "请将以上全部对话历史压缩为一段精炼的中文摘要，作为后续工作的背景说明：\n"
             "保留已完成的决策与结论、修改过的文件清单、关键发现与未完成的任务，"

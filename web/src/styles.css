@@ -6929,3 +6929,79 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   word-break: break-all;
 }
 
+
+/* ============================================================
+   模型元数据提醒横幅（启动检查：缓存缺失 / 过期 >7 天）
+   ============================================================ */
+
+.meta-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: color-mix(in srgb, var(--yellow) 12%, var(--bg-1));
+  border-bottom: 1px solid color-mix(in srgb, var(--yellow) 35%, var(--border));
+  font-size: 12px;
+  color: var(--text-0);
+  user-select: none;
+}
+
+.meta-notice-icon {
+  color: var(--yellow);
+  font-size: 13px;
+}
+
+.meta-notice-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-notice-sync {
+  flex-shrink: 0;
+  padding: 3px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.meta-notice-sync:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.meta-notice-sync:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.meta-notice-error {
+  flex-shrink: 0;
+  max-width: 320px;
+  color: var(--red);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-notice-close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.meta-notice-close:hover {
+  color: var(--text-0);
+}

@@ -11,9 +11,10 @@
 供应商下价格差异极大，必须按供应商区分）。
 
 本模块：
-1. 启动时尝试拉取 models.dev 数据并缓存到配置目录；
+1. 数据缓存在配置目录（models.dev.json），由用户手动同步（refresh()）更新；
 2. 查询时按 provider + 模型 ID 精确匹配缓存；命中失败再回退内置静态表；
-3. 网络失败静默降级，离线可用。
+3. 网络失败静默降级，离线可用：**过期缓存照用**——TTL 只决定「要不要联网
+   刷新」，不决定「数据是否可用」，见 `_load_cache`。
 """
 from __future__ import annotations
 
@@ -114,30 +115,58 @@ class ModelMetaService:
         self._index: Optional[Dict[str, dict]] = None
         # 模型名 → 官方厂商条目的回退索引（懒构建，cache 重载时置空重建）
         self._official_idx: Optional[Dict[str, dict]] = None
+        # 最近一次联网同步的失败原因（成功时清空）：sync_pricing 透传给前端，
+        # 「同步失败」不允许只报 ok=false 不报原因（用户无从判断是网络还是接口）
+        self.last_error: str = ""
 
     # ------------------------------------------------------------ 加载/刷新
 
     def refresh(self, force: bool = False) -> bool:
         """刷新 models.dev 元数据（缓存未过期时纯本地读盘，不发网络请求）。
 
-        TTL 挡板：磁盘缓存存在且 mtime 距今不足 CACHE_TTL_SECONDS → 直接加载
-        缓存并返回，网络零开销；过期或缺失才真正拉取（失败静默降级内置表）。
+        TTL 挡板只针对**联网**：磁盘缓存存在且 mtime 距今不足 CACHE_TTL_SECONDS
+        → 直接加载缓存并返回，网络零开销；过期或缺失才真正拉取。
 
         force=True：跳过 TTL 挡板，强制联网拉取。**用户手动点「同步」必须走这条**
         —— 否则缓存未满 7 天时点了同步也只返回旧缓存，时间戳永远停在旧值
         （表象：「怎么点都显示 6 天前」）。
+
+        拉取失败（离线/接口异常）时不清空已有数据：过期缓存继续兜底服务，
+        详见 `_fallback_to_stale`。
         """
         if not force and self.cache_path and os.path.exists(self.cache_path):
-            try:
-                fresh = time.time() - os.path.getmtime(self.cache_path) <= CACHE_TTL_SECONDS
-            except OSError:
-                fresh = False
-            if fresh:
-                cached = self._load_cache()
-                if cached:
-                    self._index = cached
+            if self._cache_age_seconds() <= CACHE_TTL_SECONDS:
+                # 新鲜缓存：纯读盘，不发网络请求
+                if self._load_cache(allow_stale=False):
                     return True
-        return self._fetch_and_store()
+        ok = self._fetch_and_store()
+        if not ok:
+            self._fallback_to_stale()
+        return ok
+
+    def _cache_age_seconds(self) -> float:
+        """缓存文件年龄（秒）；无文件 / 读不到 mtime → inf（视为极旧）。"""
+        if not self.cache_path:
+            return float("inf")
+        try:
+            return max(0.0, time.time() - os.path.getmtime(self.cache_path))
+        except OSError:
+            return float("inf")
+
+    def _fallback_to_stale(self) -> bool:
+        """联网失败后的兜底：过期缓存照用，只是把「数据很旧」写进日志。
+
+        返回值恒为 False——调用方（设置页「同步」按钮）要靠它区分「同步成功 /
+        失败」，而缓存年龄另有 status().age_seconds 暴露给前端提示。这里只保证
+        同步失败**不会**连带把窗口/价格解析打回静态兜底值。
+        """
+        stale = self._load_cache()
+        if stale:
+            logger.warning(
+                "[ModelMeta] 同步失败，改用 %.1f 天前的缓存兜底（%d 个模型）",
+                self._cache_age_seconds() / 86400, len(stale),
+            )
+        return False
 
     def _fetch_and_store(self) -> bool:
         """真正拉取 models.dev 全量数据并落盘缓存。失败返回 False。"""
@@ -146,26 +175,42 @@ class ModelMetaService:
 
             resp = httpx.get(MODELS_DEV_URL, timeout=10)
             if resp.status_code != 200:
+                self.last_error = f"models.dev 返回 HTTP {resp.status_code}"
                 logger.warning("[ModelMeta] models.dev 返回 HTTP %s", resp.status_code)
                 return False
             data = resp.json()
             if not isinstance(data, dict):
+                self.last_error = "models.dev 返回了非预期的数据结构"
                 return False
             index = _flatten(data)
             if not index:
+                self.last_error = "models.dev 返回数据为空"
                 return False
             self._index = index
             if self.cache_path:
                 os.makedirs(os.path.dirname(self.cache_path) or ".", exist_ok=True)
                 with open(self.cache_path, "w", encoding="utf-8") as f:
                     json.dump(index, f, ensure_ascii=False)
+            self.last_error = ""
             logger.info("[ModelMeta] models.dev 同步成功 (%s 个模型)", len(index))
             return True
-        except Exception:
-            logger.warning("[ModelMeta] models.dev 同步失败，使用内置静态表")
+        except Exception as exc:
+            self.last_error = f"网络请求失败: {exc}"[:200]
+            logger.warning("[ModelMeta] models.dev 同步失败，回退过期缓存/内置静态表")
             return False
 
-    def _load_cache(self) -> Optional[Dict[str, dict]]:
+    def _load_cache(self, allow_stale: bool = True) -> Optional[Dict[str, dict]]:
+        """读盘索引。allow_stale=False 时把过期缓存当作不存在（仅刷新判断用）。
+
+        默认 allow_stale=True：**过期缓存照用**。窗口/价格这类查询是「查得到就
+        用、查不到才回退内置静态表」，旧数据远好过没有——TTL 只该决定「要不要
+        联网刷新」，不该成为「数据凭空消失」的开关。
+
+        历史实现把过期缓存一并丢弃，于是缓存满 7 天的那一刻：上下文窗口从
+        models.dev 的真实值静默掉回供应商默认（自定义中转 128K）、单价从真实价
+        掉回配置回退价，而设置页只显示「0 个模型」，用户看到的是长会话突然报
+        `Exceeded token budget`。这里改为「过期仍用 + 记一条 warning」。
+        """
         if self._index is not None:
             return self._index
         if not self.cache_path or not os.path.exists(self.cache_path):
@@ -173,10 +218,17 @@ class ModelMetaService:
         try:
             with open(self.cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if time.time() - os.path.getmtime(self.cache_path) > CACHE_TTL_SECONDS:
-                return None
             if not isinstance(data, dict):
                 return None
+            age = self._cache_age_seconds()
+            if age > CACHE_TTL_SECONDS:
+                if not allow_stale:
+                    return None
+                logger.warning(
+                    "[ModelMeta] 缓存已过期 %.1f 天（TTL %.0f 天），"
+                    "仍作为兜底使用；建议在设置页手动同步",
+                    age / 86400, CACHE_TTL_SECONDS / 86400,
+                )
             self._index = _to_index(data)
             self._official_idx = None  # 索引更新 → 模型名回退索引失效重建
             return self._index
@@ -269,7 +321,12 @@ class ModelMetaService:
         return _entry_pricing(self._official_model_index().get(self._model_basename(model_id)))
 
     def status(self) -> Dict[str, Any]:
-        """缓存状态（设置页展示同步情况用；只读盘，不发网络请求）。"""
+        """缓存状态（设置页展示同步情况用；只读盘，不发网络请求）。
+
+        过期缓存同样算「cached=True」并给出真实 age_seconds——前端据 age 与
+        MODEL_META_TTL 判断是否提示「建议同步」；查询侧继续用这份数据服务
+        （见 `_load_cache`）。
+        """
         index = self._load_cache()
         age: Optional[float] = None
         if self.cache_path and os.path.exists(self.cache_path):

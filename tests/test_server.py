@@ -447,3 +447,35 @@ async def test_model_meta_refresh_per_official_source(live_client, monkeypatch):
     assert "deepseek" in body["error"]
     assert "pricing" in body
 
+
+async def test_model_meta_refresh_failure_reports_reason(live_client, monkeypatch):
+    """models_dev 同步失败必须带原因（回归：只报 ok=false 不报 error）。
+
+    用户「每天点同步还是过期」的报障里，失败静默是排查黑洞：现在
+    ModelMetaService.last_error 透传到响应，前端横幅能显示具体原因。
+    """
+    c, app, _server = live_client
+    svc = app.llm_registry.meta_service
+    monkeypatch.setattr(svc, "refresh", lambda force=False: False)
+    monkeypatch.setattr(svc, "last_error", "网络请求失败: mocked timeout", raising=False)
+
+    r = await c.post("/api/model-meta/refresh", json={"source": "models_dev"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "网络请求失败: mocked timeout"
+
+
+async def test_model_meta_refresh_failure_without_reason_falls_back(live_client, monkeypatch):
+    """last_error 为空（如 conftest 短路的 _fetch_and_store）时给通用提示，不留空。"""
+    c, app, _server = live_client
+    svc = app.llm_registry.meta_service
+    monkeypatch.setattr(svc, "refresh", lambda force=False: False)
+
+    r = await c.post("/api/model-meta/refresh", json={"source": "models_dev"})
+
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]  # 非空：网络异常或接口超时的兜底文案
+

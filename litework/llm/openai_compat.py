@@ -90,12 +90,28 @@ class OpenAICompatAdapter(BaseLLMAdapter):
             expand_header_templates(self.custom_headers),
         )
 
+    @staticmethod
+    def _wire_message(m: Message) -> Dict[str, Any]:
+        """Message → OpenAI wire 格式：剔除 lite-work 内部字段。
+
+        `name`（tool 消息的工具名打标）是 OpenAI 规范里已废弃的可选字段，
+        多数供应商容忍，但部分网关直接拒绝（opencode zen go 实测 HTTP 400：
+        `messages[N]: "name" is not supported by this endpoint`）；tool 消息
+        与 assistant(tool_calls) 的关联由 tool_call_id 承担，wire 上不需要
+        name。`agent` 是会话内 Agent 打标，同样不该出网。落盘/事件仍走
+        Message.to_dict()，不受影响。
+        """
+        d = m.to_dict()
+        d.pop("name", None)
+        d.pop("agent", None)
+        return d
+
     def _build_payload(
         self, messages: List[Message], tools: List[ToolDefinition]
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model,
-            "messages": [m.to_dict() for m in messages],
+            "messages": [self._wire_message(m) for m in messages],
             "stream": True,
             "stream_options": {"include_usage": True},
         }

@@ -1029,6 +1029,11 @@ class AgentLoop:
             body = [m for m in head if m.role != "system"]
             if not body:
                 return None
+            # 与主循环 payload 同口径：摘要请求不经 repair_tool_call_pairs，
+            # 历史残留的悬空/无主 tool 对会直接 400（整次压缩失败回退裁剪）
+            body = repair_tool_call_pairs(body)
+            if not body:
+                return None
             # 超长保护：head 是已发送过的缓存内容，逐字转发通常更便宜；
             # 但极端长会话仍需截断，避免单次请求超限
             total_chars = sum(len(m.content or "") for m in body)

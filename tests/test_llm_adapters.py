@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from litework.core.events import TypedEventBus
-from litework.core.types import Message
+from litework.core.types import Message, ToolCall
 from litework.llm.anthropic import AnthropicAdapter
 from litework.llm.base import RETRYABLE_STATUS
 from litework.llm.openai_compat import OpenAICompatAdapter
@@ -119,6 +119,40 @@ async def test_openai_error_classification():
     with pytest.raises(Exception) as ei:
         await adapter.chat_stream([Message(role="user", content="hi")], [])
     assert ei.value.retryable is False
+
+
+async def test_openai_wire_payload_strips_internal_fields():
+    """wire 消息不得携带 lite-work 内部字段（name / agent）。
+
+    回归（用户报障）：tool 消息带 name 打标是 OpenAI 已废弃的可选字段，
+    opencode zen go 网关直接 HTTP 400 `messages[N]: "name" is not supported
+    by this endpoint`；agent 是会话内打标，同样不该出网。
+    tool 消息的关联由 tool_call_id 承担，必须保留。
+    """
+    captured = {}
+
+    def handler(request):
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"content": "ok"}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _openai_adapter(handler)
+    msgs = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content=None, agent="build",
+                tool_calls=[ToolCall(id="c1", name="read_file", arguments="{}")]),
+        Message(role="tool", name="read_file", tool_call_id="c1",
+                content="data", agent="build"),
+    ]
+    _, _, _ = await adapter.chat_stream(msgs, [])
+
+    wire = captured["payload"]["messages"]
+    assert all("name" not in m for m in wire)
+    assert all("agent" not in m for m in wire)
+    assert wire[2]["tool_call_id"] == "c1"
+    # 源对象不受影响：落盘/事件仍带 name/agent（会话回放、观察打包要用）
+    assert msgs[2].name == "read_file" and msgs[2].agent == "build"
 
 
 # ---------------------------------------------------------------- Anthropic

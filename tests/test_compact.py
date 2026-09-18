@@ -176,3 +176,74 @@ def test_compact_then_task_stats_no_keyerror(tmp_path):
     assert stats["prompt_tokens"] == 1000
     assert stats["compression_count"] == 1
     assert stats["last_prompt_tokens"] == result["after_tokens"]
+
+
+def test_compact_summary_repairs_orphan_tool_after_truncation(tmp_path, monkeypatch):
+    """head 超长软截断的刀口落在 assistant(tool_calls)+tool 原子对中间 →
+    selected 以无主 tool 消息开头，必须先修复再发。
+
+    回归（用户报障，DeepSeek 400）：Messages with role 'tool' must be a
+    response to a preceding message with 'tool_calls'。
+    """
+    monkeypatch.setattr("litework.app.MAX_SUMMARY_CHARS", 100)
+
+    sent = {}
+
+    class SpyAdapter(RecordingAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            sent["roles"] = [m.role for m in messages]
+            return await super().chat_stream(messages, tools, events)
+
+    adapter = SpyAdapter("摘要")
+    app = _make_app(tmp_path, adapter)
+    sid = "s-trunc"
+    from litework.core.types import ToolCall
+    msgs = [Message(role="system", content="sys"), Message(role="user", content="q0"),
+            # 超长 tool 结果：截断保留最近消息时，刀口落在 c1 与 tool 结果之间
+            Message(role="assistant", content=None,
+                    tool_calls=[ToolCall(id="c1", name="read_file", arguments="{}")]),
+            Message(role="tool", content="x" * 600, tool_call_id="c1"),
+            Message(role="user", content="q1"), Message(role="assistant", content="a1")]
+    for i in (2, 3):  # 轮2/3 = tail（keep_turns=2）
+        msgs.append(Message(role="user", content=f"q{i}"))
+        msgs.append(Message(role="assistant", content=f"a{i}"))
+    app.session_store.save(sid, msgs)
+
+    result = asyncio.run(app.compact_session(sid))
+
+    assert result["ok"] is True
+    # 修复后发给 LLM 的请求不含无主 tool 消息（修复前 roles 以 tool 开头）
+    assert "tool" not in sent["roles"][1:]
+    assert sent["roles"][0] == "system"
+
+
+def test_compact_summary_sets_header_context(tmp_path):
+    """手动压缩直连 adapter：必须注入 header_context，让 custom_headers 的
+    {conversation_id} 模板展开（否则会话亲和头被丢弃，opencode zen go 实测
+    400 MissingSessionID）；压缩保存也不得覆盖已生成的 conversation_ids。
+    """
+    from litework.llm.openai_compat import OpenAICompatAdapter
+
+    adapter = OpenAICompatAdapter(
+        api_key="k", model="m", provider_id="custom_x",
+        custom_headers={"x-opencode-session": "{conversation_id}"},
+    )
+    captured = {}
+
+    async def fake_stream(messages, tools, events=None):
+        captured["headers"] = adapter._headers()
+        return "摘要", [], None
+
+    adapter.chat_stream = fake_stream
+    app = _make_app(tmp_path, adapter)
+    sid = "s-hdr"
+    app.session_store.save(sid, _seed_messages())
+
+    result = asyncio.run(app.compact_session(sid))
+
+    assert result["ok"] is True
+    cid = captured["headers"].get("x-opencode-session")
+    assert cid, "会话亲和头必须展开为非空值"
+    # 压缩落盘后 conversation_ids 仍在（不被开头的旧 metadata 覆盖）
+    snap = app.session_store.load(sid)
+    assert snap.metadata.get("conversation_ids", {}).get("custom_x") == cid

@@ -191,6 +191,13 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  // 模型元数据提醒横幅：启动时检查一次，缓存缺失/过期（>7 天）就顶栏提示
+  // 「立即同步」——过期缓存虽仍作兜底（不会静默掉回 128K），但窗口/定价可能
+  // 失真，必须在设置页之外看得见的地方提醒，而不是查不到就默默用默认值
+  const [metaNotice, setMetaNotice] = useState<{ cached: boolean; ageDays: number } | null>(null);
+  const [metaNoticeClosed, setMetaNoticeClosed] = useState(false);
+  const [metaSyncing, setMetaSyncing] = useState(false);
+  const [metaSyncError, setMetaSyncError] = useState<string | null>(null);
   // 「项目」页签状态：最近项目列表 + 二级视图（list=项目列表 / sessions=项目内会话）
   const [recentProjects, setRecentProjects] = useState<import("./types").RecentProject[]>([]);
   const [projectsView, setProjectsView] = useState<"list" | "sessions">("list");
@@ -552,6 +559,41 @@ export default function App() {
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  // 模型元数据状态检查（启动一次）：缺失/过期 → 顶部横幅提醒。失败静默——
+  // 后端不可达时崩溃屏已兜底，横幅不该抢优先级。
+  useEffect(() => {
+    let cancelled = false;
+    api.pricingStatus()
+      .then((ps) => {
+        if (cancelled) return;
+        const md = ps.models_dev;
+        if (!md?.stale) return;
+        setMetaNotice({
+          cached: !!md.cached,
+          ageDays: Math.floor((md.age_seconds ?? 0) / 86400),
+        });
+      })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const syncModelMeta = useCallback(async () => {
+    setMetaSyncing(true);
+    setMetaSyncError(null);
+    try {
+      const res = await api.syncPricing("models_dev");
+      if (!res.ok) {
+        setMetaSyncError(res.error || "同步失败，请检查网络后重试");
+        return;
+      }
+      setMetaNotice(null);
+    } catch (e) {
+      setMetaSyncError((e as Error).message);
+    } finally {
+      setMetaSyncing(false);
+    }
+  }, []);
 
   // Alt+数字 选中对应 primary agent；Tab 键循环切换 agent
   useEffect(() => {
@@ -2495,6 +2537,31 @@ export default function App() {
       }
     >
       <div className="drag-region" />
+      {metaNotice && !metaNoticeClosed && (
+        <div className="meta-notice" role="status">
+          <span className="meta-notice-icon">ⓘ</span>
+          <span className="meta-notice-text">
+            {metaNotice.cached
+              ? `模型元数据已 ${metaNotice.ageDays} 天未同步（超过 7 天保鲜期），上下文窗口与定价可能失真。`
+              : "模型元数据尚未同步，上下文窗口将按供应商默认值（通常 128K）估算。"}
+          </span>
+          <button
+            className="meta-notice-sync"
+            disabled={metaSyncing}
+            onClick={() => void syncModelMeta()}
+          >
+            {metaSyncing ? "同步中…" : "立即同步"}
+          </button>
+          {metaSyncError && <span className="meta-notice-error">{metaSyncError}</span>}
+          <button
+            className="meta-notice-close"
+            onClick={() => setMetaNoticeClosed(true)}
+            title="本次运行不再提醒"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {sidebarCollapsed && (
         <button className="panel-restore-bar left" onClick={() => setSidebarCollapsed(false)} title="展开侧边栏">
           <span className="restore-icon">▶</span>

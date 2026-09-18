@@ -70,8 +70,19 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     @asynccontextmanager
     async def _lifespan(_fast_app: FastAPI):
         # 模型元数据与官方定价：**启动不联网**。查询侧只读本地缓存（models.dev
-        # / 官方定价 / 内置快照），任何时刻都不阻塞启动；缓存过期由前端提示
-        # 「建议同步」，用户在设置 → 综合设置里手动触发（见 meta 路由）。
+        # / 官方定价 / 内置快照），任何时刻都不阻塞启动；缓存过期/缺失由前端
+        # 启动横幅提示「立即同步」，用户确认后才联网（见 meta 路由）。
+        # 这里只记一条日志快照——「窗口掉回 128K」类报障可直接从日志定位。
+        md = app.model_meta_status()
+        age = md.get("age_seconds")
+        if not md.get("cached"):
+            logger.warning(
+                "[Startup] models.dev 元数据无缓存：上下文窗口将按供应商默认值"
+                "（自定义中转通常 128K）估算，建议在设置页同步")
+        elif age is not None and age > 7 * 86400:
+            logger.warning(
+                "[Startup] models.dev 缓存已过期 %.1f 天（仍作兜底使用），"
+                "建议在设置页同步", age / 86400)
         await app.mcp_manager.start()
         try:
             yield
