@@ -220,6 +220,42 @@ def use_builtin_skill_python() -> Optional[Path]:
 BUILTIN_SKILL_MARKER = ".litework-builtin"
 
 
+def _skill_file_version(skill_dir: Path) -> str:
+    """读 SKILL.md frontmatter 的 version（无则空串，供升级比较用）。"""
+    try:
+        text = (skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return str(parse_frontmatter(text).get("version") or "").strip()
+
+
+def _should_upgrade_builtin_skill(builtin_dir: Path, target: Path, marker: Path) -> bool:
+    """app 安装的（带 marker）技能是否需要被内置版覆盖。
+
+    以**技能自身 semver** 为准，避免应用升级把用户经社区更新过的技能降级回
+    内置旧版（marker 只记录安装时的应用版本，不代表技能版本）：
+    - 内置版本更新 → 覆盖；
+    - 目标版本更高（社区已更新）→ 不覆盖；
+    - 版本相同 → 仅当应用版本变化时刷新一次内容（幂等，且不会降级）；
+    - 任一方缺版本号 → 退回旧的「应用版本变化」判定。
+    """
+    from litework import __version__
+    from .plugin_loader import semver_compare
+
+    new, old = _skill_file_version(builtin_dir), _skill_file_version(target)
+    if new and old:
+        cmp = semver_compare(new, old)
+        if cmp > 0:
+            return True
+        if cmp < 0:
+            return False
+    # 版本相同或无法比较：沿用应用版本标记（应用升级时刷新内容）
+    try:
+        return marker.read_text(encoding="utf-8").strip() != __version__
+    except OSError:
+        return True
+
+
 def sync_builtin_skills_to_user() -> int:
     """把内置技能同步安装到 ~/.agents/skills/（用户级标准位置）。
 
@@ -253,11 +289,8 @@ def sync_builtin_skills_to_user() -> int:
             if not target.is_dir():
                 need_install = True
             elif marker.is_file():
-                # 我们装的：版本变化才升级
-                try:
-                    need_install = marker.read_text(encoding="utf-8").strip() != __version__
-                except OSError:
-                    need_install = True
+                # 我们装的：按「技能自身 semver」决定是否覆盖（见 helper 说明）
+                need_install = _should_upgrade_builtin_skill(skill_dir, target, marker)
             # 用户自有同名技能（无标记）→ 不覆盖
             if not need_install:
                 continue

@@ -224,6 +224,36 @@ def test_sync_builtin_skills_to_user(tmp_path, monkeypatch):
     assert str(user_root / "diagram-to-office") in result
 
 
+def test_sync_does_not_downgrade_community_updated_skill(tmp_path, monkeypatch):
+    """应用升级不得把用户经社区更新过的（带 marker）技能降级回内置旧版。
+
+    marker 只记录安装时的应用版本，比较应以技能自身 frontmatter version 为准。
+    """
+    from litework.tools import skills as skills_mod
+
+    assert skills_mod._builtin_skills_dir() is not None
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    assert skills_mod.sync_builtin_skills_to_user() >= 1
+
+    target = tmp_path / ".agents" / "skills" / "diagram-to-office"
+    # 模拟：用户经社区更新到更高版本，且 marker 停留在旧应用版本
+    (target / "SKILL.md").write_text(
+        "---\nname: diagram-to-office\ndescription: 社区新版\nversion: \"99.0.0\"\n---\n社区内容",
+        encoding="utf-8")
+    (target / ".litework-builtin").write_text("0.0.1", encoding="utf-8")
+
+    assert skills_mod.sync_builtin_skills_to_user() == 0          # 不降级
+    assert "社区内容" in (target / "SKILL.md").read_text(encoding="utf-8")
+
+    # 反向：内置版本更高 → 正常覆盖升级
+    (target / "SKILL.md").write_text(
+        "---\nname: diagram-to-office\ndescription: 旧版\nversion: \"0.0.1\"\n---\n旧内容",
+        encoding="utf-8")
+    assert skills_mod.sync_builtin_skills_to_user() >= 1
+    assert "旧内容" not in (target / "SKILL.md").read_text(encoding="utf-8")
+
+
 
 
 def test_parse_frontmatter_flat_and_nested():
