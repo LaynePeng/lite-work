@@ -100,14 +100,6 @@ export default function ProjectPicker({
     return () => document.removeEventListener("mousedown", close);
   }, [drivesOpen]);
 
-  // 点击下拉外部自动收起盘符菜单
-  useEffect(() => {
-    if (!drivesOpen) return;
-    const close = () => setDrivesOpen(false);
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [drivesOpen]);
-
   const breadcrumb = pathSegments(current || "");
   const jumpTo = (idx: number) => {
     const segs = breadcrumb.slice(0, idx + 1);
