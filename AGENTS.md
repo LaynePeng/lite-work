@@ -20,8 +20,10 @@
 | --- | --- | --- |
 | **Windows** | `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1` | **唯一正确的 Windows 打包入口**：sync-version → web 构建 → PyInstaller → NSIS，产出 `release/lite-work Setup X.Y.Z.exe` |
 | Windows 清缓存 | `... build-windows.ps1 -Clean` | 清 PyInstaller 分析缓存（干净出包用） |
+| **Windows (CN)** | `powershell -ExecutionPolicy Bypass -File scripts/build-windows-cn.ps1` | 同 Windows 但自动启用 npmmirror / 清华 PyPI 镜像（本地 CN 环境用，CI 不受影响） |
 | **macOS** | `./scripts/build-macos.sh` | **macOS 一键打包入口**：依赖检查 → web 构建 → `package.mjs`（sync-version → 图标 → PyInstaller → .app）→ spawn-helper 权限修复，产出 `release/lite-work-<版本>-<arch>.dmg` |
 | macOS 变体 | `./scripts/build-macos.sh --clean` / `--skip-web` / `--skip-deps` | 清 PyInstaller 缓存 / 跳过前端构建 / 跳过依赖检查 |
+| **macOS (CN)** | `./scripts/build-macos-cn.sh` | 同 macOS 但自动启用国内镜像（本地 CN 环境用，CI 不受影响） |
 | macOS 底层 | `npm run package`（= `scripts/package.mjs`） | 供 `build-macos.sh` 内部调用的 **macOS 专用**流程（iconutil / hdiutil / DMG / .app）——**在 Windows 上运行必失败，也不要直接调它**，永远从 `build-macos.sh` 进 |
 | 仅后端 | `node scripts/package-backend.mjs` | PyInstaller --onedir，输出 `release/backend/` |
 | 仅前端 | `npm run build:web` | tsc + vite，输出 `web/dist/` |
