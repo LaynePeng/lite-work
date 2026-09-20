@@ -26,6 +26,12 @@
   也刻意不因「Agent 多于 1 个」提示 `Shift+Tab`（默认就有 4 个 Agent，那等于把安全提示永久挤掉）。
 
 ### 修复
+- **对话气泡内超长不可断词溢出气泡**：`.md` 规则块缺 `overflow-wrap`，超长 URL、`?token=…`
+  这类无断行点的长串、长英文单词、行内 `code` 长路径都会直接撑破气泡背景（`.bubble` 的
+  `max-width` 只约束盒子，不约束内容；实测溢出 636px / 468px / 317px）。现于 `.md` 加
+  `overflow-wrap: anywhere`——用 `anywhere` 而非 `break-word`，因为前者参与 min-content
+  计算，flex 子项（`.bubble`）才真的能收缩。代码块（`pre` 仍 `white-space: pre` 横向滚动）
+  与表格（`th,td` 仍 `nowrap`、表格整体 `overflow-x: auto`）行为不变。
 - **内置终端中文乱码（zsh 把多字节字符转义成 `\M-^X`）**：从 Finder/Dock 启动的 app 不继承
   shell 环境，`LANG` 为空；而 node-pty 起的是**非登录** shell，`/etc/zprofile` 里那句
   `LANG=C.UTF-8`（只对登录 shell 生效）不会执行 —— `LC_CTYPE` 落到 `US-ASCII`，zsh 会把

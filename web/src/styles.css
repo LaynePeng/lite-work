@@ -1815,6 +1815,13 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 
 /* Markdown 渲染 */
+.md {
+  /* 超长不可断词（URL、`?token=…`、长路径、长英文单词）默认没有断行点，会直接撑破
+     气泡背景（.bubble 的 max-width 只约束盒子，不约束内容）。用 anywhere 而非
+     break-word：前者参与 min-content 计算，flex 子项（.bubble）才真的能收缩。
+     注意 pre / th,td 有 white-space:pre / nowrap，不受影响，仍按原样横向滚动。 */
+  overflow-wrap: anywhere;
+}
 .md > *:first-child {
   margin-top: 0;
 }
