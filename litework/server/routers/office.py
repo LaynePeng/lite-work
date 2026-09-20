@@ -65,7 +65,10 @@ def _collect_deliverables(base: str, rel_base: str, source: str) -> list:
         parts = [] if rel_root == "." else rel_root.split(_os.sep)
         category = parts[0] if parts else "未分类"
         for name in files:
-            if name.startswith(".") or name in _SKIP_FILES:
+            # 隐藏文件、目录索引，以及 Office 打开文档时产生的锁/临时文件
+            # （Word/Excel/PPT 的 `~$xxx.docx`；LibreOffice 的 `.~lock.xxx#` 已被 `.` 规则覆盖）。
+            # 这类文件是「文档正被打开」的副产物，不是交付物，混进收件箱会造成重复条目。
+            if name.startswith(".") or name.startswith("~$") or name in _SKIP_FILES:
                 continue
             ext = _os.path.splitext(name)[1].lower()
             if ext not in _DELIVERABLE_EXTS:

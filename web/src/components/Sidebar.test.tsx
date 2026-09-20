@@ -4,7 +4,7 @@
 // 产出物 Tab：右键菜单（重命名 / 删除）与行内重命名
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./Sidebar";
 import { api } from "../api";
 
@@ -102,6 +102,89 @@ describe("Sidebar · 产出物右键菜单", () => {
     await user.click(screen.getByText(/删除/));
     await waitFor(() => expect(api.deleteFile).toHaveBeenCalledWith("素材/报表.xlsx"));
     confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------- 产出物单击打开
+
+describe("Sidebar · 产出物单击打开（与文件树同规则）", () => {
+  const DOCX = {
+    name: "交底书.docx",
+    path: "产出物/交底书.docx",
+    source: "outputs",
+    size: 2048,
+    mtime: "2026-01-01 10:00",
+  };
+
+  const mockOutputs = (items: unknown[]) =>
+    (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      groups: [{ name: "产出物", source: "outputs", items }],
+      total: items.length,
+    });
+
+  const mockPreview = () =>
+    (api.filePreview as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: "x", kind: "text", text: "a,b", truncated: false,
+    });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("非文本类（.docx）单击 → 调系统默认程序，不走内置预览", async () => {
+    mockOutputs([DOCX]);
+    mockPreview();
+    const openFile = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("liteWork", { openFile });
+
+    const user = userEvent.setup();
+    render(<Sidebar {...baseProps} />);
+    await user.click(await screen.findByTitle("产出物/交底书.docx"));
+
+    await waitFor(() => expect(openFile).toHaveBeenCalledWith("产出物/交底书.docx"));
+    expect(api.filePreview).not.toHaveBeenCalled();
+  });
+
+  it("文本类（.csv）单击 → 走内置预览，不调系统程序", async () => {
+    const csv = { ...DOCX, name: "数据.csv", path: "产出物/数据.csv" };
+    mockOutputs([csv]);
+    mockPreview();
+    const openFile = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("liteWork", { openFile });
+
+    const user = userEvent.setup();
+    render(<Sidebar {...baseProps} />);
+    await user.click(await screen.findByTitle("产出物/数据.csv"));
+
+    await waitFor(() => expect(api.filePreview).toHaveBeenCalledWith("产出物/数据.csv"));
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("浏览器模式（无 bridge）→ 回落内置预览", async () => {
+    mockOutputs([DOCX]);
+    mockPreview();
+
+    const user = userEvent.setup();
+    render(<Sidebar {...baseProps} />);
+    await user.click(await screen.findByTitle("产出物/交底书.docx"));
+
+    await waitFor(() => expect(api.filePreview).toHaveBeenCalledWith("产出物/交底书.docx"));
+  });
+
+  it("系统打开失败（非文本类）→ 提示，且不再回落内置预览", async () => {
+    mockOutputs([DOCX]);
+    mockPreview();
+    const openFile = vi.fn(async () => ({ ok: false, error: "没有关联程序" }));
+    vi.stubGlobal("liteWork", { openFile });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+
+    const user = userEvent.setup();
+    render(<Sidebar {...baseProps} />);
+    await user.click(await screen.findByTitle("产出物/交底书.docx"));
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining("没有关联程序")));
+    expect(api.filePreview).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
   });
 });
 

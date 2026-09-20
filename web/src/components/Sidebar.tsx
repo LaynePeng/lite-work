@@ -9,7 +9,7 @@ import AppIcon from "./AppIcon";
 import TerminalPanel from "./TerminalPanel";
 import type { OutputItem, RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../types";
 import { baseName } from "../lib/path";
-import { isTextLikePath, SYSTEM_FIRST_EXT } from "../lib/fileOpen";
+import { isTextLikePath, resolveOpenTarget } from "../lib/fileOpen";
 
 export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
 
@@ -440,14 +440,19 @@ function OutputPreview({ revision }: { revision: number }) {
   }, [revision, refresh]);
 
   const openPreview = useCallback(async (path: string, opts?: OpenFileOptions) => {
-    // markdown：桌面端优先系统默认程序（与文件树同规则）；失败/浏览器静默回退内置预览
+    // 与文件树同规则（resolveOpenTarget）：markdown 与非文本类（docx/xlsx/pptx/pdf/图片…）
+    // 桌面端优先系统默认程序，与右键「用系统默认程序打开」一致。
+    // 失败时——文本类静默回退内置预览；非文本类明确报错（内置预览也渲染不了它们）。
+    // 浏览器模式无 bridge：非文本类落到下面的内置预览（图片/PDF 可正常渲染）。
     if (!opts?.forceBuiltin) {
-      const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
-      if (SYSTEM_FIRST_EXT.has(ext)) {
-        const bridge = window.liteWork;
-        if (bridge?.openFile) {
-          const r = await bridge.openFile(path);
-          if (r.ok) return;
+      const bridge = window.liteWork;
+      const target = resolveOpenTarget(path, { hasBridge: !!bridge?.openFile });
+      if (target === "system" && bridge?.openFile) {
+        const r = await bridge.openFile(path);
+        if (r.ok) return;
+        if (!isTextLikePath(path)) {
+          window.alert(`无法打开文件：${r.error ?? path}`);
+          return;
         }
       }
     }

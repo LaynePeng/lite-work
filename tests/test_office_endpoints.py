@@ -104,6 +104,26 @@ def test_outputs_inbox_groups_by_dir_and_keeps_latest_version(client_and_workspa
     assert [i["name"] for i in by_group["演示"]["items"]] == ["简报_v3.pptx"]
 
 
+def test_outputs_skips_office_lock_files(client_and_workspace):
+    """Office 打开文档时产生的 `~$xxx.docx` 锁文件不是交付物，不应混进收件箱。
+
+    这类文件带交付物扩展名（.docx/.xlsx…），若不按前缀过滤会被当成一份独立产出物
+    （版本号解析后基名为 `~$xxx`，与真实文件并列出现）。
+    """
+    client, ws = client_and_workspace
+    base = os.path.join(ws, "产出物")
+    _write(os.path.join(base, "交底书_v9.docx"), b"doc")
+    _write(os.path.join(base, "~$交底书_v9.docx"), b"lock")
+    _write(os.path.join(base, "报告", "报告_v2.xlsx"), b"xlsx")
+    _write(os.path.join(base, "报告", "~$报告_v2.xlsx"), b"lock")
+
+    body = client.get("/api/outputs").json()
+    names = {i["name"] for g in body["groups"] for i in g["items"]}
+    assert names == {"交底书_v9.docx", "报告_v2.xlsx"}
+    assert body["total"] == 2
+    assert all(not i["name"].startswith("~$") for g in body["groups"] for i in g["items"])
+
+
 def _write(path: str, data: bytes) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
