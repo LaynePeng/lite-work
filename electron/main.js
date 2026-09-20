@@ -554,8 +554,17 @@ ipcMain.handle("terminal-start", (event, cols = 100, rows = 24) => {
   if (!instance?.workspace) return { ok: false, error: "请先打开项目" };
   stopTerminal(event.sender.id);
   const shellName = process.platform === "win32" ? "powershell.exe" : (process.env.SHELL || "/bin/zsh");
+  // 终端 locale：从 Finder/Dock 启动的 app 不继承 shell 环境，LANG 为空；而 node-pty 起的是
+  // 「非登录」shell，/etc/zprofile 里那句 `LANG=C.UTF-8`（只对登录 shell 生效）不会执行，
+  // 于是 LC_CTYPE 落到 US-ASCII —— zsh 会把 prompt / 路径 / 输出里的多字节字符逐字节转义成
+  // `\M-^X` 字面量（中文直接变乱码且不可逆），各类工具的列宽计算也会错。
+  // 这里补一个 UTF-8 locale（仅当用户与系统都没设时），与 Terminal.app 的登录 shell 行为对齐。
+  const env = { ...process.env };
+  if (process.platform !== "win32" && !env.LANG && !env.LC_ALL) {
+    env.LANG = "C.UTF-8";
+  }
   const term = pty.spawn(shellName, [], {
-    name: "xterm-256color", cols, rows, cwd: instance.workspace, env: process.env,
+    name: "xterm-256color", cols, rows, cwd: instance.workspace, env,
   });
   const winId = event.sender.id;
   const sender = event.sender;

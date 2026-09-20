@@ -26,6 +26,12 @@
   也刻意不因「Agent 多于 1 个」提示 `Shift+Tab`（默认就有 4 个 Agent，那等于把安全提示永久挤掉）。
 
 ### 修复
+- **内置终端中文乱码（zsh 把多字节字符转义成 `\M-^X`）**：从 Finder/Dock 启动的 app 不继承
+  shell 环境，`LANG` 为空；而 node-pty 起的是**非登录** shell，`/etc/zprofile` 里那句
+  `LANG=C.UTF-8`（只对登录 shell 生效）不会执行 —— `LC_CTYPE` 落到 `US-ASCII`，zsh 会把
+  prompt / 路径 / 输出里的多字节字符**逐字节转义成 `\M-^X` 字面量**（不可逆），各类工具的
+  列宽计算也随之出错。现于 `terminal-start` 里补一个 UTF-8 locale（`LANG=C.UTF-8`，仅在
+  用户与系统都没设时），与 Terminal.app 的登录 shell 行为对齐。
 - **内置技能同步不再降级社区更新**：`sync_builtin_skills_to_user()` 的 `.litework-builtin`
   标记记录的是安装时的应用版本，应用升级时会用内置副本覆盖——若用户经社区更新过该技能，
   会被降回内置旧版。现改为按技能自身 `SKILL.md` 的 `version`（semver）比较：仅内置更新才
