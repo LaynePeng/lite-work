@@ -399,3 +399,101 @@ describe("QuestionBar（ask_user 非阻塞提问条）", () => {
     expect(onAnswer).toHaveBeenCalledWith("q1", "MySQL");
   });
 });
+
+// ---------------------------------------------------------------- 对话跳转
+
+describe("ChatView 对话跳转快捷键", () => {
+  function renderWithScroll() {
+    render(<ChatView {...baseProps} messages={makeMsgs()} streaming={null} />);
+    return hijackScrollMetrics(getScrollEl());
+  }
+
+  it("Ctrl+End / Ctrl+Alt+G 跳到末尾，Ctrl+G / Ctrl+Home 跳到开头", () => {
+    const scroll = renderWithScroll();
+
+    fireEvent.keyDown(window, { key: "End", code: "End", ctrlKey: true });
+    expect(scroll.top).toBe(1000);
+
+    fireEvent.keyDown(window, { key: "g", code: "KeyG", ctrlKey: true });
+    expect(scroll.top).toBe(0);
+
+    fireEvent.keyDown(window, { key: "g", code: "KeyG", ctrlKey: true, altKey: true });
+    expect(scroll.top).toBe(1000);
+
+    fireEvent.keyDown(window, { key: "Home", code: "Home", ctrlKey: true });
+    expect(scroll.top).toBe(0);
+  });
+
+  it("跳到开头后停止贴底，跳到末尾后恢复贴底", () => {
+    const messages = [{ role: "user", content: "请持续输出" }] as Msg[];
+    const chunk = (text: string) => ({
+      items: [{ type: "text" as const, id: "stream", content: text }],
+    });
+    const { rerender } = render(
+      <ChatView {...baseProps} messages={messages} streaming={chunk("一")} />
+    );
+    const scroll = hijackScrollMetrics(getScrollEl());
+
+    // 跳到开头 → 停止贴底
+    fireEvent.keyDown(window, { key: "Home", code: "Home", ctrlKey: true });
+    expect(scroll.top).toBe(0);
+
+    // 内容继续增长：仍停在顶部，不被拉回
+    rerender(<ChatView {...baseProps} messages={messages} streaming={chunk("一\n二")} />);
+    expect(scroll.top).toBe(0);
+
+    // 跳到末尾 → 恢复贴底
+    fireEvent.keyDown(window, { key: "End", code: "End", ctrlKey: true });
+    expect(scroll.top).toBe(1000);
+
+    // 内容再增长 → 继续跟随
+    rerender(<ChatView {...baseProps} messages={messages} streaming={chunk("一\n二\n三")} />);
+    expect(scroll.top).toBe(1000);
+  });
+
+  it("焦点在输入框内时不劫持 Ctrl+End / Ctrl+Home", () => {
+    const scroll = renderWithScroll();
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "End", code: "End", ctrlKey: true, bubbles: true, cancelable: true,
+    });
+    ta.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(false);
+    expect(scroll.top).toBe(0);
+    ta.remove();
+  });
+});
+
+describe("ChatView 贴底状态回调（驱动 Composer 提示）", () => {
+  it("上翻回调 false、回底回调 true，状态未变时不重复回调", () => {
+    const onStickChange = vi.fn();
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[{ role: "user", content: "请持续输出" }] as Msg[]}
+        streaming={null}
+        onStickChange={onStickChange}
+      />
+    );
+    const el = getScrollEl();
+    const scroll = hijackScrollMetrics(el);
+
+    // 上翻（距底部 300px > 阈值 48px）→ 非贴底
+    scroll.top = 300;
+    fireEvent.scroll(el);
+    expect(onStickChange).toHaveBeenLastCalledWith(false);
+
+    // 状态未变：不重复回调（避免高频滚动反复 setState）
+    onStickChange.mockClear();
+    fireEvent.scroll(el);
+    expect(onStickChange).not.toHaveBeenCalled();
+
+    // 滚回底部 → 贴底
+    scroll.top = 600;
+    fireEvent.scroll(el);
+    expect(onStickChange).toHaveBeenLastCalledWith(true);
+  });
+});

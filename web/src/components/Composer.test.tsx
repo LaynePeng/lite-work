@@ -245,3 +245,43 @@ describe("Composer · 长文本粘贴折叠为粘贴块", () => {
     expect(screen.queryByRole("button", { name: /粘贴内容/ })).not.toBeInTheDocument();
   });
 });
+
+describe("Composer · 状态驱动的快捷键提示", () => {
+  // 修饰键符号随平台而变（macOS ⌃ / 其他 Ctrl），故断言只匹配中文文案部分
+  it("默认（单标签、空闲）：显示安全策略提示", () => {
+    render(<Composer {...baseProps} tabCount={1} scrolledUp={false} />);
+    expect(screen.getByText(/工具执行受安全策略保护/)).toBeInTheDocument();
+  });
+
+  it("对话区被上翻：优先提示「回到最新」，且压过运行中的队列提示", () => {
+    render(<Composer {...baseProps} running tabCount={3} scrolledUp />);
+    expect(screen.getByText(/回到对话最新/)).toBeInTheDocument();
+    expect(screen.queryByText(/加入待发送队列/)).not.toBeInTheDocument();
+  });
+
+  it("多个标签页：提示标签页快捷键", () => {
+    render(<Composer {...baseProps} tabCount={3} scrolledUp={false} />);
+    expect(screen.getByText(/切换标签页/)).toBeInTheDocument();
+    expect(screen.queryByText(/工具执行受安全策略保护/)).not.toBeInTheDocument();
+  });
+
+  it("运行中：显示排队提示", () => {
+    render(<Composer {...baseProps} running tabCount={1} scrolledUp={false} />);
+    expect(screen.getByText(/加入待发送队列/)).toBeInTheDocument();
+  });
+
+  it("多 Agent 但单标签：仍回落安全提示（不因常态把安全提示挤掉）", () => {
+    render(
+      <Composer
+        {...baseProps}
+        tabCount={1}
+        scrolledUp={false}
+        agents={[
+          { id: "build", mode: "primary", description: "开发" } as never,
+          { id: "plan", mode: "primary", description: "规划" } as never,
+        ]}
+      />
+    );
+    expect(screen.getByText(/工具执行受安全策略保护/)).toBeInTheDocument();
+  });
+});

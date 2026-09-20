@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
-import Composer from "./components/Composer";
+import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PendingQueue from "./components/PendingQueue";
 import FileViewer from "./components/FileViewer";
@@ -247,6 +247,12 @@ export default function App() {
   }, []);
   const [draftModels, setDraftModels] = useState<Record<string, SessionModel | null>>({});
   const [draftReasoning, setDraftReasoning] = useState<Record<string, string>>({});
+
+  // 对话区是否被上翻（非贴底）：驱动 Composer 的状态化快捷键提示
+  const [chatScrolledUp, setChatScrolledUp] = useState(false);
+  const handleStickChange = useCallback((stick: boolean) => setChatScrolledUp(!stick), []);
+  // 切换标签页后重置，避免上一个标签的「上翻」状态残留成错误提示
+  useEffect(() => { setChatScrolledUp(false); }, [activeTabId]);
   // 新会话 tab（session 未创建）暂存的协作模式，首次发送创建 session 后写入
   const [draftCollabModes, setDraftCollabModes] = useState<Record<string, string | null>>({});
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
@@ -595,32 +601,6 @@ export default function App() {
     }
   }, []);
 
-  // Alt+数字 选中对应 primary agent；Tab 键循环切换 agent
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Alt+N：直接选中第 N 个 primary agent（build/plan/office/research → 1/2/3/4）
-      if (e.altKey && !e.ctrlKey && !e.metaKey && /^[1-9]$/.test(e.key)) {
-        const primary = agents.filter((a) => a.mode !== "subagent");
-        const idx = Number(e.key) - 1;
-        if (idx >= primary.length) return; // 超出 primary 数量：不响应
-        e.preventDefault();
-        setCurrentAgent(primary[idx].id);
-        return;
-      }
-      if (e.key !== "Tab") return;
-      e.preventDefault();
-      setCurrentAgent((prev) => {
-        const primary = agents.filter((a) => a.mode !== "subagent");
-        if (primary.length < 2) return prev;
-        const idx = primary.findIndex((a) => a.id === prev);
-        const next = idx < 0 || idx >= primary.length - 1 ? primary[0] : primary[idx + 1];
-        return next.id;
-      });
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [agents]);
-
   // ------------------------------------------------------------ Tab 操作
 
   const closeStream = useCallback((sid?: string) => {
@@ -751,6 +731,121 @@ export default function App() {
       return [...prev, tab];
     });
   }, []);
+
+  // 推理强度（模型变体）循环切换：off → low → medium → high → max → off
+  const cycleReasoningEffort = useCallback(() => {
+    const current = activeSessionId
+      ? (chatStatesRef.current[activeSessionId]?.reasoningEffort ?? "")
+      : (activeTabId ? draftReasoning[activeTabId] ?? "" : "");
+    // ""（跟随供应商默认）视为排在 "off" 之前，首次按下落到 "off"
+    const idx = REASONING_EFFORT_OPTIONS.findIndex((o) => o.value === current);
+    const next = REASONING_EFFORT_OPTIONS[(idx + 1) % REASONING_EFFORT_OPTIONS.length].value;
+    if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: next });
+    else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: next }));
+  }, [activeSessionId, activeTabId, draftReasoning, patchChat]);
+
+  // 全局快捷键（键位对齐 opencode v2）：
+  //   Shift+Tab               循环切换 primary agent（Tab 让给命令面板补全）
+  //   Alt+1..9                直接选中第 N 个 primary agent
+  //   Ctrl+Tab / Alt+↓        下一个标签
+  //   Ctrl+Shift+Tab / Alt+↑  上一个标签
+  //   Ctrl+1..9 / Ctrl+0      切到第 N 个标签
+  //   Alt+W                   关闭当前标签
+  //   Alt+N                   新建会话
+  //   Ctrl+T                  循环切换推理强度（模型变体）
+  // 注：macOS 上 Option(Alt)+字母/数字 会产出特殊字符（e.key 变成 "˜"/"¡"），
+  // 故 Alt 组合一律按 e.code（物理键位）匹配；不用 Ctrl+W 是因为 Electron
+  // 默认菜单的 Close 占用了它。
+  useEffect(() => {
+    const primaryAgents = agents.filter((a) => a.mode !== "subagent");
+
+    const digit = (e: KeyboardEvent): number | null => {
+      const m = /^(?:Digit|Numpad)([0-9])$/.exec(e.code);
+      if (m) return Number(m[1]);
+      return /^[0-9]$/.test(e.key) ? Number(e.key) : null;
+    };
+
+    const cycleAgent = () => {
+      if (primaryAgents.length < 2) return;
+      setCurrentAgent((prev) => {
+        const idx = primaryAgents.findIndex((a) => a.id === prev);
+        const next = idx < 0 || idx >= primaryAgents.length - 1 ? 0 : idx + 1;
+        return primaryAgents[next].id;
+      });
+    };
+
+    const cycleTab = (dir: 1 | -1) => {
+      if (tabs.length < 2) return;
+      const idx = tabs.findIndex((t) => t.id === activeTabId);
+      const next = idx < 0 ? 0 : (idx + dir + tabs.length) % tabs.length;
+      setActiveTabId(tabs[next].id);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const alt = e.altKey && !e.ctrlKey && !e.metaKey;
+      const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
+
+      // Ctrl+Tab / Ctrl+Shift+Tab：标签页前后切换
+      if (ctrl && e.key === "Tab") {
+        e.preventDefault();
+        cycleTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+      // Alt+↓ / Alt+↑：标签页前后切换（同 opencode v2）
+      if (alt && (e.code === "ArrowDown" || e.code === "ArrowUp")) {
+        e.preventDefault();
+        cycleTab(e.code === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      // Alt+N：新建会话
+      if (alt && e.code === "KeyN") {
+        e.preventDefault();
+        newChatTab();
+        return;
+      }
+      // Alt+W：关闭当前标签
+      if (alt && e.code === "KeyW") {
+        e.preventDefault();
+        closeTab(activeTabId);
+        return;
+      }
+      if (ctrl) {
+        const n = digit(e);
+        // Ctrl+1..9 / Ctrl+0：切到第 N 个标签
+        if (n !== null) {
+          const target = tabs[n === 0 ? 9 : n - 1];
+          if (target) {
+            e.preventDefault();
+            setActiveTabId(target.id);
+          }
+          return;
+        }
+        // Ctrl+T：循环切换推理强度（模型变体）
+        if (e.code === "KeyT") {
+          e.preventDefault();
+          cycleReasoningEffort();
+          return;
+        }
+      }
+      // Alt+1..9：直接选中第 N 个 primary agent（build/plan/office/research → 1/2/3/4）
+      if (alt) {
+        const n = digit(e);
+        if (n !== null && n >= 1 && n <= primaryAgents.length) {
+          e.preventDefault();
+          setCurrentAgent(primaryAgents[n - 1].id);
+          return;
+        }
+      }
+      // Shift+Tab：循环切换 primary agent（opencode v2 键位）
+      if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        cycleAgent();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [agents, tabs, activeTabId, newChatTab, closeTab, cycleReasoningEffort]);
 
   const selectSession = useCallback(
     async (sid: string) => {
@@ -2681,6 +2776,7 @@ export default function App() {
               onWorktreeDiscard={() => activeSessionId && void handleWorktreeDiscard(activeSessionId)}
               foldTurns={uiConfig?.chat_fold_turns}
               foldMessages={uiConfig?.chat_fold_messages}
+              onStickChange={handleStickChange}
             />
             <QuestionBar
               pendingQuestions={currentChat.pendingQuestions ?? []}
@@ -2733,6 +2829,8 @@ export default function App() {
                 if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: v });
                 else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: v }));
               }}
+              tabCount={tabs.length}
+              scrolledUp={chatScrolledUp}
             />
             <button className="debug-toggle" onClick={() => setShowDebug(!showDebug)} title="调试日志">
               {showDebug ? "隐藏日志" : "日志"}

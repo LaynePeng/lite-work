@@ -7,6 +7,16 @@ import { api } from "../api";
 import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
 import { AGENT_META } from "../lib/agentMeta";
 
+/** 推理强度档位（会话级覆盖；"" = 跟随供应商默认）。
+ *  App 的 Ctrl+T 循环切换复用此顺序，避免两处定义漂移。 */
+export const REASONING_EFFORT_OPTIONS = [
+  { value: "off", label: "关闭", desc: "常规回答（本会话）" },
+  { value: "low", label: "低", desc: "轻量推理" },
+  { value: "medium", label: "中", desc: "平衡速度与深度" },
+  { value: "high", label: "高", desc: "深度推理" },
+  { value: "max", label: "最大", desc: "极限推理（Token 消耗大）" },
+] as const;
+
 /**
  * 长文本粘贴折叠阈值：行数 ≥ PASTE_FOLD_LINES 或字符数 ≥ PASTE_FOLD_CHARS
  * 即折叠为「粘贴块」（短文本照常内联，不打扰输入体验）。
@@ -61,6 +71,8 @@ export default function Composer({
   onSessionModelChange,
   reasoningEffort = "",
   onReasoningEffortChange,
+  tabCount = 0,
+  scrolledUp = false,
 }: {
   disabled?: boolean;
   running: boolean;
@@ -82,6 +94,10 @@ export default function Composer({
   onSessionModelChange: (model: SessionModel | null) => void;
   reasoningEffort?: string;
   onReasoningEffortChange?: (v: string) => void;
+  /** 打开的标签页数量：>1 时才在提示行展示标签页快捷键 */
+  tabCount?: number;
+  /** 对话区是否被上翻（非贴底）：为真时优先提示「回到最新」 */
+  scrolledUp?: boolean;
 }) {
   const [text, setText] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -513,8 +529,22 @@ export default function Composer({
 
   const primary = agents.filter((a) => a.mode !== "subagent");
 
-  // 快捷键修饰键按平台显示：macOS 为 Option，其余（Windows/Linux）为 Alt
-  const modKey = navigator.platform.toUpperCase().includes("MAC") ? "Option" : "Alt";
+  // 快捷键修饰键按平台显示：macOS 用 ⌃/⌥，其余（Windows/Linux）用 Ctrl/Alt
+  const isMac = navigator.platform.toUpperCase().includes("MAC");
+  const modKey = isMac ? "Option" : "Alt";
+  const kCtrl = isMac ? "⌃" : "Ctrl+";
+  const kAlt = isMac ? "⌥" : "Alt+";
+
+  // 状态驱动的快捷键提示：只显示「当下最有用」的一条，都没命中时回落到原提示文案。
+  // 刻意不做随机/轮播——流式输出期间本行高频重渲染，随机文本会跳动，且纯属噪音。
+  // 也刻意不因「Agent 多于 1 个」提示 Shift+Tab：默认就有 4 个 Agent，那等于把安全提示永久挤掉。
+  const hint = scrolledUp
+    ? `${kCtrl}End 回到对话最新`
+    : running
+      ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送"
+      : tabCount > 1
+        ? `${kCtrl}Tab 切换标签页 · ${kCtrl}1–9 直选 · ${kAlt}W 关闭`
+        : "工具执行受安全策略保护，中危操作会请求你确认";
 
   return (
     <div className="composer-wrap">
@@ -688,17 +718,17 @@ export default function Composer({
           }}
           onKeyDown={(e) => {
             if (panelVisible && candidates.length > 0) {
-              if (e.key === "ArrowDown") {
+              if (e.key === "ArrowDown" && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 setSelIdx((i) => (i + 1) % candidates.length);
                 return;
               }
-              if (e.key === "ArrowUp") {
+              if (e.key === "ArrowUp" && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 setSelIdx((i) => (i - 1 + candidates.length) % candidates.length);
                 return;
               }
-              if (e.key === "Tab") {
+              if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 applySuggestion(candidates[Math.min(selIdx, candidates.length - 1)].name);
                 return;
@@ -870,13 +900,7 @@ export default function Composer({
                         <span className="reasoning-option-desc">使用供应商默认（{effProviderName} 设置中配置）</span>
                       </button>
                     )}
-                    {[
-                      { value: "off", label: "关闭", desc: "常规回答（本会话）" },
-                      { value: "low", label: "低", desc: "轻量推理" },
-                      { value: "medium", label: "中", desc: "平衡速度与深度" },
-                      { value: "high", label: "高", desc: "深度推理" },
-                      { value: "max", label: "最大", desc: "极限推理（Token 消耗大）" },
-                    ].map((item) => (
+                    {REASONING_EFFORT_OPTIONS.map((item) => (
                       <button
                         key={item.value}
                         className={`reasoning-option ${hasEffortOverride && reasoningEffort === item.value ? "active" : ""}`}
@@ -896,7 +920,7 @@ export default function Composer({
         <div className="composer-hint">
         {uploadToast && <span className="upload-toast">{uploadToast}</span>}
         {uploadToast ? " · " : ""}
-        {running ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送" : "工具执行受安全策略保护，中危操作会请求你确认"}
+        {hint}
         </div>
       </div>
     </div>

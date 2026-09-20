@@ -435,6 +435,7 @@ export default function ChatView({
   onWorktreeDiscard,
   foldTurns = FOLD_THRESHOLD,
   foldMessages = FOLD_MESSAGES,
+  onStickChange,
 }: {
   sessionId: string;
   sessionTitle: string;
@@ -478,6 +479,8 @@ export default function ChatView({
   /** 展示折叠阈值（消息条数）：高工具密度会话里 1 轮可含几十张工具卡片，
    *  只按轮数阈值会形同虚设，故补充消息数维度（v1.6.0） */
   foldMessages?: number;
+  /** 贴底状态变化（true=停在底部）：供 Composer 做状态驱动的快捷键提示 */
+  onStickChange?: (stick: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -551,8 +554,10 @@ export default function ChatView({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
-  }, []);
+    const stick = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
+    if (stick !== stickRef.current) onStickChange?.(stick);
+    stickRef.current = stick;
+  }, [onStickChange]);
 
   // 用户新发消息（含运行中排队的补充指令）时强制回到底部：
   // 上翻浏览历史时发送新内容，也应立即跟随到最新
@@ -569,6 +574,36 @@ export default function ChatView({
     const el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, streaming, displayTurns]);
+
+  // 对话跳转（对齐 opencode v2 的 session.first / session.last）：
+  //   Ctrl+G / Ctrl+Home      跳到最开头
+  //   Ctrl+Alt+G / Ctrl+End   跳到最末尾
+  // 焦点在输入框内时不劫持——那里 Ctrl+Home / Ctrl+End 是「光标移到文首/文末」。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const plainCtrl = e.ctrlKey && !e.altKey && !e.metaKey;
+      const toFirst = plainCtrl && (e.code === "KeyG" || e.key === "Home");
+      const toLast = (e.ctrlKey && e.altKey && !e.metaKey && e.code === "KeyG")
+        || (plainCtrl && e.key === "End");
+      if (!toFirst && !toLast) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      e.preventDefault();
+      if (toLast) {
+        stickRef.current = true; // 回到末尾即恢复贴底，后续流式继续跟随
+        onStickChange?.(true);
+        el.scrollTop = el.scrollHeight;
+      } else {
+        stickRef.current = false; // 上翻后不自动贴底
+        onStickChange?.(false);
+        el.scrollTop = 0;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onStickChange]);
 
   // 当前展示的待审批：分页索引越界时收敛到最后一项（当前项被批准/拒绝后，
   // 列表缩短仍能稳定落到下一张卡）。

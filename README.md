@@ -60,6 +60,32 @@ Python 后端（litework/）
 
 新增任何提示 UI 时，先回答"它何时消失"，再写代码。
 
+## 快捷键
+
+全局生效（macOS 列用 `⌃` `⌥` `⇧` 表示 Control / Option / Shift）：
+
+| 功能 | macOS | Windows |
+| --- | --- | --- |
+| 下一个 Agent | `⇧Tab` | `Shift+Tab` |
+| 直接选中第 N 个 Agent | `⌥1` … `⌥9` | `Alt+1` … `Alt+9` |
+| 下一个标签页 | `⌃Tab` / `⌥↓` | `Ctrl+Tab` / `Alt+↓` |
+| 上一个标签页 | `⌃⇧Tab` / `⌥↑` | `Ctrl+Shift+Tab` / `Alt+↑` |
+| 切到第 N 个标签页 | `⌃1` … `⌃9` / `⌃0`（第 10 个） | `Ctrl+1` … `Ctrl+9` / `Ctrl+0` |
+| 关闭当前标签页 | `⌥W` | `Alt+W` |
+| 新建会话 | `⌥N` | `Alt+N` |
+| 跳到对话最开头 | `⌃G` / `⌃Home` | `Ctrl+G` / `Ctrl+Home` |
+| 跳到对话最末尾 | `⌃⌥G` / `⌃End` | `Ctrl+Alt+G` / `Ctrl+End` |
+| 循环切换推理强度（关 → 低 → 中 → 高 → 最大） | `⌃T` | `Ctrl+T` |
+
+输入框内：`Enter` 发送、`Shift+Enter` 换行、`↑` / `↓` 翻阅输入历史、`Esc` 关闭命令面板与弹窗。
+
+不用刻意背：Composer 底部的提示行会**按当前状态**显示最相关的一条——对话区被上翻时提示「回到最新」、多标签页时提示标签页键（都不命中时回落为安全策略说明）。
+
+两点说明：
+
+- **对话跳转键在输入框内不生效**——那里 `Ctrl/⌃ + Home/End` 是「光标移到文首/文末」，抢过来会破坏正常编辑。跳到开头/末尾前先点一下对话区即可。
+- **统一用 `Ctrl`（macOS `⌃`）而不是 `⌘`**：`⌘Tab` 被系统应用切换器占用，`⌘W` 被 Electron 默认菜单的「关闭窗口」占用，都无法复用；用 `Ctrl` 才能两端键位一致。`Alt`（macOS `⌥`）组合按物理键位 `event.code` 匹配，不受 Option 输入 `∑` 等特殊字符影响（键位对齐 opencode v2）。
+
 ## 快速开始（Quick Start）
 
 **桌面应用（完整体验）**：从 [Releases](https://github.com/LaynePeng/lite-work/releases) 下载安装包即可（自带后端，无需 Python / Node）；或源码运行：
