@@ -455,8 +455,9 @@ export default function SettingsModal({
   }, [community, skills]);
 
   // 已安装插件统一视图：内置 + 本地用户版合并。
-  // 本地版（~/.lite-work/plugins/）同名覆盖内置版 → 生效版本 = 本地版本；
-  // 没有本地版的显示内置版（随主程序发布）。updateTo = 社区可更新到的版本。
+  // 版本感知覆盖：本地版 >= 内置版才生效（effectiveVer = 本地）；本地旧版被
+  // 内置版旁路（effectiveVer = 内置，标记 staleLocal 供清理提示）——装新版
+  // lite-work 后内置即为最新，无需再手动更新一遍社区插件。
   const installedView = useMemo(() => {
     const userByName = new Map(plugins.map((p) => [p.name, p]));
     const updateByName = new Map(communityUpdates.updates.map((u) => [u.cp.name, u.cp.version]));
@@ -469,22 +470,30 @@ export default function SettingsModal({
       builtinVer?: string;
       source?: string;
       isLocal: boolean;
+      /** 本地旧版被内置版旁路（可删除本地旧版） */
+      staleLocal?: boolean;
+      /** staleLocal 时本地旧版的版本号 */
+      localStaleVer?: string;
       updateTo?: string;
       kind?: "tool" | "collab";
       /** 插件加载失败原因（透传自后端列表项） */
       error?: string;
     }> = builtinPlugins.map((bp) => {
       const u = userByName.get(bp.name);
+      // 后端版本感知裁决：stale_local = 本地存在但落后 → 内置生效
+      const stale = !!bp.stale_local;
       return {
         name: bp.name,
-        description: u?.description || bp.description,
-        tools: u ? u.tools : bp.tools,
-        removedTools: u?.removed_tools,
-        effectiveVer: u?.version || bp.version,
+        description: (!stale && u?.description) || bp.description,
+        tools: (!stale && u) ? u.tools : bp.tools,
+        removedTools: !stale ? u?.removed_tools : undefined,
+        effectiveVer: stale ? bp.version : (u?.version || bp.version),
         error: u?.error || "",
         builtinVer: bp.version,
         source: u?.source,
-        isLocal: !!u,
+        isLocal: !!u && !stale,
+        staleLocal: stale,
+        localStaleVer: bp.local_version,
         updateTo: updateByName.get(bp.name),
         kind: u?.kind || bp.kind,
       };
@@ -1825,6 +1834,12 @@ export default function SettingsModal({
                         {item.error && (
                           <span className="plugin-tag error-tag" title={item.error}>⚠ 加载失败</span>
                         )}
+                        {item.staleLocal && (
+                          <span className="plugin-upd-hint" style={{ color: "var(--yellow)" }}
+                            title={`本地社区版 v${item.localStaleVer || "?"} 已落后于内置版，已自动使用内置版生效；可删除本地旧版`}>
+                            ⚠ 本地 v{item.localStaleVer || "?"} 已被内置版取代
+                          </span>
+                        )}
                         {item.isLocal && item.builtinVer && (
                           <span className="plugin-tag builtin" title="删除本地版后回退到此版本">
                             内置 v{item.builtinVer}
@@ -1862,6 +1877,14 @@ export default function SettingsModal({
                               ? `已删除本地版 ${r.name}，回退内置版 v${item.builtinVer}`
                               : `已彻底删除 ${r.name}`;
                           })}>删除</button>
+                      )}
+                      {item.staleLocal && (
+                        <button className="btn-test" disabled={pluginBusy}
+                          title="删除已被内置版取代的本地旧版（内置版随主程序更新，删后不再显示该提示）"
+                          onClick={() => void pluginAction(async () => {
+                            const r = await api.deletePlugin(item.name);
+                            return `已清理本地旧版 ${r.name}（v${item.localStaleVer || "?"}），继续使用内置版 v${item.effectiveVer}`;
+                          })}>清理旧版</button>
                       )}
                     </div>
                   </div>

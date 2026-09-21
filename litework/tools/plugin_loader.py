@@ -85,6 +85,20 @@ def semver_compare(a: str, b: str) -> int:
     return -1 if ra < rb else 1
 
 
+def local_shadows_builtin(local_version: str, builtin_version: str) -> bool:
+    """本地社区版是否应覆盖内置版（版本感知优先级）。
+
+    规则：两者版本号均可比较时，仅 local >= builtin 才覆盖——lite-work 升级
+    带来的新内置版不应被旧本地社区版压住（否则内置插件名存实亡：装了最新
+    lite-work 还要手动再更新一遍社区插件）。local < builtin 时内置版生效，
+    旧本地版被旁路（不删除，设置页可见并可清理）。
+    任一侧版本缺失（空串）→ 无法比较 → 回退旧行为（本地优先，保守兼容）。
+    """
+    if not local_version or not builtin_version:
+        return True
+    return semver_compare(local_version, builtin_version) >= 0
+
+
 # ---------------------------------------------------------------- 已安装元信息（installed.json）
 
 INSTALLED_FILE = "installed.json"

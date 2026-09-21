@@ -283,7 +283,7 @@ class AgentApp:
     def collab_modes(self) -> List["Plugin"]:
         """协作模式插件：litework/builtin_plugins/ 内置 v1.0.0，
         ~/.lite-work/plugins/ 同名包覆盖（社区更新机制）。"""
-        from .tools.plugin_loader import load_collab_builtin
+        from .tools.plugin_loader import load_collab_builtin, local_shadows_builtin
 
         local_plugins = self._ensure_local_plugins()
         from .orchestration.collab_policy import CollabModePlugin
@@ -294,8 +294,23 @@ class AgentApp:
         ]
         for p in local:
             p._is_local_override = True
-        local_names = {p.name for p in local}
-        return [m for m in load_collab_builtin() if m.name not in local_names] + local
+        builtin = load_collab_builtin()
+        builtin_names = {m.name for m in builtin}
+        # 版本感知覆盖：本地旧版（< 内置版）被旁路，内置版直接生效
+        local_wins = {
+            m.name for m in builtin
+            if any(p.name == m.name and local_shadows_builtin(
+                getattr(p, "version", ""), getattr(m, "version", "")) for p in local)
+        }
+        modes = [
+            m for m in builtin
+            if m.name not in local_wins
+        ]
+        modes.extend(
+            p for p in local
+            if p.name not in builtin_names or p.name in local_wins
+        )
+        return modes
 
     def _apply_env_api_key(self, cli_key: Optional[str] = None) -> None:
         """CLI 传入的 --api-key 回填到所有未配置的供应商。"""
@@ -1024,11 +1039,28 @@ class AgentApp:
         本地插件只加载一次（缓存），避免每次建内核重复 import。
         workspace（P3）：worktree 隔离时以指定目录构建内置插件实例。
         """
+        from .tools.plugin_loader import local_shadows_builtin
+
         local_plugins = self._ensure_local_plugins()
-        local_names = {p.name for p in local_plugins}
-        plugins: List[Plugin] = [
-            p for p in self._builtin_plugins(workspace) if p.name not in local_names]
-        plugins.extend(local_plugins)
+        local_by_name = {p.name: p for p in local_plugins}
+        builtin_names: set = set()
+        # 版本感知覆盖生效名单：同名且 local >= builtin（本地胜出）
+        local_wins: set = set()
+        plugins: List[Plugin] = []
+        for p in self._builtin_plugins(workspace):
+            builtin_names.add(p.name)
+            lp = local_by_name.get(p.name)
+            if lp is not None and local_shadows_builtin(
+                    getattr(lp, "version", ""), getattr(p, "version", "")):
+                local_wins.add(p.name)  # 本地版覆盖内置版（跳过内置）
+            else:
+                plugins.append(p)  # 无本地版 / 本地旧版被旁路：内置生效
+        # 本地插件：覆盖胜出的 + 无内置同名的照常进装配；被旁路的不进
+        # （否则同一插件两份实例，后注册的覆盖前者，行为不可预期）
+        plugins.extend(
+            p for p in local_plugins
+            if p.name not in builtin_names or p.name in local_wins
+        )
         return plugins
 
     @staticmethod
@@ -1359,9 +1391,10 @@ class AgentApp:
     def plugins_builtin(self) -> List[Dict[str, Any]]:
         """列出内置插件元信息（name/description/tools/version/是否被用户版覆盖）。"""
         from . import __version__ as _app_version
+        from .tools.plugin_loader import local_shadows_builtin
 
         local_plugins = self._ensure_local_plugins()
-        local_names = {p.name for p in local_plugins}
+        local_by_name = {p.name: p for p in local_plugins}
 
         results: List[Dict[str, Any]] = []
         for p in self._builtin_plugins():
@@ -1371,12 +1404,21 @@ class AgentApp:
                 tools = [t.name for t in get_tools()] if get_tools is not None else []
             except Exception:
                 logger.debug("[App] 读取插件 %s 工具列表失败", p.name, exc_info=True)
+            lp = local_by_name.get(p.name)
+            # overridden=本地版实际生效（local >= builtin）；stale_local=本地版
+            # 存在但已落后被旁路（前端提示可删除本地旧版）
+            overridden = bool(
+                lp is not None and local_shadows_builtin(
+                    getattr(lp, "version", ""), getattr(p, "version", ""))
+            )
             results.append({
                 "name": p.name,
                 "description": getattr(p, "description", ""),
                 "tools": sorted(set(tools)),
                 "version": getattr(p, "version", "") or _app_version,
-                "overridden": p.name in local_names,
+                "overridden": overridden,
+                "stale_local": lp is not None and not overridden,
+                "local_version": getattr(lp, "version", "") if lp is not None else "",
                 "builtin": True,
                 "kind": "tool",
             })
@@ -1384,12 +1426,19 @@ class AgentApp:
         from .tools.plugin_loader import load_collab_builtin
 
         for m in load_collab_builtin():
+            lp = local_by_name.get(m.name)
+            overridden = bool(
+                lp is not None and local_shadows_builtin(
+                    getattr(lp, "version", ""), getattr(m, "version", ""))
+            )
             results.append({
                 "name": m.name,
                 "description": getattr(m, "description", ""),
                 "tools": [],
                 "version": getattr(m, "version", "") or "1.0.0",
-                "overridden": m.name in local_names,
+                "overridden": overridden,
+                "stale_local": lp is not None and not overridden,
+                "local_version": getattr(lp, "version", "") if lp is not None else "",
                 "builtin": True,
                 "kind": "collab",
             })

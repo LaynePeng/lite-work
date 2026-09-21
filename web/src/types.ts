@@ -733,6 +733,10 @@ export interface BuiltinPluginInfo {
   builtin: true;
   /** 已被用户版（~/.lite-work/plugins/ 同名插件）覆盖 */
   overridden?: boolean;
+  /** 本地版存在但版本落后，已被内置版旁路（可删除本地旧版） */
+  stale_local?: boolean;
+  /** stale_local 时本地旧版的版本号（清理提示展示用） */
+  local_version?: string;
   /** 插件类别：collab=协作模式 / tool=工具插件 */
   kind?: "tool" | "collab";
 }
