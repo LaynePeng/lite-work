@@ -14,9 +14,10 @@
   通用技术术语**（连接/固定/夹持/检测/处理单元等），**禁止随意生造词汇**（如「环抱式定位握持」
   「插拔耦合组件」「时序锚定器」）；新概念用通用词组合并在首次出现处定义。落点覆盖顶层 SKILL.md
   总则、交底成稿与自检、申请文件主文件纪律与权要撰写。
-- **专利技能依赖随包内置**：`latex2mathml`（公式→Word 可编辑）与 `mammoth`（docx→md）随安装包
-  分发（`_internal/`），技能解释器离线直接复用，无需用户机器 Python 再装；`playwright`（mermaid
-  出图 + CNIPA 检索）维持按需自动安装 + 降级策略不变。
+- **专利技能依赖随包内置**：`latex2mathml`（公式→Word 可编辑）、`mammoth`（docx→md）、
+  `playwright`（mermaid 出图 + CNIPA 检索，含平台 node driver）随安装包分发（`_internal/`），
+  技能解释器离线直接复用，无需用户机器 Python 再装；浏览器复用系统 Chrome/Edge，无则首次
+  `playwright install chromium` 后即可用。
 
 ## [1.9.4] — 桌面体验修复
 

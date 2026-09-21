@@ -25,9 +25,12 @@ dependencies = [
     "reportlab>=4.0",
     "pandas>=2.0",
     "matplotlib>=3.7",
-    # 专利技能（patent-disclosure-skill v4.8.0 随包依赖）：公式→Word 可编辑、docx→md
+    # 专利技能（patent-disclosure-skill v4.8.0 随包依赖）：公式→Word 可编辑、docx→md、
+    # mermaid 出图 + CNIPA 公布公告检索（playwright；浏览器复用系统 Chrome/Edge，
+    # 无则首次需 playwright install chromium）
     "latex2mathml>=3.77",
     "mammoth>=1.6",
+    "playwright>=1.40",
     # 办公文件读取（调研/参考场景）
     "pypdf>=5",
     # OCR 识别：图片/PDF/PPT 内嵌图片文字提取

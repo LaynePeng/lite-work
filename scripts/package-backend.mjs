@@ -215,6 +215,12 @@ const specArgs = [
   "--collect-all", "reportlab",
   "--collect-all", "latex2mathml",
   "--collect-all", "mammoth",
+  // playwright：专利技能的 mermaid 出图 + CNIPA 检索。包内 driver/ 含平台 node
+  // 可执行（130M 级），--collect-all 一并收入 _internal；greenlet 为 C 扩展、
+  // pyee 为纯 Python 依赖，缺一个技能脚本 import playwright 都会挂，必须一起收。
+  "--collect-all", "playwright",
+  "--collect-all", "pyee",
+  "--collect-all", "greenlet",
   "--collect-all", "curl_cffi",
   "--hidden-import", "uvicorn.logging",
   "--hidden-import", "uvicorn.loops",
