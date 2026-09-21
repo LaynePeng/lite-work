@@ -213,6 +213,8 @@ const specArgs = [
   "--collect-all", "typing_extensions",
   "--collect-all", "defusedxml",
   "--collect-all", "reportlab",
+  "--collect-all", "latex2mathml",
+  "--collect-all", "mammoth",
   "--collect-all", "curl_cffi",
   "--hidden-import", "uvicorn.logging",
   "--hidden-import", "uvicorn.loops",
