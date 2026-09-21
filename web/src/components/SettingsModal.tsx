@@ -1592,6 +1592,12 @@ export default function SettingsModal({
 
               {skillMsg && <div className={`test-result ${skillMsg.ok ? "ok" : "error"}`}>{skillMsg.text}</div>}
 
+              {/* 技能任务进度卡就近展示（导入 zip / URL / 社区更新时能看到实时反馈；
+                  插件任务仍只在插件 tab 展示，避免跨 tab 重复 */}
+              {installJob && installJob.kind === "skill" && (
+                <InstallProgressCard job={installJob} onControl={controlInstallJob} />
+              )}
+
               <div className="mcp-section-head">
                 <span>已安装 {skills.length} 个技能</span>
                 <label className="btn-test" style={{ cursor: "pointer" }}>
@@ -1751,7 +1757,11 @@ export default function SettingsModal({
                   )}
                 </div>
               )}
-              <InstallProgressCard job={installJob} onControl={controlInstallJob} />
+              {/* 顶部进度卡只承载插件任务；技能任务就近渲染在下方社区技能区，
+                  避免 kind=skill 时同屏出现两张进度卡 */}
+              {installJob && installJob.kind !== "skill" && (
+                <InstallProgressCard job={installJob} onControl={controlInstallJob} />
+              )}
 
               {/* -------- 工具栏：手动导入 + 社区更新检查 -------- */}
               <div className="plugin-toolbar">
@@ -2533,6 +2543,11 @@ export default function SettingsModal({
                   </div>
                   {collabInstallOpen && (
                     <div className="skills-list" style={{ marginTop: 8 }}>
+                      {/* 协作模式安装走 plugin 安装任务，进度卡就近展示在安装面板内
+                          （否则要切到插件 tab 才能看到进度） */}
+                      {installJob && installJob.kind !== "skill" && (
+                        <InstallProgressCard job={installJob} onControl={controlInstallJob} />
+                      )}
                       {communityBusy && <div className="mcp-empty-inline">正在拉取社区清单…</div>}
                       {!communityBusy && communityCollabModes.updates.length + communityCollabModes.fresh.length === 0 && (
                         <div className="mcp-empty-inline">✔ 7 个协作模式已内置且均为最新（社区有新版本时在此显示更新）</div>
