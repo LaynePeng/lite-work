@@ -118,10 +118,15 @@ function createWindow(url) {
   // 整个应用是"一个大 Chrome"：渲染层里的 <a href> 点击属于当前窗口导航
   // （不走 setWindowOpenHandler），不拦截就会把整个应用页面替换成外部网页
   // 且无法返回。应用自身来源之外的一切导航一律转交系统默认浏览器。
-  const appOrigin = (() => { try { return new URL(url).origin; } catch { return ""; } })();
   window.webContents.on("will-navigate", (event, target) => {
+    // 同源判定以「当前页面实际 URL」为准：createWindow 入参可能是加载页
+    // file://（origin 为 "null"），拿它比对会把应用自身的 reload（如打开项目
+    // 后的 location.reload()）误判成外部链接、把应用页面转交系统浏览器。
     let sameOrigin = false;
-    try { sameOrigin = !!appOrigin && new URL(target).origin === appOrigin; } catch { /* 非法 URL 也拦 */ }
+    try {
+      const currentOrigin = new URL(window.webContents.getURL()).origin;
+      sameOrigin = currentOrigin !== "null" && new URL(target).origin === currentOrigin;
+    } catch { /* 页面未加载或非法 URL：一律拦截 */ }
     if (sameOrigin) return;
     event.preventDefault();
     shell.openExternal(target);
