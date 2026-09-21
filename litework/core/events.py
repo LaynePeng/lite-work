@@ -57,6 +57,8 @@ class ToolBeforeExecutePayload(TypedDict):
     toolName: str
     args: Dict[str, Any]
     callId: str
+    # 本次工具调用的超时毫秒数（effective_timeout；前端 running 卡片据此设卡死看门狗）
+    timeoutMs: int
 
 
 class ToolAfterExecutePayload(TypedDict):

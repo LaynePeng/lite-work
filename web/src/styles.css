@@ -2146,6 +2146,17 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--yellow);
 }
 
+/* 疑似卡死：超过后端超时上限仍无响应（事件循环可能被阻塞），强烈警示 */
+.tool-status.stalled {
+  background: rgba(248, 81, 73, 0.16);
+  color: var(--red);
+  animation: tool-stalled-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tool-stalled-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* 「继续执行未完成的任务」按钮（任务结束 + TODO 未清空时展示） */
 .continue-row {
   display: flex;

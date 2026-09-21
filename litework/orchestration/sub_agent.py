@@ -207,7 +207,8 @@ class SubAgentRunner:
         system = (
             f"{FINAL_REPORT_REQUIREMENT}\n\n{base_prompt}\n\n[你的具体任务]\n{task_description}\n\n"
             f"工作目录: {agent_ws}\n"
-            f"{SystemPromptBuilder._git_info(agent_ws)}"
+            # _git_info 是同步子进程调用（各 3s 超时）：丢线程池防冻事件循环
+            f"{await asyncio.to_thread(SystemPromptBuilder._git_info, agent_ws)}"
         )
         if allowed_dirs:
             system += (

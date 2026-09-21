@@ -193,8 +193,9 @@ class TaskHandle:
                     and (payload or {}).get("toolName") == "execute_command"):
                 try:
                     mgr = self.app.worktree_manager()
-                    if mgr.has_merge_in_progress():
-                        conflicts = mgr.merge_conflicts()
+                    # git 探测是同步 subprocess：丢线程池，别冻事件循环
+                    if await asyncio.to_thread(mgr.has_merge_in_progress):
+                        conflicts = await asyncio.to_thread(mgr.merge_conflicts)
                         if conflicts and conflicts != self._merge_conflicts_seen:
                             self._merge_conflicts_seen = conflicts
                             self._emit_merge_phase("conflicts", conflicts=conflicts,
@@ -272,7 +273,9 @@ class TaskHandle:
                         self.skill_names = [n for n in (self.skill_names or []) if n != name]
                         note = f"[技能 {name!r} 需要确认，已被操作员拒绝]"
                         self.skill_extra = (extra + ("\n\n" if extra else "") + note) if extra else note
-            system_prompt = SystemPromptBuilder.build(
+            # build 含 git 子进程与技能索引读取（同步重活）：丢线程池防冻事件循环
+            system_prompt = await asyncio.to_thread(
+                SystemPromptBuilder.build,
                 self.workspace or self.app.workspace or "", self.registry.get_tools(),
                 agent_prompt=agent_prompt,
                 skill_extra=getattr(self, "skill_extra", None),

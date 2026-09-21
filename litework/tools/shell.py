@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from ..core.types import ToolDefinition
 from ..security.guard import SENSITIVE_ENV_VARS
+from .proc_utils import kill_process_tree, posix_spawn_kwargs
 
 _DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+[/\~]",
@@ -132,6 +133,7 @@ class ShellTools:
                 env=clean_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **posix_spawn_kwargs(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             out = stdout.decode("utf-8", errors="replace")
@@ -139,13 +141,15 @@ class ShellTools:
             timed_out = False
             exit_code = proc.returncode
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+            kill_process_tree(proc.pid)
             out, err = "", ""
             timed_out = True
             exit_code = 124
+        except asyncio.CancelledError:
+            # 外层取消（agent_loop wait_for 超时 / 任务 stop）：杀整棵进程树
+            # 再抛——否则 shell 的孙进程（npm / pyinstaller 等）成孤儿继续占资源
+            kill_process_tree(proc.pid)
+            raise
 
         def clamp(text: str) -> str:
             if len(text) > self.max_output:
@@ -175,6 +179,7 @@ class ShellTools:
                 env=clean_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **posix_spawn_kwargs(),
             )
             task.proc = proc
             # 读取器：持续把 stdout/stderr 累积到缓冲
@@ -218,10 +223,7 @@ class ShellTools:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             task.timed_out = True
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+            kill_process_tree(proc.pid)
             try:
                 await proc.wait()
             except Exception:
@@ -284,7 +286,7 @@ class ShellTools:
         if task is None or task.done or task.proc is None:
             return False
         try:
-            task.proc.kill()
+            kill_process_tree(task.proc.pid)
             return True
         except ProcessLookupError:
             return False

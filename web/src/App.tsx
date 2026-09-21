@@ -1296,6 +1296,7 @@ export default function App() {
             args: ev.data.args,
             status: "running",
             startedAt: Date.now(), // 运行中卡片实时计时（卡死可观测）
+            timeoutMs: ev.data.timeoutMs, // 后端超时下发：卡死看门狗依据
           };
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
           // spawn_sub_agent / spawn_agent 独立成卡（承载子 Agent 活动面板），其余工具进紧凑聚合
@@ -1320,7 +1321,10 @@ export default function App() {
           // callId 精确匹配（并行安全），缺失时回退 name+running 启发式（兼容旧后端）
           const status: ToolCardInfo["status"] = ev.data.status === "cancelled"
             ? "cancelled"
-            : ev.data.status === "error" || (ev.data.result ?? "").startsWith("[Execution Exception]") || (ev.data.result ?? "").startsWith("[Error]")
+            : ev.data.status === "error" || ev.data.status === "timeout"
+              || (ev.data.result ?? "").startsWith("[Execution Exception]")
+              || (ev.data.result ?? "").startsWith("[Error]")
+              || (ev.data.result ?? "").startsWith("[Tool Timeout]")
               ? "error"
               : "done";
           const matchCard = (c: ToolCardInfo) =>
@@ -1619,7 +1623,8 @@ export default function App() {
               if (steps[i].tool === evData.tool && steps[i].status === "running") {
                 steps[i] = {
                   ...steps[i],
-                  status: evData.status === "error" ? "error" : evData.status === "cancelled" ? "cancelled" : "done",
+                  status: evData.status === "error" || evData.status === "timeout" ? "error"
+                    : evData.status === "cancelled" ? "cancelled" : "done",
                   durationMs: evData.durationMs,
                 };
                 break;

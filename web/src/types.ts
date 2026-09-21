@@ -340,7 +340,7 @@ export type SSEEvent =
   | { type: "llm:stream"; data: { chunk: string } }
   | { type: "llm:turn_start"; data: { turn: number } }
   | { type: "llm:retry"; data: { attempt: number; max_retries: number; reason: string; wait: number } }
-  | { type: "tool:before_execute"; data: { toolName: string; args: unknown; callId?: string } }
+  | { type: "tool:before_execute"; data: { toolName: string; args: unknown; callId?: string; timeoutMs?: number } }
   | { type: "tool:after_execute"; data: { toolName: string; durationMs: number; status: string; result?: string; callId?: string } }
   | { type: "approval:request"; data: { id: string; action: string; reason: string; rememberable?: boolean } }
   | { type: "approval:resolved"; data: { id: string; approved: boolean; by?: string } }
@@ -470,6 +470,8 @@ export interface ToolCardInfo {
   durationMs?: number;
   /** 工具开始执行的本地时间戳（ms）：运行中卡片显示实时已用时 */
   startedAt?: number;
+  /** 后端下发的超时毫秒数：running 卡片据此设「疑似卡死」看门狗 */
+  timeoutMs?: number;
   result?: string;
   callId?: string;
   subagent?: SubAgentProgress;

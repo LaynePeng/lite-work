@@ -710,7 +710,9 @@ class SessionAgentManager:
         runner = self.app.sub_agent_runner
         if record.isolation != "worktree":
             return await runner.run_task(**run_kwargs)
-        wt = self._create_worktree(record.agent_id)
+        # worktree 的 git 操作（建树/收割/合并/清理）是同步 subprocess.run
+        # （各 60~120s 超时）——必须丢线程池，否则冻结事件循环（SSE/审批全停）
+        wt = await asyncio.to_thread(self._create_worktree, record.agent_id)
         if wt is None:
             # 非 git 仓库：降级共享模式（记录说明，继续执行）
             record.isolation = "shared"
@@ -719,9 +721,9 @@ class SessionAgentManager:
         record.worktree = wt
         try:
             result = await runner.run_task(**{**run_kwargs, "workspace_override": wt})
-            files, patch = self._harvest_worktree(wt)
+            files, patch = await asyncio.to_thread(self._harvest_worktree, wt)
             if patch and patch.strip():
-                merged = self._apply_patch_to_workspace(patch)
+                merged = await asyncio.to_thread(self._apply_patch_to_workspace, patch)
                 if merged:
                     record.changed_files = files
                     note = f"[worktree] 改动已合并回主工作区（{len(files)} 个文件）。"
@@ -736,7 +738,7 @@ class SessionAgentManager:
             return result
         finally:
             record.worktree = None
-            self._cleanup_worktree(record.agent_id, wt)
+            await asyncio.to_thread(self._cleanup_worktree, record.agent_id, wt)
 
     async def _emit(self, bus, event: str, payload: Dict[str, Any]) -> None:
         if bus is None:

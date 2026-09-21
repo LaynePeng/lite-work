@@ -103,6 +103,19 @@ function ToolCard({ card }: { card: ToolCardInfo }) {
     if (isFileDiff(card.result ?? "") || card.status === "error" || card.status === "cancelled") setOpen(true);
   }, [card.result, card.status]);
 
+  // 卡死看门狗：running 超过「后端超时 + 15s 缓冲」仍无 after_execute → 标记疑似卡死。
+  // 命中场景：事件循环被同步阻塞（wait_for 定时器无法触发）——后端永远不回，
+  // 前端本地兜底让用户可感知（提示停止任务），而非计时器无限上涨。
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (card.status !== "running" || !card.startedAt) { setStalled(false); return; }
+    const deadline = (card.timeoutMs ?? 120_000) + 15_000;
+    const elapsed = Date.now() - card.startedAt;
+    if (elapsed >= deadline) { setStalled(true); return; }
+    const t = window.setTimeout(() => setStalled(true), deadline - elapsed);
+    return () => window.clearTimeout(t);
+  }, [card.status, card.startedAt, card.timeoutMs]);
+
   const statusClass = card.status === "running" ? "running" : card.status;
   const argsPreview = typeof card.args === "string"
     ? card.args
@@ -114,7 +127,14 @@ function ToolCard({ card }: { card: ToolCardInfo }) {
         <ToolIcon name={card.name} />
         <span className="tool-name">{card.name}</span>
         <span className="tool-args-preview">{argsPreview.slice(0, 120)}</span>
-        {card.status === "running" && (card.startedAt ? <ToolElapsed since={card.startedAt} /> : <span className="tool-status running">运行中…</span>)}
+        {card.status === "running" && (stalled
+          ? <span className="tool-status stalled"
+              title="已超过后端超时上限仍无响应——事件循环可能被阻塞。可点击输入区「停止」终止任务后重试">
+              ⚠ 疑似卡死
+            </span>
+          : card.startedAt
+            ? <ToolElapsed since={card.startedAt} />
+            : <span className="tool-status running">运行中…</span>)}
         {card.status === "done" && <span className="tool-status done">✓ {card.durationMs !== undefined ? `${card.durationMs}ms` : "完成"}</span>}
         {card.status === "cancelled" && <span className="tool-status cancelled">已取消</span>}
         {card.status === "error" && <span className="tool-status error">执行异常</span>}

@@ -14,6 +14,7 @@ import shutil
 from typing import Any, Dict, List, Tuple
 
 from ..core.types import ToolDefinition
+from .proc_utils import kill_process_tree, posix_spawn_kwargs
 
 
 class GitTools:
@@ -76,12 +77,17 @@ class GitTools:
             cwd=self.workspace,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **posix_spawn_kwargs(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            kill_process_tree(proc.pid)
             return (124, "", f"git 命令超时（{timeout}s）。")
+        except asyncio.CancelledError:
+            # 外层取消（agent_loop wait_for / 任务 stop）：杀进程树再抛，防孤儿
+            kill_process_tree(proc.pid)
+            raise
         return (
             proc.returncode or 0,
             stdout.decode("utf-8", errors="replace"),

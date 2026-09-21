@@ -428,8 +428,12 @@ class AgentLoop:
         """任务初始化：System Prompt 装配、历史修复、用户消息入链、首次落盘。"""
         # 1. System Prompt 初始化（每任务一次：静态骨架，保证缓存前缀稳定）
         if system_prompt is None:
-            system_prompt = SystemPromptBuilder.build(
-                self.workspace, tools, skill_index=self._filtered_skill_index())
+            # build 含 _git_info 的两次 git 子进程调用（各 3s 超时）与技能索引
+            # 读取——纯同步重活丢线程池，防事件循环被冻（SSE/审批全部无响应）
+            system_prompt = await asyncio.to_thread(
+                SystemPromptBuilder.build,
+                self.workspace, tools, skill_index=self._filtered_skill_index(),
+            )
         if not messages or messages[0].role != "system":
             messages.insert(0, Message(role="system", content=system_prompt))
         else:
@@ -868,18 +872,23 @@ class AgentLoop:
             stats["blocked"] += 1
             result_text = f"[Tool Execution Cancelled]: {verified.get('reason') or '被安全策略拒绝。'}"
         else:
+            # execute_command 支持自定义 timeout（覆盖默认 tool_timeout）——
+            # 提前计算并随 before_execute 下发（前端卡片看门狗依据）
+            effective_timeout = self.tool_timeout
+            if tool_name == "execute_command" and args.get("timeout"):
+                effective_timeout = max(float(args["timeout"]), self.tool_timeout)
             await self.kernel.events.emit(
-                "tool:before_execute", {"toolName": tool_name, "args": args, "callId": call.id}
+                "tool:before_execute",
+                {"toolName": tool_name, "args": args, "callId": call.id,
+                 "timeoutMs": int(effective_timeout * 1000)},
             )
+            timed_out = False
             try:
-                # execute_command 支持自定义 timeout（覆盖默认 tool_timeout）
-                effective_timeout = self.tool_timeout
-                if tool_name == "execute_command" and args.get("timeout"):
-                    effective_timeout = max(float(args["timeout"]), self.tool_timeout)
                 raw = await asyncio.wait_for(
                     self.registry.execute(tool_name, args), timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
+                timed_out = True
                 raw = f"[Tool Timeout]: 工具 {tool_name} 执行超过 {effective_timeout}s 被终止。"
             except Exception as exc:  # 注册表内已捕获，这里兜底
                 raw = f"[Execution Exception]: {exc}"
@@ -916,7 +925,11 @@ class AgentLoop:
         await self.kernel.events.emit(
             "tool:after_execute",
             {"toolName": tool_name, "durationMs": duration_ms, "callId": call.id,
-             "status": "cancelled" if verified.get("cancel") else "success",
+             # timeout 显性化：超时不再是 success——前端据此置错误样式，
+             # LLM 结果文本里的 [Tool Timeout] 前缀也在前端映射兜底
+             "status": ("cancelled" if verified.get("cancel")
+                        else "timeout" if timed_out
+                        else "success"),
              "result": result_text},
         )
         return result_text

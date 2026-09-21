@@ -10,6 +10,7 @@ import shutil
 from typing import Any, Dict, List
 
 from ..core.types import ToolDefinition
+from .proc_utils import kill_process_tree, posix_spawn_kwargs
 
 
 class CodebaseTools:
@@ -65,6 +66,7 @@ class CodebaseTools:
                 cwd=self.workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **posix_spawn_kwargs(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             text = stdout.decode("utf-8", errors="replace").strip()
@@ -74,7 +76,12 @@ class CodebaseTools:
             note = f"\n[... 仅显示前 {max_results} 条匹配]" if len(lines) >= max_results else ""
             return f'搜索 "{query}" 找到 {len(lines)} 处匹配:{note}\n{text}'
         except asyncio.TimeoutError:
+            kill_process_tree(proc.pid)
             return "[Error]: 搜索超时（30s）。"
+        except asyncio.CancelledError:
+            # 外层取消（agent_loop wait_for / 任务 stop）：杀进程树再抛，防孤儿
+            kill_process_tree(proc.pid)
+            raise
         except Exception as exc:
             return f"[Error]: 搜索执行失败: {exc}"
 
