@@ -4,6 +4,16 @@
 
 ## [未发布]
 
+### 修复
+- **打开项目会把应用自身页面塞进系统浏览器**：本地模式下窗口先用 `file://loading.html`
+  创建（`file://` 的 origin 是 `"null"`），而 `will-navigate` 的同源判定却拿创建窗口时的
+  初始 URL 比对——打开项目成功后前端 `window.location.reload()` 触发导航，target 正是应用
+  自身地址 `http://127.0.0.1:<port>/`，因与 `"null"` 不匹配被误判为外部链接，整页转交
+  系统浏览器（应用 reload 照常执行，于是「浏览器多开了一个应用页面」）。改为在导航发生时
+  动态取 `webContents.getURL()` 判断同源；外部链接转交浏览器的行为不变。
+
+## [1.9.3] — 快捷键对齐 opencode v2 与桌面体验修复
+
 ### 新增
 - **全局快捷键（键位对齐 opencode v2）**：
   - `Shift+Tab` 循环切换 Agent（原为 `Tab`）——把 `Tab` 让给命令面板补全，顺带修掉
