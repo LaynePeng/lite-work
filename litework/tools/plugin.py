@@ -212,7 +212,9 @@ class WebFetchPlugin(ToolPlugin):
 
 class OcrPlugin(ToolPlugin):
     name = "ocr-plugin"
-    version = "1.0.0"
+    # 与社区 ocr-plugin v1.1.0 同源：litework/tools/ocr.py 为社区副本
+    # （MIT、无许可证头），版本以社区 manifest 为准
+    version = "1.1.0"
     description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
 
     def __init__(self, workspace: str) -> None:

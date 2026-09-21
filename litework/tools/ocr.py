@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 lite-work contributors
-
+# 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
+# plugins/ocr-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本。
+# v1.1.0 与社区同源（引擎串行锁 + 页级软截止 + pptx 页数上限 + dpi 150）。
 """OCR 工具：把图片 / PDF 页面 / PPT 内嵌图片中的文字提取出来。
 
 - ocr_image   : 直接识别单张图片（png/jpg/bmp/tiff/webp 等）
@@ -11,13 +11,18 @@
 OCR 引擎：rapidocr-onnxruntime（纯 pip 安装、离线可用、内置中英文模型，
 无需系统级 Tesseract/poppler）。依赖缺失时返回可操作提示。
 """
+# 本仓库（lite-work-plugins）为源；需要作为 lite-work 内置时按需同步回
+# litework/tools/ocr.py（社区独立分发版）。
 from __future__ import annotations
 
 import logging
 import os
+import re
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
-from ..core.types import ToolDefinition
+from litework.core.types import ToolDefinition
 
 logger = logging.getLogger("litework.tools.ocr")
 
@@ -39,7 +44,7 @@ try:
     _HAS_PYMUPDF = True
 except ImportError:
     try:
-        import fitz as pymupdf
+        import fitz as pymupdf  # type: ignore[no-redef]
 
         _HAS_PYMUPDF = True
     except ImportError:
@@ -49,6 +54,16 @@ except ImportError:
 _OCR_ENGINE: Any = None
 
 MAX_TEXT_LEN = 4000  # 单图识别结果截断长度（上下文保护）
+
+# 引擎串行锁：RapidOCR/onnxruntime session 非线程安全，并发使用同一
+# 单例会内部锁死（识别线程永久挂起，几百 MB 内存拿不回）——超时被
+# 遗弃的旧线程 + 重试的新线程并发进引擎是最典型的死锁场景
+_OCR_LOCK = threading.Lock()
+
+# 单次调用软截止（秒）：页循环的页级 checkpoint。外层 tool_timeout=120s
+# 硬超时后线程杀不掉（Python 无法杀线程），软截止让工具体自己停下并
+# 返回已识别的部分结果——留 20s 余量给收尾与结果截断
+_OCR_SOFT_DEADLINE_S = 100.0
 
 
 def _get_engine():
@@ -73,21 +88,25 @@ def _missing_pdf_msg() -> str:
 # ---------------------------------------------------------------- 核心识别
 
 def _ocr_image_bytes(image_path: str) -> str:
-    """识别单张图片，返回文字（按行拼接）。"""
-    engine = _get_engine()
-    # RapidOCR 返回 [(box, text, score), ...]，按 top-left y 排序保持阅读顺序
-    result, _elapse = engine(image_path)
-    if not result:
-        return ""
-    lines = []
-    for box, text, _score in result:
-        try:
-            y = float(box[0][1])
-        except Exception:
-            y = 0.0
-        lines.append((y, text))
-    lines.sort(key=lambda t: t[0])
-    return "\n".join(text for _, text in lines if text and str(text).strip())
+    """识别单张图片，返回文字（按行拼接）。
+
+    整体持 _OCR_LOCK：引擎单例串行使用（非线程安全，见 _OCR_LOCK 注释）。
+    """
+    with _OCR_LOCK:
+        engine = _get_engine()
+        # RapidOCR 返回 [(box, text, score), ...]，按 top-left y 排序保持阅读顺序
+        result, _elapse = engine(image_path)
+        if not result:
+            return ""
+        lines = []
+        for box, text, _score in result:
+            try:
+                y = float(box[0][1])
+            except Exception:
+                y = 0.0
+            lines.append((y, text))
+        lines.sort(key=lambda t: t[0])
+        return "\n".join(text for _, text in lines if text and str(text).strip())
 
 
 # ---------------------------------------------------------------- OCRTools
@@ -155,6 +174,10 @@ class OCRTools:
                         "path": {
                             "type": "string",
                             "description": "pptx 文件路径（相对工作区）",
+                        },
+                        "max_pages": {
+                            "type": "number",
+                            "description": "最多识别页数（默认 20，上限 100）",
                         },
                     },
                     "required": ["path"],
@@ -234,14 +257,28 @@ class OCRTools:
             return f"[OCR Error]: 无法打开 PDF: {exc}"
         total = len(doc)
         parts = [f"PDF 共 {total} 页，识别前 {min(max_pages, total)} 页"]
+        deadline = time.monotonic() + _OCR_SOFT_DEADLINE_S
+        stopped_early = False
         for i in range(min(max_pages, total)):
+            # 页级软截止：到点即停，已识别部分照常返回（外层硬超时杀不掉
+            # 线程，这里是唯一能「体面停下」的机会）
+            if time.monotonic() > deadline:
+                stopped_early = True
+                break
             try:
-                pix = doc[i].get_pixmap(dpi=200)
+                # dpi 150：A4 扫描件识别质量与 200 几乎无损，单页提速约 40%
+                pix = doc[i].get_pixmap(dpi=150)
                 text = _ocr_pixmap(pix)
             except Exception as exc:
                 text = f"[识别失败: {exc}]"
             parts.append(f"\n--- 第 {i + 1} 页 ---\n{text[:MAX_TEXT_LEN]}")
         doc.close()
+        if stopped_early:
+            done = len(parts) - 1
+            parts.append(
+                f"\n[软超时中止]: 已识别 {done}/{min(max_pages, total)} 页"
+                f"（单次调用超过 {_OCR_SOFT_DEADLINE_S:.0f}s）。"
+                f"如需继续，请用 max_pages 从第 {done + 1} 页分批识别。")
         return "\n".join(parts)
 
     # ------------------------------------------------------------ PPTX（带位置）
@@ -272,9 +309,20 @@ class OCRTools:
 
         parts = [f"共 {len(prs.slides)} 页幻灯片"]
         total_images = 0
+        # 页数上限（与 ocr_document 对齐）+ 页级软截止：PPT 页数无上限时
+        # 几十页的 deck 一次能跑几十分钟，工具层必须自己设边界
+        max_pages = max(1, min(100, int(args.get("max_pages") or 20)))
+        deadline = time.monotonic() + _OCR_SOFT_DEADLINE_S
+        stopped_early = False
         with tempfile.TemporaryDirectory(prefix="litework-ocr-") as tmpdir:
             for idx, slide in enumerate(prs.slides, 1):
-                images: List[Dict[str, Any]] = []
+                if idx > max_pages:
+                    break
+                # 页级软截止：到点即停，已识别部分照常返回
+                if time.monotonic() > deadline:
+                    stopped_early = True
+                    break
+                images = []
                 for shape in slide.shapes:
                     if shape.shape_type is None:
                         continue
@@ -324,6 +372,13 @@ class OCRTools:
         if total_images == 0:
             return f"[OCR]: 演示文稿中没有找到内嵌图片（{len(prs.slides)} 页）"
         parts.insert(1, f"共识别 {total_images} 张图片中的文字")
+        if stopped_early:
+            parts.append(
+                f"\n[软超时中止]: 已识别到第 {idx - 1} 页"
+                f"（单次调用超过 {_OCR_SOFT_DEADLINE_S:.0f}s）。"
+                f"如需继续，请分批处理后续页面。")
+        if idx <= len(prs.slides) and not stopped_early and idx > max_pages:
+            parts.append(f"\n[页数上限]: 仅识别前 {max_pages} 页（共 {len(prs.slides)} 页）。")
         return "\n".join(parts)
 
 
@@ -341,3 +396,5 @@ def _ocr_pixmap(pix) -> str:
             os.remove(tmp)
         except OSError:
             pass
+
+

@@ -104,3 +104,9 @@ module = ["litework.tools.office"]
 # office.py 与社区 office-plugin v1.3.0 同源（AGENTS.md §6）：类型问题不在
 # 本仓库修，避免与上游分叉
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["litework.tools.ocr"]
+# ocr.py 与社区 ocr-plugin v1.1.0 同源（AGENTS.md §6）：类型问题不在
+# 本仓库修，避免与上游分叉
+ignore_errors = true
