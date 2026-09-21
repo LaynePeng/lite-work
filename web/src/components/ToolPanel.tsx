@@ -469,12 +469,14 @@ function agentColor(key: string): string {
   return AGENT_PALETTE[h % AGENT_PALETTE.length];
 }
 
-/** 单张 agent 卡片：运行中显示实时步骤/流式尾部；完成显示可展开的 summary + 交付标记。 */
-function AgentCard({ agent, delivered, reviewed, onToggleReview }: {
+/** 单张 agent 卡片：运行中显示实时步骤/流式尾部（可展开详情+取消）；完成显示可展开的 summary + 交付标记。 */
+function AgentCard({ agent, delivered, reviewed, onToggleReview, onClose }: {
   agent: SubAgentProgress;
   delivered?: boolean;
   reviewed?: boolean;
   onToggleReview?: () => void;
+  /** 手动取消（仅 running 态显示按钮；Agents 看板发起） */
+  onClose?: (agentId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const running = agent.status === "running";
@@ -482,6 +484,12 @@ function AgentCard({ agent, delivered, reviewed, onToggleReview }: {
   const current = [...agent.steps].reverse().find((s) => s.status === "running");
   const doneSteps = agent.steps.filter((s) => s.status !== "running").length;
   const color = agentColor(`${agent.role}/${agent.subagentId || agent.task}`);
+  const cancel = () => {
+    if (!agent.subagentId || !onClose) return;
+    if (window.confirm("确定取消该子 Agent？进行中的工作将丢失（已改动文件保留）。")) {
+      onClose(agent.subagentId);
+    }
+  };
   return (
     <div
       className={`agent-card ${running ? "running" : "done"}`}
@@ -495,19 +503,56 @@ function AgentCard({ agent, delivered, reviewed, onToggleReview }: {
               {agent.tokens ? `${(agent.tokens / 1000).toFixed(1)}k tok` : ""}
               {delivered && <span className="agent-delivered"> · ↩ 已交付</span>}
             </span>}
+        {running && onClose && agent.subagentId && (
+          <button
+            className="agent-cancel-btn"
+            title="取消该子 Agent（终止运行中的工作）"
+            onClick={(e) => { e.stopPropagation(); cancel(); }}
+          >✕</button>
+        )}
       </div>
       <div className="agent-task" title={agent.task}>{agent.task || "（未描述任务）"}</div>
       {running ? (
-        <div className="agent-live">
-          {current
-            ? <span className="agent-step" title={current.brief}>▸ {current.tool}</span>
-            : (doneSteps > 0 || agent.turn > 0
-                ? <span className="agent-step">已执行 {doneSteps} 步</span>
-                : <span className="agent-step">启动中…</span>)}
-          {agent.streaming_text && (
-            <span className="agent-stream">{agent.streaming_text.slice(-100)}</span>
+        <>
+          <div
+            className="agent-live"
+            style={{ cursor: "pointer" }}
+            onClick={() => setExpanded((v) => !v)}
+            title="点击展开/收起实时输出详情"
+          >
+            {current
+              ? <span className="agent-step" title={current.brief}>▸ {current.tool}</span>
+              : (doneSteps > 0 || agent.turn > 0
+                  ? <span className="agent-step">已执行 {doneSteps} 步</span>
+                  : <span className="agent-step">启动中…</span>)}
+            {agent.streaming_text && (
+              <span className="agent-stream">
+                {expanded ? "▾ 收起实时输出" : agent.streaming_text.slice(-100)}
+              </span>
+            )}
+          </div>
+          {expanded && (
+            <div className="agent-live-detail">
+              {agent.steps.length > 0 && (
+                <div className="agent-steps-list">
+                  {agent.steps.map((s, i) => (
+                    <div key={`${s.tool}-${i}`} className="agent-steps-row">
+                      <span className={`agent-steps-mark ${s.status}`}>
+                        {s.status === "running" ? "●" : s.status === "error" ? "✗" : "✓"}
+                      </span>
+                      <span className="agent-steps-tool">{s.tool}</span>
+                      {s.durationMs != null && <span className="agent-steps-dur">{s.durationMs}ms</span>}
+                      {s.brief && <span className="agent-steps-brief" title={s.brief}>{s.brief}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {agent.streaming_text && (
+                <pre className="agent-stream-full">{agent.streaming_text.slice(-5000)}</pre>
+              )}
+            </div>
           )}
-        </div>
+        </>
       ) : (
         <div className="agent-result">
           {agent.changedFiles && agent.changedFiles.length > 0 && (
@@ -551,9 +596,11 @@ function AgentCard({ agent, delivered, reviewed, onToggleReview }: {
  * - 待审查计数聚合到折叠头部（review gate 不因折叠而不可见） */
 const MAX_DONE_SHOWN = 3;
 
-function AgentsPanel({ agents, orchestrator }: {
+function AgentsPanel({ agents, orchestrator, onCloseAgent }: {
   agents: SubAgentProgress[];
   orchestrator?: { agentId: string; running: boolean };
+  /** 手动取消子 Agent（透传 AgentCard 的 ✕ 按钮） */
+  onCloseAgent?: (agentId: string) => void;
 }) {
   const running = agents.filter((a) => a.status === "running");
   const done = agents.filter((a) => a.status !== "running");
@@ -638,6 +685,7 @@ function AgentsPanel({ agents, orchestrator }: {
                 onToggleShowAll={() => setShowAllDone((m) => ({ ...m, [mode]: !m[mode] }))}
                 reviewedMap={reviewedMap}
                 onToggleReview={toggleReview}
+                onCloseAgent={onCloseAgent}
               />
             ))}
           </div>
@@ -657,7 +705,7 @@ const MODE_META: Record<string, { icon: string; label: string }> = {
 };
 
 function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onToggleShowAll,
-                       reviewedMap, onToggleReview }: {
+                       reviewedMap, onToggleReview, onCloseAgent }: {
   mode: string;
   agents: SubAgentProgress[];
   filter: "all" | "running";
@@ -667,6 +715,7 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
   onToggleShowAll: () => void;
   reviewedMap: Record<string, boolean>;
   onToggleReview: (id: string) => void;
+  onCloseAgent?: (id: string) => void;
 }) {
   const meta = MODE_META[mode] ?? MODE_META.orchestrate;
   const runningList = agents.filter((a) => a.status === "running");
@@ -698,12 +747,13 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
   const doneShown = showAllDone ? doneList : doneList.slice(-MAX_DONE_SHOWN);
   const doneHidden = doneList.length - doneShown.length;
   const cardProps = (a: SubAgentProgress, delivered = false) => ({
-    key: a.subagentId || a.task,
     agent: a,
     delivered,
     reviewed: !!reviewedMap[a.subagentId || a.task],
     onToggleReview: () => onToggleReview(a.subagentId || a.task),
+    onClose: onCloseAgent,
   });
+  const cardKey = (a: SubAgentProgress) => a.subagentId || a.task;
   const moreBtn = doneHidden > 0 && (
     <button className="agent-group-more" onClick={onToggleShowAll}>
       ⋯ 展开全部已完成（{doneList.length}）
@@ -725,7 +775,7 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
         // 视角提案墙 / 会议发言流：卡片平铺（会议按发言序，运行中脉冲点标识未完）
         <div className="agent-brainstorm-wall">
           {(filter === "running" ? runningList : [...runningList, ...doneShown]).map((a) => (
-            <AgentCard {...cardProps(a)} />
+            <AgentCard key={cardKey(a)} {...cardProps(a)} />
           ))}
           {moreBtn}
         </div>
@@ -734,7 +784,8 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
         <DebateLanes agents={filter === "running" ? runningList : agents}
                      doneList={filter === "running" ? [] : doneShown}
                      doneHidden={doneHidden} onToggleShowAll={onToggleShowAll}
-                     reviewedMap={reviewedMap} onToggleReview={onToggleReview} />
+                     reviewedMap={reviewedMap} onToggleReview={onToggleReview}
+                     onCloseAgent={onCloseAgent} />
       ) : mode === "pipeline" ? (
         // 接力链：按派生序编号 + 箭头串联
         <div className="agent-pipeline-chain">
@@ -745,7 +796,7 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
                 {i > 0 && <span className="agent-pipeline-arrow">↓</span>}
                 <div className="agent-pipeline-step">
                   <span className="agent-pipeline-no">{i + 1}</span>
-                  <AgentCard {...cardProps(a)} />
+                  <AgentCard key={cardKey(a)} {...cardProps(a)} />
                 </div>
               </div>
             ))}
@@ -757,13 +808,13 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
           <div className="agent-section-head">
             <span className="agent-dot running" />运行中（{runningList.length}）
           </div>
-          {runningList.map((a) => <AgentCard {...cardProps(a)} />)}
+          {runningList.map((a) => <AgentCard key={cardKey(a)} {...cardProps(a)} />)}
           {doneShown.length > 0 && (
             <>
               <div className="agent-section-head">
                 <span className="agent-dot done" />已完成（{doneList.length}）
               </div>
-              {doneShown.map((a) => <AgentCard {...cardProps(a, true)} />)}
+              {doneShown.map((a) => <AgentCard key={cardKey(a)} {...cardProps(a, true)} />)}
             </>
           )}
           {moreBtn}
@@ -774,33 +825,35 @@ function ModeSection({ mode, agents, filter, open, onToggle, showAllDone, onTogg
 }
 
 /** 辩论泳道：proposer vs critic 对垒（角色归位：critic 单独一组，其余为提案方） */
-function DebateLanes({ agents, doneList, doneHidden, onToggleShowAll, reviewedMap, onToggleReview }: {
+function DebateLanes({ agents, doneList, doneHidden, onToggleShowAll, reviewedMap, onToggleReview, onCloseAgent }: {
   agents: SubAgentProgress[];
   doneList: SubAgentProgress[];
   doneHidden: number;
   onToggleShowAll: () => void;
   reviewedMap: Record<string, boolean>;
   onToggleReview: (id: string) => void;
+  onCloseAgent?: (id: string) => void;
 }) {
   const critics = agents.filter((a) => a.role === "critic");
   const proposers = agents.filter((a) => a.role !== "critic");
+  const cardKey = (a: SubAgentProgress) => a.subagentId || a.task;
   const cardProps = (a: SubAgentProgress) => ({
-    key: a.subagentId || a.task,
     agent: a,
     reviewed: !!reviewedMap[a.subagentId || a.task],
     onToggleReview: () => onToggleReview(a.subagentId || a.task),
+    onClose: onCloseAgent,
   });
   return (
     <div className="agent-debate-lanes">
       <div className="agent-debate-lane">
         <div className="agent-debate-lane-head">提案方</div>
-        {proposers.map((a) => <AgentCard {...cardProps(a)} />)}
+        {proposers.map((a) => <AgentCard key={cardKey(a)} {...cardProps(a)} />)}
         {proposers.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
       </div>
       <span className="agent-debate-vs">⇄</span>
       <div className="agent-debate-lane critic">
         <div className="agent-debate-lane-head">批判方</div>
-        {critics.map((a) => <AgentCard {...cardProps(a)} />)}
+        {critics.map((a) => <AgentCard key={cardKey(a)} {...cardProps(a)} />)}
         {critics.length === 0 && <span className="mcp-empty-inline">（暂无）</span>}
       </div>
       {doneHidden > 0 && (
@@ -873,7 +926,7 @@ function useTabStripDrag() {
 export default function ToolPanel({
   contextStats, contextHistory, running, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
-  activeTab, onTabChange, onCompact, compacting,
+  activeTab, onTabChange, onCompact, compacting, onCloseAgent,
 }: {
   contextStats: ContextStats | null;
   /** 每轮水位轨迹（面板趋势图数据源） */
@@ -896,6 +949,8 @@ export default function ToolPanel({
   onCompact?: () => void;
   /** 压缩进行中 */
   compacting?: boolean;
+  /** 手动取消子 Agent（Agents 看板 ✕ 按钮） */
+  onCloseAgent?: (agentId: string) => void;
 }) {
   const [panelTabLocal, setPanelTabLocal] = useState<PanelTabId>("context");
   // 受控优先（外部传入），否则内部状态
@@ -950,7 +1005,7 @@ export default function ToolPanel({
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />
             : panelTab === "agents"
-              ? <AgentsPanel agents={agentBoard ?? []} orchestrator={orchestrator} />
+              ? <AgentsPanel agents={agentBoard ?? []} orchestrator={orchestrator} onCloseAgent={onCloseAgent} />
               : panelTab === "mcp"
                 ? <McpPanel servers={mcpServers} />
                 : panelTab === "background"

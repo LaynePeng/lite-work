@@ -381,6 +381,39 @@ async def test_session_agents_endpoint(live_client):
     assert ids == {"sa_test1", "sa_test2"}
 
 
+async def test_session_agent_close_endpoint(live_client):
+    """Agents 看板手动取消：POST /api/sessions/{sid}/agents/{aid}/close。
+
+    - 正常路径：取消 running 记录 → ok、状态置 closed、返回 previous_status；
+    - 未知 agent → 404；
+    - 无 manager 的会话 → 404。
+    """
+    c, app, _ = live_client
+    r = await c.post("/api/sessions", json={"name": "取消测试"})
+    sid = r.json()["session_id"]
+    from litework.orchestration.agent_manager import AgentRecord
+
+    mgr = app.agent_manager(sid)
+    mgr.agents["sa_closeme"] = AgentRecord(
+        agent_id="sa_closeme", nickname="victim", role="explorer",
+        task="长任务", status="running",
+    )
+    r = await c.post(f"/api/sessions/{sid}/agents/sa_closeme/close")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["previous_status"] == "running"
+    assert mgr.agents["sa_closeme"].status == "closed"
+
+    # 未知 agent → 404
+    r = await c.post(f"/api/sessions/{sid}/agents/sa_nope/close")
+    assert r.status_code == 404
+
+    # 无 manager 的会话（create=False 返回 None）→ 404
+    r = await c.post("/api/sessions/never-exists/agents/sa_x/close")
+    assert r.status_code == 404
+
+
 async def test_security_hot_reload(live_client):
     c, app, _ = live_client
     r = await c.get("/api/security")

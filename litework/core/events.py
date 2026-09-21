@@ -193,6 +193,10 @@ class AgentSpawnedPayload(TypedDict):
 
 class AgentClosedPayload(TypedDict):
     agentId: str
+    # 关闭发起方：agent=Agent 工具 close_agent / user=Agents 看板手动取消。
+    # 恒定携带（该文件 from __future__ import annotations 下 NotRequired 会
+    # 被误判必填，与 ApprovalResolvedPayload 同一方案）
+    by: str
 
 
 class WorktreeMergePayload(TypedDict):

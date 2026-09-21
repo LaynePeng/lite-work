@@ -4655,6 +4655,74 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   white-space: nowrap;
 }
 
+/* Agents 看板：手动取消按钮（仅运行中卡片显示） */
+.agent-cancel-btn {
+  margin-left: auto;
+  border: 1px solid rgba(248, 81, 73, 0.45);
+  background: transparent;
+  color: var(--red);
+  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+  transition: background .15s;
+}
+.agent-cancel-btn:hover {
+  background: rgba(248, 81, 73, 0.15);
+}
+
+/* 运行中卡片展开的实时输出详情（步骤历史 + 全量流式文本） */
+.agent-live-detail {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.agent-steps-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10.5px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+}
+.agent-steps-mark.done { color: var(--green); }
+.agent-steps-mark.running { color: var(--accent); }
+.agent-steps-mark.error,
+.agent-steps-mark.cancelled { color: var(--red); }
+.agent-steps-tool { color: var(--text-1); }
+.agent-steps-dur { opacity: 0.6; }
+.agent-steps-brief {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.65;
+  flex: 1;
+}
+.agent-stream-full {
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .agent-summary {
   font-size: 11.5px;
   line-height: 1.5;

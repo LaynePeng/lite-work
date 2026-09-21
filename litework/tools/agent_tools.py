@@ -157,7 +157,7 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         bus = parent_events or (kernel.events if kernel is not None else None)
         if bus is not None:
             try:
-                await bus.emit("agent:closed", {"agentId": result["agent_id"]})
+                await bus.emit("agent:closed", {"agentId": result["agent_id"], "by": "agent"})
             except Exception:
                 pass
         return f"[Agent 已关闭] {result['agent_id']}（关闭前状态：{result['previous_status']}）"

@@ -262,3 +262,102 @@ describe("ToolPanel · TODOs 面板（竖排脊线看板）", () => {
     expect(container.querySelector(".ctx2-meter > i")?.getAttribute("style")).toContain("100%");
   });
 });
+
+// ---------------------------------------------------------------- Agents 看板
+
+import { fireEvent } from "@testing-library/react";
+import type { SubAgentProgress } from "../types";
+
+const RUNNING_AGENT: SubAgentProgress = {
+  subagentId: "sa_cancel1",
+  role: "explorer",
+  task: "调研竞品",
+  turn: 2,
+  steps: [
+    { tool: "webfetch", status: "done", durationMs: 812 },
+    { tool: "search_code", status: "running" },
+  ],
+  status: "running",
+  startedAt: Date.now() - 45_000,
+  streaming_text: "正在分析搜索结果…实时输出内容 ABC123",
+  mode: "orchestrate",
+};
+
+const DONE_AGENT: SubAgentProgress = {
+  subagentId: "sa_done1",
+  role: "critic",
+  task: "审查方案",
+  turn: 3,
+  steps: [],
+  status: "done",
+  summary: "方案可行",
+  mode: "orchestrate",
+};
+
+describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", () => {
+  it("运行中卡片显示 ✕ 取消按钮，完成后不显示", () => {
+    const onCloseAgent = vi.fn();
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="agents" agentBoard={[RUNNING_AGENT, DONE_AGENT]}
+        onCloseAgent={onCloseAgent} />
+    );
+    const btns = container.querySelectorAll(".agent-cancel-btn");
+    expect(btns.length).toBe(1);  // 仅 running 卡片有
+  });
+
+  it("点击 ✕ 确认后调用 onCloseAgent（agentId 正确）", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onCloseAgent = vi.fn();
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="agents" agentBoard={[RUNNING_AGENT]}
+        onCloseAgent={onCloseAgent} />
+    );
+    fireEvent.click(container.querySelector(".agent-cancel-btn")!);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onCloseAgent).toHaveBeenCalledWith("sa_cancel1");
+    confirmSpy.mockRestore();
+  });
+
+  it("确认框点「取消」不触发关闭", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onCloseAgent = vi.fn();
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="agents" agentBoard={[RUNNING_AGENT]}
+        onCloseAgent={onCloseAgent} />
+    );
+    fireEvent.click(container.querySelector(".agent-cancel-btn")!);
+    expect(onCloseAgent).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("点击运行卡片展开实时输出：步骤历史 + 全量流式文本（截尾 100 字符→全文）", () => {
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="agents" agentBoard={[RUNNING_AGENT]} />
+    );
+    // 未展开：只有尾部摘要
+    expect(container.querySelector(".agent-live-detail")).toBeNull();
+    const live = container.querySelector(".agent-live")!;
+    fireEvent.click(live);
+    // 展开：详情区出现，步骤与全量文本可见
+    const detail = container.querySelector(".agent-live-detail");
+    expect(detail).toBeTruthy();
+    expect(container.querySelectorAll(".agent-steps-row").length).toBe(2);
+    expect(container.querySelector(".agent-steps-tool")?.textContent).toBe("webfetch");
+    expect(container.querySelector(".agent-stream-full")?.textContent).toContain("ABC123");
+    // 再点收起
+    fireEvent.click(container.querySelector(".agent-live")!);
+    expect(container.querySelector(".agent-live-detail")).toBeNull();
+  });
+
+  it("未传 onCloseAgent 时不渲染取消按钮（功能可关）", () => {
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="agents" agentBoard={[RUNNING_AGENT]} />
+    );
+    expect(container.querySelector(".agent-cancel-btn")).toBeNull();
+  });
+});

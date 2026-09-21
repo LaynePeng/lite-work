@@ -117,6 +117,9 @@ class AgentRecord:
     started_at: float = 0.0
     finished_at: Optional[float] = None
     error: str = ""
+    # 关闭发起方：agent=编排者 close_agent / user=看板手动取消。
+    # 用户取消必须通知编排者（它不知道任务被砍了），编排者自己关闭则不用
+    closed_by: str = ""
     # 后台执行任务（asyncio.Task；声明 Any 避免循环导入）
     runner: Any = None
     # 运行中的 AgentLoop 引用（send_message 直达 agent_inbox；结束/取消后置 None）
@@ -357,7 +360,9 @@ class SessionAgentManager:
                 record.status = "completed" if result.get("completed") else "errored"
             except asyncio.CancelledError:
                 record.status = "closed"
-                record.summary = record.summary or "（被 close_agent 终止）"
+                record.summary = record.summary or (
+                    "（已被用户手动取消）" if record.closed_by == "user"
+                    else "（被 close_agent 终止）")
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception("[AgentManager] 子 agent 执行异常: %s", agent_id)
@@ -391,7 +396,24 @@ class SessionAgentManager:
     def _enqueue_notification(self, record: AgentRecord) -> None:
         """终态 → 通知队列（完成即通知模型的数据源）。"""
         if record.status == "closed":
-            return  # 主动关闭不算交付
+            if record.closed_by != "user":
+                return  # 编排者自己 close_agent 的：它知道，不算交付
+            # 用户从看板手动取消：编排者完全不知情，必须通知（否则它以为任务还在跑）
+            self.notifications.append({
+                "agent_id": record.agent_id,
+                "nickname": record.nickname,
+                "role": record.role,
+                "status": record.status,
+                "summary": record.summary,
+                "changed_files": list(record.changed_files),
+                "tokens": record.tokens,
+                "text": (
+                    f"[agent:cancelled-by-user] {record.nickname}（{record.role}）"
+                    f"的任务「{record.task[:80]}」已被用户手动取消。"
+                    f"请勿等待其结果；如仍需要该工作，请重新派生或自行完成。"
+                ),
+            })
+            return
         files = f"（改动文件：{', '.join(record.changed_files[:10])}）" if record.changed_files else ""
         self.notifications.append({
             "agent_id": record.agent_id,
@@ -425,10 +447,15 @@ class SessionAgentManager:
     # ------------------------------------------------------------ 查询 / 生命周期
 
     def list_agents(self, include_closed: bool = False) -> List[Dict[str, Any]]:
+        """编排者视角的 agent 清单。
+
+        closed 记录默认隐藏（编排者自己 close_agent 的不算交付）；但用户
+        手动取消（closed_by=user）必须可见——编排者要能发现任务被砍。
+        """
         self._restore_from_session()
         out = []
         for r in self.agents.values():
-            if r.status == "closed" and not include_closed:
+            if r.status == "closed" and not include_closed and r.closed_by != "user":
                 continue
             out.append({
                 "agent_id": r.agent_id, "nickname": r.nickname, "role": r.role,
@@ -442,11 +469,19 @@ class SessionAgentManager:
     def get(self, agent_id: str) -> Optional[AgentRecord]:
         return self.agents.get(agent_id)
 
-    async def close(self, agent_id: str) -> Dict[str, Any]:
+    async def close(self, agent_id: str, by: str = "agent") -> Dict[str, Any]:
+        """关闭一个 agent（取消 runner + 置 closed 终态）。
+
+        by：关闭发起方——agent=编排者 close_agent 工具 / user=Agents 看板
+        手动取消 / shutdown=会话清理。by=user 会记录到 closed_by，
+        _enqueue_notification 据此把「任务被用户砍掉」通知编排者（否则
+        编排者下一轮还以为任务在跑）。
+        """
         record = self.agents.get(agent_id)
         if record is None:
             return {"ok": False, "error": f"未知 agent: {agent_id}"}
         previous = record.status
+        record.closed_by = by
         runner = getattr(record, "runner", None)
         if runner is not None and not runner.done():
             runner.cancel()
@@ -469,7 +504,7 @@ class SessionAgentManager:
             if record is None or record.status in ("closed", "completed", "errored"):
                 continue
             try:
-                await self.close(agent_id)
+                await self.close(agent_id, by="shutdown")
                 stopped += 1
             except Exception:
                 logger.debug("[AgentManager] shutdown %s 失败", agent_id, exc_info=True)
@@ -622,7 +657,9 @@ class SessionAgentManager:
                 record.status = "completed" if result.get("completed") else "errored"
             except asyncio.CancelledError:
                 record.status = "closed"
-                record.summary = record.summary or "（被 close_agent 终止）"
+                record.summary = record.summary or (
+                    "（已被用户手动取消）" if record.closed_by == "user"
+                    else "（被 close_agent 终止）")
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception("[AgentManager] followup 执行异常: %s", agent_id)

@@ -193,6 +193,11 @@ export const api = {
     req<{ tasks: import("./types").BackgroundTaskInfo[] }>("/api/tasks/background"),
   killBackgroundTask: (taskId: string) =>
     req<{ ok: boolean }>(`/api/tasks/background/${encodeURIComponent(taskId)}/kill`, { method: "POST" }),
+  /** Agents 看板手动取消子 Agent：取消 runner + 广播 agent:closed（by=user） */
+  closeSubAgent: (sessionId: string, agentId: string) =>
+    req<{ ok: boolean; agent_id: string; previous_status: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/close`,
+      { method: "POST" }),
   approve: (approvalId: string, approved: boolean, opts?: { remember?: boolean; sessionId?: string | null }) =>
     req<{ ok: boolean; remembered?: { ok: boolean } | null }>("/api/approve", {
       method: "POST", body: JSON.stringify({

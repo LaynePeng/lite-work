@@ -1687,10 +1687,25 @@ export default function App() {
           break;
         }
         case "agent:closed": {
-          // close_agent 主动关闭：从 Agents 看板移除卡片
+          // 关闭分流：by=agent（close_agent 工具）→ 从看板移除卡片；
+          // by=user（看板手动取消）→ 置终态保留卡片（乐观更新已先行，此处幂等兜底）
           const closedData = ev.data as Record<string, unknown>;
-          log(`◈ Agent ${String(closedData.agentId ?? "")} 已关闭`);
-          pushAgentEvent(sid, "closed", closedData);
+          const byUser = closedData.by === "user";
+          log(`◈ Agent ${String(closedData.agentId ?? "")} 已${byUser ? "被用户取消" : "关闭"}`);
+          if (byUser) {
+            const aid = String(closedData.agentId ?? "");
+            const chat = getChat(sid);
+            const board = chat.agentBoard ?? [];
+            if (board.some((a) => a.subagentId === aid && a.status === "running")) {
+              patchChat(sid, {
+                agentBoard: board.map((a) => a.subagentId === aid && a.status === "running"
+                  ? { ...a, status: "done" as const, summary: a.summary ?? "已被用户取消" }
+                  : a),
+              });
+            }
+          } else {
+            pushAgentEvent(sid, "closed", closedData);
+          }
           break;
         }
         case "skill:loaded": {
@@ -2558,6 +2573,25 @@ export default function App() {
     }
   }, [activeSessionId, patchChat, pushLog]);
 
+  /** Agents 看板手动取消子 Agent：调 REST 关闭（后端广播 agent:closed by=user），
+   *  本地乐观置终态——SSE 只在主任务运行时存在，不能依赖事件到达。 */
+  const handleCloseAgent = useCallback(async (agentId: string) => {
+    const sid = activeSessionId;
+    if (!sid) return;
+    const chat = getChat(sid);
+    patchChat(sid, {
+      agentBoard: (chat.agentBoard ?? []).map((a) => a.subagentId === agentId && a.status === "running"
+        ? { ...a, status: "done" as const, summary: a.summary ?? "已被用户取消" }
+        : a),
+    });
+    pushLog(`■ 已请求取消子 Agent ${agentId}`);
+    try {
+      await api.closeSubAgent(sid, agentId);
+    } catch (e) {
+      pushLog(`✗ 取消失败: ${(e as Error).message}`);
+    }
+  }, [activeSessionId, getChat, patchChat, pushLog]);
+
   const approve = useCallback(
     async (approvalId: string, approved: boolean, remember = false) => {
       patchActiveChat({ pendingApprovals: (currentChat.pendingApprovals ?? []).filter((p) => p.id !== approvalId) });
@@ -2902,6 +2936,7 @@ export default function App() {
             backgroundTasks={backgroundTasks}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}
+            onCloseAgent={(id) => void handleCloseAgent(id)}
             onKillBackground={(id) => void api.killBackgroundTask(id).then(() => {
               setBackgroundTasks((prev) => prev.filter((t) => t.task_id !== id));
             }).catch(() => {})}

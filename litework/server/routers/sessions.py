@@ -279,6 +279,33 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         return app.worktree_status(session_id)
 
+    @router.post("/api/sessions/{session_id}/agents/{agent_id}/close")
+    async def close_session_agent(session_id: str, agent_id: str, request: Request):
+        """从 Agents 看板手动取消一个后台子 Agent。
+
+        复用 AgentManager.close（取消 runner + 置 closed 终态），并照
+        /api/approve 的广播模式向活跃任务 kernel 发 agent:closed（by=user）。
+        前端同时做乐观更新——SSE 只在主任务运行时存在，不能依赖事件到达。
+        """
+        import logging as _logging
+
+        ctx.check_auth(request)
+        manager = app.agent_manager(session_id, create=False)
+        if manager is None:
+            raise HTTPException(status_code=404, detail="会话无活动子 Agent")
+        result = await manager.close(agent_id, by="user")
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=str(result.get("error", "未知 agent")))
+        # 广播给所有活跃任务的 kernel（UI 按 agentId + by 匹配更新看板卡片）
+        for handle in list(tasks.tasks.values()):
+            try:
+                await handle.kernel.events.emit(
+                    "agent:closed", {"agentId": agent_id, "by": "user"})
+            except Exception:
+                _logging.getLogger("litework.server").debug(
+                    "[Agents] 广播 agent:closed 失败", exc_info=True)
+        return result
+
     @router.get("/api/sessions/{session_id}/worktree/diff")
     async def worktree_diff(session_id: str, request: Request):
         """worktree 改动的人类可读 unified diff（评审卡「查看 diff」）。"""
