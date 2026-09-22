@@ -1002,6 +1002,39 @@ async def test_grandchild_attaches_to_root_manager(tmp_path):
         current_session_id.reset(token2)
 
 
+async def test_legacy_role_denied_tool_gets_explanatory_rejection(tmp_path, monkeypatch):
+    """旧模型角色（ROLE_TOOLS 白名单）：explorer 越权调用 write_file → 回填
+    「权限拒绝」自解释消息（与职责域路径同口径），而非含糊的「未注册」。"""
+    app = _make_app(tmp_path)
+    app._mock_adapter = MockLLMAdapter([
+        ("", [tool_call("write_file", '{"filePath":"x.txt","content":"hi"}', cid="w1")]),
+        ("（已说明边界）", []),
+    ])
+
+    captured: list = []
+    original_init = AgentLoop.__init__
+
+    def _capture_init(self, *args, **kwargs):
+        captured.append(self)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(AgentLoop, "__init__", _capture_init)
+
+    mgr = app.agent_manager("s-legacy")
+    r = await mgr.spawn("调研一下", role="explorer")
+    await mgr.wait([r["agent_id"]], timeout_ms=30000)
+
+    subs = [l for l in captured
+            if l.registry.has("read_file") and not l.registry.has("write_file")]
+    assert subs, "未捕获 explorer 子 Agent loop"
+    tool_msgs = [m for m in subs[0].kernel.ctx.messages if m.role == "tool"]
+    assert any("[权限拒绝]" in m.content and "write_file" in m.content
+               for m in tool_msgs), "白名单外越权调用未回填自解释拒绝"
+    assert any("explorer" in m.content for m in tool_msgs), "拒绝消息未标明角色"
+    # 文件未被写入
+    assert not os.path.exists(tmp_path / "x.txt")
+
+
 async def test_followup_preserves_model_and_steps_semantics(tmp_path):
     """Bug 修复：followup 保留模型路由；max_steps=0 走配置默认+封顶。"""
     app = _make_app(tmp_path)

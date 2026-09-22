@@ -169,6 +169,14 @@ class SubAgentRunner:
         effective_perms = dict(permissions or {})
         for t in (extra_denied_tools or []):
             effective_perms[t] = "deny"
+        # 旧模型角色（ROLE_TOOLS / profile.tools 显式白名单）：白名单外的已知工具
+        # 同样标记 deny——仅用于越权调用的自解释拒绝消息（build_registry 侧
+        # allowed 过滤已裁剪，标记不影响实际工具面）。深度排除（sub_agent_
+        # excludes）不在此列：那是嵌套限制而非权限边界，保持通用报错。
+        if allowed is not None:
+            for t in self.app._all_tool_names():
+                if t not in allowed:
+                    effective_perms.setdefault(t, "deny")
         # worktree 物理隔离：工具集以 worktree 为工作区构建
         agent_ws = workspace_override or self.app.workspace
         registry = self.app.build_registry(
