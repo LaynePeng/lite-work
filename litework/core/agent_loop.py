@@ -845,11 +845,13 @@ class AgentLoop:
     async def _execute_tool_call_inner(self, call: ToolCall, stats: Dict[str, Any]) -> str:
         tool_name = call.name
 
-        # 1. 死循环检测（连续 N 次相同工具+相同参数；只读/写类工具分级阈值）
+        # 1. 死循环检测（精确重复：连续 N 次相同工具+相同参数；滑窗重读：同一文件
+        #    反复读重叠区域但行窗口每次微变——精确哈希拦不住的震荡形态）
         if self.state.register_and_check_loop(tool_name, call.arguments):
             return (
-                f"[Harness Defense]: 检测到死循环！你已用完全相同参数连续调用 {tool_name} "
-                f"{self.state._threshold_for(tool_name)} 次。请停止并换一种策略。"
+                f"[Harness Defense]: 检测到死循环！{self.state.last_loop_detail}。"
+                "请立即停止重复读取：目标内容已在上下文中，直接执行编辑/写入等下一步动作；"
+                "若确实无法推进，停止调用工具并向用户说明遇到的困难。"
             )
 
         # 2. JSON 容错解析（失败回填给 LLM 自愈）

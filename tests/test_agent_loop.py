@@ -109,6 +109,95 @@ async def test_loop_detection_strict_for_write_tools(tmp_path):
     assert result == "好吧，我换策略。"
 
 
+async def test_loop_detection_sliding_window(tmp_path):
+    """窄行窗口滑动重读同一文件（参数每次都不同）→ 精确哈希拦不住，冗余重读检测兜底。
+
+    事故复盘：read_file 1-6、5-7、6-8、7-8……绕过旧防御空转十几轮。
+    """
+    registry = ToolRegistry()
+    registry.register("read_file", "读文件", {"type": "object"},
+                      lambda args: "content")
+
+    reads = [
+        '{"filePath":"recipe.md"}',                      # 整读（不冗余）
+        '{"filePath":"recipe.md","startLine":1,"endLine":6}',
+        '{"filePath":"recipe.md","startLine":5,"endLine":7}',   # 冗余 1
+        '{"filePath":"recipe.md","startLine":6,"endLine":8}',   # 冗余 2
+        '{"filePath":"recipe.md","startLine":7,"endLine":8}',   # 冗余 3
+        '{"filePath":"recipe.md","startLine":6,"endLine":9}',   # 冗余 4
+        '{"filePath":"recipe.md","startLine":2,"endLine":3}',   # 冗余 5 → 触发
+    ]
+    adapter = MockLLMAdapter(
+        [("", [tool_call("read_file", r)]) for r in reads]
+        + [("收到，直接执行编辑。", [])]
+    )
+    loop, kernel, _ = _make_loop(tmp_path, adapter, registry)
+
+    result, _ = await loop.run_task("改 recipe.md", system_prompt=SYSTEM_PROMPT)
+    tool_msgs = [m for m in kernel.ctx.messages if m.role == "tool"]
+    assert any("死循环" in m.content and "重复读取" in m.content for m in tool_msgs)
+    assert result == "收到，直接执行编辑。"
+
+
+async def test_no_loop_for_sequential_chunk_reads(tmp_path):
+    """顺序分块读大文件（窗口互不重叠）→ 冗余计数不增长，不误杀。"""
+    registry = ToolRegistry()
+    registry.register("read_file", "读文件", {"type": "object"},
+                      lambda args: "content")
+
+    reads = [
+        '{"filePath":"big.ts","startLine":1,"endLine":50}',
+        '{"filePath":"big.ts","startLine":51,"endLine":100}',
+        '{"filePath":"big.ts","startLine":101,"endLine":150}',
+        '{"filePath":"big.ts","startLine":151,"endLine":200}',
+        '{"filePath":"big.ts","startLine":201,"endLine":250}',
+        '{"filePath":"big.ts","startLine":251,"endLine":300}',
+    ]
+    adapter = MockLLMAdapter(
+        [("", [tool_call("read_file", r)]) for r in reads]
+        + [("读完了。", [])]
+    )
+    loop, kernel, _ = _make_loop(tmp_path, adapter, registry)
+
+    result, _ = await loop.run_task("读大文件", system_prompt=SYSTEM_PROMPT)
+    tool_msgs = [m for m in kernel.ctx.messages if m.role == "tool"]
+    assert not any("死循环" in m.content for m in tool_msgs)
+    assert result == "读完了。"
+
+
+def test_state_tracker_write_invalidates_coverage():
+    """写类调用清空该文件已读覆盖：写后重读是合法校验，冗余计数从零重算。
+
+    判别点：若无清空逻辑，写之后的第一次重读就是第 5 次冗余 → 必触发。
+    """
+    from litework.core.state_tracker import AgentStateTracker
+
+    st = AgentStateTracker()
+    # 冗余累计到 4（差一步触发）
+    assert not st.register_and_check_loop(
+        "read_file", '{"filePath":"a.ts","startLine":1,"endLine":10}')
+    for lo, hi in [(5, 8), (6, 9), (4, 7), (2, 3)]:
+        assert not st.register_and_check_loop(
+            "read_file", f'{{"filePath":"a.ts","startLine":{lo},"endLine":{hi}}}')
+
+    # 写文件 → 覆盖清空
+    assert not st.register_and_check_loop(
+        "write_file", '{"filePath":"a.ts","content":"x"}')
+
+    # 写后的第一次重读不触发（覆盖已清零，冗余计数从头算）
+    assert not st.register_and_check_loop(
+        "read_file", '{"filePath":"a.ts","startLine":5,"endLine":8}')
+
+    # 对照：没有写操作打断时，第 5 次冗余即触发
+    st2 = AgentStateTracker()
+    st2.register_and_check_loop("read_file", '{"filePath":"b.ts","startLine":1,"endLine":10}')
+    for lo, hi in [(5, 8), (6, 9), (4, 7), (2, 3)]:
+        assert not st2.register_and_check_loop(
+            "read_file", f'{{"filePath":"b.ts","startLine":{lo},"endLine":{hi}}}')
+    assert st2.register_and_check_loop(
+        "read_file", '{"filePath":"b.ts","startLine":5,"endLine":8}')
+
+
 async def test_json_self_heal(tmp_path):
     """非法 JSON 参数 → 回填错误让 LLM 自愈，不 crash。"""
     registry = ToolRegistry()
