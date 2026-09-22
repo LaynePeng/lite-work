@@ -247,6 +247,10 @@ export default function App() {
   }, []);
   const [draftModels, setDraftModels] = useState<Record<string, SessionModel | null>>({});
   const [draftReasoning, setDraftReasoning] = useState<Record<string, string>>({});
+  // draft（新会话 tab 未建 session）暂存的模型/推理强度：send 内读 ref 最新值，
+  // 避免 useCallback 闭包依赖漏列导致「切换 effort/模型不生效」的回归
+  const draftModelsRef = useRef<Record<string, SessionModel | null>>({});
+  const draftReasoningRef = useRef<Record<string, string>>({});
 
   // 对话区是否被上翻（非贴底）：驱动 Composer 的状态化快捷键提示
   const [chatScrolledUp, setChatScrolledUp] = useState(false);
@@ -311,6 +315,8 @@ export default function App() {
 
   useEffect(() => { chatStatesRef.current = chatStates; }, [chatStates]);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+  useEffect(() => { draftModelsRef.current = draftModels; }, [draftModels]);
+  useEffect(() => { draftReasoningRef.current = draftReasoning; }, [draftReasoning]);
 
   // 应用菜单「关于」→ 打开设计版关于弹窗（仅桌面模式有 preload 桥）
   useEffect(() => {
@@ -2409,12 +2415,14 @@ export default function App() {
         return;
       }
       let sid = activeTabId ? tabsRef.current.find((t) => t.id === activeTabId)?.sessionId : null;
+      // 会话态走 getChat（chatStatesRef 最新）/ draft 走对应 ref：避免 useCallback
+      // 闭包捕获旧值导致「切换模型/推理强度后发送仍带旧档位」的回归
       const selectedModel = activeSessionId
-        ? currentChat.modelOverride ?? null
-        : (activeTabId ? draftModels[activeTabId] ?? null : null);
+        ? (getChat(activeSessionId).modelOverride ?? null)
+        : (activeTabId ? draftModelsRef.current[activeTabId] ?? null : null);
       const reasoningEffort = activeSessionId
-        ? (currentChat.reasoningEffort ?? "")
-        : (activeTabId ? draftReasoning[activeTabId] ?? "" : "");
+        ? (getChat(activeSessionId).reasoningEffort ?? "")
+        : (activeTabId ? draftReasoningRef.current[activeTabId] ?? "" : "");
       let createdSession = false;
       if (!sid) {
         // 当前 tab 尚无 session（newChatTab 的占位），首次发送时创建并绑定到该 tab
@@ -2422,6 +2430,9 @@ export default function App() {
         sid = session_id;
         createdSession = true;
         patchChat(session_id, { ...EMPTY_CHAT, messages: [] });
+        // 暂存的推理强度随 session 创建写入（同模型/协作模式的处理），
+        // 否则首条消息后档位丢失、会话内后续消息回到供应商默认
+        if (reasoningEffort) patchChat(session_id, { reasoningEffort });
         setTabs((prev) => prev.map((t) =>
           t.id === activeTabId ? { ...t, sessionId: session_id, modelOverride: selectedModel } : t
         ));
@@ -2494,7 +2505,7 @@ export default function App() {
         pushLog(`✗ 提交失败: ${(e as Error).message}`);
       }
     },
-    [activeTabId, activeSessionId, currentChat.modelOverride, draftCollabModes, draftModels, getChat, patchChat, refreshSessions, cancelStreamFlush, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, runContinueCommand, runWorktreeCommand]
+    [activeTabId, activeSessionId, draftCollabModes, getChat, patchChat, refreshSessions, cancelStreamFlush, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, runContinueCommand, runWorktreeCommand]
   );
 
   // 发送队列中的单条指令到当前运行任务（queue_input 注入下一回合）

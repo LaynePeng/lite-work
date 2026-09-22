@@ -2,7 +2,7 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [1.9.7] — 修复推理强度切换失效
 
 ### 新增
 - **内置专利技能 `patent-disclosure-skill`（v4.8.0，随包分发）**：中国专利一站式技能——专利点挖掘
@@ -18,6 +18,13 @@
   `playwright`（mermaid 出图 + CNIPA 检索，含平台 node driver）随安装包分发（`_internal/`），
   技能解释器离线直接复用，无需用户机器 Python 再装；浏览器复用系统 Chrome/Edge，无则首次
   `playwright install chromium` 后即可用。
+
+### 修复
+- **推理强度（reasoning_effort）切换失效**：主输入框与设置弹窗切换档位后，实际请求仍带旧档位
+  （通常为空串 → 后端按「未指定」跟随供应商默认）。根因是 `send` 回调的 `useCallback` 依赖数组
+  漏列 `reasoningEffort`/`draftReasoning`，闭包捕获了切换前的旧值。修复：`send` 内改走
+  `getChat`/ref 读最新值（与 `sendQueuedItem` 一致），并补「新建会话 tab 的暂存档位在创建会话时
+  接力写入会话」；新增前端 App 级回归测试（draft 路径 + 会话路径）与后端 override/payload 护栏测试。
 
 ## [1.9.4] — 桌面体验修复
 
