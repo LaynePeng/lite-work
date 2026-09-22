@@ -112,10 +112,14 @@ class AgentLoop:
         enable_observation_pack: bool = True,
         enable_compaction_economics: bool = True,
         header_conversation_id: Optional[str] = None,
+        denied_tools: Optional[Dict[str, str]] = None,
     ) -> None:
         self.kernel = kernel
         self.adapter = adapter
         self.registry = registry
+        # 越权工具 → 自解释拒绝消息（app.create_loop / sub_agent 按权限域装配；
+        # None = 未提供，退回注册表的「未注册的工具」通用报错）
+        self.denied_tools: Dict[str, str] = denied_tools or {}
         self.session_store = session_store
         self.context_manager = context_manager or ContextManager(token_budget)
         self.max_steps = max_steps
@@ -853,6 +857,13 @@ class AgentLoop:
                 "请立即停止重复读取：目标内容已在上下文中，直接执行编辑/写入等下一步动作；"
                 "若确实无法推进，停止调用工具并向用户说明遇到的困难。"
             )
+
+        # 1.5 越权工具调用：不在当前 Agent 工具面内、且是被权限域 deny 的已知工具
+        #     → 回填自解释拒绝（含原因与出路），而不是「未注册的工具」——后者易被
+        #     模型误读为工具名笔误而换参数重试（v1.9.x 循环事故的信任污染入口）
+        denial = self.denied_tools.get(tool_name)
+        if denial is not None and not self.registry.has(tool_name):
+            return denial
 
         # 2. JSON 容错解析（失败回填给 LLM 自愈）
         ok, args, error = safe_json_parse(call.arguments)

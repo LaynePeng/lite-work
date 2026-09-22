@@ -115,3 +115,28 @@ def domains_to_allowed_and_permissions(
         if t not in allowed:
             allowed.append(t)
     return allowed, permissions
+
+
+def denied_tool_messages(agent_label: str, permissions: Dict[str, str]) -> Dict[str, str]:
+    """权限为 deny 的工具 → 自解释拒绝消息（供 AgentLoop 越权调用时回填）。
+
+    背景（v1.9.x 循环事故复盘）：模型越权调用被裁剪的工具时，注册表只回
+    「[Error]: 未注册的工具」——不解释原因，模型易误读为工具名笔误而换参数
+    重试，成为过度验证/循环的信任污染入口。此消息明确三点：是权限边界而非
+    工具名错误、重试无效、出路是什么（向用户说明 / 写入计划交接）。
+    """
+    return {
+        tool: _denial_message(agent_label, tool)
+        for tool, action in permissions.items() if action == "deny"
+    }
+
+
+def _denial_message(agent_label: str, tool: str) -> str:
+    domain = domain_of(tool)
+    label = DOMAIN_LABELS.get(domain, domain)
+    return (
+        f"[权限拒绝]: {tool} 属于「{label}」职责域，当前 Agent（{agent_label}）对该域"
+        "无权限（deny），此调用不会执行。这不是工具名错误，换参数重试同样会被拒绝——"
+        "能力边界由用户配置。若任务确需该能力，请在回复中向用户说明，"
+        "或把需要的改动写入计划 / 交接给具备对应权限的 Agent 执行。"
+    )

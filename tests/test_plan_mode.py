@@ -104,6 +104,32 @@ async def test_plan_mode_never_leaks_write_tools(tmp_path):
     assert "未注册" in result
 
 
+async def test_plan_denied_tool_gets_explanatory_rejection(tmp_path):
+    """plan 越权调用写工具：回填「权限拒绝」自解释消息，而非含糊的「未注册」。
+
+    事故复盘（v1.9.x 循环）：模型（幻觉/沿旧上下文）调用被裁剪的写工具时，
+    「[Error]: 未注册的工具」不解释原因，被误读为工具名笔误 → 换参数重试 →
+    信任污染 → 滑窗重读循环。拒绝消息必须自解释：权限边界 + 不可重试 + 出路。
+    """
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app._mock_adapter = MockLLMAdapter([
+        ("", [tool_call("apply_search_replace",
+                        '{"filePath":"x.txt","searchBlock":"a","replaceBlock":"b"}', cid="d1")]),
+        ("（已向用户说明权限边界）", []),
+    ])
+    tm = TaskManager(app)
+    handle = tm.start("plan-session", "帮我改配置", agent_id="plan")
+    await handle.task
+
+    tool_msgs = [m for m in handle.kernel.ctx.messages if m.role == "tool"]
+    assert any("[权限拒绝]" in m.content and "apply_search_replace" in m.content
+               for m in tool_msgs), "越权调用未回填自解释拒绝"
+    assert any("职责域" in m.content and "无权限" in m.content for m in tool_msgs)
+    assert any("重试" in m.content for m in tool_msgs), "拒绝消息未告知重试无效"
+    # 文件未被写入
+    assert not os.path.exists(tmp_path / "x.txt")
+
+
 async def test_build_mode_keeps_full_tools(tmp_path):
     """对照：build 模式仍拥有全部工具，写文件正常执行。"""
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))

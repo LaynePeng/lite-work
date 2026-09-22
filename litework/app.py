@@ -1900,10 +1900,21 @@ class AgentApp:
                 )
             except Exception:
                 logger.warning("[App] reducer 适配器构建失败，证据收据机制停用", exc_info=True)
+        # 越权工具 → 自解释拒绝消息（职责域 deny 的工具；plan 只读等场景下，
+        # 模型幻觉调用写工具时明确告知是权限边界而非工具名错误，防止重试循环）
+        from .core.permissions import (
+            denied_tool_messages,
+            domains_to_allowed_and_permissions,
+        )
+
+        _, deny_perms = domains_to_allowed_and_permissions(
+            profile.domains, self._all_tool_names(), profile.extra_tools
+        )
         loop = AgentLoop(
             kernel=kernel,
             adapter=adapter,
             registry=registry,
+            denied_tools=denied_tool_messages(profile.id, deny_perms),
             session_store=self.session_store,
             context_manager=context_manager,
             max_steps=int(self.config.get("max_steps", 100)),

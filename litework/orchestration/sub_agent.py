@@ -252,10 +252,16 @@ class SubAgentRunner:
         # 供应商的成本会算错数倍；窗口同理（默认 128K 会让压缩阈值失真）。
         sub_provider = getattr(adapter, "provider_id", "") or self.app.llm_registry.active
         sub_model = getattr(adapter, "model", "") or ""
+        # 越权工具 → 自解释拒绝消息（角色域 deny + 父编排者收敛的 deny）：
+        # 与主会话 Agent 同口径，避免「未注册的工具」误导模型反复重试
+        from ..core.permissions import denied_tool_messages
+
+        agent_label = profile.id if profile is not None else role
         loop = AgentLoop(
             kernel=sub_kernel,
             adapter=adapter,  # 模型路由：per-agent 覆盖
             registry=registry,
+            denied_tools=denied_tool_messages(agent_label, effective_perms),
             session_store=None,  # 子 Agent 不落盘
             pricing=self.app.resolve_pricing(sub_provider, sub_model),
             context_window=self.app.llm_registry.get_context_window(sub_provider, sub_model),
