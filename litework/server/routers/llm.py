@@ -54,6 +54,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
         )
         return result
 
+    @router.post("/api/llm/models")
+    async def list_llm_models(payload: LLMTestRequest, request: Request):
+        ctx.check_auth(request)
+        return await app.list_llm_models(
+            provider_id=payload.provider_id or app.llm_registry.active,
+            overrides=payload.overrides,
+        )
+
     @router.get("/api/context/stats")
     async def context_stats(session_id: str = "", request: Request = None):
         if request:

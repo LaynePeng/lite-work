@@ -114,6 +114,12 @@ class RenameRequest(BaseModel):
     new_name: str
 
 
+class DeleteFilesRequest(BaseModel):
+    """批量删除工作区内文件：paths=工作区相对路径列表（单次最多 500 个）。"""
+
+    paths: list[str] = []
+
+
 def _guess_media_type(target: str) -> str:
     import mimetypes
     mt, _ = mimetypes.guess_type(target)
@@ -123,6 +129,34 @@ def _guess_media_type(target: str) -> str:
 def _is_git_internal(rel: str) -> bool:
     """路径是否位于 .git/ 内部（禁止经 UI 改删仓库元数据）。"""
     return ".git" in (rel or "").split("/")
+
+
+def _resolve_delete_target(workspace: str, path: str) -> tuple:
+    """单删/批量删除共用的路径守卫：返回 (规范化相对路径, 绝对路径)。
+
+    守卫规则（与文件页签删除语义一致）：
+    - 路径为空 → 400；
+    - `.git/` 内部 → 403（防破坏仓库元数据）；
+    - `..` 等越界 → 403；
+    - 目录 → 400（目录需递归确认，UI 未提供）；
+    - 文件不存在 → 404。
+    违规时抛 HTTPException；调用方决定抛出（单删）还是记 failed（批量）。
+    """
+    import os as _os
+
+    rel = (path or "").strip().lstrip("/\\").replace("\\", "/")
+    if not rel:
+        raise HTTPException(status_code=400, detail="缺少 path")
+    if _is_git_internal(rel):
+        raise HTTPException(status_code=403, detail="不允许操作 .git 内部文件")
+    target = _os.path.abspath(_os.path.join(workspace, rel))
+    if not target.startswith(workspace + _os.path.sep):
+        raise HTTPException(status_code=403, detail="路径越界")
+    if _os.path.isdir(target):
+        raise HTTPException(status_code=400, detail="不支持删除目录")
+    if not _os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    return rel, target
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -332,23 +366,42 @@ def create_router(ctx: ServerContext) -> APIRouter:
         import os as _os
 
         workspace = ctx.require_workspace()
-        rel = (path or "").strip().lstrip("/\\").replace("\\", "/")
-        if not rel:
-            raise HTTPException(status_code=400, detail="缺少 path")
-        if _is_git_internal(rel):
-            raise HTTPException(status_code=403, detail="不允许操作 .git 内部文件")
-        target = _os.path.abspath(_os.path.join(workspace, rel))
-        if not target.startswith(workspace + _os.path.sep):
-            raise HTTPException(status_code=403, detail="路径越界")
-        if _os.path.isdir(target):
-            raise HTTPException(status_code=400, detail="不支持删除目录")
-        if not _os.path.isfile(target):
-            raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+        rel, target = _resolve_delete_target(workspace, path)
         try:
             _os.remove(target)
         except OSError as exc:
             raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
         return {"ok": True, "path": rel}
+
+    @router.post("/api/files/delete-batch")
+    async def delete_files_batch(payload: DeleteFilesRequest, request: Request = None):
+        """批量删除工作区内的文件（单删守卫复用，单项失败不中断整批）。
+
+        与单删 DELETE /api/files 的区别：任一路径守卫失败或删除异常时，
+        不中断整批，而是把该项记入 failed 继续处理其余路径。
+        响应：{ok, deleted: 成功数, failed: [{path: 原样相对路径, error: 中文原因}]}。
+        """
+        if request:
+            ctx.check_auth(request)
+        import os as _os
+
+        workspace = ctx.require_workspace()
+        if not payload.paths:
+            raise HTTPException(status_code=400, detail="paths 不能为空")
+        if len(payload.paths) > 500:
+            raise HTTPException(status_code=400, detail="单次最多删除 500 个文件")
+        deleted = 0
+        failed: list = []
+        for path in payload.paths:
+            try:
+                _, target = _resolve_delete_target(workspace, path)
+                _os.remove(target)
+                deleted += 1
+            except HTTPException as exc:
+                failed.append({"path": path, "error": str(exc.detail)})
+            except OSError as exc:
+                failed.append({"path": path, "error": f"删除失败: {exc}"})
+        return {"ok": True, "deleted": deleted, "failed": failed}
 
     @router.post("/api/files/rename")
     async def rename_file(payload: RenameRequest, request: Request = None):

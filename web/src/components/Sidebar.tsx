@@ -37,6 +37,9 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
+  // 批量选择删除（文件页签）：selectMode 开关 + 已选路径集合
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const loadDir = useCallback(async (path: string) => {
     const r = await api.workspaceTree(path);
@@ -152,6 +155,42 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
     setRenameValue(name);
   };
 
+  /** 批量模式：切换某文件选中态。 */
+  const toggleSelected = (path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  /** 退出批量选择并清空已选。 */
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
+  /** 批量删除所选文件：确认 → 后端批量删除 → 部分失败提示（截断前 5 条）→ 刷新并退出。 */
+  const deleteSelected = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`删除所选 ${selected.size} 个文件？此操作不可恢复`)) return;
+    try {
+      const r = await api.deleteFilesBatch([...selected]);
+      if (r.failed.length > 0) {
+        const shown = r.failed.slice(0, 5);
+        window.alert(
+          `已删除 ${r.deleted} 个，${r.failed.length} 个失败：\n${shown.map((f) => `${f.path}：${f.error}`).join("\n")}` +
+            (r.failed.length > shown.length ? "\n…" : "")
+        );
+      }
+      await refresh();
+    } catch (err) {
+      window.alert(`删除失败：${err instanceof Error ? err.message : err}`);
+    }
+    exitSelectMode();
+  };
+
   /** 右键「用系统默认程序打开」：桌面端 shell.openPath；浏览器提示不支持。 */
   const openWithSystem = (path: string, name: string) => {
     setMenu(null);
@@ -189,7 +228,7 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           <div
             className={`tree-row dir ${open.has(n.path) ? "open" : ""}`}
             style={{ paddingLeft: depth * 14 + 8 }}
-            title={`${n.path}（双击在系统文件管理器中打开）`}
+            title={selectMode ? `${n.path}（批量删除不支持目录）` : `${n.path}（双击在系统文件管理器中打开）`}
             onClick={() => void toggleDir(n.path)}
             onDoubleClick={() => {
               // 双击目录：系统文件管理器打开；双击产生的两次单击会把
@@ -208,16 +247,27 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
       ) : (
         <div
           key={n.path}
-          className={`tree-row file ${n.status ? `st-${n.status}` : ""}`}
+          className={`tree-row file ${n.status ? `st-${n.status}` : ""} ${selectMode && selected.has(n.path) ? "selected" : ""}`}
           style={{ paddingLeft: depth * 14 + 8 }}
           title={n.path}
-          onDoubleClick={() => onFileOpen?.(n.path)}
+          onClick={selectMode ? () => toggleSelected(n.path) : undefined}
+          onDoubleClick={selectMode ? undefined : () => onFileOpen?.(n.path)}
           onContextMenu={(e) => {
             e.preventDefault();
             setMenu({ x: e.clientX, y: e.clientY, path: n.path, name: n.name });
           }}
         >
-          <span className="tree-caret-placeholder" />
+          {selectMode ? (
+            <input
+              type="checkbox"
+              className="batch-checkbox"
+              checked={selected.has(n.path)}
+              onChange={() => toggleSelected(n.path)}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="tree-caret-placeholder" />
+          )}
           <span className="tree-icon">{n.status === "D" ? "✕" : "📄"}</span>
           {renamingPath === n.path ? (
             <input
@@ -252,6 +302,13 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           📁 {workspace}
         </span>
         <div className="files-header-actions">
+          <button
+            className={`btn-batch ${selectMode ? "active" : ""}`}
+            onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}
+            title={selectMode ? "退出批量选择" : "批量选择删除文件"}
+          >
+            ☑ 批量
+          </button>
           {branch && (
             <span className="git-branch" title="当前分支">
               ⎇ {branch}
@@ -266,6 +323,17 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           </button>
         </div>
       </div>
+      {selectMode && (
+        <div className="batch-bar">
+          <span className="batch-count">已选 {selected.size}</span>
+          <button className="batch-delete" disabled={selected.size === 0} onClick={() => void deleteSelected()}>
+            🗑 删除所选
+          </button>
+          <button className="batch-cancel" onClick={exitSelectMode}>
+            ✕ 取消
+          </button>
+        </div>
+      )}
       {loading && dirs.size === 0 ? (
         <div className="sidebar-empty">加载中…</div>
       ) : error ? (
@@ -402,6 +470,10 @@ function OutputPreview({ revision }: { revision: number }) {
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  // 批量选择删除（产出物）：selectMode 开关 + 已选路径集合
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
   // 同 FileTree：in-flight 期间到达的刷新请求记 pending，结束后补一轮
   const pendingRef = useRef(false);
   const refreshRef = useRef<() => void>(() => {});
@@ -503,6 +575,42 @@ function OutputPreview({ revision }: { revision: number }) {
       .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
   };
 
+  /** 批量模式：切换某文件选中态。 */
+  const toggleSelected = (path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  /** 退出批量选择并清空已选。 */
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
+  /** 批量删除所选产出物：确认 → 后端批量删除 → 部分失败提示（截断前 5 条）→ 刷新并退出。 */
+  const deleteSelected = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`删除所选 ${selected.size} 个文件？此操作不可恢复`)) return;
+    try {
+      const r = await api.deleteFilesBatch([...selected]);
+      if (r.failed.length > 0) {
+        const shown = r.failed.slice(0, 5);
+        window.alert(
+          `已删除 ${r.deleted} 个，${r.failed.length} 个失败：\n${shown.map((f) => `${f.path}：${f.error}`).join("\n")}` +
+            (r.failed.length > shown.length ? "\n…" : "")
+        );
+      }
+      await refresh();
+    } catch (err) {
+      window.alert(`删除失败：${err instanceof Error ? err.message : err}`);
+    }
+    exitSelectMode();
+  };
+
   /** 进入行内重命名（预填原名；扩展名不可改，由后端校验兜底）。 */
   const startRename = (it: OutputItem) => {
     setMenu(null);
@@ -543,6 +651,13 @@ function OutputPreview({ revision }: { revision: number }) {
       <div className="files-header">
         <span className="outputs-count">产出物{total > 0 ? ` · ${total}` : ""}</span>
         <div className="files-header-actions">
+          <button
+            className={`btn-batch ${selectMode ? "active" : ""}`}
+            onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}
+            title={selectMode ? "退出批量选择" : "批量选择删除文件"}
+          >
+            ☑ 批量
+          </button>
           <button
             className="output-tool-icon"
             data-tip="在文件管理器中打开产出物目录"
@@ -592,6 +707,17 @@ function OutputPreview({ revision }: { revision: number }) {
           </button>
         </div>
       </div>
+      {selectMode && (
+        <div className="batch-bar">
+          <span className="batch-count">已选 {selected.size}</span>
+          <button className="batch-delete" disabled={selected.size === 0} onClick={() => void deleteSelected()}>
+            🗑 删除所选
+          </button>
+          <button className="batch-cancel" onClick={exitSelectMode}>
+            ✕ 取消
+          </button>
+        </div>
+      )}
       {total > 0 && (
         <div className="outputs-search-row">
           <input
@@ -629,14 +755,27 @@ function OutputPreview({ revision }: { revision: number }) {
                 return (
                   <div
                     key={it.path}
-                    className="tree-row file output-item"
+                    className={`tree-row file output-item ${selectMode && selected.has(it.path) ? "selected" : ""}`}
                     title={`${it.path}${it.version ? `（v${it.version}）` : ""}`}
-                    onClick={() => { if (!isRenaming) void openPreview(it.path); }}
+                    onClick={() => {
+                      if (isRenaming) return;
+                      if (selectMode) toggleSelected(it.path);
+                      else void openPreview(it.path);
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, item: it });
                     }}
                   >
+                    {selectMode && (
+                      <input
+                        type="checkbox"
+                        className="batch-checkbox"
+                        checked={selected.has(it.path)}
+                        onChange={() => toggleSelected(it.path)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    )}
                     <span className="tree-icon">{fileIcon(it.name)}</span>
                     {isRenaming ? (
                       <input
@@ -812,6 +951,7 @@ export default function Sidebar({
   onOpenSessionWithProject,
   onNewSession,
   onDeleteSession,
+  onDeleteSessions,
   onOpenProject,
   onOpenCode,
   onNewProject,
@@ -845,6 +985,8 @@ export default function Sidebar({
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
+  /** 批量删除会话（App 层调 api.deleteSessionsBatch 并同步页签/会话列表） */
+  onDeleteSessions?: (ids: string[]) => void;
   onOpenProject: () => void;
   onOpenCode: () => void;
   onNewProject?: (git: boolean) => void;
@@ -875,6 +1017,29 @@ export default function Sidebar({
         p.name.toLowerCase().includes(projectSearch.trim().toLowerCase()) ||
         p.path.toLowerCase().includes(projectSearch.trim().toLowerCase()))
     : recentProjects;
+
+  // 会话批量选择删除：selectMode 开关 + 已选会话 id 集合（删除交给 App 层批量接口）
+  const [sessionSelectMode, setSessionSelectMode] = useState(false);
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
+  const toggleSessionSelected = (id: string) => {
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const exitSessionSelectMode = () => {
+    setSessionSelectMode(false);
+    setSelectedSessions(new Set());
+  };
+  /** 批量删除所选会话：确认后交给 App 层（api.deleteSessionsBatch + 页签同步），随后退出选择模式。 */
+  const deleteSelectedSessions = () => {
+    if (selectedSessions.size === 0) return;
+    if (!window.confirm(`删除所选 ${selectedSessions.size} 个会话？此操作不可恢复`)) return;
+    onDeleteSessions?.([...selectedSessions]);
+    exitSessionSelectMode();
+  };
 
   return (
     <aside className="sidebar">
@@ -1036,26 +1201,55 @@ export default function Sidebar({
               <button className="btn-new-session" onClick={onNewSession}>
                 ＋ 新建会话
               </button>
+              <button
+                className={`btn-session-batch ${sessionSelectMode ? "active" : ""}`}
+                onClick={() => { setSessionSelectMode((v) => !v); setSelectedSessions(new Set()); }}
+                title={sessionSelectMode ? "退出批量选择" : "批量选择删除会话"}
+              >
+                ☑ 批量
+              </button>
+              {sessionSelectMode && (
+                <div className="batch-bar">
+                  <span className="batch-count">已选 {selectedSessions.size}</span>
+                  <button className="batch-delete" disabled={selectedSessions.size === 0} onClick={deleteSelectedSessions}>
+                    🗑 删除所选
+                  </button>
+                  <button className="batch-cancel" onClick={exitSessionSelectMode}>
+                    ✕ 取消
+                  </button>
+                </div>
+              )}
               {sessions.length === 0 && <div className="sidebar-empty">还没有会话</div>}
               {sessions.map((s) => (
                 <div
                   key={s.session_id}
-                  className={`session-item ${s.session_id === activeSessionId ? "active" : ""}`}
-                  onClick={() => onSelectSession(s.session_id)}
-                  onDoubleClick={() => onOpenSessionWithProject(s.session_id)}
+                  className={`session-item ${s.session_id === activeSessionId ? "active" : ""} ${sessionSelectMode && selectedSessions.has(s.session_id) ? "selected" : ""}`}
+                  onClick={sessionSelectMode ? () => toggleSessionSelected(s.session_id) : () => onSelectSession(s.session_id)}
+                  onDoubleClick={sessionSelectMode ? undefined : () => onOpenSessionWithProject(s.session_id)}
                 >
+                  {sessionSelectMode && (
+                    <input
+                      type="checkbox"
+                      className="batch-checkbox"
+                      checked={selectedSessions.has(s.session_id)}
+                      onChange={() => toggleSessionSelected(s.session_id)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
                   <div className="session-title">{s.title}</div>
                   <div className="session-meta">
                     {s.message_count} 条消息
-                    <button
-                      className="session-delete"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm(`删除会话「${s.title}」？`)) onDeleteSession(s.session_id);
-                      }}
-                    >
-                      ✕
-                    </button>
+                    {!sessionSelectMode && (
+                      <button
+                        className="session-delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`删除会话「${s.title}」？`)) onDeleteSession(s.session_id);
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

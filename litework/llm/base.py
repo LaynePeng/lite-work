@@ -150,5 +150,9 @@ class BaseLLMAdapter:
         """测试连接，返回 (是否成功, 消息, 延迟ms)。"""
         raise NotImplementedError
 
+    async def list_models(self) -> Tuple[bool, List[str], str]:
+        """拉取供应商模型列表，返回 (是否成功, 模型ID列表, 消息)。"""
+        raise NotImplementedError
+
     async def close(self) -> None:
         """释放底层连接资源（默认无操作；带连接池的适配器覆盖实现）。"""

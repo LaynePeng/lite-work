@@ -997,6 +997,32 @@ export default function App() {
     [activeTabId, refreshSessions, newChatTab]
   );
 
+  /** 批量删除会话：后端批量删除后同步页签（被删会话的页签一并关闭）与会话列表。 */
+  const deleteSessions = useCallback(
+    async (ids: string[]) => {
+      try {
+        await api.deleteSessionsBatch(ids);
+        const idSet = new Set(ids);
+        setTabs((prev) => {
+          const next = prev.filter((t) => !t.sessionId || !idSet.has(t.sessionId));
+          if (next.length === 0) {
+            newChatTab();
+            return prev;
+          }
+          const cur = prev.find((t) => t.id === activeTabId);
+          if (cur?.sessionId && idSet.has(cur.sessionId)) {
+            setActiveTabId(next[next.length - 1].id);
+          }
+          return next;
+        });
+        await refreshSessions();
+      } catch {
+        /* ignore（与单删风格一致） */
+      }
+    },
+    [activeTabId, refreshSessions, newChatTab]
+  );
+
   const openProject = useCallback(async () => {
     if (window.liteWork) {
       try {
@@ -2734,6 +2760,7 @@ export default function App() {
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onDeleteSession={(id) => void deleteSession(id)}
+        onDeleteSessions={(ids) => void deleteSessions(ids)}
         onOpenProject={openProjectEntry}
         onOpenCode={openCode}
         onNewProject={newProjectEntry}

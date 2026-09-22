@@ -756,6 +756,10 @@ class AgentApp:
         ok, msg, elapsed = await self.llm_registry.test_connection(provider_id, overrides)
         return {"ok": ok, "message": msg, "latency_ms": int(elapsed)}
 
+    async def list_llm_models(self, provider_id: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        ok, models, msg = await self.llm_registry.list_models(provider_id, overrides)
+        return {"ok": ok, "models": models, "message": msg}
+
     def llm_provider_meta(self) -> List[Dict[str, Any]]:
         return self.llm_registry.provider_meta()
 

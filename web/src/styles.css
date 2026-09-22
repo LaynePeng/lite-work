@@ -765,6 +765,112 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: rgba(248, 81, 73, 0.12);
 }
 
+/* ---------------------------------------------------------------- 批量选择删除 */
+/* 文件树 / 产出物 / 会话列表三处共用：进入批量模式 → 勾选行 → 批量栏「删除所选」 */
+
+/* 批量操作栏（贴 header 下方）：已选计数 + 删除 + 取消 */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-radius: 8px;
+}
+
+.batch-bar .batch-count {
+  flex: 1;
+  min-width: 0;
+}
+
+.batch-bar button {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  color: var(--text-1);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.batch-bar button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.batch-bar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.batch-bar .batch-delete:hover {
+  color: var(--red);
+}
+
+/* 文件树 / 产出物行：批量模式选中高亮（主题蓝） */
+.tree-row.selected {
+  background: rgba(79, 140, 255, 0.16);
+}
+
+.tree-row.selected:hover {
+  background: rgba(79, 140, 255, 0.22);
+}
+
+/* 会话项：批量模式选中高亮 */
+.session-item.selected {
+  background: rgba(79, 140, 255, 0.14);
+  border-color: rgba(79, 140, 255, 0.35);
+}
+
+/* 行首复选框：与图标/文字对齐 */
+.batch-checkbox {
+  margin: 0;
+  flex-shrink: 0;
+  vertical-align: middle;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+/* 头部「☑ 批量」入口（文件树 / 产出物 header） */
+.btn-batch {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 5px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-batch:hover,
+.btn-batch.active {
+  color: var(--accent);
+  background: var(--bg-2);
+}
+
+/* 会话列表「☑ 批量」入口（与「新建会话」同宽的次级按钮） */
+.btn-session-batch {
+  width: 100%;
+  padding: 6px 12px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border-radius: 9px;
+  transition: all 0.15s;
+}
+
+.btn-session-batch:hover,
+.btn-session-batch.active {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+
 .sidebar-empty {
   padding: 24px 0;
   text-align: center;

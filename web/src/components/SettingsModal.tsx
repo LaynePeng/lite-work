@@ -173,6 +173,8 @@ export default function SettingsModal({
   const [editing, setEditing] = useState<Record<string, Partial<LLMProviderSettings>>>({});
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  // 模型列表拉取中（调 /api/llm/models）
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<"llm" | "mcp" | "skills" | "general" | "plugins" | "agents">("llm");
   // 综合设置：孤儿会话清理
@@ -992,25 +994,31 @@ export default function SettingsModal({
     setActiveProvider(next[0]?.id || "deepseek");
   };
 
+  // 组装测试连接 / 拉取模型列表所用的 overrides：未保存的编辑态优先（含未 blur 的草稿）
+  const buildOverrides = useCallback((): Record<string, unknown> => {
+    const overrides: Record<string, unknown> = {};
+    const e = activeProvider ? editing[activeProvider] : undefined;
+    if (e?.api_key && !e.api_key.includes("…") && e.api_key !== "****") overrides.api_key = e.api_key;
+    if (e?.base_url) overrides.base_url = e.base_url;
+    if (e?.model) overrides.model = e.model;
+    if (e?.temperature) overrides.temperature = e.temperature;
+    if (e?.reasoning_effort) overrides.reasoning_effort = e.reasoning_effort;
+    // 带上当前编辑的自定义 Header（含未 blur 的文本框内容）
+    const liveText = activeProvider ? headersText[activeProvider] : undefined;
+    if (liveText !== undefined) {
+      overrides.custom_headers = parseHeaders(liveText);
+    } else if (e?.custom_headers !== undefined) {
+      overrides.custom_headers = e.custom_headers;
+    }
+    return overrides;
+  }, [activeProvider, editing, headersText]);
+
   const handleTest = useCallback(async () => {
     if (!activeProvider) return;
     setTesting(true);
     setTestResult(null);
     try {
-      const overrides: Record<string, unknown> = {};
-      const e = editing[activeProvider];
-      if (e?.api_key && !e.api_key.includes("…") && e.api_key !== "****") overrides.api_key = e.api_key;
-      if (e?.base_url) overrides.base_url = e.base_url;
-      if (e?.model) overrides.model = e.model;
-      if (e?.temperature) overrides.temperature = e.temperature;
-      if (e?.reasoning_effort) overrides.reasoning_effort = e.reasoning_effort;
-      // 测试连接带上当前编辑的自定义 Header（含未 blur 的文本框内容）
-      const liveText = headersText[activeProvider];
-      if (liveText !== undefined) {
-        overrides.custom_headers = parseHeaders(liveText);
-      } else if (e?.custom_headers !== undefined) {
-        overrides.custom_headers = e.custom_headers;
-      }
+      const overrides = buildOverrides();
       const res = await api.testLLM(activeProvider, Object.keys(overrides).length ? overrides : undefined);
       setTestResult(res);
     } catch (err) {
@@ -1018,7 +1026,34 @@ export default function SettingsModal({
     } finally {
       setTesting(false);
     }
-  }, [activeProvider, editing, headersText]);
+  }, [activeProvider, buildOverrides]);
+
+  // 一键从供应商拉取模型列表并回填（POST /api/llm/models）
+  const handleFetchModels = useCallback(async () => {
+    if (!activeProvider || fetchingModels) return;
+    setFetchingModels(true);
+    setTestResult(null);
+    try {
+      const overrides = buildOverrides();
+      const res = await api.llmModels(activeProvider, Object.keys(overrides).length ? overrides : undefined);
+      if (res.ok && res.models.length > 0) {
+        const text = res.models.join("\n");
+        const cur = modelsText[activeProvider] ?? "";
+        if (cur.trim() && cur.trim() !== text.trim()) {
+          if (!window.confirm(`拉取到 ${res.models.length} 个模型，覆盖当前已填写的模型列表？`)) return;
+        }
+        setModelsText((prev) => ({ ...prev, [activeProvider]: text }));
+        update(activeProvider, "models", res.models);
+        setTestResult({ ok: true, message: `已拉取 ${res.models.length} 个模型` });
+      } else {
+        setTestResult({ ok: false, message: `无法读取模型列表：${res.message || "供应商未返回模型"}，请手动填写` });
+      }
+    } catch (err) {
+      setTestResult({ ok: false, message: `无法读取模型列表：${(err as Error).message}，请手动填写` });
+    } finally {
+      setFetchingModels(false);
+    }
+  }, [activeProvider, fetchingModels, buildOverrides, modelsText, update]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -1390,7 +1425,17 @@ export default function SettingsModal({
                   </div>
 
                   <div className="form-group">
-                    <label>该供应商的模型列表（每行一个，可添加多个）</label>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <label style={{ marginBottom: 0 }}>该供应商的模型列表（每行一个，可添加多个）</label>
+                      <button
+                        type="button"
+                        className="btn-test"
+                        onClick={handleFetchModels}
+                        disabled={fetchingModels}
+                      >
+                        {fetchingModels ? "拉取中…" : "⟳ 拉取模型列表"}
+                      </button>
+                    </div>
                     <textarea
                       className="form-input"
                       rows={Math.min(

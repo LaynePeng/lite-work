@@ -278,3 +278,136 @@ async def test_custom_header_conversation_id_missing_drops_and_warns(caplog):
         r.levelno == logging.WARNING and "x-opencode-session" in r.getMessage()
         for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------- list_models 模型列表
+
+async def test_openai_list_models_parse_dedupe_sort():
+    """正常解析：data[].id 去重 + 排序，has_more=False 单页结束。"""
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": [{"id": "m-c"}, {"id": "m-a"}, {"id": "m-c"}, {"id": "m-b"}],
+            "has_more": False,
+        })
+
+    adapter = _openai_adapter(handler)
+    ok, models, msg = await adapter.list_models()
+    assert ok is True
+    assert msg == ""
+    assert models == ["m-a", "m-b", "m-c"]
+
+
+async def test_openai_list_models_cursor_pagination():
+    """游标分页：第一页 has_more + last_id → 第二页带 after=last_id 参数。"""
+    calls = []
+
+    def handler(request):
+        after = request.url.params.get("after")
+        calls.append(after)
+        if after is None:
+            return httpx.Response(200, json={
+                "data": [{"id": "page1-a"}, {"id": "page1-b"}],
+                "has_more": True, "last_id": "cursor-1",
+            })
+        return httpx.Response(200, json={
+            "data": [{"id": "page2-a"}],
+            "has_more": False,
+        })
+
+    adapter = _openai_adapter(handler)
+    ok, models, msg = await adapter.list_models()
+    assert ok is True and msg == ""
+    assert calls == [None, "cursor-1"]
+    assert models == ["page1-a", "page1-b", "page2-a"]
+
+
+async def test_openai_list_models_http_error():
+    """非 200：返回 (False, [], "HTTP code: body")。"""
+    def handler(request):
+        return httpx.Response(403, text="forbidden: no api key")
+
+    adapter = _openai_adapter(handler)
+    ok, models, msg = await adapter.list_models()
+    assert ok is False
+    assert models == []
+    assert msg.startswith("HTTP 403:") and "forbidden" in msg
+
+
+async def test_openai_list_models_exception():
+    """网络/解析异常：返回 (False, [], str(exc)[:150])。"""
+    def handler(request):
+        raise httpx.ConnectError("connection refused")
+
+    adapter = _openai_adapter(handler)
+    ok, models, msg = await adapter.list_models()
+    assert ok is False
+    assert models == []
+    assert "connection refused" in msg
+
+
+async def test_anthropic_list_models_parse_and_pagination():
+    """正常解析 + after_id 游标分页（has_more/last_id → after_id 参数）。"""
+    calls = []
+
+    def handler(request):
+        after = request.url.params.get("after_id")
+        calls.append(after)
+        if after is None:
+            return httpx.Response(200, json={
+                "data": [{"id": "claude-a"}, {"id": "claude-b"}],
+                "has_more": True, "last_id": "cursor-9",
+            })
+        return httpx.Response(200, json={
+            "data": [{"id": "claude-c"}],
+            "has_more": False,
+        })
+
+    adapter = _anthropic_adapter(handler)
+    ok, models, msg = await adapter.list_models()
+    assert ok is True and msg == ""
+    assert calls == [None, "cursor-9"]
+    assert models == ["claude-a", "claude-b", "claude-c"]
+
+
+async def test_registry_list_models_overrides_reach_transport(monkeypatch):
+    """overrides 生效：fake api_key + base_url 打到 mock transport。"""
+    import litework.llm.registry as registry_mod
+
+    def handler(request):
+        assert request.headers.get("authorization") == "Bearer sk-fake"
+        return httpx.Response(200, json={
+            "data": [{"id": "m-b"}, {"id": "m-a"}], "has_more": False,
+        })
+
+    captured = {}
+
+    class FakeAdapter(OpenAICompatAdapter):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+            self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(registry_mod, "OpenAICompatAdapter", FakeAdapter)
+
+    reg = registry_mod.LLMRegistry()
+    ok, models, msg = await reg.list_models(
+        "deepseek",
+        overrides={"api_key": "sk-fake", "base_url": "https://mock.test"},
+    )
+    assert ok is True and msg == ""
+    assert models == ["m-a", "m-b"]
+    # overrides 覆盖了注册表默认配置传入适配器
+    assert captured["api_key"] == "sk-fake"
+    assert captured["base_url"] == "https://mock.test"
+
+
+async def test_registry_list_models_missing_key_returns_value_error():
+    """未配置 API Key：build_adapter 抛 ValueError → (False, [], msg)。"""
+    from litework.llm.registry import LLMRegistry
+
+    reg = LLMRegistry()
+    # custom_ 前缀供应商不在 PROVIDER_META 中（不受环境变量兜底影响）
+    ok, models, msg = await reg.list_models("custom_nokey")
+    assert ok is False
+    assert models == []
+    assert "API Key" in msg

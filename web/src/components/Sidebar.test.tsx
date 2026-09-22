@@ -23,6 +23,7 @@ vi.mock("../api", () => ({
     fileRawUrl: (p: string) => `/api/files/raw?path=${encodeURIComponent(p)}`,
     outputsZipUrl: (includeUploads = false) =>
       `/api/outputs/zip${includeUploads ? "?include_uploads=true" : ""}`,
+    deleteFilesBatch: vi.fn(),
   },
 }));
 
@@ -241,6 +242,84 @@ describe("Sidebar · 文件页签右键菜单", () => {
     fireEvent.contextMenu(row);
     await user.click(screen.getByText(/删除/));
     await waitFor(() => expect(api.deleteFile).toHaveBeenCalledWith("src/main.py"));
+    confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------- 批量选择删除
+
+describe("Sidebar · 产出物批量选择删除", () => {
+  const A = { name: "报告A.docx", path: "产出物/报告A.docx", source: "outputs", size: 1024, mtime: "2026-01-01 10:00" };
+  const B = { name: "报告B.xlsx", path: "产出物/报告B.xlsx", source: "outputs", size: 2048, mtime: "2026-01-01 10:01" };
+
+  beforeEach(() => {
+    (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      groups: [{ name: "产出物", source: "outputs", items: [A, B] }],
+      total: 2,
+    });
+    (api.deleteFilesBatch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true, deleted: 2, failed: [],
+    });
+  });
+
+  it("批量模式勾选多项 → 删除所选 → api.deleteFilesBatch 收到全部路径", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Sidebar {...baseProps} />);
+
+    await screen.findByTitle("产出物/报告A.docx");
+    // 进入批量模式（产出物面板头部「☑ 批量」；filter 只留 header 里那个）
+    const batchBtn = screen.getAllByTitle("批量选择删除文件")[0];
+    await user.click(batchBtn);
+    // 单击切换选中（不再触发预览）
+    await user.click(screen.getByTitle("产出物/报告A.docx"));
+    await user.click(screen.getByTitle("产出物/报告B.xlsx"));
+    expect(screen.getByText(/已选 2/)).toBeInTheDocument();
+    // 删除所选
+    await user.click(screen.getByText(/删除所选/));
+    await waitFor(() =>
+      expect(api.deleteFilesBatch).toHaveBeenCalledWith(["产出物/报告A.docx", "产出物/报告B.xlsx"])
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("普通模式单击仍是打开预览，不进批量删除", async () => {
+    (api.filePreview as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: "x", kind: "text", text: "hi", truncated: false,
+    });
+    const user = userEvent.setup();
+    render(<Sidebar {...baseProps} />);
+    await user.click(await screen.findByTitle("产出物/报告A.docx"));
+    await waitFor(() => expect(api.filePreview).toHaveBeenCalledWith("产出物/报告A.docx"));
+    expect(api.deleteFilesBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("Sidebar · 会话列表批量选择删除", () => {
+  const sessions = [
+    { session_id: "s1", title: "会话一", message_count: 3 },
+    { session_id: "s2", title: "会话二", message_count: 5 },
+  ];
+  const sessionProps = {
+    ...baseProps,
+    tab: "sessions" as const,
+    projectsView: "sessions" as const,
+    sessions: sessions as never,
+    onDeleteSessions: vi.fn(),
+  };
+
+  it("批量模式勾选会话 → 删除所选 → onDeleteSessions 收到全部 id", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Sidebar {...sessionProps} />);
+
+    await screen.findByText("会话一");
+    await user.click(screen.getByTitle("批量选择删除会话"));
+    await user.click(screen.getByText("会话一"));
+    await user.click(screen.getByText("会话二"));
+    expect(screen.getByText(/已选 2/)).toBeInTheDocument();
+    await user.click(screen.getByText(/删除所选/));
+    expect(sessionProps.onDeleteSessions).toHaveBeenCalledWith(["s1", "s2"]);
     confirmSpy.mockRestore();
   });
 });

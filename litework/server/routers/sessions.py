@@ -50,6 +50,11 @@ class WorktreeCleanRequest(BaseModel):
     include_dirty: bool = False
 
 
+class DeleteSessionsRequest(BaseModel):
+    """批量删除会话：ids=会话 ID 列表（单次最多 200 个）。"""
+    ids: list[str] = []
+
+
 async def _shutdown_session_agents(app, session_id: str) -> None:
     """停止该会话全部后台子 Agent（会话删除时防泄漏）。"""
     try:
@@ -160,6 +165,33 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except Exception:
             pass
         return {"ok": True}
+
+    @router.post("/api/sessions/delete-batch")
+    async def delete_sessions_batch(payload: DeleteSessionsRequest, request: Request):
+        """批量删除会话（复用单删逻辑；单个失败不中断整批，记入 failed）。
+
+        会话删除成功后同样停掉该会话的后台子 Agent、清理 TODO 看板；
+        不存在的会话记入 failed（{"id", "error": "会话不存在"}）继续处理其余。
+        """
+        ctx.check_auth(request)
+        if not payload.ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(payload.ids) > 200:
+            raise HTTPException(status_code=400, detail="单次最多删除 200 个会话")
+        deleted = 0
+        failed: list = []
+        for sid in payload.ids:
+            if not app.session_store.delete(sid):
+                failed.append({"id": sid, "error": "会话不存在"})
+                continue
+            deleted += 1
+            await _shutdown_session_agents(app, sid)
+            # 附带清理该会话的 TODO 看板（内存 + 磁盘）
+            try:
+                app.todo_plugin.delete_board(sid)
+            except Exception:
+                pass
+        return {"ok": True, "deleted": deleted, "failed": failed}
 
     @router.get("/api/todos")
     async def get_todos(session_id: str = "", request: Request = None):

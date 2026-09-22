@@ -150,6 +150,10 @@ export const api = {
     }),
   deleteSession: (id: string) =>
     req<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
+  deleteSessionsBatch: (ids: string[]) =>
+    req<{ ok: boolean; deleted: number; failed: { id: string; error: string }[] }>("/api/sessions/delete-batch", {
+      method: "POST", body: JSON.stringify({ ids }),
+    }),
   cleanupSessions: () =>
     req<{ ok: boolean; deleted: number }>("/api/sessions/cleanup", { method: "DELETE" }),
 
@@ -221,6 +225,11 @@ export const api = {
     req<{ ok: boolean; message: string; latency_ms: number }>("/api/llm/test", {
       method: "POST", body: JSON.stringify({ provider_id: providerId, overrides }),
     }),
+  // 拉取供应商模型列表（长超时：外网 /models 接口可能较慢）
+  llmModels: (providerId: string, overrides?: Record<string, unknown>) =>
+    req<{ ok: boolean; models: string[]; message: string }>("/api/llm/models", {
+      method: "POST", body: JSON.stringify({ provider_id: providerId, overrides }),
+    }, 30000),
 
   // 定价数据源状态（models.dev + 定价插件各官方源）；同步为**逐源**调用，
   // 前端据此逐步呈现「同步中 → 成功/失败」（不自动联网）
@@ -323,6 +332,11 @@ export const api = {
   deleteFile: (path: string) =>
     req<{ ok: boolean; path: string }>(`/api/files?path=${encodeURIComponent(path)}`, {
       method: "DELETE",
+    }),
+  // 批量删除工作区文件：单项失败不中断整批，失败项在 failed 里逐个返回
+  deleteFilesBatch: (paths: string[]) =>
+    req<{ ok: boolean; deleted: number; failed: { path: string; error: string }[] }>("/api/files/delete-batch", {
+      method: "POST", body: JSON.stringify({ paths }),
     }),
   renameFile: (path: string, newName: string) =>
     req<{ ok: boolean; path: string; name: string }>("/api/files/rename", {

@@ -299,3 +299,38 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         except Exception as exc:
             elapsed = (time.time() - start) * 1000
             return False, str(exc)[:150], elapsed
+
+    async def list_models(self) -> Tuple[bool, List[str], str]:
+        """拉取供应商可用模型列表（GET /models，游标分页）。
+
+        响应为 OpenAI 兼容惯例：{"data": [{"id": ...}], "has_more": bool,
+        "last_id": str}。has_more 时以 after=last_id 续拉，安全上限
+        10 页 / 累计 1000 个模型，防游标死循环。
+        """
+        try:
+            client = self._get_client()
+            seen: set = set()
+            after: Optional[str] = None
+            for _ in range(10):
+                resp = await client.get(
+                    f"{self.base_url}/models",
+                    headers=self._headers(),
+                    timeout=15.0,
+                    params={"after": after} if after else None,
+                )
+                if resp.status_code != 200:
+                    body = resp.text[:200]
+                    return False, [], f"HTTP {resp.status_code}: {body}"
+                data = resp.json()
+                for item in data.get("data") or []:
+                    mid = item.get("id") if isinstance(item, dict) else None
+                    if isinstance(mid, str) and mid:
+                        seen.add(mid)
+                if len(seen) >= 1000 or not data.get("has_more"):
+                    break
+                after = data.get("last_id")
+                if not after:
+                    break
+            return True, sorted(seen), ""
+        except Exception as exc:
+            return False, [], str(exc)[:150]

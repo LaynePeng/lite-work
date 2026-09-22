@@ -434,3 +434,16 @@ class LLMRegistry:
         except Exception as exc:
             logger.exception("[LLM] 测试连接异常")
             return False, str(exc)[:150], 0
+
+    async def list_models(
+        self, provider_id: str, overrides: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, List[str], str]:
+        """拉取供应商模型列表（overrides 为未保存的编辑态配置）。"""
+        try:
+            adapter = self.build_adapter(provider_id, overrides)
+            return await adapter.list_models()
+        except ValueError as exc:
+            return False, [], str(exc)
+        except Exception as exc:
+            logger.exception("[LLM] 拉取模型列表异常")
+            return False, [], str(exc)[:150]

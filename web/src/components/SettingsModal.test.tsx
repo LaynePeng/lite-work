@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
     collabModes: vi.fn(),
     llmProviders: vi.fn(),
     llmConfig: vi.fn(),
+    llmModels: vi.fn(),
     mcpStatus: vi.fn(),
     readSkill: vi.fn(),
     createSkill: vi.fn(),
@@ -131,5 +132,41 @@ describe("SettingsModal · 故障隔离", () => {
     await waitFor(() => {
       expect(screen.getByText(/插件列表加载失败/)).toBeTruthy();
     });
+  });
+});
+
+describe("SettingsModal · 拉取模型列表", () => {
+  it("成功：拉取结果原样回填 textarea 并提示数量", async () => {
+    // 初始模型列表为空，避免触发覆盖确认弹窗
+    (api.llmConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      active: "deepseek",
+      providers: { deepseek: { model: "deepseek-chat", models: [], api_key: "sk-x" } },
+    });
+    (api.llmModels as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true, models: ["m-b", "m-a"], message: "",
+    });
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    fireEvent.click(await screen.findByText("⟳ 拉取模型列表"));
+    // testing-library 对多行 placeholder 做空白归一化（换行折叠为空格），用 \s+ 正则定位
+    const ta = await screen.findByPlaceholderText(/deepseek-chat\s+deepseek-reasoner/) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(ta.value).toBe("m-b\nm-a");
+    });
+    expect(await screen.findByText(/已拉取 2 个模型/)).toBeTruthy();
+    // 请求带上当前编辑态（api_key/model 等未脱敏字段会作为 overrides 传给后端）
+    expect((api.llmModels as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("deepseek");
+  });
+
+  it("失败：显示可见错误且不清空已填写的模型列表", async () => {
+    // 默认 primeAll：deepseek 已有 models: ["deepseek-chat"]
+    (api.llmModels as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false, models: [], message: "HTTP 401",
+    });
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    fireEvent.click(await screen.findByText("⟳ 拉取模型列表"));
+    expect(await screen.findByText(/无法读取模型列表：HTTP 401/)).toBeTruthy();
+    // 同上：多行 placeholder 用 \s+ 正则定位（空白归一化）
+    const ta = screen.getByPlaceholderText(/deepseek-chat\s+deepseek-reasoner/) as HTMLTextAreaElement;
+    expect(ta.value).toBe("deepseek-chat");
   });
 });
