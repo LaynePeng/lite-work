@@ -333,6 +333,23 @@ class AgentLoop:
 
                 # B. beforeLLM 管道（插件可修改消息）
                 processed = await self.kernel.before_llm.run(self.kernel.ctx, payload)
+                # B1. 回答短路（通用协议，v1.10.0）：插件若在 ctx.metadata["final_answer"]
+                #     里放了 {"content": "..."}，说明它已能直接作答（如 Jev 结构化判断）——
+                #     此时**跳过本次 LLM 调用**，把该内容作为助手回复收尾。
+                #     约定：只在"最后一条消息是用户消息"时生效（避免多轮重复抢答），
+                #     取用后立即 pop（一次性），任何异常都不影响正常链路。
+                try:
+                    direct = self.kernel.ctx.metadata.pop("final_answer", None)
+                except Exception:
+                    direct = None
+                if isinstance(direct, dict) and str(direct.get("content") or "").strip():
+                    direct_text = str(direct["content"])
+                    direct_msg = Message(role="assistant", content=direct_text)
+                    messages.append(direct_msg)
+                    await self.kernel.events.emit("message:added",
+                                                  {"message": direct_msg.to_dict()})
+                    self.state.status = AgentStatus.SUCCESS
+                    return await self._finish(direct_text, messages, stats, store_snapshot)
                 # B2. 兜底修复：确保发给 LLM 的消息链满足原子对约束（压缩/裁剪兜底）
                 processed = repair_tool_call_pairs(processed)
 

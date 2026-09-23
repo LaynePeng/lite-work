@@ -1070,7 +1070,23 @@ export default function ToolPanel({
   type PluginPanelRef = { plugin: string; id: string; title: string; icon?: string };
   const [pluginPanels, setPluginPanels] = useState<PluginPanelRef[]>([]);
   const [pluginPanelMd, setPluginPanelMd] = useState<Record<string, string>>({});
+  const [pluginPanelBusy, setPluginPanelBusy] = useState(false);
   const panelKeyOf = (x: PluginPanelRef) => `plugin:${x.plugin}:${x.id}`;
+  // 本次"激活期间"已抓取的 key：切到别的 tab 时清空 → 切回即重抓（面板是日志，不能缓存）
+  const loadedPanelRef = useRef<string>("");
+
+  const loadPluginPanel = useCallback(async (plugin: string, id: string) => {
+    const key = `plugin:${plugin}:${id}`;
+    setPluginPanelBusy(true);
+    try {
+      const r = await api.pluginPanel(plugin, id);
+      setPluginPanelMd((prev) => ({ ...prev, [key]: r.markdown || "（面板为空）" }));
+    } catch (e) {
+      setPluginPanelMd((prev) => ({ ...prev, [key]: `读取失败：${(e as Error).message}` }));
+    } finally {
+      setPluginPanelBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     void api.plugins()
@@ -1088,13 +1104,12 @@ export default function ToolPanel({
 
   useEffect(() => {
     const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
-    if (!hit) return;
+    if (!hit) { loadedPanelRef.current = ""; return; }   // 切走 → 下次切回重抓
     const key = panelKeyOf(hit);
-    if (pluginPanelMd[key] !== undefined) return;
-    void api.pluginPanel(hit.plugin, hit.id)
-      .then((r) => setPluginPanelMd((prev) => ({ ...prev, [key]: r.markdown || "（面板为空）" })))
-      .catch((e) => setPluginPanelMd((prev) => ({ ...prev, [key]: `读取失败：${(e as Error).message}` })));
-  }, [panelTab, pluginPanels, pluginPanelMd]);
+    if (loadedPanelRef.current === key) return;          // 本次激活已抓过
+    loadedPanelRef.current = key;
+    void loadPluginPanel(hit.plugin, hit.id);
+  }, [panelTab, pluginPanels, loadPluginPanel]);
 
   const TABS: { id: PanelTabId; label: string; title?: string }[] = [
     { id: "context", label: "上下文" },
@@ -1109,7 +1124,7 @@ export default function ToolPanel({
     // 插件声明的面板（通用插件 UI 协议；无插件时为空数组，不影响内置 tab）
     ...pluginPanels.map((x) => ({
       id: panelKeyOf(x) as PanelTabId,
-      label: `${x.icon ? `${x.icon} ` : ""}${x.title}`,
+      label: x.title,
       title: `来自插件 ${x.plugin} 的面板`,
     })),
   ];
@@ -1154,6 +1169,15 @@ export default function ToolPanel({
                     ? (
                       <div className="plugin-panel-md"
                         style={{ padding: "10px 12px", fontSize: 12.5, lineHeight: 1.65 }}>
+                        <div style={{ marginBottom: 8 }}>
+                          <button className="btn-test" disabled={pluginPanelBusy}
+                            onClick={() => {
+                              const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
+                              if (hit) void loadPluginPanel(hit.plugin, hit.id);
+                            }}>
+                            {pluginPanelBusy ? "刷新中…" : "刷新"}
+                          </button>
+                        </div>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {pluginPanelMd[panelTab] ?? "加载中…"}
                         </ReactMarkdown>

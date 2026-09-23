@@ -271,9 +271,27 @@ export default function SettingsModal({
     for (const [k, v] of Object.entries(draft)) {
       const spec = schema.find((s: any) => s?.key === k);
       const isSecret = Boolean(spec?.secret) || spec?.type === "secret";
-      if (isSecret && v === base[k]) continue;   // 占位未改动 → 不覆盖既有密钥
-      if (v === base[k]) continue;               // 其他字段未改动也不提交
-      payload[k] = v;
+      const isMap = spec?.type === "map";
+      let value: any = v;
+      if (isMap) {
+        // map 字段在 UI 里始终是「原始文本」，保存时才解析（避免边打字边重排格式）
+        const text = typeof v === "string" ? v.trim() : "";
+        if (!text) {
+          value = {};
+        } else {
+          try {
+            value = JSON.parse(text);
+          } catch {
+            setPluginMsg({ ok: false, text: `${spec?.label || k} 不是合法 JSON，请检查后再保存` });
+            return;
+          }
+        }
+        if (JSON.stringify(value) === JSON.stringify(base[k] ?? {})) continue;
+      } else {
+        if (isSecret && v === base[k]) continue;   // 占位未改动 → 不覆盖既有密钥
+        if (v === base[k]) continue;               // 其他字段未改动也不提交
+      }
+      payload[k] = value;
     }
     if (Object.keys(payload).length === 0) {
       setPluginMsg({ ok: true, text: `${name}：没有改动需要保存` });
@@ -2002,8 +2020,9 @@ export default function SettingsModal({
                           </button>
                           {pluginCfgOpen[item.name] && (
                             <div style={{
-                              marginTop: 8, padding: "10px 12px", borderRadius: 8,
+                              marginTop: 10, padding: "16px 18px", borderRadius: 10,
                               border: "1px solid var(--border)", background: "var(--bg-1)",
+                              maxWidth: 820,
                             }}>
                               {(pluginCfg[item.name]?.schema || []).length === 0 && (
                                 <span className="mcp-empty-inline">正在读取设置项…</span>
@@ -2016,50 +2035,52 @@ export default function SettingsModal({
                                 }));
                                 const type = s.secret ? "secret" : (s.type || "str");
                                 return (
-                                  <div key={s.key} style={{
-                                    display: "flex", gap: 10, alignItems: "flex-start",
-                                    padding: "6px 0", flexWrap: "wrap",
-                                  }}>
-                                    <label style={{ minWidth: 130, fontSize: 12.5, color: "var(--text-1)", paddingTop: 4 }}>
+                                  <div key={s.key} style={{ marginBottom: 16 }}>
+                                    <div style={{ fontSize: 13, color: "var(--text-0)", marginBottom: 6 }}>
                                       {s.label || s.key}
-                                    </label>
+                                      <span style={{ marginLeft: 8, fontSize: 11, color: "var(--text-2)" }}>{s.key}</span>
+                                    </div>
                                     {type === "boolean" ? (
-                                      <input type="checkbox" checked={Boolean(val)}
-                                        onChange={(e) => setVal(e.target.checked)} />
+                                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text-1)" }}>
+                                        <input type="checkbox" checked={Boolean(val)}
+                                          onChange={(e) => setVal(e.target.checked)} />
+                                        启用
+                                      </label>
                                     ) : type === "select" ? (
-                                      <select className="inp" style={{ width: 260 }} value={String(val ?? "")}
+                                      <select className="form-input" style={{ maxWidth: 320 }} value={String(val ?? "")}
                                         onChange={(e) => setVal(e.target.value)}>
                                         {(s.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                                       </select>
                                     ) : type === "map" ? (
-                                      <textarea className="inp" rows={3} style={{ width: 420, fontFamily: "var(--font-mono)" }}
-                                        placeholder='JSON 对象，例如 {"x-api-key":"..."}'
-                                        value={typeof val === "string" ? val : JSON.stringify(val ?? {}, null, 0)}
-                                        onChange={(e) => {
-                                          const t = e.target.value;
-                                          if (!t.trim()) return setVal({});
-                                          try { setVal(JSON.parse(t)); } catch { setVal(t); }
-                                        }} />
+                                      <textarea className="form-input" rows={6}
+                                        style={{
+                                          width: "100%", fontFamily: "var(--font-mono)",
+                                          fontSize: 12, lineHeight: 1.6, resize: "vertical",
+                                        }}
+                                        spellCheck={false}
+                                        placeholder={'可直接粘贴，例如：\n{\n  "x-api-key": "sk-...",\n  "X-Api-Version": "1"\n}'}
+                                        value={typeof val === "string" ? val : JSON.stringify(val ?? {}, null, 2)}
+                                        onChange={(e) => setVal(e.target.value)} />
                                     ) : type === "number" ? (
-                                      <input className="inp" style={{ width: 160 }} type="number"
+                                      <input className="form-input" style={{ maxWidth: 200 }} type="number"
                                         value={String(val ?? "")}
                                         onChange={(e) => setVal(e.target.value === "" ? "" : Number(e.target.value))} />
                                     ) : (
-                                      <input className="inp" style={{ width: 320 }}
+                                      <input className="form-input" style={{ width: "100%" }}
                                         type={type === "secret" ? "password" : "text"}
                                         value={String(val ?? "")}
                                         placeholder={type === "secret" ? "已配置（留空表示不修改）" : ""}
                                         onChange={(e) => setVal(e.target.value)} />
                                     )}
                                     {s.hint && (
-                                      <span style={{ flexBasis: "100%", fontSize: 11.5, color: "var(--text-2)" }}>
+                                      <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--text-2)", lineHeight: 1.6 }}>
                                         {s.hint}
-                                      </span>
+                                      </div>
                                     )}
                                   </div>
                                 );
                               })}
-                              <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+                              <div style={{ marginTop: 4, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                                 <button className="btn-test" disabled={pluginBusy}
                                   onClick={() => void savePluginCfg(item.name)}>保存</button>
                                 <span style={{ fontSize: 11.5, color: "var(--text-2)" }}>
