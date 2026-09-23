@@ -128,7 +128,8 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
     };
     const onScroll = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    // preventDefault：声明本 Esc 已被右键菜单占用，避免冒泡到全局「Esc 停止任务」
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); setMenu(null); } };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("scroll", onScroll, true);
     document.addEventListener("keydown", onKey);
@@ -555,7 +556,8 @@ function OutputPreview({ revision }: { revision: number }) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
     };
     const onScroll = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    // preventDefault：声明本 Esc 已被右键菜单占用，避免冒泡到全局「Esc 停止任务」
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); setMenu(null); } };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("scroll", onScroll, true);
     document.addEventListener("keydown", onKey);

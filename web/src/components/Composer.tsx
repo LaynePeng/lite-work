@@ -73,6 +73,7 @@ export default function Composer({
   onReasoningEffortChange,
   tabCount = 0,
   scrolledUp = false,
+  stopArmed = false,
 }: {
   disabled?: boolean;
   running: boolean;
@@ -98,6 +99,8 @@ export default function Composer({
   tabCount?: number;
   /** 对话区是否被上翻（非贴底）：为真时优先提示「回到最新」 */
   scrolledUp?: boolean;
+  /** 已按过一次 Esc、等待第二次确认（App 的 Esc 停止任务待确认态） */
+  stopArmed?: boolean;
 }) {
   const [text, setText] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -538,13 +541,16 @@ export default function Composer({
   // 状态驱动的快捷键提示：只显示「当下最有用」的一条，都没命中时回落到原提示文案。
   // 刻意不做随机/轮播——流式输出期间本行高频重渲染，随机文本会跳动，且纯属噪音。
   // 也刻意不因「Agent 多于 1 个」提示 Shift+Tab：默认就有 4 个 Agent，那等于把安全提示永久挤掉。
-  const hint = scrolledUp
-    ? `${kCtrl}End 回到对话最新`
-    : running
-      ? "输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送"
-      : tabCount > 1
-        ? `${kCtrl}Tab 切换标签页 · ${kCtrl}1–9 直选 · ${kAlt}W 关闭`
-        : "工具执行受安全策略保护，中危操作会请求你确认";
+  // stopArmed（已按过一次 Esc，等第二次确认）优先级最高：那是一次进行中的确认，必须盖过其它提示。
+  const hint = stopArmed
+    ? "再按一次 Esc 停止任务"
+    : scrolledUp
+      ? `${kCtrl}End 回到对话最新`
+      : running
+        ? `连按两次 Esc 停止任务 · 输入将加入待发送队列（上方），点击队列项 ➤ 立即发送，或任务结束后自动逐条发送`
+        : tabCount > 1
+          ? `${kCtrl}Tab 切换标签页 · ${kCtrl}1–9 直选 · ${kAlt}W 关闭`
+          : "工具执行受安全策略保护，中危操作会请求你确认";
 
   return (
     <div className="composer-wrap">
@@ -753,11 +759,14 @@ export default function Composer({
                 }
                 return;
               }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setPaletteOpen(false);
-                return;
-              }
+            }
+            // 命令面板：Esc 关闭（只要面板可见就吞掉，含「无候选」的空面板）。
+            // preventDefault 同时声明这个 Esc 已被面板占用，不会冒泡到全局
+            // 「Esc 停止任务」——不会一边关面板一边把任务打断。
+            if (e.key === "Escape" && panelVisible) {
+              e.preventDefault();
+              setPaletteOpen(false);
+              return;
             }
             // /history 面板：Esc 关闭
             if (e.key === "Escape" && showHistory) {

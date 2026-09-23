@@ -48,6 +48,12 @@ const AUTO_CONTINUE_MAX = 3;
 const CONTINUE_PROMPT =
   "继续执行未完成的任务：对照 TODO 看板继续推进剩余项，不要重复已完成的部分。全部完成后输出最终总结。";
 
+// Esc 停止任务的「确认窗口」：Esc 常被手滑按下，故要求连按两次才真正停止。
+// 首次 Esc 只进入待确认态（提示行显示「再按一次 Esc 停止任务」），窗口内再按一次才停；
+// 超时未再按则自动解除待确认态。窗口取 2s：够看清提示并补一次按键，又不至于长期挂着重型操作。
+// 导出仅供 App.esc.test.tsx 断言窗口边界，业务代码请用常量名而非字面量。
+export const ESC_STOP_CONFIRM_MS = 2000;
+
 let tabSeq = 0;
 const nextTabId = () => `tab_${++tabSeq}`;
 
@@ -759,6 +765,7 @@ export default function App() {
   //   Alt+W                   关闭当前标签
   //   Alt+N                   新建会话
   //   Ctrl+T                  循环切换推理强度（模型变体）
+  //   Esc                     连按两次停止当前任务（弹窗打开或该 Esc 已被其它交互占用时让位）
   // 注：macOS 上 Option(Alt)+字母/数字 会产出特殊字符（e.key 变成 "˜"/"¡"），
   // 故 Alt 组合一律按 e.code（物理键位）匹配；不用 Ctrl+W 是因为 Electron
   // 默认菜单的 Close 占用了它。
@@ -2610,6 +2617,63 @@ export default function App() {
     }
   }, [activeSessionId, patchChat, pushLog]);
 
+  // Esc：停止当前任务（对齐 opencode 的中断键位，与输入区「停止」按钮同一路径）。
+  // 防误触：要求连按两次——首次 Esc 只进入「待确认」态（提示行出现「再按一次 Esc
+  // 停止任务」），ESC_STOP_CONFIRM_MS 窗口内再按一次才真正停止；超时自动解除。
+  // 让位规则（避免与其它 Esc 交互打架）：
+  //   · 设置 / 关于弹窗打开时——交给弹窗自身的 Esc 关闭；
+  //   · 事件已被 preventDefault（命令面板、输入历史、右键菜单、行内重命名等
+  //     已占用 Esc 的交互）——那不计数、也不清掉待确认态；
+  //   · 当前会话没有运行中的任务——无操作。
+  // 注：Composer / Sidebar 的 Esc 分支都在 React 合成事件里 preventDefault，
+  // 原生事件冒泡到 window 时仍是 defaultPrevented=true，故此处可靠。
+  const [escStopArmed, setEscStopArmed] = useState(false);
+  // 待确认态同时存一份 ref：判定「这是第几次 Esc」必须用 ref 而非 state——
+  // 两次按键可能极快，window 监听器的闭包未必来得及随 state 重新注册（effect 是异步的）。
+  // state 只负责驱动提示行文案。
+  const escStopArmedRef = useRef(false);
+  const escStopTimerRef = useRef<number | null>(null);
+  const disarmEscStop = useCallback(() => {
+    if (escStopTimerRef.current !== null) {
+      window.clearTimeout(escStopTimerRef.current);
+      escStopTimerRef.current = null;
+    }
+    escStopArmedRef.current = false;
+    setEscStopArmed(false);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      if (e.defaultPrevented) return;
+      if (showSettings || showAbout) return;
+      if (!currentChat.running) return;
+      e.preventDefault();
+      if (escStopArmedRef.current) {
+        disarmEscStop();
+        void stop();
+        return;
+      }
+      // 首次 Esc：只武装，不停止
+      escStopArmedRef.current = true;
+      setEscStopArmed(true);
+      pushLog(`■ 再按一次 Esc 停止任务（${ESC_STOP_CONFIRM_MS / 1000}s 内）`);
+      if (escStopTimerRef.current !== null) window.clearTimeout(escStopTimerRef.current);
+      escStopTimerRef.current = window.setTimeout(() => {
+        escStopTimerRef.current = null;
+        disarmEscStop();
+      }, ESC_STOP_CONFIRM_MS);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showSettings, showAbout, currentChat.running, stop, disarmEscStop, pushLog]);
+
+  // 待确认态跟着「运行中 + 当前会话」走：任务结束或切了会话/标签就解除，
+  // 避免在 A 会话按过一次 Esc，切到 B 会话后一次按键就把 B 的任务停掉。
+  useEffect(() => {
+    disarmEscStop();
+  }, [currentChat.running, activeSessionId, disarmEscStop]);
+
   /** Agents 看板手动取消子 Agent：调 REST 关闭（后端广播 agent:closed by=user），
    *  本地乐观置终态——SSE 只在主任务运行时存在，不能依赖事件到达。 */
   const handleCloseAgent = useCallback(async (agentId: string) => {
@@ -2908,6 +2972,7 @@ export default function App() {
               }}
               tabCount={tabs.length}
               scrolledUp={chatScrolledUp}
+              stopArmed={escStopArmed}
             />
             <button className="debug-toggle" onClick={() => setShowDebug(!showDebug)} title="调试日志">
               {showDebug ? "隐藏日志" : "日志"}

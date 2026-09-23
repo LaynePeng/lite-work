@@ -268,6 +268,15 @@ describe("Composer · 状态驱动的快捷键提示", () => {
   it("运行中：显示排队提示", () => {
     render(<Composer {...baseProps} running tabCount={1} scrolledUp={false} />);
     expect(screen.getByText(/加入待发送队列/)).toBeInTheDocument();
+    // 停止任务需连按两次 Esc，提示行写明
+    expect(screen.getByText(/连按两次 Esc 停止任务/)).toBeInTheDocument();
+  });
+
+  it("待确认停止（stopArmed）：提示「再按一次」，且压过上翻提示", () => {
+    render(<Composer {...baseProps} running tabCount={3} scrolledUp stopArmed />);
+    expect(screen.getByText(/再按一次 Esc 停止任务/)).toBeInTheDocument();
+    expect(screen.queryByText(/回到对话最新/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/加入待发送队列/)).not.toBeInTheDocument();
   });
 
   it("多 Agent 但单标签：仍回落安全提示（不因常态把安全提示挤掉）", () => {
@@ -283,5 +292,25 @@ describe("Composer · 状态驱动的快捷键提示", () => {
       />
     );
     expect(screen.getByText(/工具执行受安全策略保护/)).toBeInTheDocument();
+  });
+});
+
+describe("Composer · Esc 关闭命令面板（不冒泡到全局「Esc 停止任务」）", () => {
+  it("命令面板可见时按 Esc：事件被面板吞掉（preventDefault）", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} running />);
+    const ta = screen.getByPlaceholderText(/任务进行中/);
+    await user.type(ta, "/"); // 触发命令面板（panelVisible）
+
+    // 模拟 App 的全局 Esc 监听：冒泡到 window 时事件应已被 preventDefault
+    const seen: boolean[] = [];
+    const onWin = (e: KeyboardEvent) => {
+      if (e.key === "Escape") seen.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", onWin);
+    await user.keyboard("{Escape}");
+    window.removeEventListener("keydown", onWin);
+
+    expect(seen).toEqual([true]);
   });
 });
