@@ -130,6 +130,36 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+    @router.get("/api/plugins/{name}/panel/{panel_id}")
+    def plugin_panel(name: str, panel_id: str, request: Request):
+        """插件面板内容（通用插件 UI 协议，返回 Markdown）。
+
+        插件实现 `panel_content(panel_id, config)` 并在 `contributes.panels`
+        声明面板，前端右栏即自动出现对应 tab —— 插件无需改前端代码。
+        """
+        ctx.check_auth(request)
+        try:
+            return app.plugin_panel(name, panel_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.get("/api/plugins/{name}/settings")
+    def plugin_settings(name: str, request: Request):
+        """插件设置项的 schema 与当前值（通用插件 UI 协议；secret 字段打码）。
+
+        前端据此渲染通用设置表单；保存仍走 `POST /api/config`
+        （`{"updates": {"<插件名>": {...}}}`），无需为插件新增写入接口。
+        """
+        ctx.check_auth(request)
+        try:
+            return app.plugin_settings(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
     @router.get("/api/commands")
     def list_commands(request: Request):
         ctx.check_auth(request)

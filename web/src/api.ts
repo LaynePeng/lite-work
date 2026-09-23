@@ -88,6 +88,21 @@ export const api = {
   updateConfig: (updates: Partial<AppConfig>) =>
     req<{ ok: boolean }>("/api/config", { method: "POST", body: JSON.stringify({ updates }) }),
 
+  /** 通用插件 UI 协议：读插件设置项 schema 与当前值（secret 字段后端已打码） */
+  pluginSettings: (name: string) =>
+    req<{ name: string; schema: import("./types").PluginSettingSpec[]; values: Record<string, unknown> }>(
+      `/api/plugins/${encodeURIComponent(name)}/settings`),
+  /** 保存插件配置：复用 /api/config 的任意键透传（{"updates": {"<插件名>": {...}}}） */
+  savePluginConfig: (name: string, values: Record<string, unknown>) =>
+    req<{ ok: boolean }>("/api/config", {
+      method: "POST",
+      body: JSON.stringify({ updates: { [name]: values } }),
+    }),
+  /** 通用插件 UI 协议：读插件面板内容（Markdown） */
+  pluginPanel: (name: string, panelId: string) =>
+    req<{ name: string; panel: string; title: string; markdown: string }>(
+      `/api/plugins/${encodeURIComponent(name)}/panel/${encodeURIComponent(panelId)}`),
+
   agents: () => req<AgentInfo[]>("/api/agents"),
   collabModes: () =>
     req<{ modes: import("./types").CollabMode[] }>("/api/collab/modes"),

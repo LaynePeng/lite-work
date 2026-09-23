@@ -509,6 +509,8 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
                 logger.warning("[PluginLoader] 插件 %s 依赖安装失败: %s", name, exc)
         tools: List[str] = []
         removed: List[str] = []
+        contributes: Dict[str, Any] = {}
+        status: Optional[Dict[str, Any]] = None
         description = ""
         version = ""
         load_error = dep_error
@@ -538,6 +540,21 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
                     ver = getattr(instance, "version", "")
                     if isinstance(ver, str) and ver:
                         version = ver
+                    # 通用插件 UI 协议：声明式贡献（设置项 / 面板）
+                    contrib = getattr(instance, "contributes", None)
+                    if isinstance(contrib, dict) and contrib and not contributes:
+                        contributes = dict(contrib)
+                    # 运行状态（设置页显示「未启动 + 原因」用）；纯读、缺省不声明
+                    if status is None and hasattr(instance, "status_from_config"):
+                        try:
+                            cfg_path = os.path.join(config_dir, "config.json")
+                            with open(cfg_path, "r", encoding="utf-8") as fh:
+                                cfg_json = json.load(fh)
+                            status = instance.status_from_config(
+                                cfg_json if isinstance(cfg_json, dict) else {})
+                        except Exception:
+                            logger.debug("[PluginLoader] %s status_from_config 失败", name,
+                                         exc_info=True)
                 except Exception as exc:
                     load_error = load_error or f"实例化失败: {exc}"
                     logger.warning("[PluginLoader] 实例化插件 %s 失败: %s", name, exc)
@@ -556,6 +573,10 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
             "version": version,
             "source": src,
             "kind": kind,
+            # 通用插件 UI 协议：设置项/面板声明（前端通用渲染器消费）
+            "contributes": contributes,
+            # 插件自述的运行状态：{"state": "running"|"not_started", "reason": "..."}
+            "status": status,
             # 加载失败原因（空=正常）；前端插件页显示"⚠ 加载失败：原因"而非整页挂掉
             "error": load_error,
         })

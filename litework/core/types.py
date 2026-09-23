@@ -117,5 +117,30 @@ PluginInstallFn = Callable[[Any], None]
 class Plugin:
     name: str = "plugin"
 
+    #: 声明式 UI 贡献（通用插件 UI 协议，可选）：
+    #:   {"settings": [{"key","type","label","default","hint","options","secret"}],
+    #:    "panels":   [{"id","title","icon"}]}
+    #: settings 的 type ∈ str | secret | number | boolean | select | map
+    #: （map 用于自定义 HTTP headers 这类键值表）。
+    #: 设置页与右栏有通用渲染器消费它——插件**无需改前端**即可带配置项与面板。
+    contributes: Dict[str, Any] = {}
+
     def install(self, kernel: Any) -> None:  # pragma: no cover - 抽象基类
         pass
+
+    # -------------------------------------------------- 可选 UI 钩子（未实现则对应 UI 不出现）
+
+    def status_from_config(self, config: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """当前配置下的运行状态（设置页据此显示「未启动 + 原因」）。
+
+        返回 {"state": "running"|"not_started", "reason": "..."}；None = 不声明状态。
+        **纯读约定**：不得发网络请求、不得写盘（调用方已对异常兜底）。
+        """
+        return None
+
+    def panel_content(self, panel_id: str, config: Dict[str, Any]) -> str:
+        """面板内容的 Markdown（右栏通用渲染器显示）。
+
+        同样**纯读 + 快返回**；重活请自行缓存。未实现的面板返回空串即可。
+        """
+        return ""

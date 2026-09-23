@@ -1420,6 +1420,65 @@ class AgentApp:
 
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 
+    def plugin_by_name(self, name: str) -> Optional[Plugin]:
+        """按名字取插件实例（面板内容等"非装配"用途）。
+
+        复用 tool_plugins() 的结果 —— 它已含内置 + 本地插件并处理了版本感知覆盖
+        （同名时本地版胜出），保证与真实装配看到的是同一个插件。
+        """
+        for plugin in self.tool_plugins():
+            if getattr(plugin, "name", "") == name:
+                return plugin
+        return None
+
+    def plugin_panel(self, name: str, panel_id: str) -> Dict[str, Any]:
+        """取插件面板的 Markdown 内容（通用插件 UI 协议）。
+
+        插件只需实现 `panel_content(panel_id, config) -> str`，并在
+        `contributes.panels` 里声明面板；前端右栏据此动态出 tab 与内容。
+        """
+        plugin = self.plugin_by_name(name)
+        if plugin is None or not hasattr(plugin, "panel_content"):
+            raise ValueError(f"插件 {name} 未提供面板")
+        title = panel_id
+        for item in (getattr(plugin, "contributes", {}) or {}).get("panels", []) or []:
+            if isinstance(item, dict) and item.get("id") == panel_id:
+                title = str(item.get("title") or panel_id)
+                break
+        return {
+            "name": name,
+            "panel": panel_id,
+            "title": title,
+            "markdown": plugin.panel_content(panel_id, self.config),
+        }
+
+    def plugin_settings(self, name: str) -> Dict[str, Any]:
+        """插件设置项的 schema 与当前值（通用插件 UI 协议；密钥打码）。
+
+        值的来源是主 config 的同名键（`config[name]`）；只回 schema 里声明过的键，
+        避免把该命名空间下的无关内容暴露给前端。声明为 secret / type="secret" 的
+        字段**只回"是否已配置"占位**（`••••••`），前端保存时跳过未修改的密文字段。
+        """
+        plugin = self.plugin_by_name(name)
+        if plugin is None:
+            raise ValueError(f"插件不存在或未启用：{name}")
+        schema = (getattr(plugin, "contributes", {}) or {}).get("settings", []) or []
+        cfg_raw = self.config.get(name)
+        raw: Dict[str, Any] = cfg_raw if isinstance(cfg_raw, dict) else {}
+        values: Dict[str, Any] = {}
+        for spec in schema:
+            if not isinstance(spec, dict):
+                continue
+            key = str(spec.get("key") or "")
+            if not key:
+                continue
+            secret = bool(spec.get("secret")) or spec.get("type") == "secret"
+            if secret:
+                values[key] = "••••••" if raw.get(key) else ""
+            else:
+                values[key] = raw.get(key, spec.get("default"))
+        return {"name": name, "schema": schema, "values": values}
+
     def plugins_list(self) -> List[Dict[str, Any]]:
         """已安装插件列表（带 TTL 缓存）。
 

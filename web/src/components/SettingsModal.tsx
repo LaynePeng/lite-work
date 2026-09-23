@@ -243,6 +243,54 @@ export default function SettingsModal({
 
   // Plugins 管理
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  // 通用插件 UI 协议：插件的设置项 schema 与当前值（展开时懒加载；按插件名缓存）
+  const [pluginCfg, setPluginCfg] = useState<Record<string, { schema: any[]; values: Record<string, any> }>>({});
+  const [pluginCfgOpen, setPluginCfgOpen] = useState<Record<string, boolean>>({});
+  const [pluginCfgDraft, setPluginCfgDraft] = useState<Record<string, Record<string, any>>>({});
+
+  /** 展开/收起某插件的配置区；首次展开时拉取 schema 与当前值 */
+  async function togglePluginCfg(name: string) {
+    const next = !pluginCfgOpen[name];
+    setPluginCfgOpen((prev) => ({ ...prev, [name]: next }));
+    if (!next || pluginCfg[name]) return;
+    try {
+      const r = await api.pluginSettings(name);
+      setPluginCfg((prev) => ({ ...prev, [name]: { schema: r.schema || [], values: r.values || {} } }));
+      setPluginCfgDraft((prev) => ({ ...prev, [name]: { ...(r.values || {}) } }));
+    } catch (e) {
+      setPluginMsg({ ok: false, text: `读取插件设置失败：${(e as Error).message}` });
+    }
+  }
+
+  /** 保存：只提交有变化的字段；未修改的密文字段跳过（后端回的是 •••••• 占位而非真值） */
+  async function savePluginCfg(name: string) {
+    const draft = pluginCfgDraft[name] || {};
+    const base = pluginCfg[name]?.values || {};
+    const schema = pluginCfg[name]?.schema || [];
+    const payload: Record<string, any> = {};
+    for (const [k, v] of Object.entries(draft)) {
+      const spec = schema.find((s: any) => s?.key === k);
+      const isSecret = Boolean(spec?.secret) || spec?.type === "secret";
+      if (isSecret && v === base[k]) continue;   // 占位未改动 → 不覆盖既有密钥
+      if (v === base[k]) continue;               // 其他字段未改动也不提交
+      payload[k] = v;
+    }
+    if (Object.keys(payload).length === 0) {
+      setPluginMsg({ ok: true, text: `${name}：没有改动需要保存` });
+      return;
+    }
+    try {
+      await api.savePluginConfig(name, payload);
+      setPluginMsg({ ok: true, text: `${name} 配置已保存（钩子类下一条消息生效；工具面最长 60 秒）` });
+      const r = await api.pluginSettings(name);
+      setPluginCfg((prev) => ({ ...prev, [name]: { schema: r.schema || [], values: r.values || {} } }));
+      setPluginCfgDraft((prev) => ({ ...prev, [name]: { ...(r.values || {}) } }));
+      refreshPlugins();
+    } catch (e) {
+      setPluginMsg({ ok: false, text: `保存失败：${(e as Error).message}` });
+    }
+  }
+
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginMsg, setPluginMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // 同名插件已存在时覆盖安装（更新）
@@ -484,6 +532,10 @@ export default function SettingsModal({
       kind?: "tool" | "collab";
       /** 插件加载失败原因（透传自后端列表项） */
       error?: string;
+      /** 通用插件 UI 协议：设置项/面板声明（透传自后端列表项） */
+      contributes?: PluginInfo["contributes"];
+      /** 插件自述运行状态（「未启动 + 原因」；缺省 = 不声明） */
+      status?: PluginInfo["status"];
     }> = builtinPlugins.map((bp) => {
       const u = userByName.get(bp.name);
       // 后端版本感知裁决：stale_local = 本地存在但落后 → 内置生效
@@ -502,6 +554,8 @@ export default function SettingsModal({
         localStaleVer: bp.local_version,
         updateTo: updateByName.get(bp.name),
         kind: u?.kind || bp.kind,
+        contributes: u?.contributes,
+        status: u?.status,
       };
     });
     // 纯本地插件（无内置对应）
@@ -517,6 +571,8 @@ export default function SettingsModal({
           isLocal: true,
           updateTo: updateByName.get(p.name),
           kind: p.kind,
+          contributes: p.contributes,
+          status: p.status,
         });
       }
     }
@@ -1905,6 +1961,13 @@ export default function SettingsModal({
                         {item.error && (
                           <span className="plugin-tag error-tag" title={item.error}>⚠ 加载失败</span>
                         )}
+                        {item.status?.state === "not_started" && (
+                          <span className="plugin-tag" style={{ color: "var(--yellow)", borderColor: "var(--yellow)" }}
+                            title={item.status.reason || ""}>⏸ 未启动</span>
+                        )}
+                        {item.status?.state === "running" && (
+                          <span className="plugin-tag" style={{ color: "var(--green)" }}>● 运行中</span>
+                        )}
                         {item.staleLocal && (
                           <span className="plugin-upd-hint" style={{ color: "var(--yellow)" }}
                             title={`本地社区版 v${item.localStaleVer || "?"} 已落后于内置版，已自动使用内置版生效；可删除本地旧版`}>
@@ -1930,6 +1993,84 @@ export default function SettingsModal({
                           <span className="mcp-empty-inline">移除: {item.removedTools.join(", ")}</span>
                         )}
                       </div>
+                      {/* 通用插件 UI 协议：声明了 contributes.settings 的插件自动出现配置表单 */}
+                      {item.contributes?.settings && item.contributes.settings.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <button className="btn-test" disabled={pluginBusy}
+                            onClick={() => void togglePluginCfg(item.name)}>
+                            {pluginCfgOpen[item.name] ? "▾ 收起配置" : "▸ 配置"}
+                          </button>
+                          {pluginCfgOpen[item.name] && (
+                            <div style={{
+                              marginTop: 8, padding: "10px 12px", borderRadius: 8,
+                              border: "1px solid var(--border)", background: "var(--bg-1)",
+                            }}>
+                              {(pluginCfg[item.name]?.schema || []).length === 0 && (
+                                <span className="mcp-empty-inline">正在读取设置项…</span>
+                              )}
+                              {(pluginCfg[item.name]?.schema || []).map((s: any) => {
+                                const draft = pluginCfgDraft[item.name] || {};
+                                const val = draft[s.key];
+                                const setVal = (v: any) => setPluginCfgDraft((prev) => ({
+                                  ...prev, [item.name]: { ...(prev[item.name] || {}), [s.key]: v },
+                                }));
+                                const type = s.secret ? "secret" : (s.type || "str");
+                                return (
+                                  <div key={s.key} style={{
+                                    display: "flex", gap: 10, alignItems: "flex-start",
+                                    padding: "6px 0", flexWrap: "wrap",
+                                  }}>
+                                    <label style={{ minWidth: 130, fontSize: 12.5, color: "var(--text-1)", paddingTop: 4 }}>
+                                      {s.label || s.key}
+                                    </label>
+                                    {type === "boolean" ? (
+                                      <input type="checkbox" checked={Boolean(val)}
+                                        onChange={(e) => setVal(e.target.checked)} />
+                                    ) : type === "select" ? (
+                                      <select className="inp" style={{ width: 260 }} value={String(val ?? "")}
+                                        onChange={(e) => setVal(e.target.value)}>
+                                        {(s.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                      </select>
+                                    ) : type === "map" ? (
+                                      <textarea className="inp" rows={3} style={{ width: 420, fontFamily: "var(--font-mono)" }}
+                                        placeholder='JSON 对象，例如 {"x-api-key":"..."}'
+                                        value={typeof val === "string" ? val : JSON.stringify(val ?? {}, null, 0)}
+                                        onChange={(e) => {
+                                          const t = e.target.value;
+                                          if (!t.trim()) return setVal({});
+                                          try { setVal(JSON.parse(t)); } catch { setVal(t); }
+                                        }} />
+                                    ) : type === "number" ? (
+                                      <input className="inp" style={{ width: 160 }} type="number"
+                                        value={String(val ?? "")}
+                                        onChange={(e) => setVal(e.target.value === "" ? "" : Number(e.target.value))} />
+                                    ) : (
+                                      <input className="inp" style={{ width: 320 }}
+                                        type={type === "secret" ? "password" : "text"}
+                                        value={String(val ?? "")}
+                                        placeholder={type === "secret" ? "已配置（留空表示不修改）" : ""}
+                                        onChange={(e) => setVal(e.target.value)} />
+                                    )}
+                                    {s.hint && (
+                                      <span style={{ flexBasis: "100%", fontSize: 11.5, color: "var(--text-2)" }}>
+                                        {s.hint}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                              <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+                                <button className="btn-test" disabled={pluginBusy}
+                                  onClick={() => void savePluginCfg(item.name)}>保存</button>
+                                <span style={{ fontSize: 11.5, color: "var(--text-2)" }}>
+                                  只提交有改动的字段；密钥回显为占位符，不改动则不会被覆盖
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                     </div>
                     <div className="skill-item-actions">
                       {item.updateTo && (

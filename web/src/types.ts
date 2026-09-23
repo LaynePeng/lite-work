@@ -759,9 +759,31 @@ export interface PluginInfo {
   source?: string;
   /** 插件类别：collab=协作模式（进模式选择器，不注册工具）/ tool=工具插件 */
   kind?: "tool" | "collab";
+  /** 通用插件 UI 协议：声明式设置项与右栏面板（插件无需改前端即可带配置/面板） */
+  contributes?: {
+    settings?: PluginSettingSpec[];
+    panels?: { id: string; title: string; icon?: string }[];
+  };
+  /** 插件自述的运行状态（如「未启动：缺少 API Key」）；缺省/null = 不声明 */
+  status?: { state: string; reason?: string } | null;
   /** 加载失败原因（空/缺省=正常）；列表仍返回，前端显示"⚠ 加载失败"而非整页挂掉 */
   error?: string;
 }
+
+/** 通用插件设置项声明（`Plugin.contributes.settings` 的一项） */
+export interface PluginSettingSpec {
+  key: string;
+  /** 控件类型：str（默认）| secret | number | boolean | select | map（键值表，如自定义 headers） */
+  type?: "str" | "secret" | "number" | "boolean" | "select" | "map";
+  label?: string;
+  default?: unknown;
+  hint?: string;
+  /** type=select 时的候选值 */
+  options?: string[];
+  /** 等价于 type="secret"：只回「是否已配置」占位，不回真值 */
+  secret?: boolean;
+}
+
 
 export interface BuiltinPluginInfo {
   name: string;
