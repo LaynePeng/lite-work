@@ -3,6 +3,10 @@
 //
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+import { api } from "../api";
 import type {
   BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
   ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
@@ -1062,6 +1066,36 @@ export default function ToolPanel({
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
   const runningAgents = (agentBoard ?? []).filter((a) => a.status === "running").length;
 
+  // 通用插件 UI 协议：右栏动态 tab —— 插件在 contributes.panels 里声明即出现
+  type PluginPanelRef = { plugin: string; id: string; title: string; icon?: string };
+  const [pluginPanels, setPluginPanels] = useState<PluginPanelRef[]>([]);
+  const [pluginPanelMd, setPluginPanelMd] = useState<Record<string, string>>({});
+  const panelKeyOf = (x: PluginPanelRef) => `plugin:${x.plugin}:${x.id}`;
+
+  useEffect(() => {
+    void api.plugins()
+      .then((r) => {
+        const out: PluginPanelRef[] = [];
+        for (const p of r.plugins ?? []) {
+          for (const pane of p.contributes?.panels ?? []) {
+            out.push({ plugin: p.name, id: pane.id, title: pane.title || pane.id, icon: pane.icon });
+          }
+        }
+        setPluginPanels(out);
+      })
+      .catch(() => { /* 插件列表不可用时静默：不影响内置 tab */ });
+  }, []);
+
+  useEffect(() => {
+    const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
+    if (!hit) return;
+    const key = panelKeyOf(hit);
+    if (pluginPanelMd[key] !== undefined) return;
+    void api.pluginPanel(hit.plugin, hit.id)
+      .then((r) => setPluginPanelMd((prev) => ({ ...prev, [key]: r.markdown || "（面板为空）" })))
+      .catch((e) => setPluginPanelMd((prev) => ({ ...prev, [key]: `读取失败：${(e as Error).message}` })));
+  }, [panelTab, pluginPanels, pluginPanelMd]);
+
   const TABS: { id: PanelTabId; label: string; title?: string }[] = [
     { id: "context", label: "上下文" },
     { id: "todos", label: todos.length ? `TODOs ${todoDone}/${todos.length}` : "TODOs",
@@ -1072,6 +1106,12 @@ export default function ToolPanel({
     { id: "tools", label: "工具" },
     // MCP 排在最后：它是低频的「配置/状态」类入口，日常主要看 工具/后台
     { id: "mcp", label: "MCP" },
+    // 插件声明的面板（通用插件 UI 协议；无插件时为空数组，不影响内置 tab）
+    ...pluginPanels.map((x) => ({
+      id: panelKeyOf(x) as PanelTabId,
+      label: `${x.icon ? `${x.icon} ` : ""}${x.title}`,
+      title: `来自插件 ${x.plugin} 的面板`,
+    })),
   ];
 
   return (
@@ -1110,7 +1150,16 @@ export default function ToolPanel({
                 ? <McpPanel servers={mcpServers} />
                 : panelTab === "background"
                   ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
-                  : <ToolsPanel tools={tools} />}
+                  : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
+                    ? (
+                      <div className="plugin-panel-md"
+                        style={{ padding: "10px 12px", fontSize: 12.5, lineHeight: 1.65 }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {pluginPanelMd[panelTab] ?? "加载中…"}
+                        </ReactMarkdown>
+                      </div>
+                    )
+                    : <ToolsPanel tools={tools} />}
       </div>
     </aside>
   );
