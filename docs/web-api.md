@@ -111,7 +111,8 @@ data: [DONE]
 
 | 事件 | 负载要点 | UI 怎么用 |
 |---|---|---|
-| `llm:stream` | `delta` 流式增量 | 追加到当前助手气泡 |
+| `llm:stream` | `chunk` 流式增量 | 追加到当前助手气泡 |
+| `llm:progress` | `est_tokens`/`chars`/`chunks`/`ttft_ms`/`gen_ms`/`tps` | 上下文面板「本轮 token 速度」：**估算值**，后端已按约 400ms 节流；本轮结束由 `context:stats` 的 usage 精确值校准 |
 | `llm:turn_start` / `llm:retry` | 轮次开始 / 重试中 | 显示"思考中/重试(第n次)"状态 |
 | `message:added` | 新消息入上下文 | 历史同步（轮次内消息） |
 | `tool:before_execute` | `tool`、`arguments` | 弹工具卡（标题+参数摘要） |
@@ -121,7 +122,7 @@ data: [DONE]
 | `question:request` / `question:resolved` | `id`、`question` | ask_user 提问卡：展示问题→提交答案 |
 | `task:start` / `task:done` / `task:error` | 任务生命周期 | 开始/结束状态；error 显示错误 |
 | `stats:update` | token 用量 | 顶部用量仪表 |
-| `context:stats` | 窗口占用/压缩统计/`session` 会话累计 | 上下文面板 |
+| `context:stats` | 窗口占用/压缩统计/`session` 会话累计；`task.last` 含本轮速度（`ttft_ms`/`gen_ms`/`tps_gen`/`tps_e2e`/`tps_estimated`）与 `task.avg_tps` | 上下文面板 |
 | `subagent:started` / `subagent:progress` / `subagent:completed` | 子 Agent id/role/进度/summary | 子 Agent 看板卡片 |
 | `agent:closed` | 关闭的子 Agent | 看板移除卡片 |
 | `skill:loaded` | 加载的技能名 | 技能徽标 |
@@ -213,13 +214,13 @@ UI 可以完整恢复看板与上下文面板。
 | | `POST /api/projects/create` | 新建项目（可选 git init） |
 | LLM | `GET /api/llm/providers` / `GET,POST /api/llm/config` | 供应商元数据与配置 |
 | | `POST /api/llm/test` | 测连接（返回 ok/消息/延迟） |
-| | `GET /api/model-meta` | 定价数据源状态：`{models_dev, provider, sources[]}`（是否有缓存 / 多久前 / 是否过期，过期前端提示手动同步） |
+| | `GET /api/model-meta` | 定价数据源状态：`{models_dev, provider, sources[], check_ttl_days}`（是否有缓存 / 多久前 / 是否过期，过期前端提示手动同步）。`stale` 由主程序按 `config.pricing_check_ttl_days` 复算（0=永不过期 → 恒 false），插件源与 models.dev 共用这一判定 |
 | | `POST /api/model-meta/refresh` `{source}` | 手动同步**单个**源（`models_dev` 或定价插件声明的官方源如 `deepseek`/`kimi`）；前端逐源调用以呈现同步步骤 |
 | 安全 | `GET,POST /api/security`、`GET,POST /api/mcp` | 安全规则 / MCP 服务配置 |
 | 技能 | `GET /api/skills` 等 | 技能列表/加载/权限 |
 | Agent | `GET /api/agents` 等 | 多 Agent 看板/协作模式选择器 |
 | 文件 | `GET /api/fs/read`、`GET /api/fs/list`、`GET /api/workspace/tree-json` | 文件读取与目录树（受安全层约束） |
-| 配置 | `GET,POST /api/config` | 全局配置（max_steps、pricing…） |
+| 配置 | `GET,POST /api/config` | 全局配置（max_steps、pricing、`pricing_check_ttl_days`…） |
 
 （完整签名以 `litework/server/routers/` 各文件为准，路由均以 `/api` 前缀。）
 

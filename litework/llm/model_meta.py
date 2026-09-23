@@ -323,8 +323,8 @@ class ModelMetaService:
     def status(self) -> Dict[str, Any]:
         """缓存状态（设置页展示同步情况用；只读盘，不发网络请求）。
 
-        过期缓存同样算「cached=True」并给出真实 age_seconds——前端据 age 与
-        MODEL_META_TTL 判断是否提示「建议同步」；查询侧继续用这份数据服务
+        过期缓存同样算「cached=True」并给出真实 age_seconds——前端据主程序配置的
+        检查窗口（config.pricing_check_ttl_days）判断是否提示「建议同步」；查询侧继续用这份数据服务
         （见 `_load_cache`）。
         """
         index = self._load_cache()

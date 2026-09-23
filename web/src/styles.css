@@ -89,9 +89,23 @@ button {
 
 .app {
   display: flex;
+  /* 纵向：顶部横幅（若有）独占一行，三栏横排放进 .app-row */
+  flex-direction: column;
   height: 100vh;
+  /* 顶部 38px 是无边框窗口拖拽区（.drag-region fixed 覆盖层）：
+     统一在这里让位，原先散在 .main / .panel-tabs-wrap / .sidebar-brand 三处 */
+  padding-top: 38px;
   /* 同上：应用主体默认非拖拽，仅 .drag-region 可拖拽窗口 */
   -webkit-app-region: no-drag;
+}
+
+/* 三栏横排容器（侧栏 | 分隔条 | 对话区 | 分隔条 | 工具面板）。
+   单独一层是为了让顶部横幅不参与横向宽度分配——否则它会作为 flex 项
+   吃掉数百 px 行宽，把对话区挤成窄条。 */
+.app-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .main {
@@ -100,8 +114,6 @@ button {
   flex-direction: column;
   min-width: 0;
   position: relative;
-  /* 避开顶部 drag-region（fixed 覆盖层 38px），否则 TabBar 无法点击 */
-  padding-top: 38px;
 }
 
 /* ============================== 布局分隔条 ============================== */
@@ -119,7 +131,7 @@ button {
   width: 5px;
   cursor: col-resize;
   align-self: stretch;
-  height: 100vh;
+  height: 100%;
 }
 
 /* 纵向边界（上下高度）：细横条 */
@@ -225,8 +237,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
-  /* 顶部 38px 是无边框窗口拖拽区，Tab 下移避开 */
-  padding-top: 40px;
+  /* 顶部让位（原 40px）已上移到 .app 的 padding-top:38px（统一一处）：40-38=2px */
+  padding-top: 2px;
 }
 
 /* Tab 条横向滑动容器：面板拖窄后 tab 队列整体可拖动/滚动 */
@@ -346,8 +358,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 避开 macOS 红绿灯按钮（hiddenInset 交通灯位于左上角 ~y28） */
-  padding: 44px 18px 12px;
+  /* 避开 macOS 红绿灯按钮（hiddenInset 交通灯位于左上角 ~y28）：
+     红绿灯让位已由 .app 的 padding-top:38px 承担（原 44px，44-38=6px） */
+  padding: 6px 18px 12px;
 }
 
 /* 应用图标：SVG 自带圆角渐变底（与 app-icon.svg 同源），容器只负责尺寸 */
@@ -2737,6 +2750,12 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .model-select {
   min-width: 160px;
   max-width: 260px;
+  /* 关闭态：长模型名（自定义网关常见 provider/model 全路径）只占一行并**省略号**收尾。
+     原生 select 默认是硬裁（在字符中间断开），观感上像「宽度跟着模型名变长」；
+     点击展开的弹层由浏览器按最长选项渲染，仍显示**完整模型名**——两者宽度无需一致。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   height: 28px;
   padding: 0 8px;
   color: var(--text-1);
@@ -4108,7 +4127,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: flex;
   flex-direction: column;
   min-height: 0;
-  height: 100vh;
+  height: 100%;
   transition: width 0.18s ease;
   overflow: hidden;
 }
@@ -5169,6 +5188,94 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 9px;
   color: var(--text-2);
   margin-top: 1px;
+}
+
+/* 本轮 token 速度条（变体 B）：主数字 + 首字/端到端/本任务均 + 速度趋势线。
+   速度趋势线复用 .ctx2-spark 的尺寸，仅换配色（紫）以区别于水位线（蓝）。 */
+.ctx2-speedrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.ctx2-speedrow .ctx2-sparkwrap {
+  /* 固定基准宽度：左侧内容（≈ 前缀 / 「估算」标 / 脉冲点 / 首字 / 本任务均）
+     会随状态变化，但右侧趋势图宽度必须恒定——否则同一块 UI 在「生成中」与
+     「本轮结束」之间会来回跳动。用百分比基准让图宽只随面板宽度变化。 */
+  flex: 0 0 46%;
+  margin-top: 0;
+  min-width: 96px;
+}
+
+.ctx2-speedmain {
+  /* 左侧占剩余空间并允许收缩换行：内容再长也只影响自己，不会挤动右侧趋势图 */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ctx2-speedbig {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.ctx2-speedbig b {
+  font-size: 21px;
+  line-height: 1;
+  font-family: var(--font-mono);
+  color: var(--text-0);
+}
+
+/* 估算值（流式中的实时近似）：弱化为主文本色，与 usage 校准后的精确值区分 */
+.ctx2-speedbig b.est {
+  color: var(--text-1);
+}
+
+.ctx2-speedbig small {
+  font-size: 10px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+.ctx2-esttag {
+  font-size: 9px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 3px;
+  letter-spacing: .2px;
+}
+
+.ctx2-speedsub {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--text-2);
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+
+.ctx2-speedsub b {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.ctx2-sparkline.speed {
+  stroke: var(--accent-2);
+}
+
+.ctx2-sparkfill.speed {
+  fill: var(--accent-2);
+  opacity: .12;
+}
+
+.ctx2-sparkdot.speed {
+  fill: var(--accent-2);
 }
 
 .ctx2-card {
@@ -7127,6 +7234,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
    ============================================================ */
 
 .meta-notice {
+  /* 独占顶部一行：不参与 .app-row 的横向宽度分配（只会占满宽、压出自身高度） */
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;

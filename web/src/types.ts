@@ -155,6 +155,8 @@ export interface PricingStatus {
   /** 定价插件信息；未安装为 null */
   provider: { name: string; version: string; description: string; source: string } | null;
   sources: PricingSourceStatus[];
+  /** 当前「建议同步」判定窗口（天；0=永不过期）——由主程序配置，插件源与 models.dev 共用 */
+  check_ttl_days?: number;
 }
 
 export interface SessionModel {
@@ -176,6 +178,12 @@ export interface AppConfig {
   auto_approve: boolean;
   context_full_turns?: number;
   pricing: { input_per_mtok: number; output_per_mtok: number; cache_hit_per_mtok?: number };
+  /**
+   * 「价格检查过期」窗口（天）：超过它就提示「建议同步」；0 = 永不过期。
+   * 判定在主程序侧，同时作用于 models.dev 与定价插件各官方源（纯展示策略，
+   * 不影响联网行为——数据始终手动同步）。
+   */
+  pricing_check_ttl_days?: number;
   /** 技能权限规则：glob 模式 → allow/deny/ask */
   skill_permissions?: Record<string, "allow" | "deny" | "ask">;
   /** Skills zip 导入大小上限（MB） */
@@ -212,6 +220,28 @@ export interface ContextCallStats {
   cache_hit_tokens: number;
   cache_miss_tokens: number;
   cost_estimate?: number;
+  /** 首字延迟（毫秒）：请求发出 → 第一个增量块 */
+  ttft_ms?: number | null;
+  /** 生成窗口（毫秒）：首块 → 末块（排除首字等待，速度的主口径） */
+  gen_ms?: number | null;
+  /** 端到端（毫秒）：请求发出 → 末块（含首字，贴近体感） */
+  e2e_ms?: number | null;
+  /** 本轮生成速度 tok/s = 输出 tokens ÷ 生成窗口 */
+  tps_gen?: number | null;
+  /** 本轮端到端速度 tok/s = 输出 tokens ÷ 端到端耗时 */
+  tps_e2e?: number | null;
+  /** 速度是否来自字符估算（供应商没返回 usage 时为 true） */
+  tps_estimated?: boolean;
+}
+
+/** llm:progress：流式生成中的实时速度（估算值，节流约 400ms 一次） */
+export interface LiveSpeedStats {
+  est_tokens: number;
+  chars: number;
+  chunks: number;
+  ttft_ms: number | null;
+  gen_ms: number | null;
+  tps: number | null;
 }
 
 export interface ContextTaskStats {
@@ -233,6 +263,9 @@ export interface ContextTaskStats {
   cost_estimate?: number;
   /** 最近一次调用的用量与成本 */
   last?: ContextCallStats;
+  /** 本任务平均生成速度（tok/s）与计入平均的轮数 */
+  avg_tps?: number | null;
+  speed_turns?: number;
 }
 
 /** 实际计费单价（每 M token，美元） */
@@ -270,6 +303,8 @@ export interface ContextMechanisms {
 export interface ContextHistoryPoint {
   /** 该轮实际发出的 prompt tokens（≈ 当前上下文水位） */
   p: number;
+  /** 该轮生成速度（tok/s）：无计量/无生成窗口时为 undefined（趋势图跳过该点） */
+  tps?: number | null;
 }
 
 export interface ContextSessionStats {
@@ -338,6 +373,7 @@ export type SseConnState = "idle" | "connecting" | "connected" | "reconnecting" 
 export type SSEEvent =
   | { type: "message:added"; data: { message: Msg } }
   | { type: "llm:stream"; data: { chunk: string } }
+  | { type: "llm:progress"; data: LiveSpeedStats }
   | { type: "llm:turn_start"; data: { turn: number } }
   | { type: "llm:retry"; data: { attempt: number; max_retries: number; reason: string; wait: number } }
   | { type: "tool:before_execute"; data: { toolName: string; args: unknown; callId?: string; timeoutMs?: number } }
@@ -576,6 +612,8 @@ export interface ChatSessionState {
   contextStats: ContextStats | null;
   /** 每轮 context:stats 的水位轨迹（最近 60 点，供面板趋势图） */
   contextHistory: ContextHistoryPoint[];
+  /** 流式生成中的实时速度（llm:progress，估算值）；任务结束/新任务开始时清空 */
+  liveSpeed?: LiveSpeedStats | null;
   error: string | null;
   // 审批队列：并行工具可同时挂起多个审批请求
   pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean }[];

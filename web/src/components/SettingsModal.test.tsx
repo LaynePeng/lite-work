@@ -125,6 +125,25 @@ describe("SettingsModal · 故障隔离", () => {
     expect((await screen.findAllByText(/建议同步/)).length).toBeGreaterThan(0);
   });
 
+  it("价格检查过期窗口：回显配置值，可设为 0（永不过期）并保存", async () => {
+    (api.config as ReturnType<typeof vi.fn>).mockResolvedValue({ pricing_check_ttl_days: 30 });
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+
+    const input = await screen.findByTitle(/0 = 永不过期/) as HTMLInputElement;
+    // 回显 config 里的 30 天（config 是异步拉的）
+    await waitFor(() => expect(input.value).toBe("30"));
+
+    // 改成 0（永不过期）→ 保存走 /api/config，并按新窗口重拉一次状态
+    fireEvent.change(input, { target: { value: "0" } });
+    fireEvent.click(input.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(api.updateConfig).toHaveBeenCalledWith({ pricing_check_ttl_days: 0 });
+    });
+    expect(await screen.findByText("已保存 ✓")).toBeTruthy();
+    // 保存后重拉状态：让「建议同步」标签按新窗口刷新
+    await waitFor(() => expect(api.pricingStatus).toHaveBeenCalledTimes(2));
+  });
+
   it("插件列表失败：可见错误 + 重试，且模型页不受影响", async () => {
     (api.plugins as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("plugin exploded"));
     render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);

@@ -19,7 +19,7 @@ from ..core.system_prompt import SystemPromptBuilder
 logger = logging.getLogger("litework.tasks")
 
 EVENT_FORWARD = {
-    "llm:stream", "llm:turn_start", "llm:retry", "message:added", "tool:before_execute",
+    "llm:stream", "llm:progress", "llm:turn_start", "llm:retry", "message:added", "tool:before_execute",
     "tool:after_execute", "approval:request", "approval:resolved", "task:start",
     "task:done", "task:error", "stats:update", "subagent:completed",
     "context:stats", "subagent:started", "subagent:progress", "skill:loaded",

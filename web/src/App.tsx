@@ -57,6 +57,11 @@ export const ESC_STOP_CONFIRM_MS = 2000;
 let tabSeq = 0;
 const nextTabId = () => `tab_${++tabSeq}`;
 
+// 「打开项目」（原生目录对话框）的落点意图：该路径会 `window.location.reload()`，
+// 没法在旧页面里选会话，所以把「打开后进入该项目最近一条会话」写进 localStorage
+// 带过重载边界，由启动时的 effect 消费并立即清除（不影响之后的普通启动）。
+const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
+
 const EMPTY_CHAT: ChatSessionState = {
   messages: [],
   streaming: null,
@@ -285,13 +290,14 @@ export default function App() {
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
   const sidebarResize = useResizable({
-    axis: "col", initial: 280, min: 200,
+    axis: "col", initial: 300, min: 200,
     max: () => Math.min(520, Math.floor(window.innerWidth * 0.45)),
     storageKey: "litework.sidebarWidth.v2",
   });
   const toolPanelResize = useResizable({
-    // 右侧工具面板默认约为窗口宽度的 25%（从中间聊天区压缩）
-    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.25), min: 260,
+    // 右侧工具面板默认约为窗口宽度的 28%（从中间聊天区压缩）。
+    // 注：已经拖拽过的机器会优先用 localStorage 里的像素值；双击分隔条可回到本默认值。
+    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.28), min: 260,
     max: () => Math.min(720, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
     storageKey: "litework.toolPanelWidth.v3",
@@ -469,14 +475,16 @@ export default function App() {
 
   // ------------------------------------------------------------ 会话列表
 
-  const refreshSessions = useCallback(async (ws?: string) => {
+  const refreshSessions = useCallback(async (ws?: string): Promise<SessionInfo[]> => {
     const requestId = ++sessionsRequestRef.current;
     try {
       const next = await api.sessions(ws ?? status?.workspace ?? undefined);
       // 多个任务结束/切换项目时请求可能乱序返回，旧响应不能覆盖新列表。
       if (requestId === sessionsRequestRef.current) setSessions(next);
+      return next;
     } catch {
-      /* ignore */
+      // 拉取失败当作「无历史」：调用方退化为新建空对话，不阻塞「打开项目」主流程
+      return [];
     }
   }, [status?.workspace]);
 
@@ -631,12 +639,21 @@ export default function App() {
   }, []);
 
   const openSessionTab = useCallback(
-    (sid: string, title?: string) => {
+    (sid: string, title?: string, opts?: { reuseDraft?: boolean }) => {
       setTabs((prev) => {
         const existing = prev.find((t) => t.kind === "chat" && t.sessionId === sid);
         if (existing) {
           setActiveTabId(existing.id);
           return prev.map((t) => t.id === existing.id ? { ...t, title: title || t.title } : t);
+        }
+        // reuseDraft：把「还没绑定会话的空对话 tab」直接改造成该会话的 tab，而不是再多开一个
+        // （用于「打开项目后自动进入最近会话」——否则会同时留下一个多余的「新会话」页签）
+        const draft = opts?.reuseDraft
+          ? prev.find((t) => t.kind === "chat" && !t.sessionId)
+          : undefined;
+        if (draft) {
+          setActiveTabId(draft.id);
+          return prev.map((t) => t.id === draft.id ? { ...t, sessionId: sid, title: title || sid } : t);
         }
         const tab: TabItem = { id: nextTabId(), kind: "chat", sessionId: sid, title: title || sid };
         setActiveTabId(tab.id);
@@ -861,9 +878,10 @@ export default function App() {
   }, [agents, tabs, activeTabId, newChatTab, closeTab, cycleReasoningEffort]);
 
   const selectSession = useCallback(
-    async (sid: string) => {
+    async (sid: string, title?: string, opts?: { reuseDraft?: boolean }) => {
       const info = sessions.find((s) => s.session_id === sid);
-      openSessionTab(sid, info?.title || sid);
+      // title 显式传入优先：调用方常常刚刷新过列表，sessions 闭包可能还是旧的（否则会闪成 session id）
+      openSessionTab(sid, title || info?.title || sid, opts);
       if (!chatStatesRef.current[sid]) {
         const snap = await api.getSession(sid);
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
@@ -953,6 +971,30 @@ export default function App() {
     [openSessionTab, patchChat, sessions]
   );
 
+  /**
+   * 打开项目后的默认落点：该项目**最近一条**会话；没有历史则新建空对话。
+   *
+   * 为什么不做成「落空白新会话」：换项目后停在空白页会让人以为历史丢了、
+   * 也要重新翻侧栏找上次的进度；落到最近一条即可接着上次的上下文继续，
+   * 想开新对话直接发消息（新建会话那条路径不受影响）。
+   *
+   * 取「最近」不依赖接口顺序：后端虽按 updated_at 倒序返回，这里仍显式按
+   * updated_at 取最大值，接口顺序若变也不会选错。
+   */
+  const openLatestSessionOrNewChat = useCallback(
+    async (ws: string, opts?: { reuseDraft?: boolean }) => {
+      const list = await refreshSessions(ws);
+      const latest = [...list].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+      if (latest?.session_id) {
+        pushLog(`↻ 已打开最近会话：${latest.title || latest.session_id}`);
+        await selectSession(latest.session_id, latest.title, opts);
+        return;
+      }
+      newChatTab();
+    },
+    [refreshSessions, selectSession, newChatTab, pushLog]
+  );
+
   // 双击会话：切到该会话关联的项目，再打开会话（便于接着原项目继续开发）
   const openSessionWithProject = useCallback(
     async (sid: string) => {
@@ -1040,6 +1082,9 @@ export default function App() {
         if (result.ok) {
           // 重载后默认落在「文件」Tab，直接看到新项目目录树
           try { localStorage.setItem("litework.sidebarTab", "files"); } catch { /* ignore */ }
+          // 「打开项目」后进入该项目最近一条会话：本条路径会整页重载，选不了会话，
+          // 于是把意图写进 localStorage 带过重载边界，由启动 effect 消费并清除。
+          try { localStorage.setItem(OPEN_LATEST_SESSION_KEY, result.workspace ?? ""); } catch { /* ignore */ }
           window.location.reload();
         }
       } catch (e) {
@@ -1121,15 +1166,14 @@ export default function App() {
           setChatStates({});
           chatStatesRef.current = {};
 
-          // 切换项目后只刷新历史会话列表，会话由用户按需新建（首条消息才落盘）
-          newChatTab();
-          await refreshSessions(res.workspace);
+          // 切换项目后自动进入该项目最近一条会话；没有历史才新建空对话
+          await openLatestSessionOrNewChat(res.workspace);
         }
       } catch (e) {
         setErrorPublic((e as Error).message);
       }
     },
-    [pushLog, refreshSessions, closeStream, newChatTab, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects, pickerMode]
+    [pushLog, closeStream, openLatestSessionOrNewChat, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects, pickerMode]
   );
 
   // ------------------------------------------------------------ 项目页签：最近项目
@@ -1164,13 +1208,13 @@ export default function App() {
         closeStream();
         setChatStates({});
         chatStatesRef.current = {};
-        newChatTab();
-        await refreshSessions(res.workspace);
+        // 与其它「打开项目」入口一致：进入该项目最近一条会话（无历史才新建空对话）
+        await openLatestSessionOrNewChat(res.workspace);
       }
     } catch (e) {
       setErrorPublic((e as Error).message);
     }
-  }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, refreshRecentProjects, refreshSessions]);
+  }, [changeSidebarTab, closeStream, openLatestSessionOrNewChat, notifyElectronWorkspace, refreshRecentProjects]);
 
   /** 在隔离工作树中打开项目：切换项目 → 新建会话 → 开启 worktree 模式。 */
   const openWorktreeSession = useCallback(async (path: string) => {
@@ -1248,6 +1292,23 @@ export default function App() {
     newChatTab();
   }, [loading, newChatTab]);
 
+  // 「打开项目」（原生目录对话框）重载后的落点：进入该项目**最近一条**会话。
+  // 该意图以一次性 localStorage 承载（见 openProject），消费即清除；用 ref 保证
+  // StrictMode 双执行下不会重复开页签。没有历史会话时保留上面新建的空对话 tab。
+  const openedLatestRef = useRef(false);
+  useEffect(() => {
+    if (loading || openedLatestRef.current) return;
+    let ws = "";
+    try {
+      ws = localStorage.getItem(OPEN_LATEST_SESSION_KEY) ?? "";
+      if (ws) localStorage.removeItem(OPEN_LATEST_SESSION_KEY);
+    } catch { /* ignore */ }
+    if (!ws) return;
+    openedLatestRef.current = true;
+    // reuseDraft：复用启动时建的空对话 tab，而不是再多开一个
+    void openLatestSessionOrNewChat(ws, { reuseDraft: true });
+  }, [loading, openLatestSessionOrNewChat]);
+
   // 切到某会话时刷新其 worktree 状态：多会话同项目下，别的会话合并后主分支会前进，
   // 本会话要能看到「主分支已前进 / 合并目标分支」的最新信息（不进则静默忽略）
   useEffect(() => {
@@ -1320,7 +1381,14 @@ export default function App() {
           log(`⟳ 第 ${ev.data.turn} 轮`);
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
           streamingRefs.current.set(sid, { ...cur, turn: ev.data.turn });
-          patchChat(sid, { streaming: { ...streamingRefs.current.get(sid)! } });
+          // 新一轮开始：清掉上一轮的实时速度（本轮还没产生数据）
+          patchChat(sid, { streaming: { ...streamingRefs.current.get(sid)! }, liveSpeed: null });
+          break;
+        }
+        case "llm:progress": {
+          // 流式生成中的实时速度（估算值，后端已按 ~400ms 节流）：
+          // 只更新一个轻量字段，不触碰 streaming/messages，避免高频重渲染聊天区
+          patchChat(sid, { liveSpeed: ev.data });
           break;
         }
         case "llm:retry": {
@@ -1428,11 +1496,17 @@ export default function App() {
           break;
         }
         case "context:stats": {
-          // 追加水位轨迹（最近 60 点）：面板趋势图的数据源；替换式更新当前统计
+          // 追加水位轨迹（最近 60 点）：面板趋势图的数据源；替换式更新当前统计。
+          // 同时把本轮速度（已由 usage 校准）写进轨迹 → 速度趋势图。
           const cur = getChat(sid);
-          const point = { p: ev.data?.task?.last_prompt_tokens ?? 0 };
+          const last = ev.data?.task?.last;
+          const point = {
+            p: ev.data?.task?.last_prompt_tokens ?? 0,
+            tps: last?.tps_gen ?? null,
+          };
           const history = [...(cur.contextHistory ?? []), point].slice(-60);
-          patchChat(sid, { contextStats: ev.data, contextHistory: history });
+          // 本轮已出精确结果 → 清掉实时估算值（面板随之从「估算」切到「精确」）
+          patchChat(sid, { contextStats: ev.data, contextHistory: history, liveSpeed: null });
           break;
         }
         case "chat:queued": {
@@ -1479,6 +1553,7 @@ export default function App() {
             running: false,
             turn: 0,
             sseState: "idle",
+            liveSpeed: null,
             subAgentRecords: [...(getChat(sid).subAgentRecords ?? []), ...finished],
             skillLoaded: undefined,
           });
@@ -2797,6 +2872,9 @@ export default function App() {
           </button>
         </div>
       )}
+      {/* 三栏横排容器：与顶部横幅分开层级——横幅独占一行，不再参与横向宽度分配
+          （此前横幅是 .app 的横向 flex 项，会吃掉数百 px 行宽把聊天区挤成窄条） */}
+      <div className="app-row">
       {sidebarCollapsed && (
         <button className="panel-restore-bar left" onClick={() => setSidebarCollapsed(false)} title="展开侧边栏">
           <span className="restore-icon">▶</span>
@@ -3028,6 +3106,7 @@ export default function App() {
           <ToolPanel
             contextStats={currentChat.contextStats}
             contextHistory={currentChat.contextHistory}
+            liveSpeed={currentChat.liveSpeed ?? null}
             running={currentChat.running}
             mcpServers={mcpServers}
             tools={registeredTools}
@@ -3049,6 +3128,7 @@ export default function App() {
           </ErrorBoundary>
         </>
       )}
+      </div>
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}

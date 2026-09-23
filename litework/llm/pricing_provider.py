@@ -29,6 +29,13 @@ lookup 返回结构（键名与价格字段沿用主程序口径，每 M token�
       "model_key": str, "source": "official:deepseek"|"snapshot:deepseek"|...,
       "source_label": str, "source_age_seconds": float|None, "stale": bool,
     }
+
+**数据 vs 策略**：插件只负责报「数据」——价格、来源、**缓存年龄**
+（`source_age_seconds` / `status()` 的 `age_seconds`）。「多久算旧、要不要提示
+用户同步」是**用户偏好**，判定在主程序侧（`config.pricing_check_ttl_days`，
+0=永不过期），并且与 models.dev 共用同一项设置——所以插件可以照常返回 `stale`
+（作为它自身的默认口径，供独立使用时参考），主程序会用年龄 + 用户配置复算，
+不会直接透出插件那份。插件不必、也不应该去读主程序的 config。
 """
 from __future__ import annotations
 

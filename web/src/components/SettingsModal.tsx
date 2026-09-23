@@ -202,6 +202,10 @@ export default function SettingsModal({
   const [pricing, setPricing] = useState<PricingStatus | null>(null);
   const [syncBusy, setSyncBusy] = useState<string | null>(null);
   const [syncResults, setSyncResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+  // 「价格检查过期」窗口（天；0 = 永不过期）：主程序侧的纯展示策略，插件源与
+  // models.dev 共用。改完立即重拉状态，让「建议同步」标签按新窗口刷新。
+  const [pricingTtlDays, setPricingTtlDays] = useState<number>(7);
+  const [ttlSaved, setTtlSaved] = useState(false);
   // 综合设置：多智能体限额与行为（docs/multi-agent-design.md §3）
   const [maParallel, setMaParallel] = useState<number>(4);
   const [maTotal, setMaTotal] = useState<number>(16);
@@ -564,6 +568,10 @@ export default function SettingsModal({
       setPermDirty(false);
       if (typeof c.max_zip_size_mb === "number" && c.max_zip_size_mb > 0) {
         setMaxZipSize(c.max_zip_size_mb);
+      }
+      // 价格检查过期窗口（0 也要回显——它就是「永不过期」）
+      if (typeof c.pricing_check_ttl_days === "number" && c.pricing_check_ttl_days >= 0) {
+        setPricingTtlDays(c.pricing_check_ttl_days);
       }
       if (c.skill_trigger_mode === "substring" || c.skill_trigger_mode === "advanced") {
         setTriggerMode(c.skill_trigger_mode);
@@ -1142,6 +1150,24 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [maxZipSize, onSaved]);
+
+  // 保存「价格检查过期」窗口（天；0 = 永不过期）。
+  // 判定在主程序侧（插件源与 models.dev 共用），所以保存后重拉一次状态，
+  // 让上方的「建议同步」标签按新窗口立刻刷新（不用等下次打开设置页）。
+  const savePricingTtl = useCallback(async () => {
+    setTtlSaved(false);
+    try {
+      await api.updateConfig({
+        pricing_check_ttl_days: Math.max(0, Math.floor(Number(pricingTtlDays) || 0)),
+      });
+      setTtlSaved(true);
+      setTimeout(() => setTtlSaved(false), 2000);
+      api.pricingStatus().then(setPricing).catch(() => {});
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [pricingTtlDays, onSaved]);
 
   // 保存 triggers 匹配模式
   const saveTriggerMode = useCallback(async () => {
@@ -2349,6 +2375,30 @@ export default function SettingsModal({
                   {syncBusy ? `同步中（${syncBusy}）…` : "🔄 立即同步定价数据"}
                 </button>
                 {syncBusy === "models_dev" && <span className="mcp-hint" style={{ marginLeft: 12 }}>正在拉取 models.dev…</span>}
+              </div>
+
+              <div className="form-group" style={{ marginTop: 14 }}>
+                <label>价格检查过期时间（天）</label>
+                <div className="form-row">
+                  <input
+                    type="number"
+                    className="form-input"
+                    min={0}
+                    max={3650}
+                    value={pricingTtlDays}
+                    onChange={(e) => setPricingTtlDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    style={{ width: 120 }}
+                    title="超过这个天数就在上方提示「建议同步」；0 = 永不过期"
+                  />
+                  <button className="btn-test" onClick={() => void savePricingTtl()}>
+                    {ttlSaved ? "已保存 ✓" : "保存"}
+                  </button>
+                </div>
+                <p className="mcp-hint" style={{ marginTop: 6 }}>
+                  <b>0 = 永不过期</b>（不再提示「建议同步」）。该窗口同时作用于 models.dev 与
+                  定价插件各官方源；只影响<u>是否提示同步</u>，
+                  <b>不改变联网行为</b>——定价数据始终不自动抓取，想更新仍要手动点上面的同步按钮。
+                </p>
               </div>
 
               <div className="mcp-section-head" style={{ marginTop: 18 }}>

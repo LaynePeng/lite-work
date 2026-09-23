@@ -12,13 +12,11 @@ import os
 import uuid
 from pathlib import Path
 
-import httpx
 import pytest
-import uvicorn
 
 from litework.app import AgentApp
 from litework.server.app import create_app
-from tests.conftest import MockLLMAdapter, tool_call
+from tests.conftest import MockLLMAdapter, live_server, tool_call
 
 
 @pytest.fixture
@@ -34,25 +32,9 @@ async def live_client(tmp_path):
     # 测试不依赖在线元数据，直接短路掉。
     app.refresh_model_meta = lambda: False
     fast_app = create_app(app, token=None)
-    config = uvicorn.Config(
-        fast_app, host="127.0.0.1", port=0, log_level="error",
-        timeout_graceful_shutdown=2,
-    )
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-    # models.dev 同步已在上面短路，lifespan 启动只含 mcp_manager.start()，应当秒起
-    for _ in range(400):
-        if server.started:
-            break
-        await asyncio.sleep(0.05)
-    assert server.started, "uvicorn 未在预期时间内启动"
-    port = server.servers[0].sockets[0].getsockname()[1]
-
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=15) as c:
-        yield c, app, server
-
-    server.should_exit = True
-    await asyncio.wait_for(server_task, timeout=10)
+    # 真实 uvicorn + 就绪探测（消除「started 但 accept 未就绪」的偶发 RemoteProtocolError）
+    async with live_server(fast_app) as (client, server):
+        yield client, app, server
 
 
 async def _consume_sse(stream, on_event=None):

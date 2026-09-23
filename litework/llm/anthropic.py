@@ -27,6 +27,7 @@ from .base import (
     expand_header_templates,
     merge_headers,
 )
+from .stream_meter import current_stream_meter
 
 logger = logging.getLogger("litework.llm")
 
@@ -237,6 +238,9 @@ class AnthropicAdapter(BaseLLMAdapter):
         buffer = ""
         byte_buffer = b""
 
+        # token 速度计量器（由 AgentLoop 通过 contextvar 注入；没有就纯流式转发）
+        meter = current_stream_meter()
+
         # 空闲看门狗：逐 chunk 限时，卡死连接可见中断（而非等 llm_timeout 静默超时）
         aiter = response.aiter_bytes()
         while True:
@@ -295,13 +299,19 @@ class AnthropicAdapter(BaseLLMAdapter):
                     if delta.get("type") == "text_delta":
                         text = delta.get("text", "")
                         full_content += text
+                        due = meter.feed(text) if meter is not None else False
                         if events:
+                            if due and meter is not None:
+                                await events.emit("llm:progress", meter.progress())
                             await events.emit("llm:stream", {"chunk": text})
                     elif delta.get("type") == "thinking_delta":
                         # 扩展思考内容：转发给 UI（与 OpenAI 的 reasoning_content 对齐）
                         thinking = delta.get("thinking", "")
                         full_content += thinking
+                        due = meter.feed(thinking) if meter is not None else False
                         if events:
+                            if due and meter is not None:
+                                await events.emit("llm:progress", meter.progress())
                             await events.emit("llm:stream", {"chunk": thinking})
                     elif delta.get("type") == "input_json_delta" and current_tool:
                         current_tool.arguments += delta.get("partial_json", "")

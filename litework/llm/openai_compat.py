@@ -28,6 +28,7 @@ from .base import (
     expand_header_templates,
     merge_headers,
 )
+from .stream_meter import current_stream_meter
 
 logger = logging.getLogger("litework.llm")
 
@@ -203,6 +204,9 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         buffer = ""
         byte_buffer = b""
 
+        # token 速度计量器（由 AgentLoop 通过 contextvar 注入；没有就纯流式转发）
+        meter = current_stream_meter()
+
         # 空闲看门狗：逐 chunk 限时，卡死连接 120s 内可见中断（而非等 llm_timeout）
         aiter = response.aiter_bytes()
         while True:
@@ -247,7 +251,11 @@ class OpenAICompatAdapter(BaseLLMAdapter):
                 stream_content = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
                 if stream_content:
                     full_content += stream_content
+                    # 计量（速度）：只对增量做小正则累加；到节流窗口才推一次实时进度
+                    due = meter.feed(stream_content) if meter is not None else False
                     if events:
+                        if due and meter is not None:
+                            await events.emit("llm:progress", meter.progress())
                         await events.emit("llm:stream", {"chunk": stream_content})
 
                 for tc in delta.get("tool_calls") or []:

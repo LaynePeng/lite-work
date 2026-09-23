@@ -33,6 +33,7 @@ from .token_counter import TokenCounter
 from .truncator import truncate_tool_output
 from .types import Message, ToolCall, ToolDefinition, header_context
 from ..llm.pricing_provider import is_off_peak_now
+from ..llm.stream_meter import StreamMeter, use_stream_meter
 from ..tools.todos import current_session_id, current_root_session_id
 
 logger = logging.getLogger("litework.agentloop")
@@ -146,8 +147,9 @@ class AgentLoop:
         self._compression_count = 0
         self._compressed_tokens = 0
         self._last_usage: Optional[Dict[str, int]] = None
-        # 最近一次 LLM 调用的用量（「本次调用」口径，与 stats 里的任务累计区分）
-        self._last_call: Optional[Dict[str, int]] = None
+        # 最近一次 LLM 调用的用量与速度（「本次调用」口径，与 stats 里的任务累计区分）：
+        # tokens 为整数，速度字段可能为 None（窗口过小/未计量）→ 用 Any
+        self._last_call: Optional[Dict[str, Any]] = None
         # 无 usage 时每轮估算的 prompt 规模（用于「本次调用」的兜底口径）
         self._last_prompt_estimate: int = 0
         # 并行工具执行模式："auto"（只读轮并行/含写串行）| "always" | "never"
@@ -175,6 +177,13 @@ class AgentLoop:
         self.header_conversation_id: Optional[str] = header_conversation_id
         # 最近一次压缩决策理由（面板可解释性）
         self._compaction_reason: Optional[str] = None
+        # ---- token 速度（v1.9.x）：本任务的配对累计 ----
+        # 为什么放在实例属性而不是 stats 字典：stats 会被原样作为 stats:update 事件
+        # 发出（StatsUpdatePayload 有严格字段声明，strict 模式下多一个键就抛错），
+        # 速度是「面板展示口径」而非 stats 契约的一部分。
+        self._speed_output_tokens = 0   # Σ 有生成窗口那几轮的输出 tokens
+        self._speed_gen_ms = 0          # Σ 生成窗口（毫秒）
+        self._speed_turns = 0           # 计入平均的轮数
         self._register_obs_recall_tool()
 
     def _register_obs_recall_tool(self) -> None:
@@ -290,6 +299,15 @@ class AgentLoop:
             "cache_miss_tokens": 0,
         }
 
+        # token 速度累计按任务清零（stats 是 stats:update 的严格契约，速度另存）
+        self._speed_output_tokens = 0
+        self._speed_gen_ms = 0
+        self._speed_turns = 0
+
+        # 流式计量器（token 速度）：整任务复用同一实例，每次尝试前 reset。
+        # 不传 usage 的调用方（子 Agent / 证据收据）另建实例或不用——不影响主任务口径。
+        meter = StreamMeter()
+
         # 阶段〇：初始化（system prompt、用户消息入链、首次落盘、task:start）
         await self._initialize_task(messages, prompt, system_prompt, tools, store_snapshot)
 
@@ -338,14 +356,15 @@ class AgentLoop:
 
                 # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
                 try:
-                    content, tool_calls, usage = await self._call_llm_with_retry(processed, tools)
+                    content, tool_calls, usage = await self._call_llm_with_retry(
+                        processed, tools, meter)
                 except AgentLoop._LLMCallFailure as failure:
                     logger.warning("[AgentLoop] LLM 调用失败: %s", failure.message)
                     messages.append(Message(role="assistant", content=f"[LLM Error]: {failure.message}"))
                     return await self._finish(f"[LLM Error]: {failure.message}", messages, stats, store_snapshot)
 
-                # 阶段三：状态更新（usage 累加 + 上下文水位推送）
-                self._record_usage(usage, content, stats)
+                # 阶段三：状态更新（usage 累加 + 本轮速度 + 上下文水位推送）
+                self._record_usage(usage, content, stats, meter)
                 await self._emit_context_stats(stats)
 
                 if not content and not tool_calls:
@@ -512,6 +531,7 @@ class AgentLoop:
 
     async def _call_llm_with_retry(
         self, processed: List[Message], tools: List[ToolDefinition],
+        meter: Optional[StreamMeter] = None,
     ) -> Tuple[str, List[ToolCall], Optional[Dict[str, int]]]:
         """阶段一：调用 LLM（流式，内部 emit llm:stream）。
 
@@ -519,14 +539,22 @@ class AgentLoop:
         避免长思考模型或网络波动直接杀死整个任务；重试过程 emit
         "llm:retry" 事件供 UI 展示。不可重试错误（鉴权/参数等）立即失败，
         抛出 _LLMCallFailure 由 run_task 统一收尾。
+
+        meter：每次**尝试**开始前重置——失败尝试的字符/时间戳不能算进速度。
         """
         attempt = 0
         while True:
             try:
-                return await asyncio.wait_for(
-                    self.adapter.chat_stream(processed, tools, self.kernel.events),
-                    timeout=self.llm_timeout,
-                )
+                if meter is not None:
+                    meter.reset()
+                    meter.start()
+                # 计量器通过 contextvar 传给适配器（不改进 chat_stream 签名：
+                # 社区/测试里的自定义适配器无需改动，不实现计量也不影响功能）
+                with use_stream_meter(meter):
+                    return await asyncio.wait_for(
+                        self.adapter.chat_stream(processed, tools, self.kernel.events),
+                        timeout=self.llm_timeout,
+                    )
             except asyncio.TimeoutError:
                 last_err: BaseException = TimeoutError(
                     f"LLM 请求超过 {self.llm_timeout}s（模型可能正在长时间思考或网络拥堵）"
@@ -554,12 +582,16 @@ class AgentLoop:
 
     def _record_usage(
         self, usage: Optional[Dict[str, int]], content: Optional[str], stats: Dict[str, Any],
+        meter: Optional[StreamMeter] = None,
     ) -> None:
         """阶段三（a）：用模型返回的 usage 累加（准确值），无 usage 时回退估算。
 
         stats 是「本任务累计」（每轮把整段上下文重发，逐轮线性累加），
         而 self._last_call 记录「最近一次调用」的用量——两者口径不同，
         面板必须分开显示，否则单轮 1 万 token 的任务在几十轮后看起来像上百万。
+
+        meter（可选）：流式增量计量器。传入时额外算出「本轮 token 速度」——
+        生成速度（排除首字等待）、端到端速度、首字延迟，并把本轮计入任务平均。
         """
         self._last_usage = usage or self._last_usage
         if usage:
@@ -591,6 +623,47 @@ class AgentLoop:
                 "prompt_tokens": estimate, "output_tokens": output,
                 "cache_hit_tokens": 0, "cache_miss_tokens": estimate,
             }
+        self._record_speed(usage, stats, meter)
+
+    def _record_speed(
+        self, usage: Optional[Dict[str, int]], stats: Dict[str, Any],
+        meter: Optional[StreamMeter],
+    ) -> None:
+        """把本轮生成速度写进 self._last_call，并累加「任务平均」的配对分子/分母。
+
+        口径（见 StreamMeter）：
+          - tps_gen：生成速度 = 输出 tokens ÷ 生成窗口（末块−首块），**排除首字等待**
+            ——这才是「模型吐字速度」，跨供应商/模型可比；
+          - tps_e2e：端到端 = 输出 tokens ÷（末块−请求发出），含首字，贴近体感；
+          - ttft_ms：首字延迟，单独展示（推理模型 TTFT 长但吐字不慢，不能混为一谈）。
+
+        任务平均必须用**配对**的分子/分母：只把「既有输出 tokens 又有生成窗口」的
+        轮次计入，否则缺测轮次会把平均值抬高（分母缺、分子照加）。
+        """
+        if meter is None:
+            return
+        tokens = int((self._last_call or {}).get("output_tokens", 0) or 0)
+        # 有 usage 时用精确输出 tokens 校准估算值（estimated=False）
+        exact = int(usage.get("completion_tokens", 0)) if usage else None
+        snap = meter.snapshot(exact_output_tokens=exact)
+        # 复制后再写（而不是原地 update）：_last_call 在本方法外可能为 None，
+        # 显式重新赋值既让类型收敛，也避免与其它引用共享可变字典。
+        call: Dict[str, Any] = dict(self._last_call or {})
+        call.update({
+            "ttft_ms": snap["ttft_ms"],
+            "gen_ms": snap["gen_ms"],
+            "e2e_ms": snap["e2e_ms"],
+            "tps_gen": snap["tps_gen"],
+            "tps_e2e": snap["tps_e2e"],
+            "tps_estimated": snap["estimated"],
+        })
+        self._last_call = call
+        gen_ms = snap["gen_ms"]
+        if gen_ms:
+            # 配对累计：任务平均 = Σ输出 / Σ生成窗口
+            self._speed_output_tokens += tokens
+            self._speed_gen_ms += gen_ms
+            self._speed_turns += 1
 
     async def _execute_tool_batch(
         self, tool_calls: List[ToolCall], stats: Dict[str, Any],
@@ -1231,5 +1304,9 @@ class AgentLoop:
                 "blocked": stats.get("blocked", 0),
                 "cost_estimate": round(cost, 4),
                 "last": last_call,
+                # 本任务平均生成速度 = Σ输出 tokens ÷ Σ生成窗口（只算有生成窗口的轮次）
+                "avg_tps": (round(self._speed_output_tokens / (self._speed_gen_ms / 1000.0), 2)
+                            if self._speed_gen_ms else None),
+                "speed_turns": self._speed_turns,
             },
         })

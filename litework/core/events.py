@@ -42,6 +42,20 @@ class LLMStreamPayload(TypedDict):
     chunk: str
 
 
+class LLMProgressPayload(TypedDict):
+    """llm:progress：流式生成中的实时速度（**估算值**，节流约 400ms 一次）。
+
+    只在生成过程中推送，用于面板上「正在生成」时的速度跳动；本轮结束时由
+    context:stats 携带 usage 校准后的精确值（见 StreamMeter.snapshot）。
+    """
+    est_tokens: int
+    chars: int
+    chunks: int
+    ttft_ms: Optional[int]
+    gen_ms: Optional[int]
+    tps: Optional[float]
+
+
 class LLMTurnStartPayload(TypedDict):
     turn: int
 
@@ -333,6 +347,7 @@ class TypedEventBus:
         "session:end": SessionEndPayload,
         "message:added": MessageAddedPayload,
         "llm:stream": LLMStreamPayload,
+        "llm:progress": LLMProgressPayload,
         "llm:turn_start": LLMTurnStartPayload,
         "llm:retry": LLMRetryPayload,
         "tool:before_execute": ToolBeforeExecutePayload,

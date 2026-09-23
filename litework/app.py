@@ -18,7 +18,6 @@ from .core.kernel import Kernel
 from .core.session_store import SessionStore
 from .core.types import Plugin, header_context
 from .llm.base import BaseLLMAdapter
-from .llm.model_meta import CACHE_TTL_SECONDS as MODEL_META_TTL
 from .llm.registry import LLMRegistry
 from .mcp import MCPManager
 from .security.approval import ApprovalGate
@@ -49,6 +48,11 @@ if TYPE_CHECKING:  # 仅供类型标注：运行时按需懒导入，避免与 o
     from .orchestration.agent_manager import SessionAgentManager
 
 logger = logging.getLogger("litework.app")
+
+# 「价格检查过期」窗口的默认值（天）：见 DEFAULT_CONFIG["pricing_check_ttl_days"]。
+# 判定在主程序侧（数据源插件只报缓存年龄，不拥有这个策略），因此插件官方源与
+# models.dev 共用同一项配置。
+DEFAULT_PRICING_CHECK_TTL_DAYS = 7
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "max_steps": 100,
@@ -96,6 +100,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # "provider/model" 或裸 "model"；值 {"input_per_mtok", "output_per_mtok",
     # "cache_hit_per_mtok", 可选 "off_peak": {同结构}}。
     "pricing_overrides": {},
+    # 「价格检查过期」窗口（天）：0 = 永不过期（设置页不再提示「建议同步」）。
+    # 这只是**展示策略**——判定在主程序侧（见 AgentApp.pricing_check_ttl_seconds），
+    # 插件官方源与 models.dev 共用；不影响 models.dev 的联网挡板
+    # （model_meta.CACHE_TTL_SECONDS 仍独立管「要不要联网」）。
+    "pricing_check_ttl_days": DEFAULT_PRICING_CHECK_TTL_DAYS,
     # 效率机制（v1.6.0，SoL-Pi 存活机制的适配）：
     # observation_pack      大工具结果「先全文后占位符」，obs_recall 分页召回
     # compaction_economics  压缩经济学决策（写入成本+缓存债 vs 剩余轮数收益）
@@ -767,6 +776,48 @@ class AgentApp:
 
     _PRICE_KEYS = ("input_per_mtok", "output_per_mtok", "cache_hit_per_mtok")
 
+    def pricing_check_ttl_seconds(self) -> Optional[float]:
+        """「建议同步 / 定价数据已过期」的判定窗口（秒）；None = 永不过期。
+
+        配置项 `pricing_check_ttl_days`（天，0 或负数 = 永不过期）。**纯展示策略**：
+        不参与任何抓取/缓存行为（models.dev 的联网挡板仍是
+        model_meta.CACHE_TTL_SECONDS；定价插件的同步一直是手动的）。
+
+        为什么放在主程序：定价插件只报「缓存年龄」这类数据，「多久算旧、要不要
+        提醒」是用户偏好——放在这里才能与 models.dev 共用同一项设置，也免得
+        同一个诉求在两个来源各配一处。
+        """
+        raw = self.config.get("pricing_check_ttl_days", DEFAULT_PRICING_CHECK_TTL_DAYS)
+        try:
+            days = float(raw)
+        except (TypeError, ValueError):
+            days = float(DEFAULT_PRICING_CHECK_TTL_DAYS)
+        if days <= 0:
+            return None
+        return days * 86400.0
+
+    @staticmethod
+    def _age_seconds(raw: Any) -> Optional[float]:
+        """把来源给的年龄字段规整成 Optional[float]（第三方插件可能给字符串/None）。"""
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return None
+
+    def _pricing_stale(self, age: Optional[float], *, missing_is_stale: bool) -> bool:
+        """按用户配置判定来源是否「过期」（前端「建议同步」/「定价数据已过期」）。
+
+        missing_is_stale：age 为 None（从未同步 / 仅有内置快照）时是否算过期。
+        口径与各来源原本的一致——models.dev 与插件 status() 计为过期（提醒去同步），
+        插件 lookup() 的「用内置快照兜底」不算（快照是随包分发的已知数据）。
+        """
+        ttl = self.pricing_check_ttl_seconds()
+        if ttl is None:            # 永不过期
+            return False
+        if age is None:
+            return missing_is_stale
+        return age > ttl
+
     def _pricing_override(self, provider_id: str, model: str) -> Optional[Dict[str, Any]]:
         """用户级按模型覆盖价（config.pricing_overrides）。
 
@@ -837,9 +888,11 @@ class AgentApp:
                 logger.warning("[App] 定价插件查询失败，回退后续来源", exc_info=True)
         if official:
             self._apply_prices(pricing, official)
+            age = self._age_seconds(official.get("source_age_seconds"))
             return {**pricing, "source": official.get("source") or "official",
-                    "source_age_seconds": official.get("source_age_seconds"),
-                    "stale": bool(official.get("stale"))}
+                    "source_age_seconds": age,
+                    # stale 由主程序按用户配置复算（插件自己那份只作它内部的默认口径）
+                    "stale": self._pricing_stale(age, missing_is_stale=False)}
 
         # DeepSeek 家族的 models.dev 定价不可信（挂的是空闲价，会让成本系统性
         # 少算一半）→ 宁可回退 config，也不采用。插件缺失时同样适用。
@@ -849,9 +902,9 @@ class AgentApp:
             model_pricing = self.llm_registry.get_model_pricing(provider_id, model)
             if model_pricing:
                 pricing.update(model_pricing)
-                age = self.model_meta_status().get("age_seconds")
+                age = self._age_seconds(self.model_meta_status().get("age_seconds"))
                 meta = {"source": "models.dev", "source_age_seconds": age,
-                        "stale": bool(age is not None and age > MODEL_META_TTL)}
+                        "stale": self._pricing_stale(age, missing_is_stale=True)}
         return {**pricing, **meta}
 
     def refresh_model_meta(self, force: bool = True) -> bool:
@@ -915,13 +968,32 @@ class AgentApp:
         价格来源不自动联网同步，因此把「有没有缓存 / 多久前 / 是否过期」全部
         暴露给前端，过期时提示用户手动同步（建议不强制）。插件未安装时按
         「未安装」呈现，价格只剩 models.dev / config 回退。
+
+        stale 由主程序按 config 的 `pricing_check_ttl_days` 复算（0=永不过期 →
+        恒 False），插件与 models.dev 共用这一判定；插件返回的 stale 只作它自身
+        的默认口径，不直接透出。
         """
         md = self.model_meta_status()
-        age = md.get("age_seconds")
-        models_dev = {**md, "stale": bool(age is None or age > MODEL_META_TTL)}
+        age = self._age_seconds(md.get("age_seconds"))
+        models_dev = {**md, "age_seconds": age,
+                      "stale": self._pricing_stale(age, missing_is_stale=True)}
+        # 当前生效的判定窗口（天；0=永不过期）：设置页据此回显（插件未装也返回）。
+        # 回「生效值」而非配置原件——手改成非法值时也能回显真实策略。
+        ttl_seconds = self.pricing_check_ttl_seconds()
+        check_ttl_days = 0 if ttl_seconds is None else ttl_seconds / 86400
         provider = self.pricing_provider()
         if provider is None:
-            return {"models_dev": models_dev, "provider": None, "sources": []}
+            return {"models_dev": models_dev, "provider": None, "sources": [],
+                    "check_ttl_days": check_ttl_days}
+        # 各来源的 stale 同样由主程序按用户配置复算（永不过期 ⇒ 恒 False），
+        # 但保留插件给的 age/cached/models 等数据字段。
+        sources: List[Dict[str, Any]] = []
+        for src in provider.status() or []:
+            if not isinstance(src, dict):
+                continue
+            src_age = self._age_seconds(src.get("age_seconds"))
+            sources.append({**src, "age_seconds": src_age,
+                            "stale": self._pricing_stale(src_age, missing_is_stale=True)})
         return {
             "models_dev": models_dev,
             "provider": {
@@ -931,7 +1003,8 @@ class AgentApp:
                 "source": "plugin" if getattr(provider, "_is_local_override", False)
                           else "builtin",
             },
-            "sources": provider.status(),
+            "sources": sources,
+            "check_ttl_days": check_ttl_days,
         }
 
     def sync_pricing(self, source_id: str) -> Dict[str, Any]:

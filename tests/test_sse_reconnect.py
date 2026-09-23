@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 
-import httpx
 import pytest
-import uvicorn
 
 from litework.app import AgentApp
 from litework.core.types import Message, ToolCall, ToolDefinition
 from litework.server.app import create_app
+from tests.conftest import live_server
 
 
 class SlowMockAdapter:
@@ -62,22 +61,9 @@ async def live_client(tmp_path):
     app._mock_adapter = SlowMockAdapter(delay=0.2)
     app.refresh_model_meta = lambda: False
     fast_app = create_app(app, token=None)
-    config = uvicorn.Config(fast_app, host="127.0.0.1", port=0, log_level="error",
-                            timeout_graceful_shutdown=2)
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-    for _ in range(400):
-        if server.started:
-            break
-        await asyncio.sleep(0.05)
-    assert server.started
-    port = server.servers[0].sockets[0].getsockname()[1]
-
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=20) as c:
-        yield c, app
-
-    server.should_exit = True
-    await asyncio.wait_for(server_task, timeout=10)
+    # 真实 uvicorn + 就绪探测（共享 helper，见 tests/conftest.py）
+    async with live_server(fast_app, timeout=20) as (client, _server):
+        yield client, app
 
 
 async def _read_events_until(resp, predicate, collected):

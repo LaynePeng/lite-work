@@ -318,6 +318,83 @@ def test_resolve_pricing_priority_and_deepseek_guard(tmp_path):
     assert unknown["input_per_mtok"] == 0.3
 
 
+# ------------------------------------------------------------ 检查过期窗口（主程序侧策略）
+
+
+def test_pricing_check_ttl_seconds_from_config(tmp_path):
+    """「多久算旧」是主程序的展示策略：默认 7 天，0/负数 = 永不过期，非法值回落默认。"""
+    app = _app(tmp_path)
+    assert app.pricing_check_ttl_seconds() == 7 * 86400
+    app.config["pricing_check_ttl_days"] = 0
+    assert app.pricing_check_ttl_seconds() is None
+    app.config["pricing_check_ttl_days"] = -3
+    assert app.pricing_check_ttl_seconds() is None
+    app.config["pricing_check_ttl_days"] = 1.5
+    assert app.pricing_check_ttl_seconds() == 1.5 * 86400
+    app.config["pricing_check_ttl_days"] = "坏值"
+    assert app.pricing_check_ttl_seconds() == 7 * 86400
+
+
+def _write_cache(tmp_path, age_seconds: float) -> None:
+    """写一份「N 秒前同步过」的定价缓存（只给 deepseek，kimi 保持从未同步）。"""
+    import time as _time
+
+    cache = {"sources": {"deepseek": {
+        "fetched_at": _time.time() - age_seconds,
+        "url": "x",
+        "models": {"deepseek-flash": {"peak": {"input_per_mtok": 0.31,
+                                               "output_per_mtok": 1.21,
+                                               "cache_hit_per_mtok": 0.0061}}},
+    }}}
+    (tmp_path / "pricing_cache.json").write_text(json.dumps(cache), encoding="utf-8")
+
+
+def test_stale_follows_one_config_for_plugin_and_models_dev(tmp_path, monkeypatch):
+    """同一项配置同时管插件官方源与 models.dev；0 = 永不过期 → 恒不提示。"""
+    app = _app(tmp_path)
+    # models.dev 的年龄来自缓存文件 mtime：此处直接给可控值，聚焦「年龄+配置→stale」
+    monkeypatch.setattr(app, "model_meta_status",
+                        lambda: {"cached": True, "models": 3, "age_seconds": 30 * 86400})
+    _write_cache(tmp_path, 30 * 86400)
+
+    # 默认窗口 7 天：30 天前的缓存过期（两个来源都提示）
+    st = app.pricing_status()
+    assert st["check_ttl_days"] == 7
+    assert st["models_dev"]["stale"] is True
+    assert {s["id"]: s["stale"] for s in st["sources"]}["deepseek"] is True
+    assert app.resolve_pricing("deepseek", "deepseek-flash")["stale"] is True
+
+    # 放宽到 60 天：30 天前的不再算过期（models.dev 同口径跟着变）
+    app.config["pricing_check_ttl_days"] = 60
+    st2 = app.pricing_status()
+    assert st2["models_dev"]["stale"] is False
+    assert {s["id"]: s["stale"] for s in st2["sources"]}["deepseek"] is False
+    assert app.resolve_pricing("deepseek", "deepseek-flash")["stale"] is False
+
+    # 0 = 永不过期：连「从未同步」的 kimi 也不再提示
+    app.config["pricing_check_ttl_days"] = 0
+    st3 = app.pricing_status()
+    assert st3["check_ttl_days"] == 0
+    assert st3["models_dev"]["stale"] is False
+    assert all(s["stale"] is False for s in st3["sources"])
+    assert app.resolve_pricing("deepseek", "deepseek-flash")["stale"] is False
+
+
+def test_snapshot_is_not_stale_but_never_synced_is(tmp_path):
+    """口径保持：lookup 的「用内置快照」不算过期；status 的「从未同步」才算（提醒去同步）。"""
+    app = _app(tmp_path)
+    pricing = app.resolve_pricing("deepseek", "deepseek-flash")
+    assert pricing["source"].startswith("snapshot:")
+    assert pricing["stale"] is False
+
+    st = {s["id"]: s for s in app.pricing_status()["sources"]}
+    assert st["deepseek"]["stale"] is True
+    # 永不过期模式下，「从未同步」也不提示
+    app.config["pricing_check_ttl_days"] = 0
+    st2 = {s["id"]: s for s in app.pricing_status()["sources"]}
+    assert st2["deepseek"]["stale"] is False
+
+
 # ------------------------------------------------------------ AgentLoop 选档
 
 

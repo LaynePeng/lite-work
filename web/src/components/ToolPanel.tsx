@@ -4,8 +4,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  BackgroundTaskInfo, ContextHistoryPoint, ContextMechanisms, ContextStats,
-  ContextTaskStats, MCPServerStatus, SubAgentProgress, TodoItem,
+  BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
+  ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
 } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
@@ -83,10 +83,96 @@ function MechanismRows({ mechanisms }: { mechanisms?: ContextMechanisms }) {
   );
 }
 
-function ContextPanel({ stats, history, running, onCompact, compacting }: {
+/** 速度条文案：tok/s 保留 1 位（0 值不显示小数） */
+function fmtTps(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return v >= 100 ? v.toFixed(0) : v.toFixed(1);
+}
+
+/** 毫秒 → 秒（首字延迟展示用） */
+function fmtSeconds(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/**
+ * 本轮 token 速度条（变体 B）：主数字 + 细分（首字 / 本任务均）+ 速度趋势图。
+ *
+ * 两种状态由数据自然决定，**两者布局尺寸完全一致**（趋势图固定宽度）：
+ *   - 生成中：liveSpeed 有值 → 显示估算值（≈ 前缀 + 「估算」小标 + 脉冲点）；
+ *   - 本轮结束/空闲：显示 usage 校准后的精确值（+ task.avg_tps 任务平均）。
+ *
+ * 不显示「本轮生成中/本轮生成速度」这类状态文案、也不显示端到端速度：
+ * 它们在两种状态下字数不同，会挤压右侧趋势图导致宽度跳动（图宽必须恒定）。
+ */
+function SpeedRow({ call, avgTps, speedTurns, live, history, running }: {
+  call?: ContextCallStats;
+  avgTps?: number | null;
+  speedTurns?: number;
+  live?: LiveSpeedStats | null;
+  history?: ContextHistoryPoint[];
+  running?: boolean;
+}) {
+  // 趋势线：只用真正有速度值的轮次（无计量的轮次会留空档，不能当 0 画）
+  const series = (history ?? [])
+    .map((h) => h.tps)
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const spark = series.length >= 2 ? sparkPoints(series) : null;
+  const seriesAvg = series.length > 0
+    ? series.reduce((a, b) => a + b, 0) / series.length
+    : null;
+
+  // 生成中优先用实时估算值；否则用最近一次调用的精确结果
+  const liveTps = live?.tps ?? null;
+  const isLive = !!running && live != null && liveTps != null;
+  const tps = isLive ? liveTps : (call?.tps_gen ?? null);
+  const ttft = isLive ? (live?.ttft_ms ?? call?.ttft_ms ?? null) : (call?.ttft_ms ?? null);
+  const estimated = isLive ? true : (call?.tps_estimated ?? false);
+
+  // 全程无数据（旧载荷 / 适配器未计量）→ 整块不渲染，不占位
+  if (tps == null && ttft == null && avgTps == null && !spark) return null;
+
+  return (
+    <div className="ctx2-speedrow">
+      <div className="ctx2-speedmain">
+        <div className="ctx2-speedbig">
+          <b className={estimated ? "est" : undefined}>{isLive ? "≈ " : ""}{fmtTps(tps)}</b>
+          <small>tok/s</small>
+          {estimated && <span className="ctx2-esttag">估算</span>}
+          {isLive && <i className="ctx2-dot run" />}
+        </div>
+        <div className="ctx2-speedsub">
+          <span>首字 <b>{fmtSeconds(ttft)}</b></span>
+          {avgTps != null && (
+            <span title={`Σ输出 tokens ÷ Σ生成窗口（${speedTurns ?? 0} 轮）`}>
+              本任务均 <b>{fmtTps(avgTps)}</b>
+            </span>
+          )}
+        </div>
+      </div>
+      {spark && (
+        <div className="ctx2-sparkwrap">
+          <svg className="ctx2-spark" viewBox="0 0 190 34" preserveAspectRatio="none">
+            <polygon className="ctx2-sparkfill speed" points={`${spark.line} 190,34 0,34`} />
+            <polyline className="ctx2-sparkline speed" points={spark.line} />
+            <circle className="ctx2-sparkdot speed" cx={spark.lastX} cy={spark.lastY} r="2.4" />
+          </svg>
+          <div className="ctx2-sparkcap">
+            <span>近 {series.length} 轮速度</span>
+            <span>{seriesAvg != null ? `平均 ${fmtTps(seriesAvg)} tok/s` : ""}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContextPanel({ stats, history, running, liveSpeed, onCompact, compacting }: {
   stats: ContextStats | null;
   history?: ContextHistoryPoint[];
   running?: boolean;
+  /** 流式生成中的实时速度（llm:progress，估算值） */
+  liveSpeed?: LiveSpeedStats | null;
   /** 手动压缩入口（环形仪表点击触发，来自 App 层） */
   onCompact?: () => void;
   /** 压缩进行中（禁用环 + 扫掠动画 + 中间文字切换） */
@@ -209,6 +295,16 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
         </div>
       </div>
 
+      {/* 本轮 token 速度（变体 B）：主数字 + 首字/端到端/本任务均 + 速度趋势 */}
+      <SpeedRow
+        call={call}
+        avgTps={task.avg_tps}
+        speedTurns={task.speed_turns}
+        live={liveSpeed}
+        history={history}
+        running={running}
+      />
+
       <div className="ctx2-card">
         <div className="ctx2-cardhead">
           <span className="ctx2-cardtitle">本会话累计成本</span>
@@ -284,9 +380,9 @@ function ContextPanel({ stats, history, running, onCompact, compacting }: {
             <div className="ctx2-ghead">计费单价（每 M tokens）</div>
             {pricing.off_peak ? (
               <>
-                <span>高峰全价（输入 / 输出 / 缓存命中）</span>
+                <span>高峰全价</span>
                 <b>${pricing.input_per_mtok} / ${pricing.output_per_mtok} / ${pricing.cache_hit_per_mtok}</b>
-                <span>空闲半价（输入 / 输出 / 缓存命中）</span>
+                <span>空闲半价</span>
                 <b>${pricing.off_peak.input_per_mtok} / ${pricing.off_peak.output_per_mtok} / ${pricing.off_peak.cache_hit_per_mtok}</b>
                 <span>当前生效档</span>
                 <b>{pricing.off_peak_active ? "空闲·半价" : "高峰·全价"}</b>
@@ -924,7 +1020,7 @@ function useTabStripDrag() {
 }
 
 export default function ToolPanel({
-  contextStats, contextHistory, running, mcpServers, tools, todos, agentBoard,
+  contextStats, contextHistory, running, liveSpeed, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
   activeTab, onTabChange, onCompact, compacting, onCloseAgent,
 }: {
@@ -933,6 +1029,8 @@ export default function ToolPanel({
   contextHistory?: ContextHistoryPoint[];
   /** 主任务是否运行中（状态 chip） */
   running?: boolean;
+  /** 流式生成中的实时速度（llm:progress 估算值，随 SSE 到达） */
+  liveSpeed?: LiveSpeedStats | null;
   mcpServers: MCPServerStatus[];
   tools: { name: string; description: string }[];
   todos: TodoItem[];
@@ -970,9 +1068,10 @@ export default function ToolPanel({
       title: todos.length ? `进度 ${todoDone}/${todos.length}` : "Agent 规划多步骤任务时生成 TODO 清单" },
     { id: "agents", label: runningAgents > 0 ? `Agents (${runningAgents})` : "Agents",
       title: "多 Agent 看板：运行中/已完成 竖排交接视图" },
-    { id: "mcp", label: "MCP" },
     { id: "background", label: runningCount > 0 ? `后台 (${runningCount})` : "后台" },
     { id: "tools", label: "工具" },
+    // MCP 排在最后：它是低频的「配置/状态」类入口，日常主要看 工具/后台
+    { id: "mcp", label: "MCP" },
   ];
 
   return (
@@ -1001,6 +1100,7 @@ export default function ToolPanel({
       <div className="tool-panel-body tool-panel-context">
         {panelTab === "context"
           ? <ContextPanel stats={contextStats} history={contextHistory} running={running}
+              liveSpeed={liveSpeed}
               onCompact={onCompact} compacting={compacting} />
           : panelTab === "todos"
             ? <TodosPanel todos={todos} />

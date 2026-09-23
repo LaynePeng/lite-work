@@ -124,6 +124,12 @@ class BaseLLMAdapter:
 
     chat_stream(messages, tools) -> (content, tool_calls, usage)
     流式输出通过事件总线以 "llm:stream" 事件实时广播。
+
+    token 速度计量（可选，适配器自行实现）：AgentLoop 通过 stream_meter 的
+    contextvar 注入一个 StreamMeter，适配器在流式解析里对每个增量块调
+    `meter.feed(delta)`，并在其返回 True（节流窗口，默认 400ms）时推送一次
+    "llm:progress" 实时速度事件；流结束后 AgentLoop 结合 usage 算出本轮速度。
+    适配器**不实现也没关系**（拿不到速度而已），且 chat_stream 签名保持不变。
     usage 为模型返回的 token 统计（准确值），无返回时可为 None：
       {prompt_tokens, completion_tokens, prompt_cache_hit_tokens}
 

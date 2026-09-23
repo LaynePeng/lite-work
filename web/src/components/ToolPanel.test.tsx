@@ -128,6 +128,8 @@ describe("ToolPanel · 上下文面板（仪表 + 账单 + 平铺明细）", () 
     expect(textOf(container)).toContain("高峰全价");
     expect(textOf(container)).toContain("空闲半价");
     expect(textOf(container)).toContain("当前生效档");
+    // 两档标签已精简：不再带「（输入 / 输出 / 缓存命中）」括号说明（列宽有限，值是同一行的三段数）
+    expect(textOf(container)).not.toContain("（输入 / 输出 / 缓存命中）");
   });
 
   it("空闲态：无任务时状态 chip 显示「空闲」且趋势图隐藏（无历史）", () => {
@@ -359,5 +361,106 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
         activeTab="agents" agentBoard={[RUNNING_AGENT]} />
     );
     expect(container.querySelector(".agent-cancel-btn")).toBeNull();
+  });
+
+  it("页签顺序：MCP 排在「工具」之后（低频配置类入口靠后）", () => {
+    const { container } = render(
+      <ToolPanel contextStats={STATS} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    const labels = Array.from(container.querySelectorAll(".panel-tab")).map((b) => b.textContent);
+    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "工具", "MCP"]);
+  });
+});
+
+// ---------------------------------------------------------------- 本轮 token 速度
+
+/** 带速度数据的载荷（task.last 为 usage 校准后的精确值）。 */
+const SPEED_STATS: ContextStats = {
+  ...STATS,
+  task: {
+    ...STATS.task!,
+    last: {
+      ...STATS.task!.last!,
+      ttft_ms: 820,
+      gen_ms: 1_130,
+      e2e_ms: 1_950,
+      tps_gen: 44.1,
+      tps_e2e: 25.6,
+      tps_estimated: false,
+    },
+    avg_tps: 36.4,
+    speed_turns: 12,
+  },
+};
+
+/** 带速度轨迹的历史点（趋势图数据源）。 */
+const SPEED_HISTORY: ContextHistoryPoint[] = Array.from({ length: 12 }, (_, i) => ({
+  p: 3_000 + i * 900,
+  tps: 30 + (i % 5) * 3,
+}));
+
+describe("ToolPanel · 本轮 token 速度（变体 B 速度条 + 趋势图）", () => {
+  it("本轮结束：显示精确速度 + 首字 / 本任务均，且不带「估算」标", () => {
+    const { container } = render(
+      <ToolPanel contextStats={SPEED_STATS} contextHistory={SPEED_HISTORY} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    expect(container.querySelector(".ctx2-speedbig b")?.textContent).toBe("44.1");
+    expect(textOf(container)).toContain("tok/s");
+    expect(textOf(container)).toContain("0.82s");      // 首字
+    expect(textOf(container)).toContain("36.4");       // 本任务平均
+    expect(textOf(container)).not.toContain("估算");    // usage 校准后不再标估算
+    expect(container.querySelector(".ctx2-esttag")).toBeNull();
+    // 状态文案与端到端速度已移除：它们字数随状态变化，会挤动右侧趋势图宽度
+    expect(textOf(container)).not.toContain("本轮生成速度");
+    expect(textOf(container)).not.toContain("本轮生成中");
+    expect(textOf(container)).not.toContain("端到端");
+    // 趋势图在此状态存在（与下面「生成中」对照，两态都必须在）
+    expect(container.querySelector(".ctx2-speedrow .ctx2-spark")).toBeTruthy();
+  });
+
+  it("生成中：实时估算值带「≈」与「估算」标，且布局与结束态一致（无状态文案）", () => {
+    const { container } = render(
+      <ToolPanel
+        contextStats={SPEED_STATS}
+        contextHistory={SPEED_HISTORY}
+        running
+        liveSpeed={{ est_tokens: 128, chars: 260, chunks: 9, ttft_ms: 700, gen_ms: 2_100, tps: 61.0 }}
+        mcpServers={[]} tools={[]} todos={[]}
+      />
+    );
+    expect(container.querySelector(".ctx2-speedbig b")?.textContent).toBe("≈ 61.0");
+    expect(container.querySelector(".ctx2-speedbig b")?.className).toBe("est");
+    expect(textOf(container)).toContain("估算");
+    expect(textOf(container)).toContain("0.70s");
+    // 生成中不报端到端（25.6 是上一轮的精确值，不该冒充本轮）
+    expect(textOf(container)).not.toContain("25.6");
+    // 状态文案已移除（否则两态字数不同会挤动趋势图宽度）
+    expect(textOf(container)).not.toContain("本轮生成中");
+    expect(textOf(container)).not.toContain("本轮生成速度");
+    expect(textOf(container)).not.toContain("端到端");
+    // 生成中趋势图必须在（与「本轮结束」态同一布局尺寸）
+    expect(container.querySelector(".ctx2-speedrow .ctx2-spark")).toBeTruthy();
+  });
+
+  it("速度趋势图：近 N 轮速度线 + 平均（与水位线共存、配色区分）", () => {
+    const { container } = render(
+      <ToolPanel contextStats={SPEED_STATS} contextHistory={SPEED_HISTORY} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    const speedLine = container.querySelector(".ctx2-sparkline.speed");
+    expect(speedLine).toBeTruthy();
+    expect(speedLine?.getAttribute("points")?.length).toBeGreaterThan(0);
+    expect(textOf(container)).toContain("近 12 轮速度");
+    expect(textOf(container)).toContain("平均");
+    // 水位线仍独立存在（两条线不互相覆盖）
+    expect(container.querySelectorAll(".ctx2-spark").length).toBe(2);
+  });
+
+  it("无速度数据（旧载荷 / 适配器未计量）：整块不渲染，不占位", () => {
+    const { container } = render(
+      <ToolPanel contextStats={STATS} contextHistory={HISTORY} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    expect(container.querySelector(".ctx2-speedrow")).toBeNull();
+    // 其余区块照常
+    expect(container.querySelector(".ctx2-card")).toBeTruthy();
   });
 });
