@@ -1716,7 +1716,7 @@ class AgentApp:
                 if not isinstance(decider_compacted, list):
                     decider_compacted = None
             except Exception:  # noqa: BLE001 - fail-closed：判不了就回退 LLM 摘要
-                logger.warning("[App] Jev 压缩判定失败，回退 LLM 摘要", exc_info=True)
+                logger.warning("[App] 压缩判定器失败，回退 LLM 摘要", exc_info=True)
                 decider_compacted = None
 
         summary: Optional[str] = None
