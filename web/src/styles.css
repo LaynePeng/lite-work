@@ -2380,8 +2380,15 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   width: 440px;
   max-width: 90vw;
   /* 超长命令/内容（如 base64、长脚本）曾把卡片撑出屏幕，按钮无法点击；
-     卡片限高 + 内容区内部滚动，按钮区常驻可见 */
-  max-height: 85%;
+     卡片限高 + 内容区内部滚动，按钮区常驻可见。
+     ⚠ 这里**不能用百分比**：遮罩是 grid 容器，卡片作为 grid item 的百分比
+     max-height 解析基准偏小（实测聊天区 420px / 遮罩内容盒 372px 时，
+     85% 只拿到 285px），且聊天区越矮塌得越狠——实测卡片 285px 而内容需
+     515px：`.approval-action` 被压到 20px、`.approval-reason` 被压成 0，
+     按钮被挤出卡片被 overflow:hidden 裁掉（点不到「允许/拒绝」）。
+     改为视口基准 min(视口余量, 遮罩内容盒)：不再随聊天区塌缩；保留 100%
+     兜底以免卡片超出遮罩（grid 居中溢出会让卡片顶部不可达）。 */
+  max-height: min(calc(100vh - 96px), 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2444,6 +2451,24 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-weight: 600;
 }
 
+/* 卡片中段（命令 / 原因 / 判定意见）统一放进一个滚动区：
+   —— 长内容只出现**一个**滚动条，且不挤掉底部按钮。
+   此前是 action / reason 各自 min-height:0 可缩、opinion 不可缩，
+   于是收缩全压在 action/reason 上（实测 reason 被压成 0px 高度、完全看不见），
+   而按钮还会被挤出卡片。 */
+.approval-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+}
+/* 末尾子元素的 margin 会算进 scrollHeight，导致内容本来就装得下时也冒滚动条 */
+.approval-body > *:last-child {
+  margin-bottom: 0;
+}
+
 .approval-action {
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -2455,12 +2480,9 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   word-break: break-all;
   color: var(--yellow);
   text-align: left;
-  /* 超长内容内部滚动，不撑爆卡片 */
-  overflow-y: auto;
-  max-height: 45vh;
-  overscroll-behavior: contain;
-  flex-shrink: 1;
-  min-height: 0;
+  /* 保持自然高度、不参与收缩：长内容由 .approval-body 统一滚动，
+     不再把命令行压成一条看不见的缝 */
+  flex-shrink: 0;
 }
 
 .approval-reason {
@@ -2468,11 +2490,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-1);
   margin-bottom: 20px;
   overflow-wrap: anywhere;
-  max-height: 20vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  flex-shrink: 1;
-  min-height: 0;
+  flex-shrink: 0;
 }
 
 /* ---------- 审批卡上的「判定意见」面板（中立，插件名由数据提供）----------
@@ -2487,9 +2505,10 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   padding: 12px 14px;
   margin-bottom: 18px;
   /* 自适应高度（按内容自然展开，不截断、无自己的滚动条）；
-     溢出由 .approval-card 整卡负责（它已有 flex + overflow） */
+     溢出由 .approval-body（中段滚动区）统一负责 */
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 /* 等级 → 左边线 + 顶部微染（渐隐到透明，不喧宾夺主） */
 .approval-opinion.op-block {

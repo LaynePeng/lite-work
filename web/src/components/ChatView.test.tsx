@@ -369,6 +369,41 @@ describe("ChatView", () => {
     await user.click(screen.getByRole("button", { name: "允许执行" }));
     expect(onApprove).toHaveBeenCalledWith("a3", true);
   });
+
+  // 结构不变量（jsdom 无布局，高度问题只能用无头浏览器量，见 PR 说明）：
+  // 「命令 / 原因 / 判定意见」必须在 .approval-body 滚动区内，而按钮必须在其**外**——
+  // 否则长命令 + 长理由 + 判定意见会把按钮挤出卡片，被 .approval-card 的
+  // overflow:hidden 裁掉，用户点不到「允许/拒绝」。
+  it("审批卡结构：中段在 .approval-body 滚动区，按钮在其外且在卡内", () => {
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[]}
+        streaming={null}
+        pendingApprovals={[{
+          id: "ap1",
+          action: "execute_command: " + "x".repeat(400),
+          reason: "高危命令需确认",
+          judge_opinion: {
+            source: "jev", level: "需确认", choice: "confirm",
+            confidence: 0.72, threshold: 0.6, why: "判定理由",
+          },
+        }]}
+        onApprove={() => {}}
+      />
+    );
+    const card = document.querySelector(".approval-card")!;
+    const body = document.querySelector(".approval-body")!;
+    expect(body).toBeTruthy();
+    // 中段三块都在滚动区里
+    expect(body.querySelector(".approval-action")).toBeTruthy();
+    expect(body.querySelector(".approval-reason")).toBeTruthy();
+    expect(body.querySelector(".approval-opinion")).toBeTruthy();
+    // 按钮不在滚动区里，且是卡片的直接子元素（常驻可见）
+    expect(body.querySelector(".approval-buttons")).toBeNull();
+    const direct = Array.from(card.children).some((c) => c.classList.contains("approval-buttons"));
+    expect(direct).toBe(true);
+  });
 });
 
 describe("QuestionBar（ask_user 非阻塞提问条）", () => {
