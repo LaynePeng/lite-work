@@ -2486,9 +2486,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-radius: 10px;
   padding: 12px 14px;
   margin-bottom: 18px;
-  /* 固定统一高度：不随内容伸缩、不出现自己的滚动条（整卡滚动由 .approval-card 负责） */
-  height: 148px;
-  overflow: hidden;
+  /* 自适应高度（按内容自然展开，不截断、无自己的滚动条）；
+     溢出由 .approval-card 整卡负责（它已有 flex + overflow） */
   display: flex;
   flex-direction: column;
 }
@@ -2548,12 +2547,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 /* 理由：主要信息，正常文字色、行高放宽 */
 .op-why {
-  font-size: 12.5px; color: var(--text-1); line-height: 1.55;
+  font-size: 12.5px; color: var(--text-1); line-height: 1.7;
   margin: 12px 0 0; overflow-wrap: anywhere;
-  /* 固定高度下不撑破：最多 2 行，超出省略 */
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-  flex-shrink: 0;
 }
 
 /* 行动概率：彩色堆叠条 + 图例 */
