@@ -398,14 +398,14 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
       type: "lite-tree",
       status: { text: "运行中", tone: "ok", meta: ["jev-1.13", "阈值 0.60"], chips: ["工具", "门禁"] },
       trees: [{
-        nodes: [
-          { label: "工具执行前 delete_file", type: "trigger" },
-          { label: "choice", type: "kind" },
-          { label: "拦截", type: "verdict" },
-          { label: "0.91", type: "confidence", value: 0.91, threshold: 0.6, bar: 9 },
-          { label: "已采信", type: "accepted", pass: true },
-          { label: "拦截", type: "action", action: "block" },
+        title: "门禁判定", context: "工具执行前 delete_file", kind: "choice",
+        question: "该工具调用应当放行、需人确认，还是拦截？",
+        options: [
+          { label: "拦截", prob: 0.88, tone: "danger", chosen: true },
+          { label: "放行", prob: 0.09, tone: "ok", chosen: false },
+          { label: "请人确认", prob: 0.03, tone: "warn", chosen: false },
         ],
+        confidence: 0.91, threshold: 0.6, accepted: true,
       }],
       total: 1,
     };
