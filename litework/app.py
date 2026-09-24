@@ -190,6 +190,8 @@ class AgentApp:
         # 全量工具名缓存 (monotonic_ts, names)
         self._tool_names_cache: Optional[Tuple[float, List[str]]] = None
         self._shell_plugin: Optional[ShellPlugin] = None
+        # Jev 压缩判定器（插件注册；None = 用默认 LLM 摘要）——v1.10.1
+        self.compaction_decider: Optional[Any] = None
         self.approval_gate = ApprovalGate(
             timeout_seconds=self.config.get("approval_timeout", 600)
         )
@@ -1699,15 +1701,36 @@ class AgentApp:
         # custom_headers 模板上下文：否则 {conversation_id} 等模板展开为空、
         # x-opencode-session 这类会话亲和头被丢弃，网关直接 400
         # （opencode zen go 实测：MissingSessionID）。
-        header_context.set(self._summary_header_context(session_id))
+        # 注意：只在**走 LLM 摘要**时注入——Jev 压缩判定路径不调用 adapter，
+        # 不需要 header 上下文，也不该被「未配置 LLM」卡住（D1/D2 回退场景除外）。
 
-        summary = await self._summarize_head(head, system, focus)
-        if not summary:
-            return {"ok": False, "reason": "摘要调用失败（LLM 未返回正文），会话保持不变"}
+        # 【Jev 压缩判定器】（插件注册的 opt-in 能力）：
+        # 返回保留后的消息列表 → 用其替换旧历史；None/异常/未注册 → 回退原有 LLM 摘要。
+        # 退化矩阵：D0(功能关) D1(插件未启动) 未注册 → None；D2(调用失败) → 异常回退；
+        #           D3(全保留) D5(纯对话) D8(释放不足) → 返回 None 由插件侧或此处回退。
+        decider_compacted: Optional[List[Message]] = None
+        _decider = self.compaction_decider
+        if _decider is not None:
+            try:
+                decider_compacted = await _decider(head, system)
+                if not isinstance(decider_compacted, list):
+                    decider_compacted = None
+            except Exception:  # noqa: BLE001 - fail-closed：判不了就回退 LLM 摘要
+                logger.warning("[App] Jev 压缩判定失败，回退 LLM 摘要", exc_info=True)
+                decider_compacted = None
 
-        compacted = ([system] if system else []) + [
-            Message(role="user", content=f"[历史摘要] {summary}")
-        ] + tail
+        summary: Optional[str] = None
+        if decider_compacted is not None:
+            summary = "[结构化压缩] 按保留价值判定：丢弃过期工具记录，保留关键轮次原样"
+            compacted = ([system] if system else []) + decider_compacted + tail
+        else:
+            header_context.set(self._summary_header_context(session_id))
+            summary = await self._summarize_head(head, system, focus)
+            if not summary:
+                return {"ok": False, "reason": "摘要调用失败（LLM 未返回正文），会话保持不变"}
+            compacted = ([system] if system else []) + [
+                Message(role="user", content=f"[历史摘要] {summary}")
+            ] + tail
         before_tokens = TokenCounter.count_messages_tokens(messages)
         after_tokens = TokenCounter.count_messages_tokens(compacted)
         # 重新读盘取 metadata 再保存：摘要调用可能经 {conversation_id} 模板给
