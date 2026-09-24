@@ -2,9 +2,10 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ToolPanel from "./ToolPanel";
+import { api } from "../api";
 import type { ContextHistoryPoint, ContextStats } from "../types";
 
 // 单轮 12,000 prompt、30 轮任务：累计 360,017 ≠ 当前上下文 12,000
@@ -369,6 +370,21 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
     );
     const labels = Array.from(container.querySelectorAll(".panel-tab")).map((b) => b.textContent);
     expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "工具", "MCP"]);
+  });
+
+  it("不装插件（api.plugins 返回空）时，右栏不出现任何插件 tab / 面板 / lite-tree", async () => {
+    // 关键：即使 api.plugins 异步成功返回**空列表**，也不得追加插件 tab
+    vi.spyOn(api, "plugins").mockResolvedValue({ plugins: [] } as never);
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]} />
+    );
+    // 等异步 effect 跑完
+    await waitFor(() => expect(api.plugins).toHaveBeenCalled());
+    const labels = Array.from(container.querySelectorAll(".panel-tab")).map((b) => b.textContent);
+    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "工具", "MCP"]);
+    // 也没有任何"插件面板"渲染容器 / 刷新按钮
+    expect(container.querySelector(".plugin-panel-md")).toBeNull();
+    vi.restoreAllMocks();
   });
 });
 
