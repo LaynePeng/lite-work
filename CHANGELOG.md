@@ -2,6 +2,70 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [1.10.1] — 判断面板决策树 + 压缩判定器 + 插件钩子架构修复
+
+### 新增
+- **判断面板改决策树（插件判定 UI 协议 v2）**：此前面板按「节点时间线」渲染（`trigger` / `kind` /
+  `verdict` / `confidence` / `accepted` / `action` 一串 chip），读者得自己在脑子里把节点拼成结论。
+  现改为**决策树卡片**：根问题（`title` / `context`）+ 选项分支（每项带概率与语义色比例条，
+  **命中的那项高亮**）+ 置信度/阈值判定行——判定与依据一眼可读。schema 同步升级为
+  `trees[].{title, context, question, kind, options[{label, prob, tone, chosen}], confidence, threshold, accepted}`。
+  面板 tab 与内置 6 个 tab **共用同一选中态**（视图 key `plugin:<插件名>:<面板id>`，`PanelTabId`
+  拓宽为开放字符串，避免每加一个插件面板都要改联合类型）。
+- **判断面板激活期间每 5s 自动刷新**：判定记录本质是日志，只在激活时抓一次会看不到新记录（只能手动点刷新）。
+  现在**每次激活重抓**，且激活期间每 5s 轮询，切走即停（`setInterval` 在 effect 清理里 `clearInterval`）。
+- **压缩判定器钩子（`app.compaction_decider`）**：上下文压缩新增内核钩子，插件（Jev 判定）可返回
+  「保留消息」直接替换旧历史；判定器返回 `None` / 抛异常 / 未注册时**退化回原 LLM 摘要**（D0–D8 退化回退），
+  行为不倒退。实现要点：`header_context` 注入**只在 LLM 摘要分支**做（Jev 路径不需要 LLM，
+  不被前置依赖卡死）；Jev 分支必须**拼接 tail**——最新轮次不得丢失（测试抓出的关键 bug）。
+
+### 修复
+- **插件钩子在真实任务路径失效（本版最重要的一处架构修复）**：`create_kernel(registry)` 此前不装工具插件，
+  而插件注册在 `build_registry` 引导 kernel 上的 `before_tool` / `before_llm` 钩子随该内核一起被丢弃 →
+  判定类插件（Jev 门禁 / 直答）在**真实 Agent 任务里从不生效**（只在插件自测路径生效，所以一直没被发现）。
+  现以 `registry.has(name)` 作过滤器重装（被裁剪的工具不重注册，plan 只读语义保持），并用
+  `plugins_workspace` 维持 worktree 隔离语义；`SecurityPlugin` 的判定意见暂存移到 middleware 最顶部
+  （`delete_file` 等分支不再先发审批）。
+- **审批卡「Jev 意见」块高度**：先固定 148px（去滚动条）——实测内容一多 `overflow: hidden` 就**截断**、
+  `why` 被 `-webkit-line-clamp: 2` 吃掉，反而更乱；改为**自适应高度**（内容自然展开、不截断、
+  无自己的滚动条），溢出统一交给 `.approval-card` 整卡滚动。
+- **`_approve_skill` 的 `approval:request` 缺必填字段 `judge_opinion`**：strict 事件负载校验（CI）直接失败。
+  补 `judge_opinion: None`（恒定携带，`None` = 本路径无判定插件意见）。
+
+### 内部
+- **核心插件无关性门禁**：新增 `tests/test_core_plugin_agnostic.py`——核心代码与文档字符串零插件名
+  （注释放行；测试文件排除，只守运行时核心）；新增 `tests/test_judge_opinion_e2e.py`：真实
+  `AgentApp` + `SecurityPlugin` → `approval:request.judge_opinion` 带插件自报 `source`，且 0.91 不硬拦
+  （并断言 `judge` 必须是 `async`，防 `'dict' can't be awaited` 回归）；顺带修 4 条与实现脱节的插件测试
+  （私有镜像隔离 fixture、noul mock、门禁阈值预期）。压缩判定器日志文案同步中立化。
+- **打包体积**：PyInstaller `--collect-all` 会把 numpy/pandas 等第三方包的 `tests/`、`__pycache__`
+  一并收进 `_internal`（运行时用不到，纯冗余）→ 打包后自动清理，只清第三方、不碰 lite-work 自身产物。
+- **版本**：1.10.0 → 1.10.1（`sync-version` 同步 4 个 npm 文件）。
+
+## [1.10.0] — 通用插件 UI 协议（插件设置页 + 右栏插件面板 + 用户直问短路）
+
+### 新增
+- **通用插件 UI 协议（`Plugin.contributes`）**：插件基类新增 `contributes`（声明设置项 / 面板）、
+  `status_from_config`、`panel_content`；`list_plugins` 透传 `contributes` 与 `status`，
+  设置页据此渲染「未启动 + 原因」与配置表单。**插件 UI 不再需要主程序为每个插件写死界面**。
+- **插件设置页**：新增 `GET /api/plugins/{name}/settings`（schema + 当前值，secret 打码）与
+  `GET /api/plugins/{name}/panel/{id}`（Markdown）。设置页插件卡片新增「⏸ 未启动」徽章与
+  「▸ 配置」通用表单：支持 Base URL、自定义请求头（JSON 键值表）、密钥（**留空不改、不回传真值**）、
+  数字、开关；保存复用 `POST /api/config` 任意键透传。
+- **右栏插件面板**：`ToolPanel` 动态 tab——拉取插件列表，把 `contributes.panels` 渲染为右栏 tab
+  （**无插件时不影响内置 tab**）；面板内容走后端 Markdown 接口，用 ReactMarkdown 渲染；
+  视图 key 形如 `plugin:<插件名>:<面板id>`，与内置 6 个 tab 共用同一选中态。
+- **用户直问短路协议（内核）**：`before_llm` 中间件可在 `ctx.metadata["final_answer"]` 放答案 →
+  `AgentLoop` **跳过本次 LLM 调用**，以该内容作为助手回复收尾并广播 `message:added`
+  （复用现有事件与 `_finish`，不新增事件类型）。一次性取用（`pop`），任何异常都不影响正常链路；
+  **无插件设置时链路零变化**。
+- **插件配置表单重排**：字段标签在上、控件满宽（`max-width: 820px`）；`headers` 改为 6 行等宽大文本框，
+  可整段粘贴；**保存时才解析 JSON**（打字不重排，非法 JSON 明确报错）。右栏插件面板去掉图标
+  （与其他内置 tab 一致），并去掉「抓一次就缓存」，改为每次激活重抓 + 刷新按钮。
+
+> 说明：1.10.0 未单独打 tag / 发 GitHub Release；GitHub Release `v1.10.1` 的版本范围说明覆盖
+> `v1.9.11..v1.10.1`，即本条目与上一条一并包含在内。
+
 ## [1.9.11] — 本轮 token 速度面板 + 打开项目默认最近会话 + 布局修复
 
 ### 变更
