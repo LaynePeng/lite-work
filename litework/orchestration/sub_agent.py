@@ -187,7 +187,8 @@ class SubAgentRunner:
         )
         sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
         sub_kernel = self.app.create_kernel(sub_id, registry=registry,
-                                             security_workspace=agent_ws)
+                                             security_workspace=agent_ws,
+                                             plugins_workspace=agent_ws)
         # 根会话标记：子 Agent 的工具 handler（spawn_agent 等）经它定位
         # 主会话的 SessionAgentManager——否则按 current_session_id（=sub_id）
         # 会新建孤立 manager，孙 agent 脱离主会话看板与通知注入。

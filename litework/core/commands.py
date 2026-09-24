@@ -63,8 +63,11 @@ BUILTIN_COMMANDS: List[Dict[str, str]] = [
 ]
 
 
-def build_command_list(skills: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
-    """内置命令 + 技能派生命令（/skill-name）。"""
+def build_command_list(
+    skills: Optional[List[Dict[str, Any]]] = None,
+    plugin_commands: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
+    """内置命令 + 技能派生命令（/skill-name）+ 插件声明命令（contributes.commands）。"""
     out = [dict(c) for c in BUILTIN_COMMANDS]
     for skill in skills or []:
         name = skill.get("name") or ""
@@ -76,6 +79,14 @@ def build_command_list(skills: Optional[List[Dict[str, Any]]] = None) -> List[Di
             "argsHint": "[需求描述]",
             "kind": "skill",
         })
+    for cmd in plugin_commands or []:
+        if isinstance(cmd, dict) and cmd.get("name"):
+            out.append({
+                "name": str(cmd["name"]),
+                "description": str(cmd.get("description") or ""),
+                "argsHint": str(cmd.get("argsHint") or ""),
+                "kind": "plugin",
+            })
     return out
 
 

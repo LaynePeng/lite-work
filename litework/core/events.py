@@ -89,6 +89,10 @@ class ApprovalRequestPayload(TypedDict):
     reason: str
     # 「记住并允许同类」可用标记（rule 存在时为 True）；恒定携带
     rememberable: bool
+    # 判定类插件留下的结构化**风险意见**（中立概念，核心不解释具体含义；
+    # 插件名由插件自己放在 opinion["source"] 里）。无意见时为 None（恒定携带，
+    # 原因同下：本文件 `from __future__ import annotations` 下 NotRequired 会被误判必填）
+    judge_opinion: Optional[Dict[str, Any]]
 
 
 class ApprovalResolvedPayload(TypedDict):

@@ -411,7 +411,40 @@ class AgentApp:
             pass
 
     def save_config(self, updates: Dict[str, Any]) -> None:
+        """保存配置：**先合并磁盘上的现存内容**，再落盘。
+
+        为什么必须合并：`_load_config()` 只在启动时读一次，之后内存里的 self.config
+        就是一份可能过期的快照。若直接 dump 内存，**任何不在内存里的键都会被抹掉**——
+        包括用户手改的键、插件自己写的键（例如插件由插件自己/其他进程写进 config 的配置）。
+        实测事故：用户配好的插件配置键（如 headers）被后续任意一次保存清空。
+
+        合并规则：以**内存**为准（内存含本次 updates），磁盘上多出来的键保留。
+        """
         self.config.update({k: v for k, v in updates.items() if v is not None})
+        self._write_config_merged()
+
+    def _write_config_merged(self) -> None:
+        """落盘：**先把磁盘上的现存内容合并回来**（内存优先），再写。
+
+        为什么必须这样：`_load_config()` 只在启动时读一次，内存是一份可能过期的快照。
+        直接 `json.dump(self.config)` 会把**磁盘上多出来的键**静默抹掉——用户手改的、
+        插件写入的、其他进程写入的都算。实测事故：插件命名空间下的凭证被「保存 LLM 设置」
+        （`_persist_config`）清空，插件随即报「缺少凭证」。
+
+        合并规则：以内存为准（内存含本次改动），磁盘上多出来的键保留。
+        """
+        disk: Dict[str, Any] = {}
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    disk = loaded
+        except (OSError, json.JSONDecodeError):
+            disk = {}
+        if disk:
+            disk.update(self.config)
+            self.config = disk
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
 
@@ -419,8 +452,7 @@ class AgentApp:
         """热更新安全规则（动态黑白名单）并落盘。"""
         self.guard.apply_config(rules)
         self.config["security"] = rules
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, ensure_ascii=False, indent=2)
+        self._write_config_merged()
 
     # ------------------------------------------------------------ 最近项目
 
@@ -669,8 +701,7 @@ class AgentApp:
     async def update_mcp_servers(self, servers: Dict[str, Any]) -> Dict[str, Any]:
         """更新 MCP Server 配置：落盘 + 热重连。"""
         self.config["mcp_servers"] = servers
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, ensure_ascii=False, indent=2)
+        self._write_config_merged()
         result = await self.mcp_manager.reload(servers)
         self._tool_names_cache = None  # MCP 工具集变了 → 全量工具名缓存失效
         return result
@@ -679,8 +710,7 @@ class AgentApp:
 
     def _persist_config(self) -> None:
         self.config["llm"] = self.llm_registry.to_config(persist_key=True)
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, ensure_ascii=False, indent=2)
+        self._write_config_merged()
 
     async def close_adapter(self) -> None:
         """异步关闭当前 LLM 适配器，供配置热更新时释放连接。"""
@@ -1187,7 +1217,8 @@ class AgentApp:
     # ------------------------------------------------------------ 内核
 
     def create_kernel(self, session_id: str, registry: Optional[ToolRegistry] = None,
-                      security_workspace: Optional[str] = None) -> Kernel:
+                      security_workspace: Optional[str] = None,
+                      plugins_workspace: Optional[str] = None) -> Kernel:
         """Cordis 内核装配：工具插件 + 安全插件全部挂载，服务进入依赖注入容器。
 
         - registry 为 None：挂载全量工具（默认内核）。
@@ -1200,6 +1231,17 @@ class AgentApp:
         kernel.register_service("app", self)
         if registry is not None:
             kernel.register_service(TOOLS_SERVICE, registry)
+            # v1.10.0：任务 kernel 上**重装工具插件**——否则插件在 build_registry 的
+            # 引导 kernel 上挂的 before_tool / before_llm 钩子随内核一起被丢弃，
+            # 真实 Agent 任务里判定类插件（Jev 门禁/直答）根本不生效。
+            # 用 `registry.has(name)` 作为工具过滤器：被 Agent 裁剪的工具
+            # （plan 只读等）不会被重新注册，plan 模式语义不变。
+            kernel.register_service(TOOL_FILTER_SERVICE,
+                                    lambda name: registry.has(name))
+            # 用**与 registry 相同的工作区**重装插件：否则工具 handler 会绑定到主工作区，
+            # worktree 隔离的子 Agent 写文件会落错位置（changed_files 归因也失效）。
+            for plugin in self.tool_plugins(plugins_workspace):
+                kernel.use(plugin)
             # Plan Agent 专属写通道：plan_save（计划文件落盘）
             if registry.has("plan_save"):
                 from .tools.plan_save import make_plan_save_handler
@@ -1224,6 +1266,11 @@ class AgentApp:
             kernel.register_service(TOOLS_SERVICE, ToolRegistry())
             for plugin in self.tool_plugins():
                 kernel.use(plugin)
+        # 插件 before_tool 钩子先于 SecurityPlugin 执行（v1.10.0 调整）：
+        # Jev 等判定类插件可以在 SecurityPlugin 的审批卡上附加风险意见
+        # （只加信息、不拦截——拦截权仍在 SecurityPlugin / 用户手里）。
+        # 注意：插件的 cancel=True 仍会被 SecurityPlugin 看到（data["cancel"] 已置），
+        # 相当于在安全审批之前多了一层插件判定。
         # security_workspace（P3 worktree 隔离）：子 Agent 在独立工作树执行时，
         # 安全门的「项目内」边界以工作树为准（否则写入全被当项目外拦截）
         kernel.use(SecurityPlugin(self.guard, self.approval_gate,
@@ -1596,11 +1643,21 @@ class AgentApp:
         return results
 
     def commands_list(self) -> List[Dict[str, str]]:
+        """内置命令 + 技能派生命令 + 插件声明命令（contributes.commands）。
+
+        插件命令只在**插件已安装且启用**时出现——没装就不显示，不会硬编码。
+        """
         from .core.commands import build_command_list
         try:
             # deny 的技能不派生命令（对 Agent 隐藏的技能对命令面板也隐藏）
             skills = [s for s in self.skills_list() if s.get("permission") != "deny"]
-            return build_command_list(skills)
+            # 从已安装插件收集命令声明（contributes.commands）
+            plugin_cmds: List[Dict[str, Any]] = []
+            for plugin in self.tool_plugins():
+                cmds = (getattr(plugin, "contributes", {}) or {}).get("commands", [])
+                if isinstance(cmds, list):
+                    plugin_cmds.extend(c for c in cmds if isinstance(c, dict))
+            return build_command_list(skills, plugin_cmds)
         except Exception:
             return build_command_list([])
 

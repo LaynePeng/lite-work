@@ -2,7 +2,7 @@
 name: presentation
 description: 演示文稿制作：把主题/大纲/文档内容转成 PPT 初稿（python-pptx 生成 .pptx）
 triggers: PPT,ppt,幻灯片,演示文稿,presentation
-version: "1.0.0"
+version: "1.0.1"
 ---
 
 # 演示文稿技能

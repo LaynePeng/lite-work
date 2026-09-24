@@ -16,7 +16,7 @@ import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
-import type { AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 
@@ -1459,7 +1459,9 @@ export default function App() {
             pendingApprovals: [
               ...(cur.pendingApprovals ?? []).filter((p) => p.id !== ev.data.id),
               { id: ev.data.id, action: ev.data.action, reason: ev.data.reason,
-                rememberable: (ev.data as { rememberable?: boolean }).rememberable },
+                rememberable: (ev.data as { rememberable?: boolean }).rememberable,
+                // 判定类插件的风险意见 → 审批卡上展示
+                judge_opinion: (ev.data as { judge_opinion?: JudgeOpinion | null }).judge_opinion ?? null },
             ],
           });
           break;

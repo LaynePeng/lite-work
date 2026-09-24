@@ -1066,6 +1066,179 @@ export default function ToolPanel({
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
   const runningAgents = (agentBoard ?? []).filter((a) => a.status === "running").length;
 
+/** 渲染插件面板内容：JSON（lite-tree 通用决策树）→ 决策树；非 JSON → Markdown */
+function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
+  markdown: string;
+  pluginPanelBusy: boolean;
+  onRefresh: () => void;
+}) {
+  // 尝试解析 JSON：**通用决策树协议 lite-tree**（插件输出该 schema 即渲染成树）
+  let treeData: {
+    /** 通用状态行（核心不解释具体含义）：text + tone + meta + chips */
+    status: { text: string; tone?: string; meta?: string[]; chips?: string[]; reason?: string };
+    trees: { nodes: { label: string; type: string; value?: number; threshold?: number; bar?: number; pass?: boolean; action?: string }[] }[];
+    total: number;
+  } | null = null;
+  try {
+    const parsed = JSON.parse(markdown);
+    if (parsed && parsed.type === "lite-tree") treeData = parsed;
+  } catch { /* 非 JSON，走 Markdown */ }
+
+  if (treeData) {
+    const s = treeData.status;
+    return (
+      <div style={{ padding: "14px 16px", fontSize: 13, lineHeight: 1.7 }}>
+        {/* 状态行 */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          borderBottom: "1px solid var(--border)", paddingBottom: 8, marginBottom: 12,
+        }}>
+          <span style={{
+            color: s.tone === "ok" ? "var(--green)" : s.tone === "warn" ? "var(--yellow)" : "var(--text-1)",
+            fontWeight: 600,
+          }}>{s.text}</span>
+          {(s.meta ?? []).map((m, i) => <span key={i} style={{ color: "var(--text-2)" }}>{m}</span>)}
+          {(s.chips ?? []).map((c, i) => (
+            <span key={i} className="chip" style={{
+              color: "var(--text-1)", fontSize: 11.5, border: "1px solid var(--border)",
+              borderRadius: 4, padding: "1px 6px",
+            }}>{c}</span>
+          ))}
+          {s.reason && <span style={{ color: "var(--text-2)", fontSize: 12 }}>{s.reason}</span>}
+          <button
+            disabled={pluginPanelBusy}
+            onClick={onRefresh}
+            style={{
+              marginLeft: "auto", appearance: "none", border: "none", background: "transparent",
+              color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
+              fontSize: 11.5, cursor: "pointer", padding: "2px 6px",
+            }}>
+            {pluginPanelBusy ? "…" : "↻ 刷新"}
+          </button>
+        </div>
+
+        {/* 决策树 */}
+        {treeData.trees.length === 0 ? (
+          <div style={{ color: "var(--text-2)", fontSize: 12.5, padding: "20px 0", textAlign: "center" }}>
+            暂无判断记录。发起对话后，每次判断的推理链会在这里展示。
+          </div>
+        ) : (
+          treeData.trees.map((tree, ti) => (
+            <div key={ti} style={{ marginBottom: ti < treeData.trees.length - 1 ? 20 : 0 }}>
+              {tree.nodes.map((node, ni) => {
+                const isLast = ni === tree.nodes.length - 1;
+                const isAction = node.type === "action";
+                const isVerdict = node.type === "verdict";
+                const isConf = node.type === "confidence";
+                const isAccepted = node.type === "accepted";
+                const barLen = node.bar ?? 0;
+
+                return (
+                  <div key={ni} style={{ display: "flex", alignItems: "flex-start" }}>
+                    {/* 左侧连线列 */}
+                    <div style={{
+                      width: 28, display: "flex", flexDirection: "column", alignItems: "center",
+                      paddingTop: 4, flexShrink: 0,
+                    }}>
+                      {/* 圆点 */}
+                      <div style={{
+                        width: 7, height: 7, borderRadius: "50%",
+                        background: isAction
+                          ? node.action === "block" ? "var(--red)"
+                            : node.action === "allow" ? "var(--green)"
+                            : node.action === "answer" ? "var(--accent)"
+                            : "var(--text-2)"
+                          : isVerdict ? "var(--accent-2)"
+                          : isConf ? (node.pass ? "var(--green)" : "var(--yellow)")
+                          : isAccepted ? (node.pass ? "var(--green)" : "var(--yellow)")
+                          : "var(--border)",
+                        flexShrink: 0,
+                      }} />
+                      {/* 竖线（非最后节点） */}
+                      {!isLast && (
+                        <div style={{
+                          width: 1.5, flex: 1, minHeight: 22,
+                          background: "var(--border)",
+                        }} />
+                      )}
+                    </div>
+
+                    {/* 内容列 */}
+                    <div style={{
+                      flex: 1, paddingBottom: isLast ? 0 : 10, minWidth: 0,
+                    }}>
+                      {/* 标签 */}
+                      <span style={{
+                        fontSize: 12.5,
+                        color: isAction
+                          ? node.action === "block" ? "var(--red)"
+                            : node.action === "allow" ? "var(--green)"
+                            : node.action === "answer" ? "var(--accent)"
+                            : "var(--text-2)"
+                          : isVerdict ? "var(--text-0)"
+                          : isAccepted ? (node.pass ? "var(--green)" : "var(--yellow)")
+                          : "var(--text-1)",
+                        fontWeight: isVerdict || isAction || isAccepted ? 600 : 400,
+                      }}>
+                        {node.label}
+                      </span>
+
+                      {/* 置信度条 */}
+                      {isConf && (
+                        <span style={{
+                          marginLeft: 8, fontFamily: "var(--font-mono)", fontSize: 11,
+                          color: node.pass ? "var(--green)" : "var(--yellow)",
+                        }}>
+                          {"█".repeat(barLen)}{"░".repeat(10 - barLen)}
+                          <span style={{ marginLeft: 6, color: "var(--text-2)" }}>
+                            ≥ {node.threshold?.toFixed(2)}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
+
+        {/* 底部 */}
+        <div style={{
+          marginTop: 12, paddingTop: 8, borderTop: "1px solid var(--border)",
+          fontSize: 11, color: "var(--text-2)",
+        }}>
+          共 {treeData.total} 次判断 · 仅存本进程内存
+        </div>
+      </div>
+    );
+  }
+
+  // 非 JSON → Markdown 渲染
+  return (
+    <div className="plugin-panel-md" style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.7 }}>
+      <div style={{
+        display: "flex", justifyContent: "flex-end",
+        borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10,
+      }}>
+        <button
+          disabled={pluginPanelBusy}
+          onClick={onRefresh}
+          style={{
+            appearance: "none", border: "none", background: "transparent",
+            color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
+            fontSize: 11.5, cursor: "pointer", padding: "2px 6px",
+          }}>
+          {pluginPanelBusy ? "…" : "↻ 刷新"}
+        </button>
+      </div>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {markdown || "加载中…"}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
   // 通用插件 UI 协议：右栏动态 tab —— 插件在 contributes.panels 里声明即出现
   type PluginPanelRef = { plugin: string; id: string; title: string; icon?: string };
   const [pluginPanels, setPluginPanels] = useState<PluginPanelRef[]>([]);
@@ -1167,21 +1340,14 @@ export default function ToolPanel({
                   ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
                   : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
                     ? (
-                      <div className="plugin-panel-md"
-                        style={{ padding: "10px 12px", fontSize: 12.5, lineHeight: 1.65 }}>
-                        <div style={{ marginBottom: 8 }}>
-                          <button className="btn-test" disabled={pluginPanelBusy}
-                            onClick={() => {
-                              const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
-                              if (hit) void loadPluginPanel(hit.plugin, hit.id);
-                            }}>
-                            {pluginPanelBusy ? "刷新中…" : "刷新"}
-                          </button>
-                        </div>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {pluginPanelMd[panelTab] ?? "加载中…"}
-                        </ReactMarkdown>
-                      </div>
+                      <PluginPanelContent
+                        markdown={pluginPanelMd[panelTab] ?? ""}
+                        pluginPanelBusy={pluginPanelBusy}
+                        onRefresh={() => {
+                          const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
+                          if (hit) void loadPluginPanel(hit.plugin, hit.id);
+                        }}
+                      />
                     )
                     : <ToolsPanel tools={tools} />}
       </div>

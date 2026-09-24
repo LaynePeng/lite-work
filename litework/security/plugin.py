@@ -73,6 +73,12 @@ class SecurityPlugin(Plugin):
             tool_name = data.get("toolName", "")
             args = data.get("args", {}) or {}
 
+            # 判定类插件留下的结构化意见 → **先暂存**（任何审批分支之前），
+            # 否则 delete_file 等在插件判定之前就已发出审批请求，事件拿不到意见。
+            _v = data.get("judge_opinion") if isinstance(data, dict) else None
+            if isinstance(_v, dict):
+                kernel.ctx.metadata["_judge_opinion"] = _v
+
             # 技能权限（对齐 OpenCode permission.skill）：deny 拒绝 / ask 审批
             if tool_name == "load_skill" and self.skill_perm_resolver is not None:
                 action = self._skill_action(str(args.get("skillName") or ""))
@@ -145,6 +151,7 @@ class SecurityPlugin(Plugin):
                     data["reason"] = "[User Rejected]: 删除操作被拒绝。"
                     return await next(data)
 
+
             # Shell 指令过滤
             if tool_name == "execute_command":
                 command = args.get("command", "")
@@ -213,6 +220,13 @@ class SecurityPlugin(Plugin):
 
     async def _request_approval(self, kernel: Kernel, action: str, reason: str,
                                 rule: Optional[Dict[str, Any]] = None) -> bool:
+        # 判定类插件在 before_tool 里留下的结构化意见：
+        # 一次性取出（pop），随审批事件下发，前端在卡片上展示"判定意见"。
+        opinion: Optional[Dict[str, Any]] = None
+        try:
+            opinion = kernel.ctx.metadata.pop("_judge_opinion", None)
+        except Exception:
+            opinion = None
         # 审批归属根会话：子 Agent 的 kernel 带 root_session_id（sub_agent 装配，
         # 指向主会话），审批必须以主会话 id 上报——前端按活跃会话 id 过滤 pending
         # 审批（SSE 断线重连兜底），用子会话 id（sub_/sa_ 前缀）会被全部滤掉，
@@ -229,6 +243,8 @@ class SecurityPlugin(Plugin):
             "action": action,
             "reason": reason,
             "rememberable": bool(rule),
+            # 恒定携带（None = 该工具没有判定插件意见），与 rememberable 同口径
+            "judge_opinion": opinion,
         })
         approved = await future
         # 审批结果广播由 gate.on_resolve（server/app.py 注入）统一发出

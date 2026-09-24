@@ -44,7 +44,7 @@ function ToolIcon({ name }: { name: string }) {
   return <span className="tool-icon">{emoji}</span>;
 }
 
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown
@@ -467,7 +467,7 @@ export default function ChatView({
   goal?: string | null;
   /** 目标循环（/loop）运行状态：null=未开启 */
   loop: { count: number; max: number } | null;
-  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: import("../types").JudgeOpinion | null }[];
   subAgentRecords: SubAgentProgress[];
   skillLoaded?: string[];
   onSend: (prompt: string) => void;
@@ -840,6 +840,80 @@ export default function ChatView({
             )}
             <p className="approval-action">{activeApproval.action}</p>
             <p className="approval-reason">{activeApproval.reason}</p>
+
+            {/* 判定意见（中立概念：核心只按字段渲染，插件名由 opinion.source 提供） */}
+            {activeApproval.judge_opinion && (() => {
+              const op = activeApproval.judge_opinion!;
+              /** 选项语义 → 颜色（不依赖具体插件：按关键词归类，未知走中性色） */
+              const toneOf = (key: string) =>
+                /拦截|否|高|危险/.test(key) ? "var(--red)"
+                  : /放行|是|低|安全/.test(key) ? "var(--green)"
+                    : /确认|中|也许/.test(key) ? "var(--yellow)" : "var(--text-2)";
+              const entries = Object.entries(op.probabilities ?? {}).sort((a, b) => b[1] - a[1]);
+              return (
+                <div className={`approval-opinion op-${op.choice}`}>
+                  {/* 头：来源 + 等级徽章 + 置信度 */}
+                  <div className="op-head">
+                    <span className="op-title">{op.source ? `${op.source} 判定意见` : "判定意见"}</span>
+                    <span className="op-level">{op.level}</span>
+                    <span className="op-conf">
+                      {Math.round((op.confidence ?? 0) * 100)}
+                      <small>%</small>
+                    </span>
+                  </div>
+
+                  {/* 置信度条（填色）+ 采信阈值刻度（白虚线，越过才算已采信） */}
+                  <div className="op-bar">
+                    <div className="op-bar-fill" style={{ width: `${Math.min(100, (op.confidence ?? 0) * 100)}%` }} />
+                    {typeof op.threshold === "number" && (
+                      <i className="op-bar-th" style={{ left: `${Math.min(100, op.threshold * 100)}%` }}
+                        title={`采信阈值 ${op.threshold.toFixed(2)}`} />
+                    )}
+                  </div>
+                  {typeof op.threshold === "number" && (
+                    <div className="op-bar-scale">
+                      <span>0</span>
+                      <span className="op-bar-scale-th" style={{ left: `${Math.min(100, op.threshold * 100)}%` }}>
+                        阈值 {op.threshold.toFixed(2)}
+                      </span>
+                      <span>1</span>
+                    </div>
+                  )}
+
+                  {/* 理由（主要信息，正常文字色） */}
+                  {op.why && <p className="op-why">{op.why}</p>}
+
+                  {/* 行动概率：彩色堆叠条 + 图例（比一排小标签更直观） */}
+                  {entries.length > 0 && (
+                    <>
+                      <div className="op-stack">
+                        {entries.map(([k, v]) => (
+                          <div key={k} className="op-stack-seg"
+                            style={{ width: `${Math.max(0, v * 100)}%`, background: toneOf(k) }}
+                            title={`${k} ${Math.round(v * 100)}%`} />
+                        ))}
+                      </div>
+                      <div className="op-lg">
+                        {entries.map(([k, v]) => (
+                          <span className="op-lg-item" key={k}>
+                            <i className="op-dot" style={{ background: toneOf(k) }} />
+                            {k}
+                            <b>{Math.round(v * 100)}%</b>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  <div className="op-foot">
+                    {op.model || ""}
+                    {typeof op.threshold === "number" && ` · 阈值 ${op.threshold.toFixed(2)}`}
+                    {" · 只给建议，最终由你决定"}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="approval-buttons">
               <button className="btn-deny" onClick={() => onApprove(activeApproval.id, false)}>
                 拒绝

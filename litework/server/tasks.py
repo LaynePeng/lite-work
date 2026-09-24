@@ -650,7 +650,8 @@ class TaskManager:
         # workspace：隔离时所有工具插件以 worktree 为工作区构建
         registry = self.app.create_agent_registry(agent_id or "build", workspace=task_workspace)
         kernel = self.app.create_kernel(session_id, registry=registry,
-                                        security_workspace=task_workspace)
+                                        security_workspace=task_workspace,
+                                        plugins_workspace=task_workspace)
         # 权限收敛（P3）：编排者身份挂 kernel——spawn_agent handler 读取其 profile，
         # 编排者 deny 的工具对子 Agent 强制 deny（子权限永不超过父）
         kernel.orchestrator_agent_id = agent_id or "build"

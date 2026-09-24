@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { parseHeaderText } from "../lib/headerText";
 import type { InstallJobStatus, InstallPluginPayload, InstallSkillPayload } from "../api";
 import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, PricingStatus, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
@@ -66,6 +67,15 @@ function matchAgentTier(domains?: Record<string, DomainAction> | null): string |
     if (Object.entries(t.domains).every(([k, v]) => resolved[k] === v)) return t.key;
   }
   return null;
+}
+
+/** 把 headers dict 格式化成「每行 Key: Value」文本（与 LLM 页显示一致）。 */
+function formatHeadersForDisplay(val: unknown): string {
+  if (typeof val === "string") return val;
+  if (!val || typeof val !== "object" || Array.isArray(val)) return "";
+  return Object.entries(val as Record<string, string>)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
 }
 
 // 语义化版本比较（与后端 plugin_loader.semver_compare 口径一致）：
@@ -242,6 +252,8 @@ export default function SettingsModal({
   const [permDirty, setPermDirty] = useState(false);
 
   // Plugins 管理
+
+  // Header 文本解析统一走 ../lib/headerText（有 vitest 用例：每行 k: v / k=v / curl -H / JSON）
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   // 通用插件 UI 协议：插件的设置项 schema 与当前值（展开时懒加载；按插件名缓存）
   const [pluginCfg, setPluginCfg] = useState<Record<string, { schema: any[]; values: Record<string, any> }>>({});
@@ -275,21 +287,21 @@ export default function SettingsModal({
       let value: any = v;
       if (isMap) {
         // map 字段在 UI 里始终是「原始文本」，保存时才解析（避免边打字边重排格式）
-        const text = typeof v === "string" ? v.trim() : "";
-        if (!text) {
-          value = {};
-        } else {
-          try {
-            value = JSON.parse(text);
-          } catch {
-            setPluginMsg({ ok: false, text: `${spec?.label || k} 不是合法 JSON，请检查后再保存` });
-            return;
-          }
+        const parsedMap = parseHeaderText(typeof v === "string" ? v : "");
+        if (parsedMap === null) {
+          setPluginMsg({
+            ok: false,
+            text: `${spec?.label || k} 解析失败：每行「Key: Value」或「Key=Value」，也支持 JSON / curl 的 -H "k: v"`,
+          });
+          return;
         }
-        if (JSON.stringify(value) === JSON.stringify(base[k] ?? {})) continue;
+        value = parsedMap;
+        // headers 等 map 字段：即使未改动也提交（整体覆盖命名空间，跳过会丢兄弟键）
       } else {
         if (isSecret && v === base[k]) continue;   // 占位未改动 → 不覆盖既有密钥
-        if (v === base[k]) continue;               // 其他字段未改动也不提交
+        // 非密文字段即使未改动也一并提交：插件配置是【整体覆盖命名空间】，
+        // 只提交改动字段会把兄弟键（如 api_key）丢掉——实测事故
+
       }
       payload[k] = value;
     }
@@ -1981,10 +1993,10 @@ export default function SettingsModal({
                         )}
                         {item.status?.state === "not_started" && (
                           <span className="plugin-tag" style={{ color: "var(--yellow)", borderColor: "var(--yellow)" }}
-                            title={item.status.reason || ""}>⏸ 未启动</span>
+                            title={item.status.reason || ""}>未启动</span>
                         )}
                         {item.status?.state === "running" && (
-                          <span className="plugin-tag" style={{ color: "var(--green)" }}>● 运行中</span>
+                          <span className="plugin-tag" style={{ color: "var(--green)" }}>运行中</span>
                         )}
                         {item.staleLocal && (
                           <span className="plugin-upd-hint" style={{ color: "var(--yellow)" }}
@@ -2020,9 +2032,9 @@ export default function SettingsModal({
                           </button>
                           {pluginCfgOpen[item.name] && (
                             <div style={{
-                              marginTop: 10, padding: "16px 18px", borderRadius: 10,
+                              marginTop: 10, padding: "18px 20px", borderRadius: 10,
                               border: "1px solid var(--border)", background: "var(--bg-1)",
-                              maxWidth: 820,
+                              maxWidth: "100%",
                             }}>
                               {(pluginCfg[item.name]?.schema || []).length === 0 && (
                                 <span className="mcp-empty-inline">正在读取设置项…</span>
@@ -2052,14 +2064,14 @@ export default function SettingsModal({
                                         {(s.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                                       </select>
                                     ) : type === "map" ? (
-                                      <textarea className="form-input" rows={6}
+                                      <textarea className="form-input" rows={3}
                                         style={{
                                           width: "100%", fontFamily: "var(--font-mono)",
                                           fontSize: 12, lineHeight: 1.6, resize: "vertical",
                                         }}
                                         spellCheck={false}
-                                        placeholder={'可直接粘贴，例如：\n{\n  "x-api-key": "sk-...",\n  "X-Api-Version": "1"\n}'}
-                                        value={typeof val === "string" ? val : JSON.stringify(val ?? {}, null, 2)}
+                                        placeholder={'X-Title: My App\nx-opencode-session: {conversation_id}'}
+                                        value={formatHeadersForDisplay(val)}
                                         onChange={(e) => setVal(e.target.value)} />
                                     ) : type === "number" ? (
                                       <input className="form-input" style={{ maxWidth: 200 }} type="number"

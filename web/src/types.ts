@@ -378,7 +378,7 @@ export type SSEEvent =
   | { type: "llm:retry"; data: { attempt: number; max_retries: number; reason: string; wait: number } }
   | { type: "tool:before_execute"; data: { toolName: string; args: unknown; callId?: string; timeoutMs?: number } }
   | { type: "tool:after_execute"; data: { toolName: string; durationMs: number; status: string; result?: string; callId?: string } }
-  | { type: "approval:request"; data: { id: string; action: string; reason: string; rememberable?: boolean } }
+  | { type: "approval:request"; data: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: JudgeOpinion | null } }
   | { type: "approval:resolved"; data: { id: string; approved: boolean; by?: string } }
   | { type: "task:start"; data: { session_id: string } }
   | { type: "task:done"; data: { content: string; stats: Stats } }
@@ -616,7 +616,7 @@ export interface ChatSessionState {
   liveSpeed?: LiveSpeedStats | null;
   error: string | null;
   // 审批队列：并行工具可同时挂起多个审批请求
-  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: JudgeOpinion | null }[];
   // 任务完成后归档的子 Agent 活动卡（会话级内存态，刷新即失）
   subAgentRecords: SubAgentProgress[];
   /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */
@@ -746,6 +746,27 @@ export interface MCPStatus {
 }
 
 // ---------------------------------------------------------------- Plugins 管理
+
+/** 判定类插件在工具执行前给出的结构化风险意见（渲染在审批卡上）。
+ *  **中立概念**：核心只按字段渲染，插件名由插件放在 `source` 里。 */
+export interface JudgeOpinion {
+  /** 意见来源的展示名（由插件自报，如 "Jev"）；缺省显示"判定" */
+  source?: string;
+  /** 风险等级文案：低风险 / 中风险 / 高风险 */
+  level: string;
+  /** 原语结论：allow / confirm / block */
+  choice: string;
+  /** 置信度 0–1 */
+  confidence: number;
+  /** 采信阈值 */
+  threshold?: number;
+  /** 一句话理由 */
+  why?: string;
+  /** 各选项概率分布（choice 原语才有） */
+  probabilities?: Record<string, number>;
+  /** 产出该意见的模型版本 */
+  model?: string;
+}
 
 export interface PluginInfo {
   name: string;
