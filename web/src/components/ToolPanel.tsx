@@ -1277,11 +1277,13 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
 
   useEffect(() => {
     const hit = pluginPanels.find((x) => panelKeyOf(x) === panelTab);
-    if (!hit) { loadedPanelRef.current = ""; return; }   // 切走 → 下次切回重抓
-    const key = panelKeyOf(hit);
-    if (loadedPanelRef.current === key) return;          // 本次激活已抓过
-    loadedPanelRef.current = key;
+    if (!hit) return;
+    // 判断记录是日志：每次激活都抓，且激活期间每 5s 自动刷新（无需手动点刷新）
     void loadPluginPanel(hit.plugin, hit.id);
+    const timer = window.setInterval(() => {
+      loadPluginPanel(hit.plugin, hit.id);
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, [panelTab, pluginPanels, loadPluginPanel]);
 
   const TABS: { id: PanelTabId; label: string; title?: string }[] = [
