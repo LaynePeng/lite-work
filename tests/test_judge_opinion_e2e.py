@@ -45,6 +45,10 @@ def app_with_plugin(tmp_path):
     plugins = [p for p in app._ensure_local_plugins() if getattr(p, "name", "") == "jev"]
     assert plugins, "临时目录里的 jev 插件未被子插件加载器发现"
     plugin = plugins[0]
+    # 防回归：门禁里 `await self.judge(...)`——judge 必须是 async（曾因补丁丢失 async
+    # 导致真实路径每次判定都 TypeError: 'dict' object can't be awaited）
+    import asyncio
+    assert asyncio.iscoroutinefunction(plugin.judge), "judge 必须是 async（门禁 await 它）"
 
     async def _stub_judge(_cfg, _tool, _args):
         """替掉真实网关调用（不联网）：判定为「拦截」但置信 0.91（< 0.95 硬拦线）。"""
