@@ -494,3 +494,39 @@ async def test_model_meta_refresh_failure_without_reason_falls_back(live_client,
     assert body["ok"] is False
     assert body["error"]  # 非空：网络异常或接口超时的兜底文案
 
+
+# ---------------------------------------------------------------- 界面偏好 ui_prefs
+
+async def test_config_ui_prefs_roundtrip(live_client):
+    """界面偏好经 /api/config 往返 + 落盘（前端跨 origin 稳定存布局的契约）。
+
+    背景：桌面端本地 Core 每次启动端口随机（`serve --port 0`）→ 渲染层 origin 变化，
+    localStorage 按 origin 隔离会读不回（「改了、重开又变回去」）；配置类内容一律
+    改存后端 config.json，故 /api/config 必须**读得到**该键（白名单）。
+    """
+    c, app, _server = live_client
+
+    # 白名单暴露 + 初始默认值
+    r = await c.get("/api/config")
+    assert r.status_code == 200
+    assert r.json().get("ui_prefs") == {}
+
+    # 宽度 + 侧栏页签一起往返
+    r = await c.post("/api/config", json={"updates": {"ui_prefs": {
+        "toolPanel": 605, "sidebar": 300, "sidebarTab": "files"}}})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    assert (await c.get("/api/config")).json()["ui_prefs"] == {
+        "toolPanel": 605, "sidebar": 300, "sidebarTab": "files"}
+    # 已落到磁盘 config.json（重启/换端口后仍可读，不依赖内存）
+    with open(app.config_path, encoding="utf-8") as f:
+        disk = json.load(f)
+    assert disk["ui_prefs"]["sidebarTab"] == "files"
+
+    # 覆盖单键（拖拽 / 双击重置会整体重写）：其余键按前端送来的一起落盘
+    r = await c.post("/api/config", json={"updates": {"ui_prefs": {"sidebarTab": "terminal"}}})
+    assert r.status_code == 200
+    assert (await c.get("/api/config")).json()["ui_prefs"] == {"sidebarTab": "terminal"}
+
+

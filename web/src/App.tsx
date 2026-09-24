@@ -12,7 +12,7 @@ import PendingQueue from "./components/PendingQueue";
 import FileViewer from "./components/FileViewer";
 import ProjectPicker from "./components/ProjectPicker";
 import SettingsModal from "./components/SettingsModal";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { type SidebarTab } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
@@ -61,6 +61,19 @@ const nextTabId = () => `tab_${++tabSeq}`;
 // 没法在旧页面里选会话，所以把「打开后进入该项目最近一条会话」写进 localStorage
 // 带过重载边界，由启动时的 effect 消费并立即清除（不影响之后的普通启动）。
 const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
+// 「打开项目」整页重载后默认落「文件」页签：同属**跨重载的一次性意图**（非配置），
+// 由启动 effect 消费并立即清除。配置类内容一律走 localStorage 之外（见 UiPrefs）。
+const PENDING_SIDEBAR_TAB_KEY = "litework.pendingSidebarTab";
+const SIDEBAR_TABS: SidebarTab[] = ["sessions", "files", "terminal", "outputs"];
+const DEFAULT_SIDEBAR_TAB: SidebarTab = "sessions";
+const isSidebarTab = (v: unknown): v is SidebarTab =>
+  typeof v === "string" && (SIDEBAR_TABS as string[]).includes(v);
+
+// 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：存**后端** config（见 AppConfig.ui_prefs），
+// 不存 localStorage——桌面端 Core 每次启动端口随机（--port 0），渲染层 origin 随之
+// 变化，localStorage 按 origin 隔离会读不回（「改了、重开又变回去」）。localStorage
+// 只保留两类**非配置**用途：输入历史（数据）与跨整页重载的一次性意图（本文件两个 KEY）。
+type UiPrefs = { sidebar?: number; toolPanel?: number; sidebarTab?: SidebarTab };
 
 const EMPTY_CHAT: ChatSessionState = {
   messages: [],
@@ -215,17 +228,9 @@ export default function App() {
   // 目录选择器的打开模式：project=打开项目 / code=打开代码（校验 git）/
   // new-project / new-code（新建并展开表单）
   const [pickerMode, setPickerMode] = useState<"project" | "code" | "new-project" | "new-code">("project");
-  const [sidebarTab, setSidebarTab] = useState<"sessions" | "files" | "terminal" | "outputs">(() => {
-    try {
-      const saved = localStorage.getItem("litework.sidebarTab");
-      if (saved === "files" || saved === "terminal" || saved === "sessions" || saved === "outputs") return saved;
-    } catch { /* ignore */ }
-    return "sessions";
-  });
-  const changeSidebarTab = useCallback((t: "sessions" | "files" | "terminal" | "outputs") => {
-    setSidebarTab(t);
-    try { localStorage.setItem("litework.sidebarTab", t); } catch { /* ignore */ }
-  }, []);
+  // 侧栏页签：默认「会话」；真实偏好由后端 config hydrate（见 refreshAll 的 ui_prefs）
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(DEFAULT_SIDEBAR_TAB);
+  const changeSidebarTab = useCallback((t: SidebarTab) => setSidebarTab(t), []);
   const [loading, setLoading] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
@@ -288,19 +293,53 @@ export default function App() {
   // 手动压缩上下文进行中（按 session 记录，避免切 tab 状态串台）
   const [compactingSessions, setCompactingSessions] = useState<Record<string, boolean>>({});
 
-  // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置，localStorage 持久化）
+  // 界面偏好（侧栏 / 右栏宽度、侧栏页签）：持久化到**后端** config（refreshAll 读回）。
+  // 一律不存 localStorage——桌面端 Core 每次启动端口随机（--port 0）→ origin 变化
+  // → localStorage 按 origin 隔离而读不回，偏好每次重启都回默认。
+  const prefsRef = useRef<UiPrefs>({});
+  const prefsHydratedRef = useRef(false);
+  const [prefsReady, setPrefsReady] = useState(false);
+  const persistPrefs = useCallback((patch: Partial<UiPrefs>) => {
+    const next: UiPrefs = { ...prefsRef.current, ...patch };
+    // 显式传 undefined = 清除该键（双击分隔条重置回默认）
+    for (const k of Object.keys(patch) as (keyof UiPrefs)[]) {
+      if (patch[k] === undefined) delete next[k];
+    }
+    prefsRef.current = next;
+    void api.updateConfig({ ui_prefs: next }).catch(() => { /* 落盘失败不阻塞 UI */ });
+  }, []);
+  // 侧栏页签也是配置：变化即写后端（hydrate 前不写；与已存值相同则不重写）
+  useEffect(() => {
+    if (!prefsReady || prefsRef.current.sidebarTab === sidebarTab) return;
+    persistPrefs({ sidebarTab });
+  }, [sidebarTab, prefsReady, persistPrefs]);
+  const sidebarPersist = useMemo(() => ({
+    load: () => prefsRef.current.sidebar ?? null,
+    save: (v: number | null) => persistPrefs({ sidebar: v ?? undefined }),
+  }), [persistPrefs]);
+  const toolPanelPersist = useMemo(() => ({
+    load: () => prefsRef.current.toolPanel ?? null,
+    save: (v: number | null) => persistPrefs({ toolPanel: v ?? undefined }),
+  }), [persistPrefs]);
+
+  // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置回默认并清除持久值）
   const sidebarResize = useResizable({
     axis: "col", initial: 300, min: 200,
     max: () => Math.min(520, Math.floor(window.innerWidth * 0.45)),
-    storageKey: "litework.sidebarWidth.v2",
+    persist: sidebarPersist,
+    hydrated: { ready: prefsReady, value: prefsRef.current.sidebar ?? null },
   });
   const toolPanelResize = useResizable({
     // 右侧工具面板默认约为窗口宽度的 28%（从中间聊天区压缩）。
-    // 注：已经拖拽过的机器会优先用 localStorage 里的像素值；双击分隔条可回到本默认值。
-    axis: "col", initial: Math.round((typeof window !== "undefined" ? window.innerWidth : 1440) * 0.28), min: 260,
+    // `initial` 用函数：未被手动拖动时随窗口 resize 实时重算——避免挂载当口窗口
+    // 尚未最大化时按 1280 算出过窄的默认值、且此后永不跟随窗口（一次性快照问题）。
+    axis: "col",
+    initial: () => Math.round(window.innerWidth * 0.28),
+    min: 260,
     max: () => Math.min(720, Math.floor(window.innerWidth * 0.45)),
     invert: true, // 分隔条在面板左侧，向左拖 = 增大
-    storageKey: "litework.toolPanelWidth.v3",
+    persist: toolPanelPersist,
+    hydrated: { ready: prefsReady, value: prefsRef.current.toolPanel ?? null },
   });
 
   // 后台命令轮询：每 2s 拉取右侧工具面板「后台」tab 数据
@@ -499,6 +538,28 @@ export default function App() {
         api.config().catch(() => null),
       ]);
       if (cfg) setUiConfig(cfg);
+      // 界面偏好只 hydrate 一次：之后以内存 ref 为准（避免 refreshAll 重跑把用户
+      // 刚改的宽度 / 页签又覆盖回服务端旧值）。就绪后 useResizable 在首帧绘制前应用。
+      // 注意 `cfg` 为空（config 请求失败）时**不置就绪**：否则会把默认页签当成用户
+      // 改动写回、覆盖服务端已存偏好（这一版就是在修同类静默覆盖）。
+      if (!prefsHydratedRef.current && cfg) {
+        prefsHydratedRef.current = true;
+        const raw = cfg.ui_prefs;
+        if (raw && typeof raw === "object") {
+          prefsRef.current = {
+            sidebar: typeof raw.sidebar === "number" ? raw.sidebar : undefined,
+            toolPanel: typeof raw.toolPanel === "number" ? raw.toolPanel : undefined,
+            sidebarTab: isSidebarTab(raw.sidebarTab) ? raw.sidebarTab : undefined,
+          };
+          if (prefsRef.current.sidebarTab) setSidebarTab(prefsRef.current.sidebarTab);
+        }
+        // 后端无该键 / 键为空（全新安装）：以默认页签为基准，避免上面的 effect
+        // 把「默认值」误判成用户改动而写回
+        if (prefsRef.current.sidebarTab === undefined) {
+          prefsRef.current = { ...prefsRef.current, sidebarTab: DEFAULT_SIDEBAR_TAB };
+        }
+        setPrefsReady(true);
+      }
       setStatus(st);
       setAgents(ag);
       setLlmConfig(llm);
@@ -1080,8 +1141,8 @@ export default function App() {
           patchActiveChat({ error: result.error ?? "无法切换项目" });
         }
         if (result.ok) {
-          // 重载后默认落在「文件」Tab，直接看到新项目目录树
-          try { localStorage.setItem("litework.sidebarTab", "files"); } catch { /* ignore */ }
+          // 重载后默认落在「文件」Tab，直接看到新项目目录树（一次性意图，非配置）
+          try { localStorage.setItem(PENDING_SIDEBAR_TAB_KEY, "files"); } catch { /* ignore */ }
           // 「打开项目」后进入该项目最近一条会话：本条路径会整页重载，选不了会话，
           // 于是把意图写进 localStorage 带过重载边界，由启动 effect 消费并清除。
           try { localStorage.setItem(OPEN_LATEST_SESSION_KEY, result.workspace ?? ""); } catch { /* ignore */ }
@@ -1308,6 +1369,22 @@ export default function App() {
     // reuseDraft：复用启动时建的空对话 tab，而不是再多开一个
     void openLatestSessionOrNewChat(ws, { reuseDraft: true });
   }, [loading, openLatestSessionOrNewChat]);
+
+  // 「打开项目」重载后的默认页签（一次性意图，见 openProject）：消费即清除。
+  // 它是**非配置**的跨重载交接，故仍走 localStorage；落定后由上面的 ui_prefs
+  // effect 把该页签写入后端 config（下次启动直接 hydrate 到「文件」）。
+  const pendingTabRef = useRef(false);
+  useEffect(() => {
+    if (loading || pendingTabRef.current) return;
+    let tab = "";
+    try {
+      tab = localStorage.getItem(PENDING_SIDEBAR_TAB_KEY) ?? "";
+      if (tab) localStorage.removeItem(PENDING_SIDEBAR_TAB_KEY);
+    } catch { /* ignore */ }
+    if (!isSidebarTab(tab)) return;
+    pendingTabRef.current = true;
+    setSidebarTab(tab);
+  }, [loading]);
 
   // 切到某会话时刷新其 worktree 状态：多会话同项目下，别的会话合并后主分支会前进，
   // 本会话要能看到「主分支已前进 / 合并目标分支」的最新信息（不进则静默忽略）

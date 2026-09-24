@@ -67,6 +67,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "agent_collab_mode",
                 # 协作模式（配方文本 / 模式名）
                 "collab_policy", "collab_recipe",
+                # 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：前端读回后应用；跨 origin 稳定
+                # （桌面端 Core 端口随机，localStorage 按 origin 隔离会读不回）
+                "ui_prefs",
             )
         }
 

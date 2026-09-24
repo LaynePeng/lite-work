@@ -196,6 +196,13 @@ export interface AppConfig {
   /** 聊天区展示折叠阈值（轮数/消息数任一超限即折叠；数据不删，仅 UI 折叠） */
   chat_fold_turns?: number;
   chat_fold_messages?: number;
+  /**
+   * 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：存**后端** config 而非 localStorage——
+   * 桌面端 Core 每次启动端口随机（serve --port 0），渲染层 origin 随之变化，
+   * localStorage 按 origin 隔离会读不回（表现为「改了、重开又变回去」）。
+   * `sidebarTab` 用宽松 string，取值合法性由前端校验（isSidebarTab）。
+   */
+  ui_prefs?: { sidebar?: number; toolPanel?: number; sidebarTab?: string };
   // 多智能体配置（docs/multi-agent-design.md §3）
   max_parallel_agents?: number;
   agent_total_limit?: number;
