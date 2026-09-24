@@ -40,13 +40,16 @@ REQUIRED_PROTOCOLS = (
 
 
 def _iter_py_files() -> list[Path]:
-    return [p for p in (REPO_ROOT / "litework").rglob("*.py") if "__pycache__" not in str(p)]
+    return [p for p in (REPO_ROOT / "litework").rglob("*.py")
+            if "__pycache__" not in str(p) and not p.name.startswith("test_")]
 
 
 def _iter_web_files() -> list[Path]:
     out = []
     for ext in ("*.ts", "*.tsx", "*.css"):
-        out += [p for p in (REPO_ROOT / "web" / "src").rglob(ext)]
+        # 排除测试文件：夹具会合理引用插件名（门禁只守运行时核心）
+        out += [p for p in (REPO_ROOT / "web" / "src").rglob(ext)
+                if ".test." not in p.name]
     return out
 
 
