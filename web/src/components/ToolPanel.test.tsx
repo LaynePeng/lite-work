@@ -386,6 +386,48 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
     expect(container.querySelector(".plugin-panel-md")).toBeNull();
     vi.restoreAllMocks();
   });
+
+  it("装了插件且面板返回 lite-tree 时，渲染判定卡片（新设计）", async () => {
+    const plugin = {
+      name: "jev", path: "plugins/jev", is_dir: true, tools: [],
+      description: "判定层", version: "0.6.5", source: "local", kind: "tool",
+      contributes: { panels: [{ id: "judgements", title: "判断" }] },
+      status: { state: "running", reason: "" },
+    } as never;
+    const tree = {
+      type: "lite-tree",
+      status: { text: "运行中", tone: "ok", meta: ["jev-1.13", "阈值 0.60"], chips: ["工具", "门禁"] },
+      trees: [{
+        nodes: [
+          { label: "工具执行前 delete_file", type: "trigger" },
+          { label: "choice", type: "kind" },
+          { label: "拦截", type: "verdict" },
+          { label: "0.91", type: "confidence", value: 0.91, threshold: 0.6, bar: 9 },
+          { label: "已采信", type: "accepted", pass: true },
+          { label: "拦截", type: "action", action: "block" },
+        ],
+      }],
+      total: 1,
+    };
+    vi.spyOn(api, "plugins").mockResolvedValue({ plugins: [plugin] } as never);
+    vi.spyOn(api, "pluginPanel").mockResolvedValue({
+      name: "jev", panel: "judgements", title: "判断",
+      markdown: JSON.stringify(tree),
+    } as never);
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="plugin:jev:judgements" />
+    );
+    await waitFor(() => expect(api.pluginPanel).toHaveBeenCalled());
+    // 新设计：判定卡片出现（来源 + 结论徽章 + 链条 chips），刷新在头部同一行
+    expect(container.querySelectorAll(".panel-tab").length).toBeGreaterThan(6);
+    expect(container.textContent).toContain("delete_file");
+    expect(container.textContent).toContain("拦截");
+    expect(container.textContent).toContain("0.91");
+    expect(container.textContent).toContain("0.60");
+    expect(container.textContent).toContain("已采信");
+    vi.restoreAllMocks();
+  });
 });
 
 // ---------------------------------------------------------------- 本轮 token 速度

@@ -967,7 +967,7 @@ function DebateLanes({ agents, doneList, doneHidden, onToggleShowAll, reviewedMa
 
 // ---------------------------------------------------------------- 主组件
 
-type PanelTabId = "context" | "todos" | "agents" | "mcp" | "background" | "tools";
+export type PanelTabId = "context" | "todos" | "agents" | "mcp" | "background" | "tools" | (string & {});
 
 // tab 条横向滑动：面板拖窄后 tab 队列整体滑动（不是拖动单个 tab）。
 // 按住横向拖动 → scrollLeft 跟随位移；位移 < 5px 视为点击不拦截。
@@ -1086,129 +1086,135 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
 
   if (treeData) {
     const s = treeData.status;
+    const trees = treeData.trees;                 // 后端已保证「最新在前」
+    const toneColor = (tone?: string) =>
+      tone === "ok" ? "var(--green)" : tone === "warn" ? "var(--yellow)"
+        : tone === "danger" ? "var(--red)" : tone === "info" ? "var(--accent)"
+          : tone === "alt" ? "var(--accent-2)" : "var(--text-2)";
+    // 节点语义色（按类型 + 动作）
+    const nodeColor = (n: { type: string; action?: string; pass?: boolean }) => {
+      if (n.type === "action") {
+        if (n.action === "block") return "var(--red)";
+        if (n.action === "allow") return "var(--green)";
+        if (n.action === "answer") return "var(--accent)";
+        return "var(--text-2)";
+      }
+      if (n.type === "verdict") return "var(--accent-2)";
+      if (n.type === "confidence" || n.type === "accepted") return n.pass ? "var(--green)" : "var(--yellow)";
+      return "var(--text-2)";
+    };
+    const findNode = (t: { nodes: any[] }, type: string) => t.nodes.find((n) => n.type === type);
+    const sourceOf = (t: { nodes: any[] }) => {
+      const trig = findNode(t, "trigger");
+      const kind = findNode(t, "kind");
+      const parts: string[] = [];
+      if (trig) parts.push(String(trig.label).replace(/^工具执行前\s*/, "").replace(/^用户直问$/, "直答").replace(/^Agent 调用$/, "工具"));
+      if (kind) parts.push(String(kind.label));
+      return parts.join(" · ");
+    };
+    const verdictOf = (t: { nodes: any[] }) => findNode(t, "verdict")?.label ?? "—";
+    const confOf = (t: { nodes: any[] }) => {
+      const c = findNode(t, "confidence");
+      return c ? Number(c.value ?? 0) : null;
+    };
+    const acceptedOf = (t: { nodes: any[] }) => {
+      const a = findNode(t, "accepted");
+      return a ? Boolean(a.pass) : null;
+    };
+    const actionOf = (t: { nodes: any[] }) => findNode(t, "action")?.label ?? "";
+
+    // 内容更新时滚动固定到顶（最新在前，新内容也始终在最上可见）
+    const listRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      // jsdom 没有 scrollTo：可选调用，真实环境里把滚动固定到顶（新内容在最上）
+      try { listRef.current?.scrollTo?.({ top: 0 }); } catch { /* 测试环境忽略 */ }
+    }, [treeData]);
+
     return (
-      <div style={{ padding: "14px 16px", fontSize: 13, lineHeight: 1.7 }}>
-        {/* 状态行 */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-          borderBottom: "1px solid var(--border)", paddingBottom: 8, marginBottom: 12,
-        }}>
-          <span style={{
-            color: s.tone === "ok" ? "var(--green)" : s.tone === "warn" ? "var(--yellow)" : "var(--text-1)",
-            fontWeight: 600,
-          }}>{s.text}</span>
-          {(s.meta ?? []).map((m, i) => <span key={i} style={{ color: "var(--text-2)" }}>{m}</span>)}
-          {(s.chips ?? []).map((c, i) => (
-            <span key={i} className="chip" style={{
-              color: "var(--text-1)", fontSize: 11.5, border: "1px solid var(--border)",
-              borderRadius: 4, padding: "1px 6px",
-            }}>{c}</span>
-          ))}
-          {s.reason && <span style={{ color: "var(--text-2)", fontSize: 12 }}>{s.reason}</span>}
+      <div style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.55, height: "100%", display: "flex", flexDirection: "column" }}>
+        {/* 头部：状态 + 计数 + 刷新（同一行，刷新为小图标） */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <span style={{ color: toneColor(s.tone), fontWeight: 700, fontSize: 12.5 }}>{s.text}</span>
+          <span style={{ color: "var(--text-2)", fontSize: 11.5 }}>{(s.meta ?? []).join(" · ")}</span>
+          <span style={{ color: "var(--text-2)", fontSize: 11 }}>· {treeData.total} 条</span>
           <button
             disabled={pluginPanelBusy}
             onClick={onRefresh}
+            title="刷新"
             style={{
-              marginLeft: "auto", appearance: "none", border: "none", background: "transparent",
-              color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
-              fontSize: 11.5, cursor: "pointer", padding: "2px 6px",
+              marginLeft: "auto", appearance: "none", border: "1px solid var(--border)",
+              background: "var(--bg-1)", color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
+              fontSize: 13, lineHeight: 1, cursor: "pointer", padding: "3px 7px", borderRadius: 6,
+              flexShrink: 0,
             }}>
-            {pluginPanelBusy ? "…" : "↻ 刷新"}
+            {pluginPanelBusy ? "…" : "⟳"}
           </button>
         </div>
 
-        {/* 决策树 */}
-        {treeData.trees.length === 0 ? (
-          <div style={{ color: "var(--text-2)", fontSize: 12.5, padding: "20px 0", textAlign: "center" }}>
-            暂无判断记录。发起对话后，每次判断的推理链会在这里展示。
-          </div>
-        ) : (
-          treeData.trees.map((tree, ti) => (
-            <div key={ti} style={{ marginBottom: ti < treeData.trees.length - 1 ? 20 : 0 }}>
-              {tree.nodes.map((node, ni) => {
-                const isLast = ni === tree.nodes.length - 1;
-                const isAction = node.type === "action";
-                const isVerdict = node.type === "verdict";
-                const isConf = node.type === "confidence";
-                const isAccepted = node.type === "accepted";
-                const barLen = node.bar ?? 0;
-
-                return (
-                  <div key={ni} style={{ display: "flex", alignItems: "flex-start" }}>
-                    {/* 左侧连线列 */}
-                    <div style={{
-                      width: 28, display: "flex", flexDirection: "column", alignItems: "center",
-                      paddingTop: 4, flexShrink: 0,
-                    }}>
-                      {/* 圆点 */}
-                      <div style={{
-                        width: 7, height: 7, borderRadius: "50%",
-                        background: isAction
-                          ? node.action === "block" ? "var(--red)"
-                            : node.action === "allow" ? "var(--green)"
-                            : node.action === "answer" ? "var(--accent)"
-                            : "var(--text-2)"
-                          : isVerdict ? "var(--accent-2)"
-                          : isConf ? (node.pass ? "var(--green)" : "var(--yellow)")
-                          : isAccepted ? (node.pass ? "var(--green)" : "var(--yellow)")
-                          : "var(--border)",
-                        flexShrink: 0,
-                      }} />
-                      {/* 竖线（非最后节点） */}
-                      {!isLast && (
-                        <div style={{
-                          width: 1.5, flex: 1, minHeight: 22,
-                          background: "var(--border)",
-                        }} />
-                      )}
-                    </div>
-
-                    {/* 内容列 */}
-                    <div style={{
-                      flex: 1, paddingBottom: isLast ? 0 : 10, minWidth: 0,
-                    }}>
-                      {/* 标签 */}
-                      <span style={{
-                        fontSize: 12.5,
-                        color: isAction
-                          ? node.action === "block" ? "var(--red)"
-                            : node.action === "allow" ? "var(--green)"
-                            : node.action === "answer" ? "var(--accent)"
-                            : "var(--text-2)"
-                          : isVerdict ? "var(--text-0)"
-                          : isAccepted ? (node.pass ? "var(--green)" : "var(--yellow)")
-                          : "var(--text-1)",
-                        fontWeight: isVerdict || isAction || isAccepted ? 600 : 400,
-                      }}>
-                        {node.label}
-                      </span>
-
-                      {/* 置信度条 */}
-                      {isConf && (
-                        <span style={{
-                          marginLeft: 8, fontFamily: "var(--font-mono)", fontSize: 11,
-                          color: node.pass ? "var(--green)" : "var(--yellow)",
-                        }}>
-                          {"█".repeat(barLen)}{"░".repeat(10 - barLen)}
-                          <span style={{ marginLeft: 6, color: "var(--text-2)" }}>
-                            ≥ {node.threshold?.toFixed(2)}
-                          </span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+        {/* 判定时间线：最新在最上，每条是一张紧凑卡片 */}
+        <div ref={listRef} style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: 2 }}>
+          {trees.length === 0 ? (
+            <div style={{ color: "var(--text-2)", fontSize: 12.5, padding: "26px 0", textAlign: "center" }}>
+              暂无判断记录。发起对话后，每次判断会实时显示在这里。
             </div>
-          ))
-        )}
+          ) : (
+            trees.map((tree, ti) => {
+              const conf = confOf(tree);
+              const acc = acceptedOf(tree);
+              const action = actionOf(tree);
+              const verdict = verdictOf(tree);
+              const confCol = nodeColor(findNode(tree, "confidence") ?? { type: "confidence", pass: acc ?? true });
+              return (
+                <div key={ti} style={{
+                  background: "var(--bg-1)", border: "1px solid var(--border)",
+                  borderLeft: `3px solid ${toneColor(s.tone)}`,
+                  borderRadius: 8, padding: "9px 11px", marginBottom: 9,
+                }}>
+                  {/* 卡片头：来源 · 结论徽章 · 置信 · 采信/动作 */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, color: "var(--text-2)" }}>{sourceOf(tree)}</span>
+                    <span style={{
+                      fontSize: 12, fontWeight: 700, padding: "1px 8px", borderRadius: 5,
+                      color: nodeColor(findNode(tree, "verdict") ?? { type: "verdict" }),
+                      border: `1px solid ${nodeColor(findNode(tree, "verdict") ?? { type: "verdict" })}`,
+                    }}>{verdict}</span>
+                    {conf !== null && (
+                      <span className="mono" style={{ fontSize: 11.5, color: confCol, marginLeft: 2 }}>
+                        {conf.toFixed(2)}
+                      </span>
+                    )}
+                    <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-2)" }}>
+                      {acc === true ? "已采信" : acc === false ? "未采信" : ""}
+                      {action && (acc ? ` · ${action}` : ` · 交回${action}`)}
+                    </span>
+                  </div>
 
-        {/* 底部 */}
-        <div style={{
-          marginTop: 12, paddingTop: 8, borderTop: "1px solid var(--border)",
-          fontSize: 11, color: "var(--text-2)",
-        }}>
-          共 {treeData.total} 次判断 · 仅存本进程内存
+                  {/* 链条：节点 → chips */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 3, marginTop: 7 }}>
+                    {tree.nodes.map((n, ni) => (
+                      <span key={ni} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        {ni > 0 && <span style={{ color: "var(--border)" }}>→</span>}
+                        <span style={{
+                          fontSize: 10.5, padding: "1px 6px", borderRadius: 4,
+                          background: "var(--bg-0)", border: "1px solid var(--border)",
+                          color: nodeColor(n),
+                          fontWeight: n.type === "verdict" || n.type === "action" ? 600 : 400,
+                        }}>
+                          {n.label}
+                          {n.type === "confidence" && n.threshold != null ? ` ≥${Number(n.threshold).toFixed(2)}` : ""}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* 底部说明 */}
+        <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--border)", fontSize: 10.5, color: "var(--text-2)" }}>
+          仅存本进程内存，重启清空 · 5 秒自动刷新
         </div>
       </div>
     );

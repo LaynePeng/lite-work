@@ -14,7 +14,7 @@ import ProjectPicker from "./components/ProjectPicker";
 import SettingsModal from "./components/SettingsModal";
 import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
-import ToolPanel from "./components/ToolPanel";
+import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { useResizable } from "./hooks/useResizable";
 import type { JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
@@ -284,7 +284,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
   // 工具面板 tab 受控（聊天区 Agents 状态条可跳转）
-  const [toolPanelTab, setToolPanelTab] = useState<"context" | "todos" | "agents" | "mcp" | "background" | "tools">("context");
+  const [toolPanelTab, setToolPanelTab] = useState<PanelTabId>("context");
   // 手动压缩上下文进行中（按 session 记录，避免切 tab 状态串台）
   const [compactingSessions, setCompactingSessions] = useState<Record<string, boolean>>({});
 
