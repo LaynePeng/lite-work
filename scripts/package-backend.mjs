@@ -254,3 +254,34 @@ if (!fs.existsSync(binary)) {
   process.exit(1);
 }
 console.log(`[package] Backend binary: ${binary}`);
+
+// 清理第三方包自带的测试/缓存（PyInstaller --collect-all 会把 numpy/pandas 等
+// 的 tests/ 一并收入 _internal——运行时用不到，纯冗余体积）。只清第三方，不碰
+// litework 自己的产物（litework 的测试本就不在收集范围内）。
+const internalDir = path.join(outDir, "lite-work-backend", "_internal");
+if (fs.existsSync(internalDir)) {
+  let removedFiles = 0, removedDirs = 0;
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === "__pycache__" || e.name === "tests" || e.name === "test") {
+          fs.rmSync(p, { recursive: true, force: true });
+          removedDirs++;
+        } else {
+          walk(p);
+        }
+      } else if (e.name.startsWith("test_") && e.name.endsWith(".py")) {
+        fs.rmSync(p, { force: true });
+        removedFiles++;
+      } else if (e.name === "conftest.py") {
+        fs.rmSync(p, { force: true });
+        removedFiles++;
+      }
+    }
+  };
+  walk(internalDir);
+  console.log(`[package] 清理第三方 tests/__pycache__: ${removedDirs} 目录, ${removedFiles} 文件`);
+}
