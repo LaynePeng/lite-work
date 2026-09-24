@@ -774,9 +774,12 @@ export default function Composer({
               setShowHistory(false);
               return;
             }
-            // 输入历史翻阅：命令面板未打开时，空输入 ↑ 翻上一条、↓ 往回
+            // 输入历史翻阅：命令面板未打开时，空输入 ↑ 翻上一条、↓ 往回。
+            // 注意 ↑ 的条件是「输入为空 **或** 已在翻阅态」：翻出第一条后输入框
+            // 已非空，若只判 `!text` 则第二次 ↑ 被挡（只能往前翻一条的 bug）。
+            // 手动编辑会经 onChange → exitHistoryMode 退出翻阅态，故不影响正常编辑。
             if (!panelVisible && !showHistory && !e.ctrlKey && !e.metaKey && !e.altKey) {
-              if (e.key === "ArrowUp" && !text) {
+              if (e.key === "ArrowUp" && (!text || historyIdx >= 0)) {
                 if (navigateHistory("up")) {
                   e.preventDefault();
                   return;
