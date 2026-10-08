@@ -84,6 +84,13 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 "[Startup] models.dev 缓存已过期 %.1f 天（仍作兜底使用），"
                 "建议在设置页同步", age / 86400)
         await app.mcp_manager.start()
+        # 回收上一次运行遗留的后台命令（服务端 TTL 兜底：后端崩溃/断连时子进程
+        # 会失去管理者，继续占用 CPU/端口/文件锁）。判定保守，只杀日志里记录过
+        # 且"存活时间与记录吻合"的 pid（防 pid 复用误杀）；失败不影响启动。
+        try:
+            app.reclaim_orphan_tasks()
+        except Exception:  # noqa: BLE001 - 启动路径绝不允许因此中断
+            logger.warning("[Startup] 回收遗留后台命令失败", exc_info=True)
         try:
             yield
         finally:

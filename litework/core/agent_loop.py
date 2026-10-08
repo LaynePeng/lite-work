@@ -184,6 +184,16 @@ class AgentLoop:
         self._speed_output_tokens = 0   # Σ 有生成窗口那几轮的输出 tokens
         self._speed_gen_ms = 0          # Σ 生成窗口（毫秒）
         self._speed_turns = 0           # 计入平均的轮数
+        # ---- 完成证据门禁（W2，对齐手册 Guardrail pp.60-63）----
+        # 事实由 loop 自己收集（命令退出码 / 改动文件），不依赖模型自述；
+        # 聚合是机械的（缺失或 blocked/unknown → 不得放行，UNKNOWN 绝不当 PASS）。
+        # 模式：off 不评估 / advisory 只记录+发事件 / enforced 未通过则不收尾
+        # （注入提醒再给一轮，最多 completion_gate_retries 次）
+        self.completion_gate: str = "advisory"
+        self.completion_gate_retries: int = 2
+        self._gate_traces: Dict[str, List[Any]] = {"commands": [], "changed_files": []}
+        self._gate_retries = 0
+        self.last_gate_result: Optional[Dict[str, Any]] = None
         self._register_obs_recall_tool()
 
     def _register_obs_recall_tool(self) -> None:
@@ -412,6 +422,39 @@ class AgentLoop:
 
                 # F. 无工具调用 → 任务收敛，输出最终文本
                 if not tool_calls:
+                    # W2「完成证据门禁」：Agent 声称完成的这一刻做机械核验。
+                    # - advisory：只记录 + 发 gate:result 事件（不打断）；
+                    # - enforced：verdict 非 pass 时注入提醒（含缺失/UNKNOWN 项），
+                    #   再给一轮补证据的机会（次数上限 completion_gate_retries）。
+                    gate = self._evaluate_completion_gate()
+                    hook_data: Dict[str, Any] = {
+                        "reason": "no_tool_calls",
+                        "content": content or "",
+                        "gate": gate,
+                        "retries": self._gate_retries,
+                    }
+                    try:
+                        # Stop 钩子：判定类插件（如 Jev 的证据核验）可在此附加意见，
+                        # 或要求再给一轮——此前没有该钩子，"无工具地声称完成并结束"
+                        # 的那一轮插件抓不到（只有 before_llm / before_tool）。
+                        hook_data = (
+                            await self.kernel.before_finish.run(self.kernel.ctx, hook_data)
+                        ) or hook_data
+                    except Exception:
+                        logger.debug("[AgentLoop] before_finish 钩子失败", exc_info=True)
+                    if isinstance(hook_data, dict):
+                        if hook_data.get("gate") is not None:
+                            self.last_gate_result = hook_data["gate"]
+                        opinion = hook_data.get("opinion")
+                        if opinion and isinstance(self.last_gate_result, dict):
+                            self.last_gate_result["opinion"] = opinion
+                    if isinstance(self.last_gate_result, dict):
+                        await self.kernel.events.emit("gate:result", self.last_gate_result)
+                    reminder = self._gate_reminder(hook_data)
+                    if reminder and self._gate_retries < max(0, self.completion_gate_retries):
+                        self._gate_retries += 1
+                        self._inject_gate_reminder(messages, reminder)
+                        continue
                     self.state.status = AgentStatus.SUCCESS
                     return await self._finish(content or "(空回复)", messages, stats, store_snapshot)
 
@@ -429,6 +472,9 @@ class AgentLoop:
                 #     执行——一次工具调用完成「改 + 验」，省去下一轮的完整请求。
                 #     走与普通工具完全相同的审批/守卫/截断链路，不绕过安全边界。
                 results = await self._apply_action_fusion(tool_calls, results, stats)
+
+                # W2 门禁事实收集：命令退出码 / 改动文件（不依赖模型自述）
+                self._record_gate_traces(tool_calls, results)
 
                 await self._append_tool_results(tool_calls, results, messages)
 
@@ -1175,6 +1221,93 @@ class AgentLoop:
             return None
 
     # ------------------------------------------------------------------ 收尾
+
+    # ------------------------------------------------------------------ 完成门禁（W2）
+
+    def _record_gate_traces(self, tool_calls: List[ToolCall], results: List[str]) -> None:
+        """收集门禁事实（命令退出码、改动文件）——机械核验的依据。
+
+        为什么由 loop 收集而不是让模型自述：模型可能在没有验证的情况下声称完成
+        （本会话真实发生过）。事实来自**工具结果**，模型无法伪造。
+        """
+        from .gate import parse_exit_code, parse_exit_codes
+
+        for call, result in zip(tool_calls, results):
+            if not result:
+                continue
+            if call.name == "execute_command":
+                ok, parsed, _ = safe_json_parse(call.arguments or "{}")
+                cmd = str((parsed or {}).get("command") or "") if ok and isinstance(parsed, dict) else ""
+                self._gate_traces["commands"].append({
+                    "command": cmd[:200],
+                    "exit_code": parse_exit_code(result),
+                    "captured_at": time.strftime("%H:%M:%S"),
+                })
+            elif call.name in WRITE_TOOLS:
+                ok, parsed, _ = safe_json_parse(call.arguments or "{}")
+                args = parsed if ok and isinstance(parsed, dict) else {}
+                # 注意：项目里写类工具的参数名是 filePath（write_file /
+                # apply_search_replace / apply_unified_diff / delete_file 一致），
+                # 兼容 path/file_path 只是防御性写法
+                path = args.get("filePath") or args.get("path") or args.get("file_path") or ""
+                if isinstance(path, str) and path:
+                    self._gate_traces["changed_files"].append(path)
+                # 动作融合：then 验证命令的退出码附在本次结果里，同样计入证据
+                for code in parse_exit_codes(result):
+                    self._gate_traces["commands"].append({
+                        "command": f"{call.name} then",
+                        "exit_code": code,
+                        "captured_at": time.strftime("%H:%M:%S"),
+                    })
+
+    def _evaluate_completion_gate(self) -> Optional[Dict[str, Any]]:
+        """评估完成门禁：机械聚合（off 模式不做任何事）。"""
+        mode = str(self.completion_gate or "off").lower()
+        if mode == "off":
+            return None
+        from .gate import aggregate, derive_submissions, load_spec
+
+        spec = load_spec(self.workspace)
+        result = aggregate(spec, derive_submissions(self._gate_traces))
+        result["mode"] = mode
+        self.last_gate_result = result
+        logger.info("[AgentLoop] 完成门禁：verdict=%s spec=%s@%s mode=%s",
+                    result["verdict"], result["spec_id"], result["spec_digest"], mode)
+        return result
+
+    def _gate_reminder(self, hook_data: Dict[str, Any]) -> str:
+        """enforced 模式下返回"再给一轮"的提醒文本；否则空串（不打断收尾）。
+
+        两种来源：门禁未通过（机械事实），或 Stop 钩子显式要求（插件判定）。
+        """
+        if str(self.completion_gate or "off").lower() != "enforced":
+            return ""
+        gate = self.last_gate_result if isinstance(self.last_gate_result, dict) else None
+        if gate is not None and gate.get("verdict") != "pass":
+            bad = [c for c in gate.get("checks") or []
+                   if not isinstance(c, dict) or c.get("status") != "pass"]
+            detail = "；".join(
+                f"{c.get('id')}={c.get('status')}（{c.get('message') or ''}）"
+                for c in bad if isinstance(c, dict)
+            )
+            return (
+                "[gate] 完成门禁未通过，请补齐证据后再结束："
+                f"verdict={gate.get('verdict')}；{detail or '存在缺失的必检项'}。"
+                "要求：执行真实验证（测试/构建/检查命令）并让退出码为 0；"
+                "未验证的部分请明确标注为未验证，不要声称已完成。"
+            )
+        if hook_data.get("block_finish"):
+            return f"[gate] {hook_data.get('reminder') or '判定层要求补充证据后再结束。'}"
+        return ""
+
+    def _inject_gate_reminder(self, messages: List[Message], reminder: str) -> None:
+        """把门禁提醒注入上下文（与判定类插件的核验同一手法：追加到 system 消息）。"""
+        for msg in reversed(messages):
+            if getattr(msg, "role", "") == "system":
+                msg.content = (msg.content or "") + f"\n\n{reminder}"
+                return
+        # 没有 system 消息时插到最前（不打断 assistant/tool 的原子配对）
+        messages.insert(0, Message(role="system", content=reminder))
 
     async def _finish(self, content: str, messages: List[Message], stats: Dict[str, Any],
                       store_snapshot: bool) -> Tuple[str, Dict[str, Any]]:

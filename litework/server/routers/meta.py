@@ -44,6 +44,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "api_key_configured": bool(settings.get("api_key")),
             "active_tasks": tasks.active_count(),
             "sessions_count": len(app.session_store.list()),
+            # 仍在运行的后台命令数（execute_command background=true）：
+            # 切换项目/重启后据此发现上次遗留的孤儿任务
+            "running_background": app.running_background_count(),
             "token_auth": bool(token),
         }
 
@@ -58,6 +61,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "llm_retries", "skill_permissions", "subagent_timeout",
                 # 效率机制（v1.6.0）：观察打包 / 压缩经济学 / 证据收据小模型
                 "observation_pack", "compaction_economics", "reducer_model", "reducer_provider",
+                # 完成证据门禁（W2）：off / advisory / enforced + 补证据轮数上限
+                "completion_gate", "completion_gate_retries",
                 # 聊天区展示折叠阈值（轮数 / 消息数，任一超限即折叠）
                 "chat_fold_turns", "chat_fold_messages",
                 # 多智能体（docs/multi-agent-design.md §3 配置面）

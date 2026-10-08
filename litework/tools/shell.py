@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
+import subprocess
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -20,6 +23,8 @@ from typing import Any, Dict, List, Optional
 from ..core.types import ToolDefinition
 from ..security.guard import SENSITIVE_ENV_VARS
 from .proc_utils import kill_process_tree, posix_spawn_kwargs
+
+logger = logging.getLogger("litework.tools.shell")
 
 _DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+[/\~]",
@@ -40,6 +45,8 @@ class _BackgroundTask:
         self.command = command
         self.proc: Optional[asyncio.subprocess.Process] = None
         self.started_at = time.monotonic()
+        # 墙钟启动时间（任务日志用；started_at 是 monotonic，跨进程无意义）
+        self.wall_started_at = time.time()
         self.stdout_buf = bytearray()
         self.stderr_buf = bytearray()
         self.exit_code: Optional[int] = None
@@ -67,19 +74,54 @@ class BackgroundRegistry:
 
     这与 OpenCode「目录随请求、实例按目录缓存」同构的收敛方向一致——区别只是
     我们让后台任务不绑定目录，而不是让目录随请求流动。
+
+    任务日志（journal_path）：add/remove 时把在跑的任务写到磁盘，供**下次启动
+    回收孤儿进程**用（服务端 TTL 兜底——Agent 可能因崩溃/断连失去管理者，见
+    手册 Sandbox 生命周期控制面）。写失败一律吞掉，绝不因为日志影响工具执行。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, journal_path: Optional[str] = None) -> None:
         self.tasks: Dict[str, _BackgroundTask] = {}
+        self.journal_path = journal_path
+        # task_id → 启动它的工作区（日志用；注册表本身与工作区无关）
+        self.workspaces: Dict[str, str] = {}
 
-    def add(self, task_id: str, task: _BackgroundTask) -> None:
+    def add(self, task_id: str, task: _BackgroundTask, workspace: str = "") -> None:
         self.tasks[task_id] = task
+        self.workspaces[task_id] = workspace
+        self._write_journal()
 
     def get(self, task_id: str) -> Optional[_BackgroundTask]:
         return self.tasks.get(task_id)
 
     def remove(self, task_id: str) -> None:
         self.tasks.pop(task_id, None)
+        self.workspaces.pop(task_id, None)
+        self._write_journal()
+
+    def journal_payload(self) -> Dict[str, Any]:
+        """当前在跑任务的持久化快照（回收时按 pid + 启动时间核对，防 pid 复用）。"""
+        return {"tasks": [{
+            "task_id": tid,
+            "pid": t.proc.pid if t.proc is not None else None,
+            "command": t.command[:500],
+            "workspace": self.workspaces.get(tid, ""),
+            "started_at": t.wall_started_at,
+        } for tid, t in self.tasks.items()]}
+
+    def _write_journal(self) -> None:
+        if not self.journal_path:
+            return
+        try:
+            parent = os.path.dirname(self.journal_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = f"{self.journal_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.journal_payload(), f, ensure_ascii=False)
+            os.replace(tmp, self.journal_path)
+        except OSError:
+            logger.debug("[bg] 写后台任务日志失败", exc_info=True)
 
     def list(self) -> List[Dict[str, Any]]:
         """列出所有后台任务（供工具面板「后台」tab 展示）。"""
@@ -246,7 +288,7 @@ class ShellTools:
             task.close()
             return f"[Error]: 启动后台命令失败: {exc}"
 
-        self._registry.add(task_id, task)
+        self._registry.add(task_id, task, workspace=self.workspace)
         return (
             f"[Background Started]: task_id={task_id} 命令已后台执行（超时 {timeout}s）。\n"
             f"使用 check_command 工具轮询状态：{{\"task_id\": \"{task_id}\"}}"
@@ -336,3 +378,112 @@ class ShellTools:
         委托共享注册表：任意工作区的实例都能终止其它工作区启动的任务。
         """
         return self._registry.kill(task_id)
+
+
+# ------------------------------------------------------------ 孤儿回收（启动兜底）
+
+def _pid_alive(pid: int) -> bool:
+    """pid 是否仍存在（POSIX：信号 0；Windows：tasklist 探活）。"""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 存在但不属于我们：保守当作存活，交给启动时间比对
+    return True
+
+
+def _process_age_seconds(pid: int) -> Optional[float]:
+    """进程已存活秒数（读 `ps -o etime=`，macOS/Linux 通用；GNU 的 etimes 不可移植）。
+
+    解析 `[[dd-]hh:]mm:ss`；拿不到返回 None（调用方保守跳过，不杀）。
+    """
+    try:
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not out:
+        return None
+    days = 0
+    raw = out
+    if "-" in raw:                      # dd-hh:mm:ss
+        d, raw = raw.split("-", 1)
+        days = int(d or 0)
+    parts = raw.split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if len(nums) == 2:                  # mm:ss
+        hh, mm, ss = 0, nums[0], nums[1]
+    elif len(nums) == 3:                # hh:mm:ss
+        hh, mm, ss = nums
+    else:
+        return None
+    return days * 86400 + hh * 3600 + mm * 60 + ss
+
+
+def read_journal(journal_path: str) -> List[Dict[str, Any]]:
+    """读任务日志；文件缺失/损坏返回空列表（启动路径不允许因日志失败而中断）。"""
+    try:
+        with open(journal_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    return [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+
+
+def reclaim_orphaned_tasks(journal_path: str, tolerance_seconds: float = 60.0) -> Dict[str, Any]:
+    """回收上一次运行遗留的后台命令（服务端 TTL 兜底）。
+
+    判定规则（宁可漏杀，不可误杀）：
+    - pid 不存在 → 跳过（进程自己结束了）；
+    - 拿不到进程存活时间 → 跳过并记日志（无法确认身份）；
+    - 存活时间与日志记录不符（差 > tolerance，说明 pid 已被复用）→ 跳过；
+    - 命中 → kill_process_tree（连带整棵进程树）。
+    无论结果如何都清空日志（避免下次重复判定）。
+    """
+    entries = read_journal(journal_path)
+    summary: Dict[str, Any] = {"checked": len(entries), "killed": 0,
+                               "killed_pids": [], "skipped": 0}
+    now = time.time()
+    for entry in entries:
+        pid = entry.get("pid")
+        started_at = entry.get("started_at")
+        if not isinstance(pid, int) or pid <= 0 or not isinstance(started_at, (int, float)):
+            summary["skipped"] += 1
+            continue
+        if not _pid_alive(pid):
+            summary["skipped"] += 1
+            continue
+        age = _process_age_seconds(pid)
+        if age is None:
+            logger.warning("[bg] 无法确认进程 %s 存活时间，跳过回收（task_id=%s）",
+                           pid, entry.get("task_id"))
+            summary["skipped"] += 1
+            continue
+        if abs(age - (now - float(started_at))) > tolerance_seconds:
+            # pid 已被系统复用给别的进程：绝不能杀
+            summary["skipped"] += 1
+            continue
+        kill_process_tree(pid)
+        summary["killed"] += 1
+        summary["killed_pids"].append(pid)
+        logger.warning("[bg] 已回收遗留后台命令 pid=%s task_id=%s command=%s",
+                       pid, entry.get("task_id"), str(entry.get("command"))[:120])
+    try:
+        os.remove(journal_path)
+    except OSError:
+        pass
+    return summary

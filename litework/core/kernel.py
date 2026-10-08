@@ -20,6 +20,12 @@ class Kernel:
     - before_llm    : LLM 调用前的消息修改（动态 Prompt 注入、记忆补充）
     - before_tool   : 工具执行前的安全审查与权限判决
     - after_tool    : 工具执行后的结果修饰（截断、格式化）
+    - before_finish : 任务收尾前的最后一道判定（完成门禁 / 证据核验）
+      **Stop 钩子**：Agent 给出最终回答（无工具调用）时触发。此前只有
+      before_llm / before_tool，导致"无工具地声称完成并结束"的那一轮插件抓不到
+      （判定类插件的核验只能覆盖"之后还会再调 LLM"的轮次）。
+      数据：{reason, content, gate, retries}；插件可附加 `opinion`（只加信息），
+      或设 `block_finish=True` + `reminder="..."` 要求再给一轮（enforced 模式生效）。
     """
 
     def __init__(self, session_id: str) -> None:
@@ -28,6 +34,7 @@ class Kernel:
         self.before_llm = Pipeline("before_llm")
         self.before_tool = Pipeline("before_tool")
         self.after_tool = Pipeline("after_tool")
+        self.before_finish = Pipeline("before_finish")
         self._plugins: Dict[str, Plugin] = {}
         # 编排者身份（可选，由 TaskManager 在启动任务时挂载）：spawn_agent 等
         # handler 读取它做「子权限不超过父」的收敛；未挂载时为 None

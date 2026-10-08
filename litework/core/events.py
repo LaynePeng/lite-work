@@ -199,6 +199,33 @@ class TodoUpdatedPayload(TypedDict):
     todos: List[Dict[str, Any]]
 
 
+class GateCheckPayload(TypedDict):
+    """完成门禁的单个检查项结果（三态 + Evidence 摘要）。"""
+
+    id: str
+    required: bool
+    status: str            # pass / blocked / unknown
+    message: str
+    evidence: Dict[str, str]
+
+
+class GateResultPayload(TypedDict):
+    """完成证据门禁的机械聚合结果（W2，对齐手册 Guardrail）。
+
+    verdict：pass / blocked / unknown（缺必检项或存在 blocked/unknown → 非 pass；
+    UNKNOWN 绝不当 PASS）。opinion 为判定类插件附加的建议（插件自报 source），只加信息。
+    """
+
+    verdict: str
+    spec_id: str
+    spec_version: int
+    spec_digest: str
+    checks: List[GateCheckPayload]
+    at: float
+    mode: Optional[str]
+    opinion: Optional[Dict[str, Any]]
+
+
 class AgentSpawnedPayload(TypedDict):
     agentId: str
     nickname: Optional[str]
@@ -372,6 +399,7 @@ class TypedEventBus:
         "question:request": QuestionRequestPayload,
         "question:resolved": QuestionResolvedPayload,
         "todo:updated": TodoUpdatedPayload,
+        "gate:result": GateResultPayload,
         "chat:queued": ChatQueuedPayload,
         "agent:spawned": AgentSpawnedPayload,
         "agent:closed": AgentClosedPayload,

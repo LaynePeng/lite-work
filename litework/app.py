@@ -43,7 +43,7 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .tools.registry import ToolRegistry
-from .tools.shell import BackgroundRegistry
+from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
 if TYPE_CHECKING:  # 仅供类型标注：运行时按需懒导入，避免与 orchestration 循环依赖
     from .orchestration.agent_manager import SessionAgentManager
@@ -91,6 +91,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "skill_trigger_mode": "substring",
     # 并行工具执行："auto"（只读轮并行/含写类整轮串行）| "always" | "never"
     "parallel_tool_calls": "auto",
+    # 完成证据门禁（W2，对齐手册 Guardrail）：Agent 声称完成时按机械事实核验
+    #   "off"      不评估
+    #   "advisory" （默认）只记录 + 发 gate:result 事件，不打断收尾
+    #   "enforced" 未通过则不收尾：注入提醒再给一轮（见 completion_gate_retries）
+    "completion_gate": "advisory",
+    # enforced 模式下"再给一轮补证据"的最大次数（防死循环）
+    "completion_gate_retries": 2,
     # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
     # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
     # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页，USD）。DeepSeek 分时计费由
@@ -203,7 +210,9 @@ class AgentApp:
         self._shell_plugins: Dict[str, ShellPlugin] = {}
         # 后台命令注册表：跨 ShellPlugin 实例共享（任务归属与工作区解耦，
         # 切换项目后旧 task_id 仍可在任意工作区查询/终止）
-        self._bg_registry = BackgroundRegistry()
+        # journal：把在跑任务落盘，供下次启动回收孤儿进程（服务端 TTL 兜底）
+        self._bg_journal_path = os.path.join(self.config_dir, "bg_tasks.json")
+        self._bg_registry = BackgroundRegistry(self._bg_journal_path)
         # Jev 压缩判定器（插件注册；None = 用默认 LLM 摘要）——v1.10.1
         self.compaction_decider: Optional[Any] = None
         self.approval_gate = ApprovalGate(
@@ -1227,10 +1236,31 @@ class AgentApp:
         # install(kernel) 时从 app 服务捕获 workspace，晚注册会拿到 None
         # → OfficeTools(None) 兜底到家目录（.outputs 落到 ~/.outputs 的根因）
         kernel.register_service("app", self)
-        for plugin in self.tool_plugins(workspace):
-            kernel.use(plugin)
+        self._install_plugins(kernel, self.tool_plugins(workspace))
         self.mcp_manager.register_tools(registry, allowed=allowed, exclude=exclude)
         return registry
+
+    def _install_plugins(self, kernel: Kernel, plugins: List[Plugin]) -> List[str]:
+        """装配插件清单；**单个插件失败不影响其余**。
+
+        为什么需要：插件 install() 里可能抛异常（最常见是社区插件依赖新核心才有的
+        能力，如新版钩子 `kernel.before_finish` 装在旧核心上 → AttributeError）。
+        此前这里是无保护的 for 循环，一个插件装不上会让**整次工具装配失败**：
+        /api/tools 报错、任务起不来，而用户只以为是"某个插件功能不能用"。
+        现在逐个隔离：失败的记为 skipped 并记 ERROR 日志，其余照常装配。
+        安全性：失败的插件只是"工具缺席"（fail-safe），不会带来额外权限。
+
+        返回被跳过的插件名（供调用方记录/面板展示）。
+        """
+        skipped: List[str] = []
+        for plugin in plugins:
+            try:
+                kernel.use(plugin)
+            except Exception:  # noqa: BLE001 - 插件隔离边界：绝不外溢
+                skipped.append(getattr(plugin, "name", "?"))
+                logger.error("[App] 插件装配失败，已跳过：%s", getattr(plugin, "name", "?"),
+                             exc_info=True)
+        return skipped
 
     # ------------------------------------------------------------ 内核
 
@@ -1282,8 +1312,8 @@ class AgentApp:
                 )
         else:
             kernel.register_service(TOOLS_SERVICE, ToolRegistry())
-            for plugin in self.tool_plugins():
-                kernel.use(plugin)
+            # 同一隔离策略：单个插件装配失败不得拖垮整个内核（见 _install_plugins）
+            self._install_plugins(kernel, self.tool_plugins())
         # 插件 before_tool 钩子先于 SecurityPlugin 执行（v1.10.0 调整）：
         # Jev 等判定类插件可以在 SecurityPlugin 的审批卡上附加风险意见
         # （只加信息、不拦截——拦截权仍在 SecurityPlugin / 用户手里）。
@@ -1482,6 +1512,25 @@ class AgentApp:
     def kill_background_task(self, task_id: str) -> bool:
         """杀掉指定后台命令（任意工作区的任务都可终止，注册表共享）。"""
         return self._bg_registry.kill(task_id)
+
+    def running_background_count(self) -> int:
+        """仍在运行的后台命令数（/api/status 用，便于发现上次遗留的孤儿任务）。"""
+        return sum(1 for t in self._bg_registry.list() if t.get("running"))
+
+    def reclaim_orphan_tasks(self) -> Dict[str, Any]:
+        """启动时回收上一次运行遗留的后台命令（服务端 TTL 兜底）。
+
+        为什么需要：Agent 可能因后端崩溃/断连而失去对子进程的管理，此时进程树
+        会继续占用 CPU/端口/文件锁（手册 Sandbox 生命周期控制面：到期回收应由
+        服务端负责，而不是指望调用方）。判定与保守策略见 tools.shell.reclaim_orphaned_tasks。
+        """
+        result = reclaim_orphaned_tasks(self._bg_journal_path)
+        if result.get("killed"):
+            logger.warning("[App] 启动回收遗留后台命令：killed=%s pids=%s",
+                           result["killed"], result.get("killed_pids"))
+        elif result.get("checked"):
+            logger.info("[App] 遗留后台命令检查完毕（无需回收）：%s", result)
+        return result
 
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 
