@@ -3,7 +3,7 @@
 //
 
 import { render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import ToolPanel from "./ToolPanel";
 import { api } from "../api";
 import type { ContextHistoryPoint, ContextStats } from "../types";
@@ -520,5 +520,107 @@ describe("ToolPanel · 本轮 token 速度（变体 B 速度条 + 趋势图）",
     expect(container.querySelector(".ctx2-speedrow")).toBeNull();
     // 其余区块照常
     expect(container.querySelector(".ctx2-card")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------- 工具 tab 指标整合（W3）
+
+describe("ToolPanel · 工具 tab 指标整合（W3）", () => {
+  const TOOLS = [
+    { name: "read_file", description: "读文件" },
+    { name: "write_file", description: "写文件" },
+    { name: "docx_create", description: "创建文档" },
+  ];
+
+  const METRICS = {
+    tools: {
+      read_file:  { calls: 42, errors: 1, cancelled: 0, success_rate: 0.976, avg_ms: 120 },
+      write_file: { calls: 18, errors: 5, cancelled: 0, success_rate: 0.72, avg_ms: 89 },
+    },
+    skills: {
+      "ppt-master": { uses: 12, auto: 8, explicit: 4, tools: { pptx_create: 6 } },
+      "weekly-report": { uses: 0, auto: 0, explicit: 0, tools: {} },
+    },
+    tool_count: 2,
+    skill_count: 2,
+    worst_tools: [
+      { tool: "write_file", calls: 18, errors: 5, cancelled: 0, success_rate: 0.72, avg_ms: 89 },
+    ],
+    events: 60,
+    path: "/tmp/metrics.jsonl",
+    enabled: true,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderToolsPanel() {
+    // 默认 tab 是 context，需要切到 tools——ToolPanel 支持受控 activeTab
+    return render(
+      <ToolPanel
+        contextStats={STATS}
+        mcpServers={[]}
+        tools={TOOLS}
+        todos={[]}
+        activeTab="tools"
+      />
+    );
+  }
+
+  it("无指标数据：回退旧版清单（工具名+点），显示提示文案", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue({
+      tools: {}, skills: {}, tool_count: 0, skill_count: 0,
+      worst_tools: [], events: 0, path: "", enabled: true,
+    });
+    const { container } = renderToolsPanel();
+    // 等异步指标加载完成
+    await waitFor(() => expect(api.metricsTools).toHaveBeenCalled());
+    // 回退旧版文案
+    expect(container.textContent).toContain("已注册工具（3）");
+    // 工具名都在
+    expect(container.textContent).toContain("read_file");
+    expect(container.textContent).toContain("docx_create");
+    // 无数据提示
+    expect(container.textContent).toContain("运行任务后自动积累");
+    // 不显示"需要关注"段
+    expect(container.textContent).not.toContain("需要关注");
+  });
+
+  it("有指标数据：总览带数字，工具行带 次数·成功率，worst 段出现", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const { container } = renderToolsPanel();
+
+    await waitFor(() => expect(container.textContent).toContain("调用 60 次"));
+    // 工具行带指标
+    expect(container.textContent).toContain("42·98%");
+    expect(container.textContent).toContain("18·72%");
+    // 未使用的工具显示 —
+    expect(container.textContent).toContain("—");
+    // 需要关注段
+    expect(container.textContent).toContain("需要关注");
+    expect(container.textContent).toContain("write_file");
+  });
+
+  it("技能使用：uses=0 警示，展开后可见", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const { container } = renderToolsPanel();
+
+    await waitFor(() => expect(container.textContent).toContain("技能使用"));
+    // 默认折叠：技能名不直接可见
+    expect(container.textContent).not.toContain("ppt-master");
+    // 但标题上有计数
+    expect(container.textContent).toContain("技能使用（2）");
+  });
+
+  it("30s 轮询：组件卸载后清理定时器", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const { unmount } = renderToolsPanel();
+    await waitFor(() => expect(api.metricsTools).toHaveBeenCalled());
+    unmount();
+    // 卸载后不再调用（轮询已清理）
+    const calls = (api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect((api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
   });
 });

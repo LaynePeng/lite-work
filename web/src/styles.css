@@ -1371,6 +1371,102 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--green);
 }
 
+/* 右面板「工具」tab：指标整合版（W3）。单列、无横向滚动（tm-name flex-1 截断）。 */
+.tm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tm-overview {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  padding: 2px 0 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.tm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tm-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 3px;
+}
+.tm-collapsible {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  min-width: 0; /* 允许 tm-name 截断 */
+}
+.tm-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-nums {
+  flex: none;
+  color: var(--text-2);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.tm-unused {
+  opacity: .5;
+}
+.tm-alert .tm-nums {
+  color: #f85149;
+}
+.tm-warn .tm-nums {
+  color: #d29922;
+}
+.tm-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.tm-dot-ok    { background: var(--green); }
+.tm-dot-mid   { background: #d29922; }
+.tm-dot-bad   { background: #f85149; }
+.tm-dot-off   { background: var(--border); }
+.tm-dot-info  { background: var(--accent, #4c8dff); }
+.tm-dot-warn  { background: #d29922; }
+.tm-more {
+  font-size: 10px;
+  color: var(--text-2);
+  padding-left: 12px;
+}
+.tm-expand {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: 10px;
+  color: var(--accent, #4c8dff);
+  font-family: inherit;
+}
+.tm-hint {
+  font-size: 10px;
+  color: var(--text-2);
+  opacity: .6;
+}
+
 .sidebar-footer {
   padding: 10px 16px;
   border-top: 1px solid var(--border);

@@ -46,6 +46,31 @@ export interface InstallSkillPayload {
   overwrite?: boolean;
 }
 
+/** 工具/技能指标聚合（GET /api/metrics/tools）。 */
+export interface ToolMetricEntry {
+  calls: number;
+  errors: number;
+  cancelled: number;
+  success_rate: number;
+  avg_ms: number | null;
+}
+export interface SkillMetricEntry {
+  uses: number;
+  auto: number;
+  explicit: number;
+  tools: Record<string, number>;
+}
+export interface ToolMetricsSummary {
+  tools: Record<string, ToolMetricEntry>;
+  skills: Record<string, SkillMetricEntry>;
+  tool_count: number;
+  skill_count: number;
+  worst_tools: (ToolMetricEntry & { tool: string })[];
+  events: number;
+  path: string;
+  enabled: boolean;
+}
+
 /** 把底层异常翻译成用户可读的中文提示（尤其 AbortError 的原始英文串）。 */
 function friendlyError(err: unknown, timeoutMs: number): Error {
   if (err instanceof DOMException && err.name === "AbortError") {
@@ -176,6 +201,7 @@ export const api = {
     const url = agentId ? `/api/tools?agent_id=${encodeURIComponent(agentId)}` : "/api/tools";
     return req<ToolDef[]>(url);
   },
+  metricsTools: () => req<ToolMetricsSummary>("/api/metrics/tools"),
   workspaceTree: (path?: string) =>
     req<TreeResponse>(`/api/workspace/tree-json${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   fsList: (path?: string, showHidden = false) =>

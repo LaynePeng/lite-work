@@ -7,6 +7,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "../api";
+import type { ToolMetricsSummary } from "../api";
 import type {
   BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
   ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
@@ -436,22 +437,111 @@ function McpPanel({ servers }: { servers: MCPServerStatus[] }) {
 // ---------------------------------------------------------------- 工具面板
 
 function ToolsPanel({ tools }: { tools: { name: string; description: string }[] }) {
+  // 指标：激活工具 tab 时拉取 + 每 30s 轮询（低频数据，不需要 5s）
+  const [metrics, setMetrics] = useState<ToolMetricsSummary | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.metricsTools().then((m) => { if (alive) setMetrics(m); }).catch(() => {});
+    void load();
+    const t = window.setInterval(load, 30_000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+
+  const hasData = metrics !== null && metrics.events > 0;
+
+  // 合并：注册工具清单 ⋈ 指标数据（按调用量降序，未使用的排后面）
+  const withMetrics = (tools ?? []).map((t) => ({
+    name: t.name,
+    description: t.description,
+    m: metrics?.tools?.[t.name],
+  }));
+  const sorted = [...withMetrics].sort((a, b) => (b.m?.calls ?? -1) - (a.m?.calls ?? -1));
+  const visible = showAll ? sorted : sorted.slice(0, 8);
+  const worst = (metrics?.worst_tools ?? []).filter((w) => w.errors > 0 || w.cancelled > 0);
+  const worstShown = worst.slice(0, 3);
+  const skillEntries = Object.entries(metrics?.skills ?? {})
+    .sort((a, b) => b[1].uses - a[1].uses);
+
   if (!tools || tools.length === 0) {
     return <div className="tool-panel-empty">暂无已注册工具（发起对话后显示）</div>;
   }
+
   return (
-    <div className="tools-panel">
-      <div className="tools-panel-count">已注册工具（{tools.length}）</div>
-      <ul className="tools-list">
-        {tools.map((t) => (
-          <li key={t.name} title={t.description}>
-            <span className="tool-dot" />
-            {t.name}
-          </li>
+    <div className="tm-panel">
+      {/* 总览条：有数据带指标数字，无数据回退旧文案 */}
+      <div className="tm-overview">
+        {hasData ? (
+          <>工具 {metrics.tool_count} · 调用 {metrics.events} 次</>
+        ) : (
+          <>已注册工具（{tools.length}）</>
+        )}
+      </div>
+
+      {/* 需要关注：仅失败工具，最多 3 条 */}
+      {hasData && worstShown.length > 0 && (
+        <div className="tm-section">
+          <div className="tm-section-title">需要关注（{worst.length}）</div>
+          {worstShown.map((w) => (
+            <div key={w.tool} className="tm-row tm-alert"
+                 title={`${w.calls} 次调用 · ${w.errors} 失败 · 成功率 ${(w.success_rate * 100).toFixed(0)}%`}>
+              <span className={`tm-dot ${rateTone(w.success_rate)}`} />
+              <span className="tm-name">{w.tool}</span>
+              <span className="tm-nums">{w.errors}错 · {(w.success_rate * 100).toFixed(0)}%</span>
+            </div>
+          ))}
+          {worst.length > 3 && <div className="tm-more">还有 {worst.length - 3} 个</div>}
+        </div>
+      )}
+
+      {/* 全部工具：有数据带 次数·成功率，无数据灰淡 */}
+      <div className="tm-section">
+        <div className="tm-section-title">全部工具（{tools.length}）</div>
+        {visible.map(({ name, description, m }) => (
+          <div key={name}
+               className={`tm-row ${m ? "" : "tm-unused"}`}
+               title={m ? `${description}\n${m.calls} 次调用 · ${m.errors} 失败 · 平均 ${m.avg_ms ?? "—"}ms` : description}>
+            <span className={`tm-dot ${m ? rateTone(m.success_rate) : "tm-dot-off"}`} />
+            <span className="tm-name">{name}</span>
+            <span className="tm-nums">{m ? `${m.calls}·${(m.success_rate * 100).toFixed(0)}%` : "—"}</span>
+          </div>
         ))}
-      </ul>
+        {sorted.length > 8 && (
+          <button className="tm-expand" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? "收起" : `展开全部 ${sorted.length} 个`}
+          </button>
+        )}
+      </div>
+
+      {/* 技能使用：默认折叠 */}
+      {hasData && skillEntries.length > 0 && (
+        <div className="tm-section">
+          <button className="tm-section-title tm-collapsible" onClick={() => setSkillsOpen((v) => !v)}>
+            技能使用（{skillEntries.length}）{skillsOpen ? "▾" : "▸"}
+          </button>
+          {skillsOpen && skillEntries.map(([name, s]) => (
+            <div key={name} className={`tm-row ${s.uses === 0 ? "tm-warn" : ""}`}
+                 title={s.uses === 0 ? "从未触发：考虑调整 triggers 或删除" : `使用 ${s.uses} 次 · 自动 ${s.auto} · 手动 ${s.explicit}\n关联工具：${Object.entries(s.tools).map(([t, c]) => `${t}×${c}`).join(" · ") || "无"}`}>
+              <span className={`tm-dot ${s.uses === 0 ? "tm-dot-warn" : "tm-dot-info"}`} />
+              <span className="tm-name">{name}</span>
+              <span className="tm-nums">{s.uses === 0 ? "⚠ 从未" : `${s.uses} · 自动${s.auto}`}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!hasData && <div className="tm-hint">运行任务后自动积累调用指标</div>}
     </div>
   );
+}
+
+/** 成功率色档：≥95% 绿 / 80–95% 黄 / <80% 红 */
+function rateTone(rate: number): string {
+  if (rate >= 0.95) return "tm-dot-ok";
+  if (rate >= 0.80) return "tm-dot-mid";
+  return "tm-dot-bad";
 }
 
 // ---------------------------------------------------------------- TODOs 面板
