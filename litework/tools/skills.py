@@ -444,6 +444,11 @@ class SkillsTools:
                     "triggers": str(meta.get("triggers") or ""),
                     # frontmatter 可选 version：社区技能更新对比用（缺失为空串）
                     "version": str(meta.get("version") or ""),
+                    # 触发边界（W3，工具评测/命中率）：`not-for` 命中的提示词直接
+                    # 抑制本技能（负向触发比正向触发更能提升命中率）；`scope` 说明
+                    # 适用范围（供人/评测参考，不参与匹配）
+                    "not_for": str(meta.get("not-for") or meta.get("not_for") or ""),
+                    "applies_to": str(meta.get("scope") or ""),
                 })
         return out
 
@@ -472,6 +477,8 @@ class SkillsTools:
         lowered = (prompt or "").lower()
         hits: List[Tuple[Dict[str, Any], List[str]]] = []
         for skill in self.list_skills():
+            if self._suppressed_by_not_for(skill, lowered):
+                continue
             triggers = skill.get("triggers") or ""
             found = [t.strip().lower() for t in triggers.split(",")
                      if t.strip() and t.strip().lower() in lowered]
@@ -487,10 +494,27 @@ class SkillsTools:
             matched.append(skill)
         return matched
 
+    @staticmethod
+    def _suppressed_by_not_for(skill: Dict[str, Any], lowered_prompt: str) -> bool:
+        """`not-for` 命中的提示词 → 抑制该技能（W3 命中率）。
+
+        为什么需要负向触发：triggers 是"包含即命中"的宽松匹配，含糊/邻近词很容易
+        误触发（例如"改个 PPT 里的表格"同时命中 presentation 与 xlsx 类技能）。
+        技能作者声明 not-for 后，这类场景直接不注入，比事后筛选更省 token 也更准。
+        """
+        not_for = str(skill.get("not_for") or "")
+        if not not_for:
+            return False
+        return any(t.strip() and t.strip().lower() in lowered_prompt
+                   for t in not_for.split(","))
+
     def _match_skills_advanced(self, prompt: str) -> List[Dict[str, Any]]:
         """高级匹配：/pattern/ 为正则，其余为词边界（\\bword\\b）。"""
         matched: List[Dict[str, Any]] = []
+        lowered = (prompt or "").lower()
         for skill in self.list_skills():
+            if self._suppressed_by_not_for(skill, lowered):
+                continue
             triggers = skill.get("triggers") or ""
             for t in triggers.split(","):
                 t = t.strip()

@@ -50,6 +50,23 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "token_auth": bool(token),
         }
 
+    @router.get("/api/metrics/tools")
+    async def tool_metrics(request: Request):
+        """工具/技能指标聚合（W3）：命中与成功率视角，用于改进工具描述与技能边界。
+
+        读的是 `core/metrics.py` 落盘的 JSONL（只含结构化计数，无参数与输出正文）。
+        数据缺失（未运行过任务 / 指标被关）时返回空表，不报错。
+        """
+        ctx.check_auth(request)
+        from ...core.metrics import read_events, summarize
+
+        path = app.tool_metrics_path()
+        events = read_events(path)
+        data = summarize(events)
+        data["path"] = path
+        data["enabled"] = bool(app.config.get("tool_metrics", True))
+        return data
+
     @router.get("/api/config")
     async def get_config(request: Request):
         ctx.check_auth(request)
@@ -63,6 +80,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "observation_pack", "compaction_economics", "reducer_model", "reducer_provider",
                 # 完成证据门禁（W2）：off / advisory / enforced + 补证据轮数上限
                 "completion_gate", "completion_gate_retries",
+                # 工具/技能指标（W3）：只记结构化计数
+                "tool_metrics",
                 # 聊天区展示折叠阈值（轮数 / 消息数，任一超限即折叠）
                 "chat_fold_turns", "chat_fold_messages",
                 # 多智能体（docs/multi-agent-design.md §3 配置面）

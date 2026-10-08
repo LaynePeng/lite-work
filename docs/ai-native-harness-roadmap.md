@@ -58,7 +58,11 @@ Verified in-tree; these are **not** workstreams below.
 Priority: **P0** = small, closes a real gap, fits existing architecture · **P1** = structural, medium
 effort · **P2** = large or product-dependent. Sizes are engineering-days for one engineer.
 
-### W1 — Background-command orphan reclamation (P0, ~1d)
+### W1 — Background-command orphan reclamation (P0, ~1d) — **IMPLEMENTED in 1.10.3**
+
+> Shipped: task journal (`<config>/bg_tasks.json`) + startup `reclaim_orphaned_tasks()`
+> (pid liveness via `os.kill(pid,0)`, start-time match via `ps -o etime=` to survive pid reuse),
+> and `/api/status.running_background`. Tests: `tests/test_bg_orphan_reclaim.py`.
 
 **Motivation.** The Sandbox lifecycle control plane must reclaim expired instances server-side,
 because an agent can lose its manager through a crash or disconnect (p. 49: "TTL is an easily
@@ -98,7 +102,13 @@ recorded. Never kill on evidence older than N days without logging loudly.
 
 ---
 
-### W2 — Completion evidence gate (P0, ~3d)
+### W2 — Completion evidence gate (P0, ~3d) — **IMPLEMENTED in 1.10.3**
+
+> Shipped as `litework/core/gate.py` + `kernel.before_finish` (Stop hook) + `gate:result` event,
+> config `completion_gate` (`off|advisory|enforced`, default `advisory`) and
+> `completion_gate_retries`. Evidence is derived from tool facts (`_record_gate_traces`).
+> Tests: `tests/test_completion_gate.py`. The companion community plugin (jev 0.8.1) now
+> records both its verdict and the mechanical gate verdict into its own panel.
 
 **Motivation.** Handbook pp. 60–63 (Guardrail): high-risk actions must be gated by *rules + facts +
 Evidence*, with a **three-state** result and **mechanical** aggregation; a missing required check, a
@@ -166,7 +176,14 @@ Mitigate: ship `advisory`, keep the default rule set tiny (two checks), make per
 
 ---
 
-### W3 — Skill/tool evaluation loop (P0, ~3d)
+### W3 — Skill/tool evaluation loop (P0, ~3d) — **IMPLEMENTED in 1.10.3 (core part)**
+
+> Shipped as `litework/core/metrics.py` (JSONL counters only — no arguments/payloads, with
+> size-based rotation), loop-side recording (`_record_tool_metrics`: outcome + task-level skill
+> attribution), `not-for` negative triggers in `SKILL.md` (suppress auto-injection in both match
+> modes), and `GET /api/metrics/tools`. Config `tool_metrics` (default on).
+> Tests: `tests/test_tool_metrics.py`. Still open: a UI surface for the report, and feeding
+> the report back into descriptions (deliberately human-in-the-loop).
 
 **Motivation.** Handbook p. 47: as tools and skills multiply, the agent may pick the wrong capability
 or fail to use the right one; measure **hit rate** and **success rate**, then feed the results back

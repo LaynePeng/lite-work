@@ -114,6 +114,7 @@ class AgentLoop:
         enable_compaction_economics: bool = True,
         header_conversation_id: Optional[str] = None,
         denied_tools: Optional[Dict[str, str]] = None,
+        metrics: Any = None,
     ) -> None:
         self.kernel = kernel
         self.adapter = adapter
@@ -194,6 +195,11 @@ class AgentLoop:
         self._gate_traces: Dict[str, List[Any]] = {"commands": [], "changed_files": []}
         self._gate_retries = 0
         self.last_gate_result: Optional[Dict[str, Any]] = None
+        # ---- 工具/技能指标（W3，对齐手册 p.47「工具评测」）----
+        # 只记结构化计数（工具名/成败/耗时/归属技能），不记参数与输出正文；
+        # 用于算命中率与成功率，反向推动工具描述与技能边界（见 core/metrics.py）
+        self.metrics = metrics
+        self._loaded_skills: List[str] = []
         self._register_obs_recall_tool()
 
     def _register_obs_recall_tool(self) -> None:
@@ -475,6 +481,9 @@ class AgentLoop:
 
                 # W2 门禁事实收集：命令退出码 / 改动文件（不依赖模型自述）
                 self._record_gate_traces(tool_calls, results)
+
+                # W3 工具/技能指标：记录成败与归属（只计数，不落正文）
+                self._record_tool_metrics(tool_calls, results)
 
                 await self._append_tool_results(tool_calls, results, messages)
 
@@ -1259,6 +1268,34 @@ class AgentLoop:
                         "exit_code": code,
                         "captured_at": time.strftime("%H:%M:%S"),
                     })
+
+    def _record_tool_metrics(self, tool_calls: List[ToolCall], results: List[str]) -> None:
+        """记录工具调用成败与技能归属（W3；未装配指标时零开销）。
+
+        归属口径：**任务级**——本任务加载过的技能都会带上（明确不精确，但足以回答
+        "某个技能带来的调用成功率如何"，见 core/metrics.py 的 summarize）。
+        `load_skill` 调用单独记为技能使用事件。
+        """
+        if self.metrics is None:
+            return
+        from .metrics import classify_outcome
+
+        session_id = getattr(self.kernel, "session_id", "")
+        for call, result in zip(tool_calls, results):
+            if call.name == "load_skill":
+                ok, parsed, _ = safe_json_parse(call.arguments or "{}")
+                name = str((parsed or {}).get("name") or "") if ok and isinstance(parsed, dict) else ""
+                if name:
+                    if name not in self._loaded_skills:
+                        self._loaded_skills.append(name)
+                    self.metrics.record_skill(name, source="explicit", session_id=session_id)
+            try:
+                self.metrics.record_tool(
+                    call.name, classify_outcome(result or ""),
+                    skills=list(self._loaded_skills), session_id=session_id,
+                )
+            except Exception:  # noqa: BLE001 - 指标是旁路：绝不因它影响任务
+                logger.debug("[AgentLoop] 指标记录失败", exc_info=True)
 
     def _evaluate_completion_gate(self) -> Optional[Dict[str, Any]]:
         """评估完成门禁：机械聚合（off 模式不做任何事）。"""

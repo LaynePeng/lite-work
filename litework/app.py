@@ -42,6 +42,7 @@ from .tools.plugin import (
     TOOLS_SERVICE,
     WebFetchPlugin,
 )
+from .core.metrics import ToolMetrics
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
@@ -98,6 +99,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "completion_gate": "advisory",
     # enforced 模式下"再给一轮补证据"的最大次数（防死循环）
     "completion_gate_retries": 2,
+    # 工具/技能指标（W3，对齐手册 p.47 工具评测）：只记结构化计数（工具名/成败/
+    # 耗时/归属技能），不落参数与正文；用于算「命中率 / 成功率」并反向改进描述
+    "tool_metrics": True,
     # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
     # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
     # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页，USD）。DeepSeek 分时计费由
@@ -1517,6 +1521,10 @@ class AgentApp:
         """仍在运行的后台命令数（/api/status 用，便于发现上次遗留的孤儿任务）。"""
         return sum(1 for t in self._bg_registry.list() if t.get("running"))
 
+    def tool_metrics_path(self) -> str:
+        """工具/技能指标文件路径（/api/metrics/tools 读它；core/metrics.py 写它）。"""
+        return os.path.join(self.config_dir, "metrics", "tool_events.jsonl")
+
     def reclaim_orphan_tasks(self) -> Dict[str, Any]:
         """启动时回收上一次运行遗留的后台命令（服务端 TTL 兜底）。
 
@@ -2210,6 +2218,11 @@ class AgentApp:
             reducer_adapter=reducer_adapter,
             enable_observation_pack=bool(self.config.get("observation_pack", True)),
             enable_compaction_economics=bool(self.config.get("compaction_economics", True)),
+            # W3 工具/技能指标：只记结构化计数（见 core/metrics.py）
+            metrics=ToolMetrics(
+                self.tool_metrics_path(),
+                enabled=bool(self.config.get("tool_metrics", True)),
+            ),
         )
         # 流式空闲看门狗透传（主/证据收据适配器；子 Agent 走适配器默认值）
         _idle = float(self.config.get("llm_idle_timeout", 120))
