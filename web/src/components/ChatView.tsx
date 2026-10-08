@@ -425,6 +425,8 @@ const FOLD_MESSAGES = 600;
 const KEEP_RECENT = 300;
 /** 点击占位条每次展开的轮次数 */
 const EXPAND_STEP = 300;
+/** 消息数触发折叠时，最少保留的轮次数（防止高工具密度下"几乎全部折叠"） */
+const KEEP_RECENT_MIN_TURNS = 100;
 
 export default function ChatView({
   sessionId,
@@ -562,7 +564,9 @@ export default function ChatView({
             acc += weight;
             idx = i;
           }
-          return idx;
+          // 保底：无论权重怎么算，至少保留 KEEP_RECENT_MIN_TURNS 轮（或全部），
+          // 防止高工具密度（每轮几十张卡片）把可见区压到只剩几轮
+          return Math.min(idx, Math.max(0, displayTurns.length - KEEP_RECENT_MIN_TURNS - foldExpanded));
         })()
       : 0;
   const renderTurns = foldFrom > 0 ? displayTurns.slice(foldFrom) : displayTurns;
