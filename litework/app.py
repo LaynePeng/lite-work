@@ -118,6 +118,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 因此补充消息数维度（v1.6.0）。
     "chat_fold_turns": 500,
     "chat_fold_messages": 600,
+    # 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：由前端经 POST /api/config 保存。
+    # 存后端而非 localStorage —— 桌面端本地 Core 每次启动端口随机（serve --port 0），
+    # 渲染层 origin 随之变化，localStorage 按 origin 隔离会被当「新站点」而读不回
+    # （表现为「改了、重开又变回去」）。**配置类内容一律不走 localStorage**。
+    "ui_prefs": {},
 }
 
 # 历史默认回退定价（对齐 OpenAI 档，远高于默认供应商 DeepSeek 的真实价：
