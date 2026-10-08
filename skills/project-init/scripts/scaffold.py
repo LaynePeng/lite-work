@@ -87,6 +87,23 @@ def main() -> int:
         agents.write_text(content, encoding="utf-8")
         created.append("AGENTS.md")
 
+    # 运行环境清单（W5）：.litework/project.json——按项目类型检测产出初版。
+    # 仅当缺失时生成（幂等）；dev 态直接 import 主程序，打包态从 litework 包取。
+    manifest = root / ".litework" / "project.json"
+    if manifest.exists():
+        kept.append(".litework/project.json")
+    else:
+        try:
+            from litework.core.runtime_manifest import (
+                generate_runtime_manifest, save_runtime_manifest,
+            )
+            if save_runtime_manifest(str(root), generate_runtime_manifest(str(root))):
+                created.append(".litework/project.json")
+            else:
+                kept.append(".litework/project.json")
+        except ImportError:
+            pass  # 主程序不可用（纯技能分发场景）→ 跳过，不阻断
+
     print("项目结构初始化完成（幂等，未覆盖任何已有文件）")
     for rel in created:
         print(f"  + 新建 {rel}")

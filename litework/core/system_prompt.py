@@ -99,6 +99,10 @@ class SystemPromptBuilder:
             f"{project_instructions}"
             if project_instructions else ""
         )
+        # W5：项目运行环境清单（.litework/project.json）——安装/验证命令进稳定层。
+        # 无清单 → 空串，prompt 不变（保证已有会话的缓存前缀不受影响）。
+        from .runtime_manifest import load_runtime_manifest, runtime_summary_for_prompt
+        runtime_section = runtime_summary_for_prompt(load_runtime_manifest(cwd))
         skill_section = (
             "\n\n### 可用技能 (Skills)\n"
             "需要专项流程时，使用 `load_skill` 按名称加载完整 SKILL.md；不要猜测技能内容。\n"
@@ -134,6 +138,6 @@ class SystemPromptBuilder:
 5. 用简洁的 Markdown 回复用户；中文优先；
 6. 涉及多个独立模块、需要广泛搜索或可并行调研时，优先使用 spawn_agent 的 explorer 角色；
 7. **完成工作后必须向用户提交完整汇报**：说明完成内容、改动文件/关键结果、验证情况和未完成事项；绝不能在工具调用后无回复结束。
-8. 你的能力边界由「可用工具」清单决定：未列出的工具不可调用，不要尝试调用不存在的工具名；需要的能力不在清单内时，明确告知用户切换对应 Agent。{instruction_section}{skill_section}
+8. 你的能力边界由「可用工具」清单决定：未列出的工具不可调用，不要尝试调用不存在的工具名；需要的能力不在清单内时，明确告知用户切换对应 Agent。{instruction_section}{runtime_section}{skill_section}
 
 """

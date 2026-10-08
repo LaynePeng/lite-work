@@ -1306,6 +1306,24 @@ class AgentLoop:
 
         spec = load_spec(self.workspace)
         result = aggregate(spec, derive_submissions(self._gate_traces))
+        # W5 集成：环境清单的 verify 命令是否已执行（项目声明了验证却没跑 → 补充证据）
+        # 检查方式：verify 命令的前缀（如 "pytest"）是否出现在已执行的命令列表里
+        from .runtime_manifest import load_runtime_manifest, verify_commands
+        _manifest = load_runtime_manifest(self.workspace)
+        _verify = verify_commands(_manifest)
+        if _verify:
+            _executed = " ".join(
+                str(c.get("command") or "") for c in self._gate_traces.get("commands", []))
+            # verify 命令的「首词」是否在已执行命令里出现过（如 pytest、npm test 的 npm）
+            _missing = [v for v in _verify
+                        if v.split()[0] not in _executed]
+            if _missing and result.get("verdict") == "pass":
+                # 声明了 verify 却没跑 → 降级为 unknown（不能算 pass）
+                for check in result.get("checks", []):
+                    if isinstance(check, dict) and check.get("id") == "verify-commands":
+                        check["status"] = "unknown"
+                        check["message"] = f"项目声明了验证命令但未执行：{', '.join(_missing)}"
+                result["verdict"] = "unknown"
         result["mode"] = mode
         self.last_gate_result = result
         logger.info("[AgentLoop] 完成门禁：verdict=%s spec=%s@%s mode=%s",

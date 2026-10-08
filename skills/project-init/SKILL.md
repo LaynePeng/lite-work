@@ -38,6 +38,10 @@ python scripts/scaffold.py <项目根>            # 默认品类
 python scripts/scaffold.py <项目根> --categories 报告,专利   # 自定义品类
 ```
 
+scaffold 同时会生成 `.litework/project.json`（运行环境清单）——按项目特征文件
+（pyproject.toml / package.json 等）自动检测安装与验证命令，Agent 后续优先使用
+这些命令（见主程序 W5：环境即第一类上下文）。已有的清单不会被覆盖。
+
 ### 2) 新交付物 / 新版本
 
 ```bash
