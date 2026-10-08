@@ -344,9 +344,17 @@ export const api = {
     req<{ ok: boolean; scope: string; deleted: number }>(`/api/outputs?scope=${scope}`, {
       method: "DELETE",
     }),
-  deleteFile: (path: string) =>
-    req<{ ok: boolean; path: string }>(`/api/files?path=${encodeURIComponent(path)}`, {
-      method: "DELETE",
+  // 删除工作区文件/目录：目录必须显式 recursive（含内容一并删除，后端二次校验）
+  deleteFile: (path: string, opts?: { recursive?: boolean }) =>
+    req<{ ok: boolean; path: string; kind?: "file" | "dir" }>(
+      `/api/files?path=${encodeURIComponent(path)}${opts?.recursive ? "&recursive=true" : ""}`,
+      { method: "DELETE" }
+    ),
+  // 新建空文件 / 空目录（文件页签：目录右键「新建…」；parent 为工作区相对目录，"" = 根）
+  createEntry: (parent: string, name: string, kind: "file" | "dir") =>
+    req<{ ok: boolean; path: string; name: string; kind: string }>("/api/files/create", {
+      method: "POST",
+      body: JSON.stringify({ parent, name, kind }),
     }),
   // 批量删除工作区文件：单项失败不中断整批，失败项在 failed 里逐个返回
   deleteFilesBatch: (paths: string[]) =>

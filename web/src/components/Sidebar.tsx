@@ -32,8 +32,8 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
   const [mainHead, setMainHead] = useState<string>("");
   const openRef = useRef<Set<string>>(new Set([""]));
   const refreshingRef = useRef(false);
-  // 右键菜单 / 行内重命名（文件页签：删除·重命名工作区文件）
-  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(null);
+  // 右键菜单 / 行内重命名（文件页签：删除·重命名工作区文件与目录）
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string; isDir: boolean } | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -60,20 +60,34 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
     }
     refreshingRef.current = true;
     setLoading(true);
-    try {
-      const [_, wt] = await Promise.all([
-        Promise.all([...openRef.current].map((p) => loadDir(p))),
-        // 工作树总览：与目录树一起刷新（多会话隔离状态随时可能变化）
-        api.worktreeList().catch(() => null),
-      ]);
-      if (wt) {
-        setWorktrees(wt.worktrees);
-        setMainBranch(wt.main_branch ?? "");
-        setMainHead(wt.main_head ?? "");
-      }
-      setError(false);
-    } catch {
-      setError(true);
+    const paths = [...openRef.current];
+    // 逐目录独立结算：某个已展开目录被删除/改名后，其请求会 4xx，
+    // 若用 Promise.all 则整体 reject → 面板进入"无法读取工作区"死状态，
+    // 且 openRef 里的失效路径会让之后每次刷新都失败（只能切 tab 重挂载）。
+    // 因此这里 allSettled + 剔除失效目录（含其子孙路径）。
+    const [results, wt] = await Promise.all([
+      Promise.allSettled(paths.map((p) => loadDir(p))),
+      // 工作树总览：与目录树一起刷新（多会话隔离状态随时可能变化）
+      api.worktreeList().catch(() => null),
+    ]);
+    const stale = paths.filter((p, i) => p !== "" && results[i].status === "rejected");
+    if (stale.length > 0) {
+      stale.forEach((p) => openRef.current.delete(p));
+      setDirs((prev) => {
+        const next = new Map(prev);
+        for (const key of [...next.keys()]) {
+          if (stale.some((p) => key === p || key.startsWith(`${p}/`))) next.delete(key);
+        }
+        return next;
+      });
+      setOpen(new Set(openRef.current));
+    }
+    // 只有根目录不可读才算"无法读取工作区"；子目录失效按过期目录处理
+    setError(paths.some((p, i) => p === "" && results[i].status === "rejected"));
+    if (wt) {
+      setWorktrees(wt.worktrees);
+      setMainBranch(wt.main_branch ?? "");
+      setMainHead(wt.main_head ?? "");
     }
     setLoading(false);
     refreshingRef.current = false;
@@ -111,7 +125,11 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
         try {
           await loadDir(path);
         } catch {
-          setError(true);
+          // 目录可能刚被删除/改名：不能把整棵树置为错误态（那会让面板卡在
+          // "无法读取工作区"，只能切 tab 恢复），改为剔除该路径并刷新一次，
+          // 让这一行从树上自然消失
+          openRef.current.delete(path);
+          refreshRef.current();
           return;
         }
       }
@@ -147,6 +165,43 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
     void api.deleteFile(path)
       .then(() => void refresh())
       .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
+  };
+
+  /** 删除目录（右键菜单）：连同内容递归删除，二次确认后调用后端。 */
+  const removeDir = (path: string, name: string) => {
+    setMenu(null);
+    if (!window.confirm(`删除目录「${name}」及其全部内容？此操作不可恢复`)) return;
+    void api.deleteFile(path, { recursive: true })
+      .then(() => void refresh())
+      .catch((err) => window.alert(`删除目录失败：${err instanceof Error ? err.message : err}`));
+  };
+
+  /** 在指定目录下新建空文件/空目录（右键菜单）：成功后刷新并展开该目录。 */
+  const createInDir = async (dirPath: string, kind: "file" | "dir") => {
+    setMenu(null);
+    const label = kind === "dir" ? "文件夹" : "文件";
+    const raw = window.prompt(`在「${dirPath || "工作区根目录"}」下新建${label}，请输入名称：`);
+    const name = (raw ?? "").trim();
+    if (!name) return;
+    try {
+      await api.createEntry(dirPath, name, kind);
+      await refresh();
+      // 新建后展开该目录，让用户直接看到结果（根目录本就展开）
+      if (dirPath && !openRef.current.has(dirPath)) await toggleDir(dirPath);
+    } catch (err) {
+      window.alert(`新建${label}失败：${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  /** 复制工作区相对路径到剪贴板（浏览器可能无 clipboard 权限 → 提示路径）。 */
+  const copyPath = (path: string) => {
+    setMenu(null);
+    const clip = navigator.clipboard;
+    if (!clip?.writeText) {
+      window.alert(`路径：${path}`);
+      return;
+    }
+    void clip.writeText(path).catch(() => window.alert(`路径：${path}`));
   };
 
   /** 进入行内重命名（预填原名；扩展名不可改，由后端校验兜底）。 */
@@ -229,18 +284,37 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           <div
             className={`tree-row dir ${open.has(n.path) ? "open" : ""}`}
             style={{ paddingLeft: depth * 14 + 8 }}
-            title={selectMode ? `${n.path}（批量删除不支持目录）` : `${n.path}（双击在系统文件管理器中打开）`}
-            onClick={() => void toggleDir(n.path)}
+            title={selectMode ? `${n.path}（批量删除不支持目录）` : `${n.path}（双击在系统文件管理器中打开，右键可新建/重命名/删除）`}
+            onClick={renamingPath === n.path ? undefined : () => void toggleDir(n.path)}
             onDoubleClick={() => {
               // 双击目录：系统文件管理器打开；双击产生的两次单击会把
               // 展开状态抵消（展开→折叠），这里恢复展开
               if (!open.has(n.path)) void toggleDir(n.path);
               onDirOpen?.(n.path);
             }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY, path: n.path, name: n.name, isDir: true });
+            }}
           >
             <span className="tree-caret">{open.has(n.path) ? "▾" : "▸"}</span>
             <span className="tree-icon">📁</span>
-            <span className="tree-name">{n.name}</span>
+            {renamingPath === n.path ? (
+              <input
+                className="output-rename-input"
+                value={renameValue}
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => setRenamingPath(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void commitRename(n.path, n.name); }
+                  else if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
+                }}
+              />
+            ) : (
+              <span className="tree-name">{n.name}</span>
+            )}
             {n.has_changes && <span className="tree-dot" title="包含改动" />}
           </div>
           {open.has(n.path) && renderNodes(n.path, depth + 1)}
@@ -255,7 +329,7 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           onDoubleClick={selectMode ? undefined : () => onFileOpen?.(n.path)}
           onContextMenu={(e) => {
             e.preventDefault();
-            setMenu({ x: e.clientX, y: e.clientY, path: n.path, name: n.name });
+            setMenu({ x: e.clientX, y: e.clientY, path: n.path, name: n.name, isDir: false });
           }}
         >
           {selectMode ? (
@@ -401,29 +475,54 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
         </div>
       </div>
 
-      {/* 右键菜单：重命名 / 删除 / 打开方式（工作区文件简单管理） */}
+      {/* 右键菜单：目录（新建/重命名/系统打开/复制路径/删除）与文件（重命名/打开方式/删除） */}
       {menu && (
         <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
-          <button className="context-menu-item" onClick={() => startRename(menu.path, menu.name)}>
-            ✏ 重命名
-          </button>
-          <button className="context-menu-item" onClick={() => openWithSystem(menu.path, menu.name)}>
-            🖥 用系统默认程序打开
-          </button>
-          {isTextLikePath(menu.path) && (
-            <button
-              className="context-menu-item"
-              onClick={() => {
-                onFileOpen?.(menu.path, { forceBuiltin: true });
-                setMenu(null);
-              }}
-            >
-              👁 用内置查看
-            </button>
+          {menu.isDir ? (
+            <>
+              <button className="context-menu-item" onClick={() => void createInDir(menu.path, "file")}>
+                📄 新建文件
+              </button>
+              <button className="context-menu-item" onClick={() => void createInDir(menu.path, "dir")}>
+                📁 新建文件夹
+              </button>
+              <button className="context-menu-item" onClick={() => startRename(menu.path, menu.name)}>
+                ✏ 重命名
+              </button>
+              <button className="context-menu-item" onClick={() => { setMenu(null); onDirOpen?.(menu.path); }}>
+                🖥 在文件管理器中打开
+              </button>
+              <button className="context-menu-item" onClick={() => copyPath(menu.path)}>
+                📋 复制路径
+              </button>
+              <button className="context-menu-item danger" onClick={() => removeDir(menu.path, menu.name)}>
+                🗑 删除目录
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="context-menu-item" onClick={() => startRename(menu.path, menu.name)}>
+                ✏ 重命名
+              </button>
+              <button className="context-menu-item" onClick={() => openWithSystem(menu.path, menu.name)}>
+                🖥 用系统默认程序打开
+              </button>
+              {isTextLikePath(menu.path) && (
+                <button
+                  className="context-menu-item"
+                  onClick={() => {
+                    onFileOpen?.(menu.path, { forceBuiltin: true });
+                    setMenu(null);
+                  }}
+                >
+                  👁 用内置查看
+                </button>
+              )}
+              <button className="context-menu-item danger" onClick={() => removeFile(menu.path, menu.name)}>
+                🗑 删除
+              </button>
+            </>
           )}
-          <button className="context-menu-item danger" onClick={() => removeFile(menu.path, menu.name)}>
-            🗑 删除
-          </button>
         </div>
       )}
     </div>

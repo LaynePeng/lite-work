@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
     outputs: vi.fn(),
     deleteFile: vi.fn(),
     renameFile: vi.fn(),
+    createEntry: vi.fn(),
     filePreview: vi.fn(),
     clearOutputs: vi.fn(),
     workspaceTree: vi.fn(),
@@ -321,5 +322,164 @@ describe("Sidebar · 会话列表批量选择删除", () => {
     await user.click(screen.getByText(/删除所选/));
     expect(sessionProps.onDeleteSessions).toHaveBeenCalledWith(["s1", "s2"]);
     confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------- 文件页签：目录右键
+
+describe("Sidebar · 文件页签目录右键菜单", () => {
+  const entries = [
+    { name: "src", path: "src", type: "dir", has_changes: false },
+    { name: "a.txt", path: "a.txt", type: "file", has_changes: false, status: null },
+  ];
+  const fileProps = { ...baseProps, tab: "files" as const, treeRevision: 1 };
+
+  beforeEach(() => {
+    // 只在根目录返回条目：展开子目录返回空，避免同一 path 被重复渲染成自引用树
+    (api.workspaceTree as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path: string) => ({
+        git: { branch: "main", has_repo: true },
+        entries: path === "" ? entries : [],
+      })
+    );
+    (api.createEntry as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true, path: "src/a.txt", name: "a.txt", kind: "file",
+    });
+  });
+
+  it("目录可右键：菜单含新建文件/新建文件夹/重命名/删除目录", async () => {
+    render(<Sidebar {...fileProps} />);
+    const dirRow = await screen.findByText("src");
+
+    fireEvent.contextMenu(dirRow.closest(".tree-row")!);
+
+    expect(screen.getByText(/📄 新建文件/)).toBeInTheDocument();
+    expect(screen.getByText(/📁 新建文件夹/)).toBeInTheDocument();
+    expect(screen.getByText(/重命名/)).toBeInTheDocument();
+    expect(screen.getByText(/删除目录/)).toBeInTheDocument();
+    // 目录菜单不应出现文件专属项
+    expect(screen.queryByText(/用系统默认程序打开/)).toBeNull();
+  });
+
+  it("右键目录 → 新建文件 → api.createEntry(parent, name, 'file')", async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("a.txt");
+    render(<Sidebar {...fileProps} />);
+    const dirRow = await screen.findByText("src");
+
+    fireEvent.contextMenu(dirRow.closest(".tree-row")!);
+    await user.click(screen.getByText(/📄 新建文件/));
+
+    await waitFor(() => expect(api.createEntry).toHaveBeenCalledWith("src", "a.txt", "file"));
+    promptSpy.mockRestore();
+  });
+
+  it("右键目录 → 新建文件夹 → kind='dir'，取消输入则不调用", async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("pkg");
+    render(<Sidebar {...fileProps} />);
+    const dirRow = await screen.findByText("src");
+
+    fireEvent.contextMenu(dirRow.closest(".tree-row")!);
+    await user.click(screen.getByText(/📁 新建文件夹/));
+    await waitFor(() => expect(api.createEntry).toHaveBeenCalledWith("src", "pkg", "dir"));
+
+    // 取消（null）不产生调用
+    (api.createEntry as unknown as ReturnType<typeof vi.fn>).mockClear();
+    promptSpy.mockReturnValue(null);
+    fireEvent.contextMenu(dirRow.closest(".tree-row")!);
+    await user.click(screen.getByText(/📁 新建文件夹/));
+    expect(api.createEntry).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("右键目录 → 删除目录 → 确认后 deleteFile(path, {recursive:true})", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Sidebar {...fileProps} />);
+    const dirRow = await screen.findByText("src");
+
+    fireEvent.contextMenu(dirRow.closest(".tree-row")!);
+    await user.click(screen.getByText(/删除目录/));
+
+    await waitFor(() => expect(api.deleteFile).toHaveBeenCalledWith("src", { recursive: true }));
+    confirmSpy.mockRestore();
+  });
+
+  it("回归：文件右键仍是文件菜单（无新建项）", async () => {
+    render(<Sidebar {...fileProps} />);
+    const fileRow = await screen.findByText("a.txt");
+
+    fireEvent.contextMenu(fileRow.closest(".tree-row")!);
+
+    expect(screen.getByText(/重命名/)).toBeInTheDocument();
+    expect(screen.queryByText(/📄 新建文件/)).toBeNull();
+    expect(screen.queryByText(/删除目录/)).toBeNull();
+  });
+});
+
+// ------------------------------------------------- 目录消失后文件树不再卡死（回归）
+
+describe("Sidebar · 目录被删除/变化后文件树仍可显示", () => {
+  const tree = {
+    root: [
+      { name: "src", path: "src", type: "dir", has_changes: false },
+      { name: "a.txt", path: "a.txt", type: "file", has_changes: false, status: null },
+    ] as unknown[],
+    srcFails: false,
+  };
+  const baseFileProps = { ...baseProps, tab: "files" as const };
+
+  beforeEach(() => {
+    tree.root = [
+      { name: "src", path: "src", type: "dir", has_changes: false },
+      { name: "a.txt", path: "a.txt", type: "file", has_changes: false, status: null },
+    ];
+    tree.srcFails = false;
+    (api.workspaceTree as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path: string) => {
+        if (path === "") return { git: { branch: "main", has_repo: true }, entries: tree.root };
+        if (path === "src") {
+          if (tree.srcFails) throw new Error("400 目录不存在: src");
+          return { git: { branch: "main", has_repo: true }, entries: [] };
+        }
+        return { git: { branch: "main", has_repo: true }, entries: [] };
+      }
+    );
+  });
+
+  it("已展开目录被删除：刷新不再进入错误态，且失效路径被剔除", async () => {
+    const { rerender } = render(<Sidebar {...baseFileProps} treeRevision={1} />);
+    const dirRow = await screen.findByText("src");
+    fireEvent.click(dirRow);
+    await waitFor(() => expect(api.workspaceTree).toHaveBeenCalledWith("src"));
+
+    // 模拟目录被删除（4xx）+ 根目录不再列出它，然后触发一次刷新
+    tree.srcFails = true;
+    tree.root = [{ name: "a.txt", path: "a.txt", type: "file", has_changes: false, status: null }];
+    rerender(<Sidebar {...baseFileProps} treeRevision={2} />);
+
+    await waitFor(() => expect(screen.getByText("a.txt")).toBeInTheDocument());
+    expect(screen.queryByText(/无法读取工作区/)).toBeNull();
+    expect(screen.queryByText("src")).toBeNull(); // 行随根目录刷新消失
+
+    // 失效路径已被剔除：后续刷新不再请求它（否则永远失败）
+    (api.workspaceTree as unknown as ReturnType<typeof vi.fn>).mockClear();
+    rerender(<Sidebar {...baseFileProps} treeRevision={3} />);
+    await waitFor(() => expect(api.workspaceTree).toHaveBeenCalled());
+    const requested = (api.workspaceTree as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(requested).not.toContain("src");
+  });
+
+  it("点击刚被删除的目录：不进入错误态，根目录仍正常显示", async () => {
+    tree.srcFails = true; // 该目录的列表接口直接 4xx
+    render(<Sidebar {...baseFileProps} treeRevision={1} />);
+    const dirRow = await screen.findByText("src");
+
+    fireEvent.click(dirRow);
+
+    await waitFor(() => expect(api.workspaceTree).toHaveBeenCalledWith("src"));
+    expect(screen.queryByText(/无法读取工作区/)).toBeNull();
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
   });
 });
