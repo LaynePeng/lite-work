@@ -94,8 +94,20 @@ function createWindow(url) {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#0d1117",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 18 },
+    // 无边框窗口：三平台统一隐藏系统标题栏。
+    // - macOS：hidden 保留内嵌红绿灯，用 trafficLightPosition 微调位置（原 hiddenInset 效果）；
+    // - Windows/Linux：原生不认 hiddenInset，会保留整套标题栏 + 窗口内菜单栏（"窗口套窗口"），
+    //   故改用 hidden + titleBarOverlay，由 Electron 在右上角绘制原生最小化/最大化/关闭按钮，
+    //   高度对齐前端预留的 38px 拖拽带（.drag-region / .app padding-top）。
+    titleBarStyle: "hidden",
+    ...(process.platform === "darwin"
+      ? { trafficLightPosition: { x: 18, y: 18 } }
+      : {
+          titleBarOverlay: { color: "#0d1117", symbolColor: "#e6edf3", height: 38 },
+          // 隐藏窗口内那条原生菜单栏（文件/编辑/视图/窗口/帮助）；菜单本身仍保留，
+          // 快捷键（Ctrl+C/V、Ctrl+Shift+I、F11 等）照常可用，Alt 可临时唤出。
+          autoHideMenuBar: true,
+        }),
     show: false,
     webPreferences: {
       contextIsolation: true,
