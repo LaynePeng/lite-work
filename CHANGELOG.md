@@ -2,6 +2,41 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [1.10.3] — 工作区缓存修复 + 文件页签目录操作 + 界面偏好持久化
+
+### 新增
+- **文件页签支持目录右键操作**：此前只有单文件能右键，目录行没有菜单。现支持
+  **新建文件 / 新建文件夹 / 重命名 / 在文件管理器中打开 / 复制路径 / 删除目录**
+  与目录行内重命名（用 `menu.isDir` 区分菜单，文件菜单保持不变；批量删除仍只支持文件）。
+  后端配套：新增 `POST /api/files/create`（新建空文件/空目录）、`DELETE /api/files` 支持
+  `recursive=true` 递归删目录（不带该参数仍拒绝，工作区根与 `.git/` 一律拒绝）、
+  `POST /api/files/rename` 支持目录改名（扩展名一致约束仅对文件生效，目录名 `v1.2` 合法）。
+- **`docs/ai-native-harness-roadmap.md`**：基于《AI Native 研发范式实践手册》整理的
+  路线图与具体设计（W1–W10 工作流、排期依赖、横切原则、验证灰度与待决问题）。
+
+### 修复
+- **切换工作区后 `execute_command` 的 cwd 停留在旧项目**（核心修复）：`ShellPlugin`
+  改为**按 workspace 为键缓存**（缓存键即目录，结构上不可能再用到旧目录实例），后台命令
+  注册表提到 app 级共享（切换项目后旧 `task_id` 仍可查询/终止），并删除为此打补丁的
+  “有后台命令就拒绝切换”拦截。对齐 OpenCode 的「实例按目录缓存」模型。
+- **删除目录/目录变化后文件页签卡在「无法读取工作区」**（需切 tab 重挂载才恢复）：
+  根因是刷新用 `Promise.all` 并发加载所有已展开目录，任一目录 4xx 即整体 reject →
+  错误态，且失效路径一直留在已展开集合里使之后每次刷新都失败。改为 `Promise.allSettled`
+  逐目录独立结算，剔除失效目录（含其子孙路径缓存），仅根目录不可读才算错误；
+  点击刚被删除的目录也不再置全局错误态。
+- **界面偏好（侧栏/右栏宽度、侧栏页签）重启后回默认**：桌面端本地 Core 端口随机导致
+  渲染层 origin 变化、`localStorage` 按 origin 隔离读不回。改为存后端 config（新增
+  `ui_prefs` 键 + `/api/config` 白名单暴露），首帧前 hydration（无闪烁）；右栏默认宽度
+  改为随窗口比例实时重算（不再是一次性 `innerWidth` 快照）。
+- **输入历史 `↑` 只能往前翻一条**：守卫误用 `!text`（翻出一条后输入框非空即被挡），
+  改为「输入为空**或**已在翻阅态」，手动编辑退出翻阅态。
+
+### 测试
+- 新增 `tests/test_fs_dir_ops.py`（13 例：新建/递归删除/目录改名 + 越界、`.git`、
+  同名、批量删除仍拒目录等守卫）、`tests/test_background_agent_guard.py` 配套用例、
+  `web/src/components/Sidebar.test.tsx`（目录右键 + 文件树卡死回归，后者经变异验证
+  可复现原 bug）、`web/src/hooks/useResizable.test.tsx`、`Composer.history.test.tsx`。
+
 ## [1.10.1] — 判断面板决策树 + 压缩判定器 + 插件钩子架构修复
 
 ### 新增

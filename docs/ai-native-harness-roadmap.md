@@ -113,11 +113,14 @@ concrete failure of exactly that kind ("done" claimed without re-running the che
 
 **Design — keep it small and local, mirroring Guardrail's shape.**
 
-```yaml
-# .litework/gate.yml (optional, per project; defaults are built in)
-version: 1
-spec_id: litework-completion-v1
-checks:
+```json
+// .litework/gate.json (optional, per project; defaults are built in).
+// JSON rather than YAML on purpose: pyyaml is only a transitive dependency today,
+// and a gate config is not worth a new runtime dependency in the frozen build.
+{
+  "version": 1,
+  "spec_id": "litework-completion-v1",
+  "checks": [
   - id: verify-commands
     required: true
     criteria:
@@ -125,20 +128,30 @@ checks:
       blocked: "a recorded exit code is non-zero"
       unknown: "no command was run, or output was unparseable"
     evidence: ["command", "exit_code", "captured_at", "output_excerpt"]
-  - id: changed-files
-    required: true
-    criteria: { pass: "change set non-empty and inside the workspace", blocked: "path outside workspace", unknown: "no change set recorded" }
-    evidence: ["paths", "source: git|write_tool"]
+    { "id": "changed-files", "required": true,
+      "criteria": { "pass": "change set non-empty and inside the workspace",
+                    "blocked": "path outside workspace",
+                    "unknown": "no change set recorded" },
+      "evidence": ["paths", "source"] }
+  ]
+}
 ```
 
 * New module `litework/core/gate.py`: `GateSpec` (load + validate + `digest`), `GateRun`
   (`spec_digest`, `change_set_digest`, append-only `submissions`), `aggregate()` implementing:
   *missing required check → not pass; any `BLOCKED` → blocked; any `UNKNOWN` → unknown; else pass.*
-* New tool `gate_submit` (one check at a time, `PASS|BLOCKED|UNKNOWN` + Evidence), registered for
-  write-capable agents only, and **not** available to the agent that *consumes* the result.
-* The result is exposed in the task snapshot and as an event `gate:result`; a config flag
-  `completion_gate = "off" | "advisory" | "enforced"` decides whether a non-pass result merely warns or
-  blocks the final "done" claim (rollout: advisory first).
+* New kernel pipeline **`before_finish`** (the missing "Stop hook"): the loop runs it at the exact
+  moment the agent claims completion, so plugins can attach an advisory `opinion` or ask for one more
+  round (`block_finish` + `reminder`). This closes a limitation the Jev plugin documents in its own
+  source: `before_llm` alone cannot see a turn that claims completion and ends without tool calls.
+* Evidence is derived from **tool facts collected by the loop** (exit codes of executed commands,
+  paths touched by write tools), not from the model's self-report — see
+  `AgentLoop._record_gate_traces`. A `gate_submit` tool for *custom* checks is deliberately postponed
+  until a project actually needs rules beyond the two defaults.
+* The result is emitted as the typed event `gate:result` (validated payload, forwarded to the UI);
+  the config flag `completion_gate = "off" | "advisory" | "enforced"` (default `advisory`) decides
+  whether a non-pass result merely warns or blocks the final "done" claim, bounded by
+  `completion_gate_retries` (default 2) so enforcement can never loop forever.
 * Evidence is stored as *redacted summaries plus references*, never credentials or full logs (p. 63).
 
 **Tests.** Aggregation truth table (missing/BLOCKED/UNKNOWN/partial-pass); spec digest stability;
