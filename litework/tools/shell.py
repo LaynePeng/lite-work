@@ -57,12 +57,65 @@ class _BackgroundTask:
                 t.cancel()
 
 
+class BackgroundRegistry:
+    """后台命令注册表（app 级共享，跨 ShellTools 实例）。
+
+    为什么共享：插件按 workspace 为键缓存（AgentApp._shell_plugins），切换工作区
+    会取到另一个 ShellTools 实例。若注册表随实例走，切换后 check_command /
+    任务面板就查不到在旧工作区启动的 task_id（任务失联）。把它提到实例之外共享，
+    **任务归属与工作区解耦**：切换项目后仍可查询、终止旧任务。
+
+    这与 OpenCode「目录随请求、实例按目录缓存」同构的收敛方向一致——区别只是
+    我们让后台任务不绑定目录，而不是让目录随请求流动。
+    """
+
+    def __init__(self) -> None:
+        self.tasks: Dict[str, _BackgroundTask] = {}
+
+    def add(self, task_id: str, task: _BackgroundTask) -> None:
+        self.tasks[task_id] = task
+
+    def get(self, task_id: str) -> Optional[_BackgroundTask]:
+        return self.tasks.get(task_id)
+
+    def remove(self, task_id: str) -> None:
+        self.tasks.pop(task_id, None)
+
+    def list(self) -> List[Dict[str, Any]]:
+        """列出所有后台任务（供工具面板「后台」tab 展示）。"""
+        return [{
+            "task_id": tid,
+            "command": t.command[:300],
+            "running": not t.done,
+            "elapsed": round(t.elapsed, 1),
+            "exit_code": t.exit_code,
+        } for tid, t in self.tasks.items()]
+
+    def kill(self, task_id: str) -> bool:
+        """终止指定后台任务（返回是否成功发起终止）。"""
+        task = self.get(task_id)
+        if task is None or task.done or task.proc is None:
+            return False
+        try:
+            kill_process_tree(task.proc.pid)
+            return True
+        except ProcessLookupError:
+            return False
+
+
 class ShellTools:
-    def __init__(self, workspace: str, timeout_seconds: float = 60.0, max_output: int = 200_000) -> None:
+    def __init__(
+        self,
+        workspace: str,
+        timeout_seconds: float = 60.0,
+        max_output: int = 200_000,
+        registry: Optional[BackgroundRegistry] = None,
+    ) -> None:
         self.workspace = os.path.abspath(workspace)
         self.timeout_seconds = timeout_seconds
         self.max_output = max_output
-        self._background: Dict[str, _BackgroundTask] = {}
+        # 注册表可由调用方注入共享（app 级）；缺省自建（单实例/测试场景）
+        self._registry = registry or BackgroundRegistry()
 
     def get_tools(self) -> List[ToolDefinition]:
         return [
@@ -193,7 +246,7 @@ class ShellTools:
             task.close()
             return f"[Error]: 启动后台命令失败: {exc}"
 
-        self._background[task_id] = task
+        self._registry.add(task_id, task)
         return (
             f"[Background Started]: task_id={task_id} 命令已后台执行（超时 {timeout}s）。\n"
             f"使用 check_command 工具轮询状态：{{\"task_id\": \"{task_id}\"}}"
@@ -234,7 +287,7 @@ class ShellTools:
 
     def _check_command(self, args: Dict[str, Any]) -> str:
         task_id = str(args.get("task_id", "")).strip()
-        task = self._background.get(task_id)
+        task = self._registry.get(task_id)
         if task is None:
             return f"[Error]: 未找到后台任务 {task_id!r}（可能已清理或从未启动）。"
 
@@ -258,7 +311,7 @@ class ShellTools:
                 parts.append(f"[STDERR]:\n{clamp(err.rstrip())}")
             if not out.strip() and not err.strip():
                 parts.append("[No output]")
-            self._background.pop(task_id, None)
+            self._registry.remove(task_id)
             task.close()
         else:
             # 运行中：返回已累积输出（截断）
@@ -271,22 +324,15 @@ class ShellTools:
         return "\n".join(parts)
 
     def list_background(self) -> List[Dict[str, Any]]:
-        """列出所有后台任务（供右侧工具面板「后台」tab 展示）。"""
-        return [{
-            "task_id": tid,
-            "command": t.command[:300],
-            "running": not t.done,
-            "elapsed": round(t.elapsed, 1),
-            "exit_code": t.exit_code,
-        } for tid, t in self._background.items()]
+        """列出所有后台任务（供右侧工具面板「后台」tab 展示）。
+
+        委托共享注册表：列出的是 app 全部工作区的后台任务，不是本实例目录的。
+        """
+        return self._registry.list()
 
     def kill_background(self, task_id: str) -> bool:
-        """杀掉指定后台任务（供面板「杀掉」按钮）。返回是否成功发起终止。"""
-        task = self._background.get(task_id)
-        if task is None or task.done or task.proc is None:
-            return False
-        try:
-            kill_process_tree(task.proc.pid)
-            return True
-        except ProcessLookupError:
-            return False
+        """杀掉指定后台任务（供面板「杀掉」按钮）。返回是否成功发起终止。
+
+        委托共享注册表：任意工作区的实例都能终止其它工作区启动的任务。
+        """
+        return self._registry.kill(task_id)

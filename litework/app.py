@@ -43,6 +43,7 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .tools.registry import ToolRegistry
+from .tools.shell import BackgroundRegistry
 
 if TYPE_CHECKING:  # 仅供类型标注：运行时按需懒导入，避免与 orchestration 循环依赖
     from .orchestration.agent_manager import SessionAgentManager
@@ -194,7 +195,15 @@ class AgentApp:
         self._plugins_list_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
         # 全量工具名缓存 (monotonic_ts, names)
         self._tool_names_cache: Optional[Tuple[float, List[str]]] = None
-        self._shell_plugin: Optional[ShellPlugin] = None
+        # 按 workspace（绝对路径）为键的 ShellPlugin 实例表：缓存键就是目录，
+        # 切换工作区不可能再拿到旧目录的实例——「切换后 cwd 陈旧」这一类 bug
+        # 从结构上消失（与 OpenCode 的 InstanceStore「按目录缓存实例」同构）。
+        # 之所以此前是单个实例：后台命令注册表曾存活在实例上，丢弃即失联；
+        # 现在注册表已提到 app 级共享（见 _bg_registry），缓存可以放心按键保留。
+        self._shell_plugins: Dict[str, ShellPlugin] = {}
+        # 后台命令注册表：跨 ShellPlugin 实例共享（任务归属与工作区解耦，
+        # 切换项目后旧 task_id 仍可在任意工作区查询/终止）
+        self._bg_registry = BackgroundRegistry()
         # Jev 压缩判定器（插件注册；None = 用默认 LLM 摘要）——v1.10.1
         self.compaction_decider: Optional[Any] = None
         self.approval_gate = ApprovalGate(
@@ -1114,12 +1123,14 @@ class AgentApp:
         """
         ws = workspace_override or self.workspace or os.path.expanduser("~")
         shell_timeout = float(self.config.get("tool_timeout", 120))
-        if workspace_override is None and self._shell_plugin is not None:
-            shell = self._shell_plugin
-        else:
-            shell = ShellPlugin(ws, timeout_seconds=shell_timeout)
+        # ShellPlugin 按 workspace 为键缓存（键就是目录，故不存在"陈旧实例"）。
+        # worktree 隔离（workspace_override）不复用缓存——缓存实例绑定主工作区，
+        # 重用会破坏隔离；但注册表始终共享，后台任务跨工作区可查。
+        shell = self._shell_plugins.get(ws) if workspace_override is None else None
+        if shell is None:
+            shell = ShellPlugin(ws, timeout_seconds=shell_timeout, registry=self._bg_registry)
             if workspace_override is None:
-                self._shell_plugin = shell
+                self._shell_plugins[ws] = shell
         plugins: List[Plugin] = [
             FileSystemPlugin(ws),
             CodebasePlugin(ws),
@@ -1461,16 +1472,16 @@ class AgentApp:
     # ------------------------------------------------------------ 后台命令（Web/API 薄封装）
 
     def background_tasks(self) -> List[Dict[str, Any]]:
-        """列出所有后台命令（execute_command background=true 启动的）。"""
-        if self._shell_plugin is None:
-            return []
-        return self._shell_plugin._tools.list_background()
+        """列出所有后台命令（execute_command background=true 启动的）。
+
+        读 app 级共享注册表：与「当前工作区是哪个」无关——切换项目后仍在运行
+        的旧任务继续可见（面板可查询/终止），不会因切目录而失联。
+        """
+        return self._bg_registry.list()
 
     def kill_background_task(self, task_id: str) -> bool:
-        """杀掉指定后台命令。"""
-        if self._shell_plugin is None:
-            return False
-        return self._shell_plugin._tools.kill_background(task_id)
+        """杀掉指定后台命令（任意工作区的任务都可终止，注册表共享）。"""
+        return self._bg_registry.kill(task_id)
 
     # ------------------------------------------------------------ Plugins 管理（Web/API 薄封装）
 

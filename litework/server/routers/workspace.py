@@ -92,7 +92,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
         bg = app.background_agent_count()
         if bg > 0:
             raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
+        # 后台命令（execute_command background=true）**不再拦截切换**：注册表是
+        # app 级共享的（AgentApp._bg_registry），任务归属与工作区解耦——切换后
+        # 仍可从任务面板查询/终止旧任务。
         app.workspace = path
+        # 这里不需要失效任何缓存：ShellPlugin 按 workspace 为键缓存
+        # （AgentApp._shell_plugins，键就是目录），切换后自然拿到新目录的实例，
+        # 不存在"旧目录实例被复用"的可能（历史上正是这个漏洞导致
+        # execute_command 的 cwd 停留在旧项目）。
         # 切换工作区即记录到最近项目（含目录选择器/子 Agent 场景）。
         # 类型按目录内容启发式判定（与 git 解耦；手动标记过的由 remember_project 锁定保护）
         try:
@@ -194,6 +201,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         bg = app.background_agent_count()
         if bg > 0:
             raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
+        # 后台命令运行中不再拦截（注册表 app 级共享，见 set_workspace 注释）
         # 类型按目录内容启发式判定（与 git 解耦）；手动标记过的项目由
         # remember_project 的 kind_locked 保护，不会被这里覆盖
         from ...tools.project_scaffold import classify_project_kind

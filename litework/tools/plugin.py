@@ -23,7 +23,7 @@ from .git import GitTools
 from .office import OfficeTools
 from .registry import ToolRegistry
 from .review import ReviewTools
-from .shell import ShellTools
+from .shell import BackgroundRegistry, ShellTools
 from .skills import SkillsTools
 from .web import WebFetchTools
 from .ocr import OCRTools
@@ -141,8 +141,11 @@ class ShellPlugin(ToolPlugin):
     version = "1.0.0"
     description = "受限终端：执行命令"
 
-    def __init__(self, workspace: str, timeout_seconds: float = 60.0) -> None:
-        self._tools = ShellTools(workspace, timeout_seconds=timeout_seconds)
+    def __init__(self, workspace: str, timeout_seconds: float = 60.0,
+                 registry: Optional[BackgroundRegistry] = None) -> None:
+        # registry：app 级共享的后台命令注册表（任务归属与工作区解耦，
+        # 切换项目后旧 task_id 仍可查询/终止）；缺省自建（单实例场景）
+        self._tools = ShellTools(workspace, timeout_seconds=timeout_seconds, registry=registry)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()
