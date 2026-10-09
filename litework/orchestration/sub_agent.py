@@ -401,14 +401,34 @@ class SubAgentRunner:
             })
 
         timeout = float(self.app.config.get("subagent_timeout", 600))
-        try:
-            summary, stats = await asyncio.wait_for(
+        # 给子 Agent 的 loop 设置 abort_event：超时时优雅终止——
+        # loop 的每轮检查点会退出，正在执行的子进程被 kill_process_tree 清理
+        abort_event = asyncio.Event()
+        loop.abort_event = abort_event
+
+        async def _run_with_abort():
+            task = asyncio.create_task(
                 loop.run_task(
                     f"请完成以下子任务并输出精炼总结（不要向用户提问，直接执行）：\n{task_description}",
                     system_prompt=system, tools=tools, store_snapshot=False,
-                ),
-                timeout=timeout,
+                )
             )
+            done, pending = await asyncio.wait(
+                {task}, timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if pending:
+                abort_event.set()
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                raise asyncio.TimeoutError()
+            return task.result()
+
+        try:
+            summary, stats = await _run_with_abort()
         except asyncio.TimeoutError:
             summary = f"[SubAgent Timeout]: 子任务超过 {timeout}s 被终止，已完成部分: {getattr(loop, 'last_summary', '无')}"
             stats = {"input_tokens": 0, "output_tokens": 0, "turns": 0, "status": "TIMEOUT"}

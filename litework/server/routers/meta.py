@@ -47,6 +47,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
             # 仍在运行的后台命令数（execute_command background=true）：
             # 切换项目/重启后据此发现上次遗留的孤儿任务
             "running_background": app.running_background_count(),
+            # 后台 Agent 概况（Agents 看板 / GC 监控用）
+            "background_agents": app.background_agent_count(),
+            "background_agents_stale": sum(
+                1
+                for manager in app.agent_managers.values()
+                for r in manager.agents.values()
+                if getattr(r, "status", "") in ("closed", "completed", "errored")
+            ),
             "token_auth": bool(token),
         }
 

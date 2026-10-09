@@ -299,14 +299,21 @@ class AgentApp:
         后台子 Agent 生命周期超出主任务（spawn_agent 异步派生），其 registry
         捕获了装配时的 MCPClient——reload 会 close 这些连接、切工作区会移走
         其 worktree 基准，必须等它们结束。
+
+        顺带 GC：清理终态超过 1 小时的过期记录（编排者崩溃后子 Agent 记录
+        会永远留在内存里——看板臃肿 + 事件转发浪费）。幂等，成本低。
         """
+        for manager in self.agent_managers.values():
+            try:
+                manager.gc_stale(max_age_seconds=3600)
+            except Exception:
+                logger.debug("[App] Agent 记录 GC 失败", exc_info=True)
         return sum(
             1
             for manager in self.agent_managers.values()
             for record in manager.agents.values()
             if getattr(record, "status", "") == "running"
         )
-
     def _ensure_local_plugins(self) -> List[Plugin]:
         """懒加载本地插件（失败也缓存为空，避免坏插件让每次请求重试或 500）。
 

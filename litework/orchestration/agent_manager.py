@@ -510,6 +510,27 @@ class SessionAgentManager:
                 logger.debug("[AgentManager] shutdown %s 失败", agent_id, exc_info=True)
         return stopped
 
+    def gc_stale(self, max_age_seconds: float = 3600) -> int:
+        """清理超过 max_age 的终态 Agent 记录（防内存泄漏）。
+
+        场景：编排者崩溃/停止后，后台子 Agent 的记录留在 self.agents 里
+        永不清理。看板列表越长越臃肿，事件转发也在给死 Agent 发无效消息。
+
+        只清终态且超过 max_age 的——运行中的不动（可能还在被消费）。
+        """
+        now = time.time()
+        stale = [
+            aid for aid, r in self.agents.items()
+            if r.status in ("closed", "completed", "errored")
+            and r.finished_at is not None
+            and (now - r.finished_at) > max_age_seconds
+        ]
+        for aid in stale:
+            self.agents.pop(aid, None)
+        if stale:
+            logger.info("[AgentManager] GC 清理 %d 个过期 Agent 记录", len(stale))
+        return len(stale)
+
     async def wait(self, agent_ids: List[str], timeout_ms: int = 120000) -> Dict[str, Any]:
         """阻塞门：等指定 agent 终态，返回状态与总结。"""
         records = [self.agents.get(a) for a in agent_ids]
