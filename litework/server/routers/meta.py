@@ -81,8 +81,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {
             k: app.config.get(k) for k in (
                 "max_steps", "token_budget", "tool_timeout",
-                "auto_approve", "pricing", "pricing_check_ttl_days",
-                "context_full_turns", "llm_timeout",
+                "auto_approve", "approval_timeout", "pricing", "pricing_check_ttl_days",
+                "context_full_turns", "llm_timeout", "llm_idle_timeout",
                 "llm_retries", "skill_permissions", "subagent_timeout",
                 # 效率机制（v1.6.0）：观察打包 / 压缩经济学 / 证据收据小模型
                 "observation_pack", "compaction_economics", "reducer_model", "reducer_provider",
@@ -111,7 +111,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     # （任意键）——插件配置是合法的全量写入场景（savePluginConfig 走这里）
     _WRITABLE_KEYS = frozenset({
         "max_steps", "token_budget", "tool_timeout", "auto_approve",
-        "context_full_turns", "llm_timeout", "llm_retries", "llm",
+        "context_full_turns", "llm_timeout", "llm_idle_timeout", "llm_retries", "llm",
         "skill_permissions", "subagent_timeout", "observation_pack",
         "compaction_economics", "reducer_model", "reducer_provider",
         "completion_gate", "completion_gate_retries", "tool_metrics",

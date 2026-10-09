@@ -240,7 +240,30 @@ export default function SettingsModal({
   const [maMeetingRounds, setMaMeetingRounds] = useState<number>(3);
   const [maCollabMode, setMaCollabMode] = useState<"explicit" | "proactive">("explicit");
   const [maLedgerInterval, setMaLedgerInterval] = useState<number>(5);
+  const [maPersistMax, setMaPersistMax] = useState<number>(20);
   const [maSaved, setMaSaved] = useState(false);
+  // 效率与诊断机制（v1.6.0 + W7 轨迹）：观察打包 / 压缩经济学 / 工具指标 /
+  // 轨迹 / 完成证据门禁 / 并行工具执行。之前只做了后端配置键，设置页没透出
+  const [observationPack, setObservationPack] = useState(true);
+  const [compactionEconomics, setCompactionEconomics] = useState(true);
+  const [toolMetrics, setToolMetrics] = useState(true);
+  const [trajectoryEnabled, setTrajectoryEnabled] = useState(false);
+  const [completionGate, setCompletionGate] = useState<"off" | "advisory" | "enforced">("advisory");
+  const [gateRetries, setGateRetries] = useState<number>(2);
+  const [parallelToolCalls, setParallelToolCalls] = useState<"auto" | "always" | "never">("auto");
+  const [mechSaved, setMechSaved] = useState(false);
+  // LLM 瞬时故障自动重试次数（与超时配置同区）
+  const [llmRetries, setLlmRetries] = useState<number>(2);
+  // 流式空闲看门狗 / Token 预算 / 上下文压缩保留轮数（执行与上下文配置）
+  const [llmIdleTimeout, setLlmIdleTimeout] = useState<number>(120);
+  const [tokenBudget, setTokenBudget] = useState<number>(48000);
+  const [contextFullTurns, setContextFullTurns] = useState<number>(2);
+  // 安全与审批：自动放行工具审批（高危，默认关）+ 审批卡等待上限
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [approvalTimeout, setApprovalTimeout] = useState<number>(600);
+  const [approvalSaved, setApprovalSaved] = useState(false);
+  // 自定义协作配方文本（collab_recipe）：优先级 > collab_policy，留空用模式默认
+  const [collabRecipe, setCollabRecipe] = useState("");
   // 协作模式（collab_policy）：内置策略 + 已安装模式插件；社区 kind=collab 包可安装
   const [collabModes, setCollabModes] = useState<CollabMode[]>([]);
   const [collabPolicy, setCollabPolicy] = useState("default");
@@ -696,7 +719,30 @@ export default function SettingsModal({
       if (typeof c.agent_meeting_rounds === "number" && c.agent_meeting_rounds > 0) setMaMeetingRounds(c.agent_meeting_rounds);
       if (c.agent_collab_mode === "proactive") setMaCollabMode("proactive");
       if (typeof c.agent_ledger_interval === "number" && c.agent_ledger_interval > 0) setMaLedgerInterval(c.agent_ledger_interval);
+      if (typeof c.agent_persist_max === "number" && c.agent_persist_max > 0) setMaPersistMax(c.agent_persist_max);
       if (typeof c.collab_policy === "string" && c.collab_policy) setCollabPolicy(c.collab_policy);
+      // 效率与诊断机制（默认值与后端 DEFAULT_CONFIG 对齐）
+      if (typeof c.observation_pack === "boolean") setObservationPack(c.observation_pack);
+      if (typeof c.compaction_economics === "boolean") setCompactionEconomics(c.compaction_economics);
+      if (typeof c.tool_metrics === "boolean") setToolMetrics(c.tool_metrics);
+      if (typeof c.trajectory_enabled === "boolean") setTrajectoryEnabled(c.trajectory_enabled);
+      if (c.completion_gate === "off" || c.completion_gate === "advisory" || c.completion_gate === "enforced") {
+        setCompletionGate(c.completion_gate);
+      }
+      if (typeof c.completion_gate_retries === "number" && c.completion_gate_retries >= 0) setGateRetries(c.completion_gate_retries);
+      if (c.parallel_tool_calls === "auto" || c.parallel_tool_calls === "always" || c.parallel_tool_calls === "never") {
+        setParallelToolCalls(c.parallel_tool_calls);
+      }
+      if (typeof c.llm_retries === "number" && c.llm_retries >= 0) setLlmRetries(c.llm_retries);
+      if (typeof c.llm_idle_timeout === "number" && c.llm_idle_timeout > 0) setLlmIdleTimeout(c.llm_idle_timeout);
+      // Token 预算与上下文压缩保留轮数（0 不回显——都是有效值域之外）
+      if (typeof c.token_budget === "number" && c.token_budget > 0) setTokenBudget(c.token_budget);
+      if (typeof c.context_full_turns === "number" && c.context_full_turns > 0) setContextFullTurns(c.context_full_turns);
+      // 安全与审批
+      if (typeof c.auto_approve === "boolean") setAutoApprove(c.auto_approve);
+      if (typeof c.approval_timeout === "number" && c.approval_timeout > 0) setApprovalTimeout(c.approval_timeout);
+      // 自定义协作配方
+      if (typeof c.collab_recipe === "string") setCollabRecipe(c.collab_recipe);
     }).catch(() => { /* 配置拉取失败不阻塞技能页 */ });
   }, [refreshSkills]);
 
@@ -1304,8 +1350,12 @@ export default function SettingsModal({
       await api.updateConfig({
         tool_timeout: toolTimeout,
         llm_timeout: llmTimeout,
+        llm_idle_timeout: llmIdleTimeout,
+        llm_retries: llmRetries,
         subagent_timeout: subagentTimeout,
         max_steps: maxSteps,
+        token_budget: tokenBudget,
+        context_full_turns: contextFullTurns,
       });
       setTimeoutSaved(true);
       setTimeout(() => setTimeoutSaved(false), 2000);
@@ -1313,7 +1363,46 @@ export default function SettingsModal({
     } catch (err) {
       window.alert(`保存失败: ${(err as Error).message}`);
     }
-  }, [toolTimeout, llmTimeout, subagentTimeout, maxSteps, onSaved]);
+  }, [toolTimeout, llmTimeout, llmIdleTimeout, llmRetries, subagentTimeout, maxSteps,
+      tokenBudget, contextFullTurns, onSaved]);
+
+  // 安全与审批保存（auto_approve 高危：默认关，开启 = 所有工具调用不再弹审批卡）
+  const saveApprovalConfig = useCallback(async () => {
+    setApprovalSaved(false);
+    try {
+      await api.updateConfig({
+        auto_approve: autoApprove,
+        approval_timeout: Math.max(60, approvalTimeout),
+      });
+      setApprovalSaved(true);
+      setTimeout(() => setApprovalSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [autoApprove, approvalTimeout, onSaved]);
+
+  // 效率与诊断机制保存（AgentLoop 每任务重建 → 对正在运行的任务不生效，下一个任务生效）
+  const saveMechConfig = useCallback(async () => {
+    setMechSaved(false);
+    try {
+      await api.updateConfig({
+        observation_pack: observationPack,
+        compaction_economics: compactionEconomics,
+        tool_metrics: toolMetrics,
+        trajectory_enabled: trajectoryEnabled,
+        completion_gate: completionGate,
+        completion_gate_retries: Math.max(0, gateRetries),
+        parallel_tool_calls: parallelToolCalls,
+      });
+      setMechSaved(true);
+      setTimeout(() => setMechSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [observationPack, compactionEconomics, toolMetrics, trajectoryEnabled,
+      completionGate, gateRetries, parallelToolCalls, onSaved]);
 
   // 证据收据 reducer 保存（reducer adapter 每任务在 create_loop 重建 → 下个任务生效）
   const saveReducerConfig = useCallback(async () => {
@@ -1345,7 +1434,9 @@ export default function SettingsModal({
         agent_meeting_rounds: maMeetingRounds,
         agent_collab_mode: maCollabMode,
         agent_ledger_interval: maLedgerInterval,
+        agent_persist_max: maPersistMax,
         collab_policy: collabPolicy,
+        collab_recipe: collabRecipe.trim(),
       });
       setMaSaved(true);
       setTimeout(() => setMaSaved(false), 2000);
@@ -1354,7 +1445,7 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [maParallel, maTotal, maSteps, maStepsCap, maDepth, maMsgChars, maMeetingRounds,
-      maCollabMode, maLedgerInterval, collabPolicy, onSaved]);
+      maCollabMode, maLedgerInterval, maPersistMax, collabPolicy, collabRecipe, onSaved]);
 
   return (
       <div className="modal-overlay">
@@ -2666,6 +2757,120 @@ export default function SettingsModal({
               </div>
 
               <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>安全与审批</span>
+                <button className="btn-test" onClick={() => void saveApprovalConfig()}>
+                  {approvalSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <div className="skills-trigger-mode" style={{ flexWrap: "wrap", rowGap: 8 }}>
+                <label className="mcp-toggle" title="高危：开启后所有工具调用不再弹审批卡，直接执行（含写文件/执行命令）。仅在可信环境使用">
+                  <input
+                    type="checkbox"
+                    checked={autoApprove}
+                    onChange={(e) => setAutoApprove(e.target.checked)}
+                  />
+                  自动放行工具审批
+                  {autoApprove && <b style={{ color: "#f85149" }}>（高危：所有工具免审批直接执行）</b>}
+                </label>
+              </div>
+              <div className="timeout-grid" style={{ marginTop: 10 }}>
+                <div className="form-group">
+                  <label>审批等待上限（秒）</label>
+                  <input
+                    type="number" className="form-input" min={60} max={3600}
+                    value={approvalTimeout}
+                    onChange={(e) => setApprovalTimeout(Math.max(60, parseInt(e.target.value, 10) || 600))}
+                    title="审批卡弹出后等待用户操作的最长时间，超时自动拒绝（60 秒起）"
+                  />
+                </div>
+              </div>
+              <p className="mcp-hint">
+                自动放行（auto_approve）<b>默认关闭</b>：开启后所有工具调用免审批直接执行，
+                仅建议在沙箱/可信环境使用。审批等待超时后按拒绝处理，任务会收到拒绝反馈。
+              </p>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
+                <span>效率与诊断机制</span>
+                <button className="btn-test" onClick={() => void saveMechConfig()}>
+                  {mechSaved ? "已保存 ✓" : "保存"}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                以下是 v1.6.0 效率机制与 W7 轨迹的开关（此前只能改 config.json）。默认全开
+                （轨迹除外）。保存后对<b>下一个任务</b>生效，正在运行的任务不受影响。
+              </p>
+              <div className="skills-trigger-mode" style={{ flexWrap: "wrap", rowGap: 8 }}>
+                <label className="mcp-toggle" title="大工具结果先全文进上下文，之后替换为占位符，可用 obs_recall 分页召回——关闭后全部结果原样占满上下文">
+                  <input
+                    type="checkbox"
+                    checked={observationPack}
+                    onChange={(e) => setObservationPack(e.target.checked)}
+                  />
+                  观察打包（大结果先全文后占位符）
+                </label>
+                <label className="mcp-toggle" title="压缩前评估写入成本+缓存债 vs 剩余轮数收益，避免为省 token 反而多花 token">
+                  <input
+                    type="checkbox"
+                    checked={compactionEconomics}
+                    onChange={(e) => setCompactionEconomics(e.target.checked)}
+                  />
+                  压缩经济学决策
+                </label>
+                <label className="mcp-toggle" title="只记结构化计数（工具名/成败/耗时/归属技能），不落参数与正文；用于算命中率与成功率">
+                  <input
+                    type="checkbox"
+                    checked={toolMetrics}
+                    onChange={(e) => setToolMetrics(e.target.checked)}
+                  />
+                  工具/技能指标
+                </label>
+                <label className="mcp-toggle" title="持久化执行轨迹（JSONL）到 ~/.lite-work/trajectories/，单会话上限 5MB，凭证已脱敏；供复盘/评测/审计（会话详情可查看分析结果）">
+                  <input
+                    type="checkbox"
+                    checked={trajectoryEnabled}
+                    onChange={(e) => setTrajectoryEnabled(e.target.checked)}
+                  />
+                  Agent 轨迹（W7）
+                </label>
+              </div>
+              <div className="timeout-grid" style={{ marginTop: 10 }}>
+                <div className="form-group">
+                  <label>完成证据门禁</label>
+                  <select
+                    className="form-input" value={completionGate}
+                    onChange={(e) => setCompletionGate(e.target.value as "off" | "advisory" | "enforced")}
+                    title="Agent 声称完成时按机械事实核验证据：关闭不评估；咨询只记录不打断收尾；强制未通过则再给一轮补证据"
+                  >
+                    <option value="off">关闭（不评估）</option>
+                    <option value="advisory">咨询（默认，只记录）</option>
+                    <option value="enforced">强制（未通过不收尾）</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>补证据轮数上限</label>
+                  <input
+                    type="number" className="form-input" min={0} max={5}
+                    value={gateRetries}
+                    onChange={(e) => setGateRetries(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    title="仅「强制」模式生效：未通过门禁时最多再给几轮补证据（防死循环）"
+                    disabled={completionGate !== "enforced"}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>并行工具执行</label>
+                  <select
+                    className="form-input" value={parallelToolCalls}
+                    onChange={(e) => setParallelToolCalls(e.target.value as "auto" | "always" | "never")}
+                    title="自动：只读工具（读文件/搜索等）同轮并行，含写操作整轮串行；始终：全部并行（写冲突风险自负）；从不：全部串行"
+                  >
+                    <option value="auto">自动（只读并行，默认）</option>
+                    <option value="always">始终（全部并行）</option>
+                    <option value="never">从不（全部串行）</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mcp-section-head" style={{ marginTop: 18 }}>
                 <span>执行超时与步数（秒）</span>
                 <button className="btn-test" onClick={() => void saveTimeoutConfig()}>
                   {timeoutSaved ? "已保存 ✓" : "保存"}
@@ -2673,7 +2878,9 @@ export default function SettingsModal({
               </div>
               <p className="mcp-hint">
                 工具调用超时：单个工具最长执行时间；LLM 请求超时：单次模型调用最长等待；
-                子 Agent 超时：派生子任务整体最长执行时间；最大步数：单个任务最多工具调用轮数。
+                流式空闲超时：连续无输出视为卡死；重试次数：瞬时故障自动重试上限；
+                子 Agent 超时：派生子任务整体最长执行时间；最大步数：单个任务最多工具调用轮数；
+                Token 预算：单任务上下文 token 硬顶；压缩保留轮数：上下文压缩时保留最近几轮完整对话。
               </p>
               <div className="timeout-grid">
                 <div className="form-group">
@@ -2693,6 +2900,24 @@ export default function SettingsModal({
                   />
                 </div>
                 <div className="form-group">
+                  <label>流式空闲超时（秒）</label>
+                  <input
+                    type="number" className="form-input" min={10} max={600}
+                    value={llmIdleTimeout}
+                    onChange={(e) => setLlmIdleTimeout(Math.max(10, parseInt(e.target.value, 10) || 120))}
+                    title="流式输出期间连续 N 秒无任何增量块视为连接卡死，触发重试"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>LLM 重试次数</label>
+                  <input
+                    type="number" className="form-input" min={0} max={10}
+                    value={llmRetries}
+                    onChange={(e) => setLlmRetries(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    title="超时/网络/限流/5xx 等瞬时故障的自动重试上限（0 = 不重试）"
+                  />
+                </div>
+                <div className="form-group">
                   <label>子 Agent 超时（秒）</label>
                   <input
                     type="number" className="form-input" min={5} max={3600}
@@ -2706,6 +2931,24 @@ export default function SettingsModal({
                     type="number" className="form-input" min={1} max={500}
                     value={maxSteps}
                     onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 100))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Token 预算</label>
+                  <input
+                    type="number" className="form-input" min={1000} max={2000000}
+                    value={tokenBudget}
+                    onChange={(e) => setTokenBudget(Math.max(1000, parseInt(e.target.value, 10) || 48000))}
+                    title="单任务上下文 token 硬顶：超过后触发压缩/截断策略"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>压缩保留轮数</label>
+                  <input
+                    type="number" className="form-input" min={1} max={20}
+                    value={contextFullTurns}
+                    onChange={(e) => setContextFullTurns(Math.max(1, parseInt(e.target.value, 10) || 2))}
+                    title="上下文压缩时保留最近几轮完整对话（含工具结果），更早的总结归档"
                   />
                 </div>
               </div>
@@ -2932,6 +3175,14 @@ export default function SettingsModal({
                       )}
                     </div>
                   )}
+                  <textarea
+                    className="form-input"
+                    style={{ marginTop: 8, minHeight: 72, fontFamily: "inherit", resize: "vertical" }}
+                    placeholder="自定义协作配方（collab_recipe，高级用法）：填写后替换所选协作模式的内置指引，描述 spawn_agent 的派生策略与行为约定。留空 = 用模式默认。"
+                    value={collabRecipe}
+                    onChange={(e) => setCollabRecipe(e.target.value)}
+                    title="优先级：会话覆盖 > collab_recipe > collab_policy > default"
+                  />
                 </div>
                 <div className="form-group">
                   <label>进度账本间隔（轮）</label>
@@ -2940,6 +3191,15 @@ export default function SettingsModal({
                     value={maLedgerInterval}
                     onChange={(e) => setMaLedgerInterval(Math.max(1, parseInt(e.target.value, 10) || 5))}
                     title="长程任务中每 N 轮用 list_agents 检查一次子 Agent 进度（提示词指引）"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>落盘归档上限（条）</label>
+                  <input
+                    type="number" className="form-input" min={1} max={200}
+                    value={maPersistMax}
+                    onChange={(e) => setMaPersistMax(Math.max(1, parseInt(e.target.value, 10) || 20))}
+                    title="会话 metadata 中 subagent_records 保留的最大条数（历史子 Agent 归档）"
                   />
                 </div>
               </div>

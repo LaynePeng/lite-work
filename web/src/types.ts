@@ -218,6 +218,30 @@ export interface AppConfig {
   /** 协作模式（default/review/已安装模式插件的 mode_name）与自定义配方文本 */
   collab_policy?: string;
   collab_recipe?: string;
+  /**
+   * 效率与诊断机制（v1.6.0 + W7 轨迹）。默认全开（轨迹除外——低频持久化需求，
+   * 默认关闭，设置页手动开启）。对正在运行的任务不生效，下一个任务生效。
+   */
+  /** 观察打包：大工具结果「先全文后占位符」，obs_recall 分页召回 */
+  observation_pack?: boolean;
+  /** 压缩经济学决策（写入成本+缓存债 vs 剩余轮数收益） */
+  compaction_economics?: boolean;
+  /** 工具/技能指标：只记结构化计数（工具名/成败/耗时），不落参数与正文 */
+  tool_metrics?: boolean;
+  /** Agent 轨迹（W7）：持久化执行轨迹 JSONL（~/.lite-work/trajectories/），供复盘/评测/审计 */
+  trajectory_enabled?: boolean;
+  /** 完成证据门禁：off 不评估 | advisory（默认）只记录不打断 | enforced 未通过不收尾 */
+  completion_gate?: "off" | "advisory" | "enforced";
+  /** enforced 模式下「再给一轮补证据」的最大次数（防死循环） */
+  completion_gate_retries?: number;
+  /** 并行工具执行：auto（只读轮并行，默认）| always | never */
+  parallel_tool_calls?: "auto" | "always" | "never";
+  /** LLM 瞬时故障（超时/网络/限流/5xx）自动重试次数 */
+  llm_retries?: number;
+  /** 流式空闲看门狗（秒）：连续 N 秒无任何 chunk 视为连接卡死，可重试 */
+  llm_idle_timeout?: number;
+  /** 审批卡等待上限（秒）：超时自动拒绝 */
+  approval_timeout?: number;
 }
 
 /** 最近一次 LLM 调用的用量（与「本任务累计」区分：每轮都会把整段上下文重发）。 */
