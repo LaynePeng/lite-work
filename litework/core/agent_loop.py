@@ -31,6 +31,8 @@ from .state_tracker import AgentStateTracker, AgentStatus
 from .system_prompt import SystemPromptBuilder
 from .token_counter import TokenCounter
 from .truncator import truncate_tool_output
+from .gate import aggregate as _gate_aggregate  # noqa: F401 (re-export for tests)
+from .provenance import contains_untrusted, extract_untrusted_sources, provenance_note, should_escalate
 from .types import Message, ToolCall, ToolDefinition, header_context
 from ..llm.pricing_provider import is_off_peak_now
 from ..llm.stream_meter import StreamMeter, use_stream_meter
@@ -200,6 +202,8 @@ class AgentLoop:
         # 用于算命中率与成功率，反向推动工具描述与技能边界（见 core/metrics.py）
         self.metrics = metrics
         self._loaded_skills: List[str] = []
+        # W6：本轮已回填的工具结果（检测"外部内容+高危动作"组合用）
+        self._recent_tool_results: List[str] = []
         self._register_obs_recall_tool()
 
     def _register_obs_recall_tool(self) -> None:
@@ -486,6 +490,9 @@ class AgentLoop:
                 self._record_tool_metrics(tool_calls, results)
 
                 await self._append_tool_results(tool_calls, results, messages)
+
+                # W6：更新本轮工具结果（下一轮工具调用前检测"外部内容+高危动作"）
+                self._recent_tool_results = [str(r) for r in results]
 
                 # G2. 工具结果回填完成后注入排队输入（消息链合法位置），
                 #     下一轮 LLM 调用立即可见（OpenCode system-reminder 模式）
@@ -1022,7 +1029,21 @@ class AgentLoop:
             return violation
 
         # 3. beforeTool 安全管道（SecurityPlugin 等）
-        hook_data = {"toolName": tool_name, "args": args, "cancel": False, "reason": ""}
+        # W6 不可信内容防护：同一轮"外部内容 + 高危动作"→ 强制走审批（升级）
+        # 检测方式：本轮已回填的工具结果里是否有 <untrusted> 包裹
+        _turn_external = any(
+            contains_untrusted(str(r)) for r in self._recent_tool_results
+        ) if hasattr(self, "_recent_tool_results") else False
+        if should_escalate(_turn_external, tool_name):
+            logger.warning("[AgentLoop] W6 升级审批：%s 紧随外部内容之后", tool_name)
+            hook_data = {
+                "toolName": tool_name, "args": args, "cancel": False, "reason": "",
+                "provenance_note": provenance_note(
+                    extract_untrusted_sources("".join(str(r) for r in self._recent_tool_results))
+                ) if _turn_external else "",
+            }
+        else:
+            hook_data = {"toolName": tool_name, "args": args, "cancel": False, "reason": ""}
         verified = await self.kernel.before_tool.run(self.kernel.ctx, hook_data)
 
         start_time = time.time()

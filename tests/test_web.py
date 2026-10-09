@@ -127,7 +127,8 @@ async def test_execute_truncates_long_output(web_tools, monkeypatch):
     monkeypatch.setattr(tools, "validate_url", lambda url: url)
     result = await tools.execute("webfetch", {"url": "https://example.com/", "maxChars": 1000})
     assert "输出截断" in result
-    assert len(result) <= 1000 + 200  # 截断提示追加在尾部
+    # W6：外部内容带 <untrusted> 包裹 + 提示规则（~180 字符），放宽上界
+    assert len(result) <= 1000 + 200 + 300
 
 
 async def test_execute_missing_url(web_tools):
