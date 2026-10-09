@@ -102,6 +102,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 工具/技能指标（W3，对齐手册 p.47 工具评测）：只记结构化计数（工具名/成败/
     # 耗时/归属技能），不落参数与正文；用于算「命中率 / 成功率」并反向改进描述
     "tool_metrics": True,
+    # Agent 轨迹（W7，对齐手册 pp.64-66）：持久化执行轨迹（JSONL），供复盘/
+    # 评测/审计。默认关闭——轨迹是低频需求的持久化数据，不应默认产生存储压力；
+    # 需要时在设置页开启（开启后新任务开始记录，已有的照常保留）
+    "trajectory_enabled": False,
     # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
     # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
     # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页，USD）。DeepSeek 分时计费由
@@ -2199,6 +2203,18 @@ class AgentApp:
         _, deny_perms = domains_to_allowed_and_permissions(
             profile.domains, self._all_tool_names(), profile.extra_tools
         )
+        # W7 轨迹写入器：trajectory_enabled 开启时创建，关闭时 None（零开销）
+        _trajectory = None
+        if bool(self.config.get("trajectory_enabled", False)):
+            from .core.trajectory import TrajectoryWriter
+            _trajectory = TrajectoryWriter(
+                self.config_dir, session_id=kernel.session_id,
+                task_id=f"task-{int(time.time())}",
+                workspace=str(workspace or self.workspace or ""),
+                agent_id=agent_id or "build",
+            )
+            _trajectory.write_header()
+
         loop = AgentLoop(
             kernel=kernel,
             adapter=adapter,
@@ -2223,6 +2239,8 @@ class AgentApp:
                 self.tool_metrics_path(),
                 enabled=bool(self.config.get("tool_metrics", True)),
             ),
+            # W7 轨迹：默认关闭（trajectory_enabled=false 时为 None，零开销）
+            trajectory=_trajectory,
         )
         # 流式空闲看门狗透传（主/证据收据适配器；子 Agent 走适配器默认值）
         _idle = float(self.config.get("llm_idle_timeout", 120))

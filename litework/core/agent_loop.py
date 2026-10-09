@@ -117,6 +117,7 @@ class AgentLoop:
         header_conversation_id: Optional[str] = None,
         denied_tools: Optional[Dict[str, str]] = None,
         metrics: Any = None,
+        trajectory: Any = None,
     ) -> None:
         self.kernel = kernel
         self.adapter = adapter
@@ -204,6 +205,9 @@ class AgentLoop:
         self._loaded_skills: List[str] = []
         # W6：本轮已回填的工具结果（检测"外部内容+高危动作"组合用）
         self._recent_tool_results: List[str] = []
+        # W7：轨迹写入器（trajectory_enabled=false 时为 None，零开销）
+        self.trajectory = trajectory
+        self._turn_count = 0
         self._register_obs_recall_tool()
 
     def _register_obs_recall_tool(self) -> None:
@@ -488,6 +492,19 @@ class AgentLoop:
 
                 # W3 工具/技能指标：记录成败与归属（只计数，不落正文）
                 self._record_tool_metrics(tool_calls, results)
+
+                # W7 轨迹：工具调用落盘（trajectory 为 None 时零开销）
+                if self.trajectory is not None:
+                    from .metrics import classify_outcome
+                    self._turn_count += 1
+                    for call, result in zip(tool_calls, results):
+                        try:
+                            self.trajectory.tool_call(
+                                self._turn_count, call.name,
+                                classify_outcome(result or ""),
+                            )
+                        except Exception:
+                            pass
 
                 await self._append_tool_results(tool_calls, results, messages)
 
@@ -1387,6 +1404,17 @@ class AgentLoop:
 
     async def _finish(self, content: str, messages: List[Message], stats: Dict[str, Any],
                       store_snapshot: bool) -> Tuple[str, Dict[str, Any]]:
+        # W7 轨迹：写最终 outcome（verdict + gate + 成本 + 轮数）
+        if self.trajectory is not None:
+            try:
+                gate = self.last_gate_result or {}
+                self.trajectory.outcome(
+                    verdict=str(gate.get("verdict") or "unknown"),
+                    gate=gate, cost_estimate=float(stats.get("cost_estimate") or 0),
+                    turns=self._turn_count,
+                )
+            except Exception:
+                pass
         # 任务收尾前投递剩余子 Agent 通知：随消息链落盘持久化，
         # 下个任务（或本会话重新打开）自然在上下文中看到交付结果
         try:

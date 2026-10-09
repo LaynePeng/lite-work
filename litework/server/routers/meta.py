@@ -82,6 +82,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "completion_gate", "completion_gate_retries",
                 # 工具/技能指标（W3）：只记结构化计数
                 "tool_metrics",
+                # Agent 轨迹（W7）：默认关闭，设置页开启
+                "trajectory_enabled",
                 # 聊天区展示折叠阈值（轮数 / 消息数，任一超限即折叠）
                 "chat_fold_turns", "chat_fold_messages",
                 # 多智能体（docs/multi-agent-design.md §3 配置面）

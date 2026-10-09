@@ -420,4 +420,30 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=result.get("reason", "压缩失败"))
         return result
 
+    # ------------------------------------------------------------ W7：轨迹
+
+    @router.get("/api/trajectories/{session_id}")
+    async def list_trajectories(session_id: str, request: Request,
+                                task_id: str = "", offset: int = 0, limit: int = 500):
+        """列出会话的轨迹任务；指定 task_id 时返回该轨迹的事件（分页）。
+
+        trajectory_enabled=false 时只返回空列表（不报错——轨迹是 opt-in 的）。
+        """
+        ctx.check_auth(request)
+        from ...core.trajectory import analyze_trajectory, list_session_trajectories, read_trajectory
+
+        if task_id:
+            events = read_trajectory(app.config_dir, session_id, task_id,
+                                     offset=max(0, offset), limit=max(1, min(limit, 2000)))
+            return {
+                "session_id": session_id, "task_id": task_id,
+                "events": events, "count": len(events),
+                "findings": analyze_trajectory(events),
+            }
+        return {
+            "session_id": session_id,
+            "trajectories": list_session_trajectories(app.config_dir, session_id),
+            "enabled": bool(app.config.get("trajectory_enabled", False)),
+        }
+
     return router
