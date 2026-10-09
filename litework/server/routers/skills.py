@@ -112,9 +112,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc))
 
     @router.get("/api/plugins/community")
-    def community_plugins(url: str = "", request: Request = None):
-        if request:
-            ctx.check_auth(request)
+    def community_plugins(request: Request, url: str = ""):
+        ctx.check_auth(request)
         try:
             return app.plugins_community(url)
         except ValueError as exc:

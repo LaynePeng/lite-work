@@ -194,10 +194,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "deleted": deleted, "failed": failed}
 
     @router.get("/api/todos")
-    async def get_todos(session_id: str = "", request: Request = None):
+    async def get_todos(request: Request, session_id: str = ""):
         """读取会话 TODO 看板（内存命中优先，未命中从磁盘恢复；刷新/重启后可还原）。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         if not session_id:
             return {"todos": []}
         return {"todos": app.todo_plugin.get(session_id.strip())}

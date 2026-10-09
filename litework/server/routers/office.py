@@ -186,8 +186,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         返回 {path: 工作区相对路径, size, name}，Agent 可直接用 read_file /
         data_analyze 读取。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -225,10 +224,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"path": rel_path, "name": _os.path.basename(target), "size": len(data)}
 
     @router.get("/api/files/download")
-    async def download_file(path: str, request: Request = None):
+    async def download_file(path: str, request: Request):
         """下载工作区内的文件（用于办公产出物：docx/xlsx/pptx/pdf/图片）。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -246,7 +244,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         )
 
     @router.get("/api/outputs")
-    async def list_outputs(request: Request = None):
+    async def list_outputs(request: Request):
         """产出物收件箱数据：按类型分组 + 只留每项的最新版本。
 
         - 类型 = 产出物/ 下的一级子目录（图表/演示/报告/…）；根目录散文件归「未分类」；
@@ -256,8 +254,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         - 素材/ 同样处理，归入 source=uploads 的分组。
         返回 {groups: [{name, source, items: [...]}], total}（空分组不返回）。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -287,10 +284,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"groups": out, "total": total}
 
     @router.get("/api/outputs/zip")
-    async def download_outputs_zip(include_uploads: bool = False, request: Request = None):
+    async def download_outputs_zip(request: Request, include_uploads: bool = False):
         """把 产出物/（可选含 素材/）打包为 zip 一键下载。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import io as _io
         import os as _os
         import zipfile as _zipfile
@@ -338,13 +334,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
         )
 
     @router.delete("/api/outputs")
-    async def clear_outputs(scope: str = "outputs", request: Request = None):
+    async def clear_outputs(request: Request, scope: str = "outputs"):
         """清空产出目录：scope = outputs（默认）/ uploads / all。
 
         只删除 产出物/素材 下的顶层文件，不影响代码与其他数据。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         if scope not in ("outputs", "uploads", "all"):
@@ -368,7 +363,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "scope": scope, "deleted": deleted}
 
     @router.delete("/api/files")
-    async def delete_file(path: str, recursive: bool = False, request: Request = None):
+    async def delete_file(request: Request, path: str, recursive: bool = False):
         """删除工作区内的文件或目录（产出物/素材 与源码文件均可）。
 
         侧边栏「文件」页签与「产出物」面板共用此端点；底线不放开的项：
@@ -378,8 +373,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         - 目录：必须显式 `recursive=true`（UI 侧二次确认「连同内容一并删除」），
           否则 400；工作区根目录本身不可删（越界守卫已拦）。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -404,15 +398,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "path": rel, "kind": "file"}
 
     @router.post("/api/files/delete-batch")
-    async def delete_files_batch(payload: DeleteFilesRequest, request: Request = None):
+    async def delete_files_batch(payload: DeleteFilesRequest, request: Request):
         """批量删除工作区内的文件（单删守卫复用，单项失败不中断整批）。
 
         与单删 DELETE /api/files 的区别：任一路径守卫失败或删除异常时，
         不中断整批，而是把该项记入 failed 继续处理其余路径。
         响应：{ok, deleted: 成功数, failed: [{path: 原样相对路径, error: 中文原因}]}。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -434,7 +427,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "deleted": deleted, "failed": failed}
 
     @router.post("/api/files/create")
-    async def create_entry(payload: CreateEntryRequest, request: Request = None):
+    async def create_entry(payload: CreateEntryRequest, request: Request):
         """在工作区内新建空文件 / 空目录（文件页签：在目录上右键「新建…」）。
 
         守卫（与删除/重命名同一套底线）：
@@ -445,8 +438,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         - 目标已存在 → 409（不覆盖）；
         - kind 仅 file | dir。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -491,7 +483,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "path": rel, "name": name, "kind": kind}
 
     @router.post("/api/files/rename")
-    async def rename_file(payload: RenameRequest, request: Request = None):
+    async def rename_file(payload: RenameRequest, request: Request):
         """重命名工作区内的单个文件或目录（产出物/素材 与源码文件均可，同目录改名）。
 
         侧边栏「文件」页签与「产出物」面板共用此端点；底线不放开的项：
@@ -501,8 +493,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         - `.git/` 内部文件禁止重命名；
         - 目标同名已存在 → 409。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -549,13 +540,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "path": new_rel, "name": new_name}
 
     @router.get("/api/files/raw")
-    async def serve_file_raw(path: str, request: Request = None):
+    async def serve_file_raw(path: str, request: Request):
         """内联返回工作区文件（Content-Disposition: inline）。
 
         用于浏览器直接渲染预览：图片（png/jpg/svg）与 PDF。
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()
@@ -568,7 +558,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                             headers={"Cache-Control": "no-store"})
 
     @router.get("/api/files/preview")
-    async def preview_file(path: str, request: Request = None):
+    async def preview_file(path: str, request: Request):
         """结构化预览办公产出物。
 
         - 图片（png/jpg/jpeg/svg/gif/webp）与 PDF → kind="media"，前端用 /api/files/raw 渲染
@@ -577,8 +567,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         - pptx → kind="slides"，提取每页标题与要点
         - 其他文本类 → kind="text"，直接读前 20000 字符
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()

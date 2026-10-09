@@ -69,14 +69,24 @@ def read_jsonl(path: PathLike, *, offset: int = 0, limit: Optional[int] = None,
     return out
 
 
-def rotate_if_needed(path: PathLike, max_bytes: int) -> None:
-    """文件超过 max_bytes 时保留最近一半行；OSError 静默。"""
+def rotate_if_needed(path: PathLike, max_bytes: int,
+                     keep_first: bool = True) -> None:
+    """文件超过 max_bytes 时保留最近一半行；OSError 静默。
+
+    keep_first=True 时保留第一行（header），避免轮转后文件丢失元数据头。
+    """
     p = Path(path)
     try:
         if not p.exists() or p.stat().st_size <= max_bytes:
             return
         lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
-        keep = lines[len(lines) // 2:]
+        if keep_first and lines:
+            # 保留 header（第 1 行）+ 最近一半的其余行
+            header = lines[0]
+            rest = lines[1:]
+            keep = [header] + rest[len(rest) // 2:]
+        else:
+            keep = lines[len(lines) // 2:]
         p.write_text("".join(keep), encoding="utf-8")
     except OSError:
         pass

@@ -63,9 +63,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         )
 
     @router.get("/api/context/stats")
-    async def context_stats(session_id: str = "", request: Request = None):
-        if request:
-            ctx.check_auth(request)
+    async def context_stats(request: Request, session_id: str = ""):
+        ctx.check_auth(request)
         if not session_id:
             return {"session": {}}
         # 会话生效模型（会话覆盖 > 全局默认）及对应上下文窗口，

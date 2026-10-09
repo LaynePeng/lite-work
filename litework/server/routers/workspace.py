@@ -59,10 +59,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ]
 
     @router.get("/api/workspace/tree-json")
-    async def workspace_tree_json(path: str = "", request: Request = None):
+    async def workspace_tree_json(request: Request, path: str = ""):
         """结构化目录树（侧边栏文件页签）：按路径懒加载 + git 状态字母。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         from ..tree import list_tree
 
         workspace = ctx.require_workspace()
@@ -185,10 +184,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         }
 
     @router.get("/api/projects/recent")
-    async def list_recent_projects(request: Request = None):
+    async def list_recent_projects(request: Request):
         """最近打开的项目（侧边栏「项目」页签）。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         return {"items": app.list_recent_projects()}
 
     @router.post("/api/projects/recent")
@@ -246,14 +244,13 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return {"ok": True, "path": payload.path, "pinned": pinned}
 
     @router.get("/api/fs/list")
-    async def fs_list(path: str = "", show_hidden: bool = False, request: Request = None):
+    async def fs_list(request: Request, path: str = "", show_hidden: bool = False):
         """浏览任意目录（用于「打开项目」目录树选择）。
 
         - show_hidden=False（默认）过滤 . 开头的隐藏文件/目录
         - Windows：path 为空或盘符根时列出所有可用盘符（目录选择需先选盘）
         """
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
         import string as _string
         import sys as _sys
@@ -330,10 +327,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
         }
 
     @router.get("/api/fs/read")
-    async def fs_read(path: str, request: Request = None):
+    async def fs_read(path: str, request: Request):
         """读取工作区内的文件，返回内容、语言、行数和 git diff。"""
-        if request:
-            ctx.check_auth(request)
+        ctx.check_auth(request)
         import os as _os
 
         workspace = ctx.require_workspace()

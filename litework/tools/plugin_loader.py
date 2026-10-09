@@ -674,7 +674,7 @@ def import_zip_bytes(config_dir: str, data: bytes, name: Optional[str] = None,
                 if info.is_dir():
                     continue
                 dest = (Path(tmp) / info.filename).resolve()
-                if not str(dest).startswith(str(Path(tmp).resolve())):
+                if not str(dest).startswith(str(Path(tmp).resolve()) + os.sep):
                     raise ValueError(f"zip 条目路径越界: {info.filename}")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as fsrc, open(dest, "wb") as fdst:
@@ -873,7 +873,7 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
                         continue
                     rel = rel[len(subpath) + 1:]
                 dest = (tmp / rel).resolve()
-                if not str(dest).startswith(str(tmp.resolve())):
+                if not str(dest).startswith(str(tmp.resolve()) + os.sep):
                     raise ValueError(f"zip 条目路径越界: {info.filename}")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as fsrc, open(dest, "wb") as fdst:
