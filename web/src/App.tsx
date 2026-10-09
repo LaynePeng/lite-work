@@ -2757,6 +2757,39 @@ export default function App() {
     })();
   };
 
+  // 任务卡「⏭ 续」：进入该会话并自动续推（复用 AUTO_CONTINUE 同款 prompt 与发送管线）。
+  const continueSession = useCallback(async (sid: string, title?: string) => {
+    try {
+      await selectSession(sid, title);
+      taskLauncherRef.current(sid, CONTINUE_PROMPT);
+      await refreshSessions();
+    } catch (e) {
+      pushLog(`✗ 续任务失败: ${(e as Error).message}`);
+    }
+  }, [selectSession, refreshSessions, pushLog]);
+
+  // 任务卡「⤴ 派生」：克隆源会话骨架（goal/协作/模型/TODO 结构）到新会话并进入，
+  // 附带一条上下文提示（只展示、不发 LLM），用户自行下达新版需求。
+  const deriveSession = useCallback(async (sid: string, title?: string) => {
+    try {
+      const r = await api.deriveSession(sid);
+      await selectSession(r.session_id, title ? `${title} · 派生` : undefined);
+      patchChat(r.session_id, {
+        messages: [{
+          role: "assistant",
+          content:
+            "⤴ 已派生于「" + (title || sid) + "」：会话目标与 TODO 结构已继承（未完成项已重置为待办）。" +
+            (r.goal ? ` 当前目标：${r.goal}` : "") +
+            (r.todos_copied ? ` 已继承 ${r.todos_copied} 项 TODO。` : "") +
+            " 可直接下达新版需求，或用 /goal 调整目标。",
+        }],
+      });
+      await refreshSessions();
+    } catch (e) {
+      pushLog(`✗ 派生失败: ${(e as Error).message}`);
+    }
+  }, [selectSession, refreshSessions, patchChat, pushLog]);
+
   const stop = useCallback(async () => {
     const sid = activeSessionId;
     if (!sid) return;
@@ -2983,6 +3016,8 @@ export default function App() {
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
         onTabChange={changeSidebarTab}
         onSelectSession={(id) => void selectSession(id)}
+        onContinueSession={(id, title) => void continueSession(id, title)}
+        onDeriveSession={(id, title) => void deriveSession(id, title)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onDeleteSession={(id) => void deleteSession(id)}

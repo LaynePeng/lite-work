@@ -143,6 +143,12 @@ export const api = {
   },
   createSession: (name?: string) =>
     req<{ session_id: string }>("/api/sessions", { method: "POST", body: JSON.stringify(name ? { name } : {}) }),
+  /** 派生会话：克隆源会话骨架（goal/协作模式/模型/隔离工作树/TODO 结构）到新会话。 */
+  deriveSession: (sourceId: string, name?: string) =>
+    req<{ session_id: string; workspace?: string; goal?: string | null; todos_copied: number; worktree: boolean }>(
+      `/api/sessions/${encodeURIComponent(sourceId)}/derive`, {
+        method: "POST", body: JSON.stringify(name ? { name } : {}),
+      }),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
   sessionModel: (id: string) => req<import("./types").SessionModelResponse>(`/api/sessions/${id}/model`),
   setSessionModel: (id: string, model: import("./types").SessionModel | null) =>

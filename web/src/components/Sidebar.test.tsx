@@ -409,4 +409,29 @@ describe("Sidebar · 任务 Tab（Goals 视图）", () => {
     await user.click(within(runCard).getByTitle("执行轨迹（W7）"));
     expect(await screen.findByText(/轨迹未开启/)).toBeInTheDocument();
   });
+
+  it("未运行且未完成的任务卡显示「⏭ 续」；点击触发 onContinueSession", async () => {
+    const user = userEvent.setup();
+    const onContinueSession = vi.fn();
+    render(<Sidebar {...taskProps} onContinueSession={onContinueSession}
+      sessions={[{ ...taskSessions[0], session_id: "s-idle", running: false }] as never} />);
+    const card = (await screen.findByText("季度报告汇总")).closest(".task-card") as HTMLElement;
+    await user.click(within(card).getByTitle(/续任务/));
+    expect(onContinueSession).toHaveBeenCalledWith("s-idle", "季度报告汇总");
+  });
+
+  it("运行中的任务不显示「续」；完成任务卡显示「⤴ 派生」并触发 onDeriveSession", async () => {
+    const user = userEvent.setup();
+    const onContinueSession = vi.fn();
+    const onDeriveSession = vi.fn();
+    render(<Sidebar {...taskProps} onContinueSession={onContinueSession} onDeriveSession={onDeriveSession} />);
+    // 运行中卡（s-run）：无「续」按钮（任务还在跑，不提供续推入口）
+    const runCard = (await screen.findByText("季度报告汇总")).closest(".task-card") as HTMLElement;
+    expect(within(runCard).queryByTitle(/续任务/)).toBeNull();
+    // 完成态卡（s-done）：显示派生按钮并触发回调，不触发续
+    const doneCard = (await screen.findByText("APP 竞品调研")).closest(".task-card") as HTMLElement;
+    await user.click(within(doneCard).getByTitle(/派生/));
+    expect(onDeriveSession).toHaveBeenCalledWith("s-done", "APP 竞品调研");
+    expect(onContinueSession).not.toHaveBeenCalled();
+  });
 });

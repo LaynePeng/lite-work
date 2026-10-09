@@ -638,10 +638,12 @@ function TrajectoryDrawer({ sessionId, onClose }: { sessionId: string; onClose: 
 /** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
  *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
  *  步骤最多 3 行；完成态自动收敛。 */
-function TaskCard({ task, active, onSelect, onDelete }: {
+function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
   task: SessionInfo;
   active: boolean;
   onSelect: () => void;
+  onContinue?: () => void;
+  onDerive?: () => void;
   onDelete: () => void;
 }) {
   const [trajOpen, setTrajOpen] = useState(false);
@@ -693,6 +695,10 @@ function TaskCard({ task, active, onSelect, onDelete }: {
           <span title={`${task.message_count} 条消息`}>💬 {task.message_count}</span>
           <div className="task-actions">
             <button title="执行轨迹（W7）" onClick={(e) => { e.stopPropagation(); setTrajOpen(true); }}>📈</button>
+            {!task.running && onContinue && (
+              <button className="btn-continue-card" title="续任务：TODO 有未完成项，继续推进（等同聊天区「继续执行未完成的任务」）"
+                onClick={(e) => { e.stopPropagation(); onContinue(); }}>⏭ 续</button>
+            )}
             <button className="run" title="进入会话" onClick={(e) => { e.stopPropagation(); onSelect(); }}>进入 ›</button>
             <button title="删除任务" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除任务「${task.title}」？`)) onDelete(); }}>✕</button>
           </div>
@@ -702,6 +708,10 @@ function TaskCard({ task, active, onSelect, onDelete }: {
       {done && (
         <div className="task-deliv" title={`完成于 ${relTime(task.updated_at)}`}>
           <span>✓ 全部完成</span>
+          {onDerive && (
+            <button className="btn-derive-card" title="派生：克隆目标与 TODO 结构到新会话（不复制对话历史）"
+              onClick={(e) => { e.stopPropagation(); onDerive(); }}>⤴ 派生</button>
+          )}
           <span style={{ marginLeft: "auto" }}>{relTime(task.updated_at)}</span>
         </div>
       )}
@@ -712,7 +722,7 @@ function TaskCard({ task, active, onSelect, onDelete }: {
 }
 
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
-function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onDeleteSession, onNewSession }: {
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   workspace: string;
@@ -720,6 +730,8 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
   projectName: string;
   onBackToProjects: () => void;
   onSelectSession: (id: string) => void;
+  onContinueSession?: (id: string, title?: string) => void;
+  onDeriveSession?: (id: string, title?: string) => void;
   onDeleteSession: (id: string) => void;
   onNewSession: () => void;
 }) {
@@ -751,6 +763,8 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
           task={s}
           active={s.session_id === activeSessionId}
           onSelect={() => onSelectSession(s.session_id)}
+          onContinue={onContinueSession ? () => onContinueSession(s.session_id, s.title) : undefined}
+          onDerive={onDeriveSession ? () => onDeriveSession(s.session_id, s.title) : undefined}
           onDelete={() => onDeleteSession(s.session_id)}
         />
       ))}
@@ -774,6 +788,8 @@ export default function Sidebar({
   onToggleCollapsed,
   onTabChange,
   onSelectSession,
+  onContinueSession,
+  onDeriveSession,
   onOpenSessionWithProject,
   onNewSession,
   onDeleteSession,
@@ -807,6 +823,10 @@ export default function Sidebar({
   onToggleCollapsed?: () => void;
   onTabChange: (tab: SidebarTab) => void;
   onSelectSession: (id: string) => void;
+  /** 任务卡「续」：进入会话并自动续推（App 层复用 AUTO_CONTINUE 发送管线） */
+  onContinueSession?: (id: string, title?: string) => void;
+  /** 任务卡「派生」：克隆会话骨架到新会话（App 层调 derive API） */
+  onDeriveSession?: (id: string, title?: string) => void;
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
@@ -1091,6 +1111,8 @@ export default function Sidebar({
             projectName={projectName}
             onBackToProjects={onBackToProjects}
             onSelectSession={onSelectSession}
+            onContinueSession={onContinueSession}
+            onDeriveSession={onDeriveSession}
             onDeleteSession={onDeleteSession}
             onNewSession={onNewSession}
           />

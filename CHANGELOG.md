@@ -2,6 +2,17 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [未发布]
+
+### 新增（任务 Tab P2：续任务 / 派生按钮）
+- **任务卡「⏭ 续」**：未完成且不在运行的会话可直接从卡片续推——进入该会话并
+  自动发送推进指令（复用 AUTO_CONTINUE 同款 prompt 与发送管线）；
+- **任务卡「⤴ 派生」**：完成态卡一键克隆会话骨架到新会话并进入——继承
+  goal / 协作模式 / 模型 / 隔离工作树开关 / TODO 结构；TODO 全部重置为待办
+  （不继承旧进度），对话历史不复制；非 git 项目静默跳过隔离工作树继承；
+- 后端新增 `POST /api/sessions/{id}/derive`（复制 metadata + 以 TODO 种子写入
+  新看板）；`TodoPlugin.seed_board` 提供看板种子写入（状态强制 pending）。
+
 ## [1.10.5] — 项目结构 v2 + 设置页配置全量透出 + 侧栏「任务」Tab
 
 ### 新增（任务 Tab：Goals 视图，参考 Muse / dots 的 Goals 设计；设计文档 docs/goals-tab-design.md）

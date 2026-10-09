@@ -7727,3 +7727,24 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .meta-notice-close:hover {
   color: var(--text-0);
 }
+
+/* 任务卡 P2：续任务（未完成卡操作行）与派生（完成态卡）按钮 */
+.task-actions .btn-continue-card {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.task-deliv .btn-derive-card {
+  background: none;
+  border: 1px solid var(--bg-3);
+  color: var(--accent);
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.task-deliv .btn-derive-card:hover {
+  background: var(--bg-3);
+}

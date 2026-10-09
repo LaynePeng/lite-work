@@ -18,6 +18,10 @@ class SessionCreateRequest(BaseModel):
     name: Optional[str] = None
     workspace: Optional[str] = None
 
+class SessionDeriveRequest(BaseModel):
+    """会话派生请求：可选自定义新会话名称（默认「源标题 · 派生」）。"""
+    name: Optional[str] = None
+
 
 class CompactRequest(BaseModel):
     session_id: str
@@ -193,6 +197,58 @@ def create_router(ctx: ServerContext) -> APIRouter:
             metadata["workspace"] = workspace
         app.session_store.save(session_id, [], metadata)
         return {"session_id": session_id}
+
+    @router.post("/api/sessions/{session_id}/derive")
+    async def derive_session(session_id: str, payload: SessionDeriveRequest, request: Request):
+        """派生会话：克隆源会话骨架（目标 / 协作模式 / 模型 / 隔离工作树开关 /
+        TODO 结构）到新会话；对话历史不复制（派生 = 带骨架另起炉灶）。
+
+        TODO 看板全部重置为 pending——「上一版已完成」不继承为新任务的进度。
+        """
+        ctx.check_auth(request)
+        source = app.session_store.load(session_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="源会话不存在")
+        src_meta = source.metadata or {}
+
+        new_id = f"session_{uuid.uuid4().hex}"
+        workspace = src_meta.get("workspace") or app.workspace
+        new_meta: Dict[str, Any] = {}
+        if workspace:
+            new_meta["workspace"] = workspace
+        name = (payload.name or "").strip()
+        if name:
+            new_meta["name"] = name[:120]
+        elif src_meta.get("name"):
+            new_meta["name"] = f"{src_meta['name']} · 派生"
+        # 继承 goal / collab_mode / model；worktree 需先过 git 校验（同开关端点语义）
+        for key in ("goal", "collab_mode", "model"):
+            if src_meta.get(key):
+                new_meta[key] = src_meta[key]
+        worktree = False
+        if src_meta.get("worktree"):
+            mgr = app.worktree_manager()
+            if mgr.is_git_repo():
+                new_meta["worktree"] = True
+                worktree = True
+
+        app.session_store.save(new_id, [], new_meta)
+
+        todos_copied = 0
+        try:
+            todos_copied = app.todo_plugin.seed_board(
+                new_id, app.todo_plugin.get(session_id)
+            )
+        except Exception:
+            pass  # TODO 复制失败不阻塞派生
+
+        return {
+            "session_id": new_id,
+            "workspace": workspace,
+            "goal": new_meta.get("goal"),
+            "todos_copied": todos_copied,
+            "worktree": worktree,
+        }
 
     @router.get("/api/sessions/{session_id}")
     async def get_session(session_id: str, request: Request):

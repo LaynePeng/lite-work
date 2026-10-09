@@ -105,6 +105,25 @@ class TodoPlugin(ToolPlugin):
             logger.exception("[TodoPlugin] 看板读取失败: %s", session_id)
             return []
 
+    def seed_board(self, session_id: str, items: list) -> int:
+        """把一组 TODO 作为新任务种子写入看板（会话派生用）：状态强制重置为
+        pending（新任务从零推进，不继承旧进度），写内存 + 落盘。
+
+        不绑定事件总线（派生出的新会话尚无任务在跑），返回实际写入项数。
+        """
+        cleaned = []
+        for t in items or []:
+            if not isinstance(t, dict):
+                continue
+            content = str(t.get("content", "")).strip()
+            if content:
+                cleaned.append({"content": content, "status": "pending"})
+        if not cleaned:
+            return 0
+        self._items[session_id] = cleaned
+        self._persist(session_id, cleaned)
+        return len(cleaned)
+
     def delete_board(self, session_id: str) -> None:
         """删除会话看板（内存 + 磁盘，会话删除时调用）。"""
         self._items.pop(session_id, None)
