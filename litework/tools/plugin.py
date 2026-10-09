@@ -242,7 +242,11 @@ class OfficePlugin(ToolPlugin):
     #        表格渲染、内联格式、主题配色（theme/accent_color）、封面与页脚页码
     # 1.4.1：与社区 v1.4.1 同源——docx_read 兜底 p.style 为 None（未声明默认
     #        段落样式的文档不再 AttributeError 崩溃）
-    version = "1.4.1"
+    # 1.5.0：与社区 v1.5.0 同源——LibreOffice 可选增强层（office_convert /
+    #        office_render / xlsx_recalculate，soffice 缺失时优雅降级）
+    # 1.6.0：与社区 v1.6.0 同源——输出目录与 v2 项目结构对齐：交付物直接写
+    #        工作区根目录，中间产物写 中间产物/
+    version = "1.6.0"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:

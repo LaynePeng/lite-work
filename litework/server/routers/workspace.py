@@ -24,7 +24,7 @@ class ProjectCreateRequest(BaseModel):
     parent: str
     name: str
     git: bool = True
-    # 结构初始化（素材/产出物/AGENTS.md，调 project_scaffold.scaffold_project）：
+    # 结构初始化（素材/中间产物/归档/AGENTS.md，调 project_scaffold.scaffold_project）：
     # None → 默认初始化（新建项目的产品默认行为）；「新建代码」显式传 False
     structure: Optional[bool] = None
     # 项目类型（入口语义）：code/project；缺省按目录内容启发式判定
@@ -158,7 +158,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
             except (OSError, _sp.TimeoutExpired):
                 git_initialized = False
 
-        # 结构初始化（素材/产出物/AGENTS.md）：新建项目默认执行；
+        # 结构初始化（素材/中间产物/归档/AGENTS.md）：新建项目默认执行；
         # 失败不阻断创建（目录已建好，Agent 可用 project-init 技能补建）
         scaffolded = False
         if payload.structure if payload.structure is not None else True:

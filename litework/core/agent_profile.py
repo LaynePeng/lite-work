@@ -264,7 +264,8 @@ OFFICE_PROMPT = """你是一名办公生产力专家（Office Agent），帮助�
 你的能力：
 - 产出文件：docx_create（Word）/ xlsx_create（Excel）/ pptx_create（PPT）/
   pdf_create（PDF）/ chart_make（图表）/ data_analyze（数据分析），
-  产出保存到工作区 .outputs/，完成后务必告知用户路径；
+  交付物直接写工作区根目录（文件名带版本，如 方案_v1.docx），中间文件
+  （文档内嵌图表/渲染预览）自动落 中间产物/，完成后务必告知用户路径；
 - 读取与再加工：docx_read / xlsx_read / pptx_read / pdf_read 读取既有
   办公文件；OCR 系列识别图片/扫描件内文字；可读写工作区普通文件；
 - 长文档用 docx_append 增量追加，不为改一段重生成整篇。
@@ -318,7 +319,8 @@ RESEARCH_PROMPT = """你是一名调研分析师（Research Agent），帮助用
 边界：
 - 你不做代码开发与命令执行：只读文件 + 联网 + 生成办公文档；
   涉及写代码/跑脚本的需求提示用户切到 Build Agent；
-- 产出物写到工作区（.outputs/），不修改业务代码文件。"""
+- 交付物直接写到工作区根目录（如 调研报告_v1.docx），过程文件写 中间产物/；
+  不修改业务代码文件。"""
 
 
 def default_research_agent() -> AgentProfile:

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""办公场景接口测试：产出物列表 / 预览 / 原始文件 / 下载 / 上传。
+"""办公场景接口测试：素材列表 / 预览 / 原始文件 / 下载 / 上传。
 
 依赖 office 主依赖（python-docx / openpyxl / python-pptx / reportlab / matplotlib）。
 """
@@ -29,7 +29,7 @@ def client_and_workspace(tmp_path):
 
 
 def _make_outputs(ws: str) -> None:
-    """在工作区 产出物/ 下生成各类办公文件。"""
+    """在工作区根目录生成各类办公交付物（v1.6.0 起默认落根目录）。"""
     tools = OfficeTools(ws)
 
     import asyncio
@@ -55,73 +55,42 @@ def _make_outputs(ws: str) -> None:
     asyncio.run(run())
 
 
-# ---------------------------------------------------------------- /api/outputs
+# ---------------------------------------------------------------- /api/uploads
 
-def test_outputs_listing(client_and_workspace):
+def test_uploads_listing(client_and_workspace):
+    """素材列表：只列 素材/，含子目录相对路径；跳过锁文件与隐藏文件。"""
     client, ws = client_and_workspace
-    _make_outputs(ws)
-    r = client.get("/api/outputs")
+    base = os.path.join(ws, "素材")
+    _write(os.path.join(base, "报表.xlsx"), b"xlsx")
+    _write(os.path.join(base, "参考", "资料.pdf"), b"pdf")
+    _write(os.path.join(base, "~$报表.xlsx"), b"lock")
+    _write(os.path.join(base, ".DS_Store"), b"junk")
+
+    r = client.get("/api/uploads")
     assert r.status_code == 200
     body = r.json()
-    groups = body["groups"]
-    # 平铺写入 产出物/ 根目录 → 归入「未分类」一组
-    assert len(groups) == 1
-    assert groups[0]["name"] == "未分类"
-    assert groups[0]["source"] == "outputs"
-    items = groups[0]["items"]
-    names = {i["name"] for i in items}
-    assert {"文档.docx", "表格.xlsx", "演示.pptx", "图表.png", "报告.pdf"} <= names
-    assert body["total"] == len(items)
-    for i in items:
-        assert i["source"] == "outputs"
-        assert i["path"].startswith("产出物/")
-        assert i["size"] > 0
-        assert "category" in i and "ext" in i
-
-
-def test_outputs_inbox_groups_by_dir_and_keeps_latest_version(client_and_workspace):
-    """收件箱：按类型目录分组、只留最新版本、跳过 归档/中间产物/构建产物。"""
-    client, ws = client_and_workspace
-    base = os.path.join(ws, "产出物")
-    os.makedirs(os.path.join(base, "图表", "中间产物"), exist_ok=True)
-    os.makedirs(os.path.join(base, "图表", "归档"), exist_ok=True)
-    os.makedirs(os.path.join(base, "演示"), exist_ok=True)
-    # 图表：同一交付物两个版本 + 一份 LaTeX 中间产物 + 归档旧版
-    _write(os.path.join(base, "图表", "系统框图_v1.png"), b"a")
-    _write(os.path.join(base, "图表", "系统框图_v2.png"), b"bb")
-    _write(os.path.join(base, "图表", "系统框图_v2.aux"), b"x")
-    _write(os.path.join(base, "图表", "中间产物", "tmp.png"), b"x")
-    _write(os.path.join(base, "图表", "归档", "系统框图_v0.png"), b"x")
-    _write(os.path.join(base, "演示", "简报_v3.pptx"), b"ppt")
-
-    body = client.get("/api/outputs").json()
-    by_group = {g["name"]: g for g in body["groups"]}
-    assert set(by_group) == {"图表", "演示"}
-    # 只留 v2（v1 不出现），.aux 与 归档/中间产物 均不出现
-    chart_names = [i["name"] for i in by_group["图表"]["items"]]
-    assert chart_names == ["系统框图_v2.png"]
-    assert by_group["图表"]["items"][0]["version"] == 2.0
-    assert [i["name"] for i in by_group["演示"]["items"]] == ["简报_v3.pptx"]
-
-
-def test_outputs_skips_office_lock_files(client_and_workspace):
-    """Office 打开文档时产生的 `~$xxx.docx` 锁文件不是交付物，不应混进收件箱。
-
-    这类文件带交付物扩展名（.docx/.xlsx…），若不按前缀过滤会被当成一份独立产出物
-    （版本号解析后基名为 `~$xxx`，与真实文件并列出现）。
-    """
-    client, ws = client_and_workspace
-    base = os.path.join(ws, "产出物")
-    _write(os.path.join(base, "交底书_v9.docx"), b"doc")
-    _write(os.path.join(base, "~$交底书_v9.docx"), b"lock")
-    _write(os.path.join(base, "报告", "报告_v2.xlsx"), b"xlsx")
-    _write(os.path.join(base, "报告", "~$报告_v2.xlsx"), b"lock")
-
-    body = client.get("/api/outputs").json()
-    names = {i["name"] for g in body["groups"] for i in g["items"]}
-    assert names == {"交底书_v9.docx", "报告_v2.xlsx"}
+    names = {i["name"] for i in body["items"]}
+    assert names == {"报表.xlsx", "资料.pdf"}
+    paths = {i["path"] for i in body["items"]}
+    assert "素材/报表.xlsx" in paths
+    assert "素材/参考/资料.pdf" in paths
+    assert all(i["source"] == "uploads" for i in body["items"])
     assert body["total"] == 2
-    assert all(not i["name"].startswith("~$") for g in body["groups"] for i in g["items"])
+
+
+def test_uploads_empty_when_no_dir(client_and_workspace):
+    client, _ = client_and_workspace
+    r = client.get("/api/uploads")
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "total": 0}
+
+
+def test_outputs_endpoints_removed(client_and_workspace):
+    """v2 结构：收件箱三件套已删除（404 而非 500）。"""
+    client, _ = client_and_workspace
+    assert client.get("/api/outputs").status_code == 404
+    assert client.get("/api/outputs/zip").status_code == 404
+    assert client.delete("/api/outputs").status_code == 405 or         client.delete("/api/outputs").status_code == 404
 
 
 def _write(path: str, data: bytes) -> None:
@@ -135,7 +104,7 @@ def _write(path: str, data: bytes) -> None:
 def test_preview_image_is_media(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/preview", params={"path": "产出物/图表.png"})
+    r = client.get("/api/files/preview", params={"path": "图表.png"})
     assert r.status_code == 200
     data = r.json()
     assert data["kind"] == "media"
@@ -146,7 +115,7 @@ def test_preview_image_is_media(client_and_workspace):
 def test_preview_pdf_is_media(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/preview", params={"path": "产出物/报告.pdf"})
+    r = client.get("/api/files/preview", params={"path": "报告.pdf"})
     assert r.status_code == 200
     assert r.json()["kind"] == "media"
     assert r.json()["media_type"] == "application/pdf"
@@ -155,7 +124,7 @@ def test_preview_pdf_is_media(client_and_workspace):
 def test_preview_xlsx_is_table(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/preview", params={"path": "产出物/表格.xlsx"})
+    r = client.get("/api/files/preview", params={"path": "表格.xlsx"})
     assert r.status_code == 200
     data = r.json()
     assert data["kind"] == "table"
@@ -166,7 +135,7 @@ def test_preview_xlsx_is_table(client_and_workspace):
 def test_preview_docx_is_text(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/preview", params={"path": "产出物/文档.docx"})
+    r = client.get("/api/files/preview", params={"path": "文档.docx"})
     assert r.status_code == 200
     data = r.json()
     assert data["kind"] == "text"
@@ -178,7 +147,7 @@ def test_preview_docx_is_text(client_and_workspace):
 def test_preview_pptx_is_slides(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/preview", params={"path": "产出物/演示.pptx"})
+    r = client.get("/api/files/preview", params={"path": "演示.pptx"})
     assert r.status_code == 200
     data = r.json()
     assert data["kind"] == "slides"
@@ -197,7 +166,7 @@ def test_preview_path_escape_blocked(client_and_workspace):
 def test_raw_image_inline(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/raw", params={"path": "产出物/图表.png"})
+    r = client.get("/api/files/raw", params={"path": "图表.png"})
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("image/png")
     assert len(r.content) > 0
@@ -206,7 +175,7 @@ def test_raw_image_inline(client_and_workspace):
 def test_download_docx(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.get("/api/files/download", params={"path": "产出物/文档.docx"})
+    r = client.get("/api/files/download", params={"path": "文档.docx"})
     assert r.status_code == 200
     assert len(r.content) > 0
 
@@ -238,71 +207,17 @@ def test_upload_same_name_conflict_renamed(client_and_workspace):
     assert len(names) == 2
 
 
-# ---------------------------------------------------------------- 产出物 ZIP / 清理
-
-def test_outputs_zip_download(client_and_workspace):
-    client, ws = client_and_workspace
-    _make_outputs(ws)
-    # 上传一个素材，验证 include_uploads 参数
-    client.post("/api/upload", files={"file": ("素材.csv", "a,b\n1,2\n", "text/csv")})
-
-    r = client.get("/api/outputs/zip")
-    assert r.status_code == 200
-    assert r.headers["content-type"] == "application/zip"
-    import io
-    import zipfile
-    zf = zipfile.ZipFile(io.BytesIO(r.content))
-    names = zf.namelist()
-    # 仅 产出物（5 个产出物），不含 uploads
-    assert any(n.startswith("产出物/") for n in names)
-    assert not any(n.startswith("素材/") for n in names)
-    assert len([n for n in names if n.startswith("产出物/")]) == 5
-
-    # include_uploads=True 时包含素材
-    r2 = client.get("/api/outputs/zip", params={"include_uploads": "true"})
-    assert r2.status_code == 200
-    zf2 = zipfile.ZipFile(io.BytesIO(r2.content))
-    assert any(n.startswith("素材/素材.csv") for n in zf2.namelist())
-
-
-def test_outputs_zip_empty_404(client_and_workspace):
-    client, _ = client_and_workspace
-    r = client.get("/api/outputs/zip")
-    assert r.status_code == 404
-
-
-def test_clear_outputs(client_and_workspace):
-    client, ws = client_and_workspace
-    _make_outputs(ws)
-    client.post("/api/upload", files={"file": ("素材.csv", "x\n", "text/csv")})
-
-    # 默认 scope=outputs：只清 产出物
-    r = client.delete("/api/outputs")
-    assert r.status_code == 200
-    assert r.json()["deleted"] == 5
-    assert os.listdir(os.path.join(ws, "产出物")) == []
-    assert os.path.isfile(os.path.join(ws, "素材", "素材.csv"))
-
-    # scope=all：连同 uploads 一起清
-    r2 = client.delete("/api/outputs", params={"scope": "all"})
-    assert r2.status_code == 200
-    assert r2.json()["deleted"] == 1
-    assert os.listdir(os.path.join(ws, "素材")) == []
-
-    # 非法 scope
-    r3 = client.delete("/api/outputs", params={"scope": "hack"})
-    assert r3.status_code == 400
-
+# ---------------------------------------------------------------- /api/files 删除
 
 def test_delete_single_output_file(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
 
-    r = client.delete("/api/files", params={"path": "产出物/图表.png"})
+    r = client.delete("/api/files", params={"path": "图表.png"})
     assert r.status_code == 200
-    assert not os.path.exists(os.path.join(ws, "产出物", "图表.png"))
+    assert not os.path.exists(os.path.join(ws, "图表.png"))
 
-    # 文件页签：嵌套目录下的源码文件同样可删（旧「仅限 产出物/素材」限制已放开）
+    # 文件页签：嵌套目录下的源码文件同样可删（旧「仅限 素材」限制已放开）
     nested = os.path.join(ws, "src", "core")
     os.makedirs(nested)
     with open(os.path.join(nested, "main.py"), "w", encoding="utf-8") as f:
@@ -316,7 +231,7 @@ def test_delete_single_output_file(client_and_workspace):
     assert r3.status_code in (403, 404)
 
     # 不存在的文件
-    r4 = client.delete("/api/files", params={"path": "产出物/nope.png"})
+    r4 = client.delete("/api/files", params={"path": "nope.png"})
     assert r4.status_code == 404
 
 
@@ -342,12 +257,12 @@ def test_delete_dir_and_git_internal_rejected(client_and_workspace):
 def test_rename_output_file(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "新图表.png"})
+    r = client.post("/api/files/rename", json={"path": "图表.png", "new_name": "新图表.png"})
     assert r.status_code == 200
-    assert r.json()["path"] == "产出物/新图表.png"
+    assert r.json()["path"] == "新图表.png"
     assert r.json()["name"] == "新图表.png"
-    assert os.path.isfile(os.path.join(ws, "产出物", "新图表.png"))
-    assert not os.path.exists(os.path.join(ws, "产出物", "图表.png"))
+    assert os.path.isfile(os.path.join(ws, "新图表.png"))
+    assert not os.path.exists(os.path.join(ws, "图表.png"))
 
 
 def test_rename_upload_file(client_and_workspace):
@@ -362,18 +277,18 @@ def test_rename_upload_file(client_and_workspace):
 def test_rename_same_name_is_noop(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "图表.png"})
+    r = client.post("/api/files/rename", json={"path": "图表.png", "new_name": "图表.png"})
     assert r.status_code == 200
-    assert os.path.isfile(os.path.join(ws, "产出物", "图表.png"))
+    assert os.path.isfile(os.path.join(ws, "图表.png"))
 
 
 def test_rename_extension_change_rejected(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "图表.txt"})
+    r = client.post("/api/files/rename", json={"path": "图表.png", "new_name": "图表.txt"})
     assert r.status_code == 400
     # 原文件安然无恙
-    assert os.path.isfile(os.path.join(ws, "产出物", "图表.png"))
+    assert os.path.isfile(os.path.join(ws, "图表.png"))
 
 
 def test_rename_conflict_409(client_and_workspace):
@@ -387,14 +302,14 @@ def test_rename_conflict_409(client_and_workspace):
 def test_rename_invalid_name(client_and_workspace):
     client, ws = client_and_workspace
     _make_outputs(ws)
-    r = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": ""})
+    r = client.post("/api/files/rename", json={"path": "图表.png", "new_name": ""})
     assert r.status_code == 400
-    r2 = client.post("/api/files/rename", json={"path": "产出物/图表.png", "new_name": "a/b.png"})
+    r2 = client.post("/api/files/rename", json={"path": "图表.png", "new_name": "a/b.png"})
     assert r2.status_code == 400
 
 
 def test_rename_workspace_source_file(client_and_workspace):
-    """文件页签：嵌套目录下的源码文件可重命名（旧「仅限 产出物/素材」限制已放开）。"""
+    """文件页签：嵌套目录下的源码文件可重命名（旧「仅限 素材」限制已放开）。"""
     client, ws = client_and_workspace
     os.makedirs(os.path.join(ws, "src"))
     with open(os.path.join(ws, "src", "main.py"), "w", encoding="utf-8") as f:
@@ -423,7 +338,7 @@ def test_rename_git_internal_rejected(client_and_workspace):
 
 def test_rename_missing_file_404(client_and_workspace):
     client, _ = client_and_workspace
-    r = client.post("/api/files/rename", json={"path": "产出物/nope.png", "new_name": "x.png"})
+    r = client.post("/api/files/rename", json={"path": "nope.png", "new_name": "x.png"})
     assert r.status_code == 404
 
 

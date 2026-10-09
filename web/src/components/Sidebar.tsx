@@ -7,15 +7,20 @@ import type { ReactNode } from "react";
 import { api } from "../api";
 import AppIcon from "./AppIcon";
 import TerminalPanel from "./TerminalPanel";
-import type { OutputItem, RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../types";
+import type { RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../types";
 import { baseName } from "../lib/path";
 import { isTextLikePath, resolveOpenTarget } from "../lib/fileOpen";
 
-export type SidebarTab = "sessions" | "files" | "terminal" | "outputs";
+export type SidebarTab = "sessions" | "files" | "terminal";
 
 export interface OpenFileOptions {
   /** 强制用内置查看器（右键「用内置查看」），绕过 markdown 的系统优先规则 */
   forceBuiltin?: boolean;
+}
+
+/** 短 SHA（画分支树用）：取前 7 位，空值显示 "-"。 */
+function shortSha(sha?: string): string {
+  return sha ? sha.slice(0, 7) : "-";
 }
 
 // ---------------------------------------------------------------- 目录树
@@ -534,509 +539,6 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
   );
 }
 
-// ---------------------------------------------------------------- 产出物面板（AGI 通用入口：预览/下载 Agent 生成的办公文件）
-
-const OUTPUT_ICONS: Record<string, string> = {
-  ".docx": "📄", ".doc": "📄", ".xlsx": "📊", ".xls": "📊", ".pptx": "🎞️", ".ppt": "🎞️",
-  ".pdf": "📕", ".png": "🖼️", ".jpg": "🖼️", ".jpeg": "🖼️", ".svg": "🖼️", ".gif": "🖼️", ".webp": "🖼️",
-  ".md": "📝", ".txt": "📄", ".csv": "📈", ".html": "🌐", ".zip": "🗜️",
-  ".mmd": "🧩", ".puml": "🧩",
-};
-
-/** 短 SHA（画分支树用）：取前 7 位，空值显示 "-"。 */
-function shortSha(sha?: string): string {
-  return sha ? sha.slice(0, 7) : "-";
-}
-
-function fileIcon(name: string) {
-  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
-  return OUTPUT_ICONS[ext] ?? "📦";
-}
-
-function fmtSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function OutputPreview({ revision }: { revision: number }) {
-  const [groups, setGroups] = useState<import("../types").OutputGroup[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
-  const [query, setQuery] = useState("");
-  const [preview, setPreview] = useState<import("../types").FilePreviewResponse | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState("");
-  const [previewPath, setPreviewPath] = useState("");
-  const refreshingRef = useRef(false);
-  // 右键菜单 / 行内重命名（产出物·素材文件简单管理）
-  const [menu, setMenu] = useState<{ x: number; y: number; item: OutputItem } | null>(null);
-  const [renamingPath, setRenamingPath] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  // 批量选择删除（产出物）：selectMode 开关 + 已选路径集合
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // 同 FileTree：in-flight 期间到达的刷新请求记 pending，结束后补一轮
-  const pendingRef = useRef(false);
-  const refreshRef = useRef<() => void>(() => {});
-
-  const refresh = useCallback(async () => {
-    if (refreshingRef.current) {
-      pendingRef.current = true;
-      return;
-    }
-    refreshingRef.current = true;
-    setLoading(true);
-    try {
-      const r = await api.outputs();
-      setGroups(r.groups);
-      setError(false);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-      refreshingRef.current = false;
-      if (pendingRef.current) {
-        pendingRef.current = false;
-        refreshRef.current();
-      }
-    }
-  }, []);
-  refreshRef.current = () => void refresh();
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // 动态刷新：产出工具执行 / 任务结束后由 App 递增 revision
-  useEffect(() => {
-    if (revision > 0) void refresh();
-  }, [revision, refresh]);
-
-  const openPreview = useCallback(async (path: string, opts?: OpenFileOptions) => {
-    // 与文件树同规则（resolveOpenTarget）：markdown 与非文本类（docx/xlsx/pptx/pdf/图片…）
-    // 桌面端优先系统默认程序，与右键「用系统默认程序打开」一致。
-    // 失败时——文本类静默回退内置预览；非文本类明确报错（内置预览也渲染不了它们）。
-    // 浏览器模式无 bridge：非文本类落到下面的内置预览（图片/PDF 可正常渲染）。
-    if (!opts?.forceBuiltin) {
-      const bridge = window.liteWork;
-      const target = resolveOpenTarget(path, { hasBridge: !!bridge?.openFile });
-      if (target === "system" && bridge?.openFile) {
-        const r = await bridge.openFile(path);
-        if (r.ok) return;
-        if (!isTextLikePath(path)) {
-          window.alert(`无法打开文件：${r.error ?? path}`);
-          return;
-        }
-      }
-    }
-    setPreviewPath(path);
-    setPreviewLoading(true);
-    setPreviewError("");
-    setPreview(null);
-    try {
-      const r = await api.filePreview(path);
-      setPreview(r);
-    } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, []);
-
-  const closePreview = () => {
-    setPreview(null);
-    setPreviewPath("");
-    setPreviewError("");
-  };
-
-  // 右键菜单：点击外部 / 滚动 / Esc 关闭
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
-    };
-    const onScroll = () => setMenu(null);
-    // preventDefault：声明本 Esc 已被右键菜单占用，避免冒泡到全局「Esc 停止任务」
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); setMenu(null); } };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("scroll", onScroll, true);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("scroll", onScroll, true);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menu]);
-
-  /** 删除单个文件（右键菜单与行内 ✕ 共用）。 */
-  const removeItem = (it: OutputItem) => {
-    setMenu(null);
-    if (!window.confirm(`删除「${it.name}」？`)) return;
-    void api.deleteFile(it.path)
-      .then(() => void refresh())
-      .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
-  };
-
-  /** 批量模式：切换某文件选中态。 */
-  const toggleSelected = (path: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-
-  /** 退出批量选择并清空已选。 */
-  const exitSelectMode = () => {
-    setSelectMode(false);
-    setSelected(new Set());
-  };
-
-  /** 批量删除所选产出物：确认 → 后端批量删除 → 部分失败提示（截断前 5 条）→ 刷新并退出。 */
-  const deleteSelected = async () => {
-    if (selected.size === 0) return;
-    if (!window.confirm(`删除所选 ${selected.size} 个文件？此操作不可恢复`)) return;
-    try {
-      const r = await api.deleteFilesBatch([...selected]);
-      if (r.failed.length > 0) {
-        const shown = r.failed.slice(0, 5);
-        window.alert(
-          `已删除 ${r.deleted} 个，${r.failed.length} 个失败：\n${shown.map((f) => `${f.path}：${f.error}`).join("\n")}` +
-            (r.failed.length > shown.length ? "\n…" : "")
-        );
-      }
-      await refresh();
-    } catch (err) {
-      window.alert(`删除失败：${err instanceof Error ? err.message : err}`);
-    }
-    exitSelectMode();
-  };
-
-  /** 进入行内重命名（预填原名；扩展名不可改，由后端校验兜底）。 */
-  const startRename = (it: OutputItem) => {
-    setMenu(null);
-    setRenamingPath(it.path);
-    setRenameValue(it.name);
-  };
-
-  /** 提交重命名：成功刷新列表，失败提示（扩展名/重名等约束由后端返回）。 */
-  const commitRename = async (it: OutputItem) => {
-    const next = renameValue.trim();
-    if (!next || next === it.name) {
-      setRenamingPath(null);
-      return;
-    }
-    try {
-      await api.renameFile(it.path, next);
-      setRenamingPath(null);
-      void refresh();
-    } catch (err) {
-      window.alert(`重命名失败：${err instanceof Error ? err.message : err}`);
-    }
-  };
-
-  // 收件箱只展示 Agent 产出物（素材留给文件树/上传区，不混在这里）
-  const q = query.trim().toLowerCase();
-  const outputsGroups = groups.filter((g) => g.source === "outputs");
-  const shownGroups = outputsGroups
-    .map((g) => ({ ...g, items: q ? g.items.filter((it) => it.name.toLowerCase().includes(q)) : g.items }))
-    .filter((g) => g.items.length > 0);
-  const total = outputsGroups.reduce((n, g) => n + g.items.length, 0);
-  const isNew = (mtime: string): boolean => {
-    const t = new Date(mtime.replace(" ", "T")).getTime();
-    return !Number.isNaN(t) && Date.now() - t < 5 * 60_000;
-  };
-
-  return (
-    <div className="files-panel outputs-panel">
-      <div className="files-header">
-        <span className="outputs-count">产出物{total > 0 ? ` · ${total}` : ""}</span>
-        <div className="files-header-actions">
-          <button
-            className={`btn-batch ${selectMode ? "active" : ""}`}
-            onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}
-            title={selectMode ? "退出批量选择" : "批量选择删除文件"}
-          >
-            ☑ 批量
-          </button>
-          <button
-            className="output-tool-icon"
-            data-tip="在文件管理器中打开产出物目录"
-            aria-label="在文件管理器中打开产出物目录"
-            onClick={() => {
-              const bridge = window.liteWork;
-              if (bridge?.openFile) {
-                void bridge.openFile("产出物").then((r) => {
-                  if (!r.ok) window.alert(`无法打开目录：${r.error ?? ""}`);
-                });
-              } else {
-                window.alert("在文件管理器中打开目录仅支持桌面应用。");
-              }
-            }}
-          >
-            📂
-          </button>
-          <a
-            className="output-tool-icon"
-            href={api.outputsZipUrl(false)}
-            data-tip="打包下载全部产出物（ZIP）"
-            aria-label="打包下载全部产出物"
-          >
-            ⬇
-          </a>
-          <button
-            className="output-tool-icon output-tool-danger"
-            data-tip="清空产出物（不影响代码与素材）"
-            aria-label="清空产出物"
-            onClick={() => {
-              if (total === 0) return;
-              if (!window.confirm(`确认清空全部产出物（${total} 个文件）？此操作不可恢复`)) return;
-              void api.clearOutputs("outputs")
-                .then(() => void refresh())
-                .catch((err) => window.alert(`清空失败：${err instanceof Error ? err.message : err}`));
-            }}
-          >
-            🧹
-          </button>
-          <button
-            className="output-tool-icon"
-            data-tip="刷新列表"
-            aria-label="刷新列表"
-            onClick={() => void refresh()}
-          >
-            ↻
-          </button>
-        </div>
-      </div>
-      {selectMode && (
-        <div className="batch-bar">
-          <span className="batch-count">已选 {selected.size}</span>
-          <button className="batch-delete" disabled={selected.size === 0} onClick={() => void deleteSelected()}>
-            🗑 删除所选
-          </button>
-          <button className="batch-cancel" onClick={exitSelectMode}>
-            ✕ 取消
-          </button>
-        </div>
-      )}
-      {total > 0 && (
-        <div className="outputs-search-row">
-          <input
-            className="outputs-search"
-            placeholder="🔍 搜索文件名…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
-      )}
-      {loading && total === 0 ? (
-        <div className="sidebar-empty">加载中…</div>
-      ) : error ? (
-        <div className="sidebar-empty">（无法读取，请确认已打开项目）</div>
-      ) : total === 0 ? (
-        <div className="sidebar-empty">
-          还没有产出物
-          <div className="sidebar-empty-sub">
-            切换到「办公」或「调研」Agent，让 Agent 生成文档/表格/图表后，
-            最新的交付物会按类型出现在这里（旧版本在 归档/ 里，不重复展示）
-          </div>
-        </div>
-      ) : shownGroups.length === 0 ? (
-        <div className="sidebar-empty">没有匹配「{query}」的文件</div>
-      ) : (
-        <div className="file-tree outputs-list">
-          {shownGroups.map((g) => (
-            <div key={`${g.source}-${g.name}`} className="output-group">
-              <div className="output-group-head">
-                <span>{g.source === "uploads" ? `📥 ${g.name}（素材）` : `📁 ${g.name}`}</span>
-                <span className="output-group-count">{g.items.length}</span>
-              </div>
-              {g.items.map((it) => {
-                const isRenaming = renamingPath === it.path;
-                return (
-                  <div
-                    key={it.path}
-                    className={`tree-row file output-item ${selectMode && selected.has(it.path) ? "selected" : ""}`}
-                    title={`${it.path}${it.version ? `（v${it.version}）` : ""}`}
-                    onClick={() => {
-                      if (isRenaming) return;
-                      if (selectMode) toggleSelected(it.path);
-                      else void openPreview(it.path);
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu({ x: e.clientX, y: e.clientY, item: it });
-                    }}
-                  >
-                    {selectMode && (
-                      <input
-                        type="checkbox"
-                        className="batch-checkbox"
-                        checked={selected.has(it.path)}
-                        onChange={() => toggleSelected(it.path)}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    )}
-                    <span className="tree-icon">{fileIcon(it.name)}</span>
-                    {isRenaming ? (
-                      <input
-                        className="output-rename-input"
-                        value={renameValue}
-                        autoFocus
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={() => setRenamingPath(null)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") { e.preventDefault(); void commitRename(it); }
-                          else if (e.key === "Escape") { e.preventDefault(); setRenamingPath(null); }
-                        }}
-                      />
-                    ) : (
-                      <span className="tree-name">{it.name}</span>
-                    )}
-                    {isNew(it.mtime) && <span className="output-new">NEW</span>}
-                    <span className="output-meta">{fmtSize(it.size)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 右键菜单：下载 / 重命名 / 打开 / 定位 / 删除（产出物文件管理） */}
-      {menu && (
-        <div className="context-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
-          <a
-            className="context-menu-item"
-            href={api.fileDownloadUrl(menu.item.path)}
-            download
-            onClick={() => setMenu(null)}
-          >
-            ⬇ 下载
-          </a>
-          <button className="context-menu-item" onClick={() => startRename(menu.item)}>
-            ✏ 重命名
-          </button>
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              const it = menu.item;
-              setMenu(null);
-              const bridge = window.liteWork;
-              if (bridge?.openFile) {
-                void bridge.openFile(it.path).then((r) => {
-                  if (!r.ok) window.alert(`无法打开：${r.error ?? it.name}`);
-                });
-              } else {
-                window.alert("用系统默认程序打开仅支持桌面应用。");
-              }
-            }}
-          >
-            🖥 用系统默认程序打开
-          </button>
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              const it = menu.item;
-              setMenu(null);
-              void openPreview(it.path, { forceBuiltin: true });
-            }}
-          >
-            👁 用内置查看
-          </button>
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              const it = menu.item;
-              setMenu(null);
-              const bridge = window.liteWork;
-              if (bridge?.showInFolder) {
-                void bridge.showInFolder(it.path).then((r) => {
-                  if (!r.ok) window.alert(`无法定位文件：${r.error ?? ""}`);
-                });
-              } else {
-                window.alert("在文件管理器中定位文件仅支持桌面应用。");
-              }
-            }}
-          >
-            📍 在文件管理器中显示
-          </button>
-          <button className="context-menu-item danger" onClick={() => removeItem(menu.item)}>
-            🗑 删除
-          </button>
-        </div>
-      )}
-
-      {(previewLoading || previewError || preview) && (
-        <div className="preview-overlay" onClick={closePreview}>
-          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="preview-modal-header">
-              <span className="preview-title">{fileIcon(previewPath)} {baseName(previewPath)}</span>
-              <div className="preview-actions">
-                <a className="output-download" href={api.fileDownloadUrl(previewPath)} title="下载文件">⬇ 下载</a>
-                <button className="preview-close" onClick={closePreview}>✕</button>
-              </div>
-            </div>
-            <div className="preview-modal-body">
-              {previewLoading && <div className="sidebar-empty">解析中…</div>}
-              {previewError && <div className="sidebar-empty">⚠ {previewError}</div>}
-              {preview?.kind === "media" && (
-                preview.media_type === "application/pdf" ? (
-                  <iframe src={api.fileRawUrl(previewPath)} title={preview.name} className="preview-frame" />
-                ) : (
-                  <img src={api.fileRawUrl(previewPath)} alt={preview.name} className="preview-image" />
-                )
-              )}
-              {preview?.kind === "table" && (
-                <div className="preview-scroll">
-                  {preview.rows.length === 0 ? (
-                    <div className="sidebar-empty">（空表格）</div>
-                  ) : (
-                    <table className="preview-table">
-                      <thead>
-                        <tr>{preview.rows[0].map((c, i) => <th key={i}>{c}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {preview.rows.slice(1).map((row, ri) => (
-                          <tr key={ri}>{row.map((c, ci) => <td key={ci}>{c}</td>)}</tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  {preview.truncated && <div className="preview-truncated">仅显示前 100 行</div>}
-                </div>
-              )}
-              {preview?.kind === "text" && (
-                <pre className="preview-text">{preview.text}</pre>
-              )}
-              {preview?.kind === "slides" && (
-                <div className="preview-scroll">
-                  {preview.slides.map((s, i) => (
-                    <div key={i} className="preview-slide">
-                      <div className="preview-slide-title">{i + 1}. {s.title || "（无标题）"}</div>
-                      {s.bullets.length > 0 && (
-                        <ul className="preview-slide-bullets">
-                          {s.bullets.map((b, bi) => <li key={bi}>{b}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- 侧边栏
 
 export default function Sidebar({
@@ -1045,7 +547,6 @@ export default function Sidebar({
   workspace,
   tab,
   treeRevision,
-  outputRevision,
   version,
   recentProjects,
   projectsView,
@@ -1079,7 +580,6 @@ export default function Sidebar({
   workspace: string;
   tab: SidebarTab;
   treeRevision: number;
-  outputRevision: number;
   version: string;
   recentProjects: RecentProject[];
   projectsView: "list" | "sessions";
@@ -1164,16 +664,13 @@ export default function Sidebar({
         <button className={tab === "files" ? "active" : ""} onClick={() => onTabChange("files")}>
           文件
         </button>
-        <button className={tab === "outputs" ? "active" : ""} onClick={() => onTabChange("outputs")}>
-          产出物
-        </button>
         <button className={tab === "terminal" ? "active" : ""} onClick={() => onTabChange("terminal")}>
           终端
         </button>
       </div>
 
       {/* 终端 Tab 时 body 隐藏，让 .sidebar-terminal 独占 tabs 与 footer 之间的空间 */}
-      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" || tab === "outputs" ? "sidebar-body--panel" : ""}`}>
+      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" ? "sidebar-body--panel" : ""}`}>
         {tab === "sessions" && (
           projectsView === "list" ? (
             <div className="projects-list">
@@ -1365,7 +862,6 @@ export default function Sidebar({
 
         {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} onOpenWorktreeSession={onOpenWorktreeSession} />}
 
-        {tab === "outputs" && <OutputPreview revision={outputRevision} />}
       </div>
 
       {tab === "terminal" && (

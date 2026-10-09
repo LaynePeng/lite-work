@@ -34,7 +34,6 @@ vi.mock("./api", () => {
     pendingApprovals: { approvals: [] },
     fileDownloadUrl: "/mock/download",
     fileRawUrl: "/mock/raw",
-    outputsZipUrl: "/mock/zip",
   };
   const __mocks: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const [k, v] of Object.entries(__defaults)) __mocks[k] = vi.fn().mockResolvedValue(v);

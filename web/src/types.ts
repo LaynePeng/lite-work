@@ -560,29 +560,18 @@ export interface FileReadResponse {
   diff: string;
 }
 
-// 产出物列表项（/api/outputs）
-export interface OutputItem {
+// 素材列表项（/api/uploads；Composer 的 # 引用面板数据源。
+// v2 结构：交付物直接放项目根目录走文件树，不再有产出物收件箱）
+export interface UploadItem {
   name: string;
+  /** 工作区相对路径（素材/ 下） */
   path: string;
-  source: "outputs" | "uploads";
+  source: "uploads";
   size: number;
   mtime: string;
-  /** 类型分组名（产出物/ 下的一级子目录；根目录散文件为「未分类」） */
-  category?: string;
-  /** 扩展名（不含点）：docx / xlsx / png … */
-  ext?: string;
-  /** 版本号（来自文件名 `_vN`；无版本号为 0） */
-  version?: number;
 }
 
-/** 产出物收件箱分组（同类型聚合，只含每项最新版本）。 */
-export interface OutputGroup {
-  name: string;
-  source: "outputs" | "uploads";
-  items: OutputItem[];
-}
-
-// 产出物预览响应（/api/files/preview）
+// 办公文件预览响应（/api/files/preview）
 export type FilePreviewResponse = {
   name: string;
   kind: "media";

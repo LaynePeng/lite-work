@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
-"""归档旧版本：把 产出物/<品类>/<文件> 移到 产出物/<品类>/归档/YYYY-MM-DD_<原名>，
-并把 INDEX 主表行移入归档表。
+"""归档旧版本：把项目根目录的交付物移到 归档/YYYY-MM-DD_<原名>。
 
 配套用法（一次修订的标准三步）：
-1. new_artifact.py 分配 _v(N+1) 路径并写入新内容
+1. new_artifact.py 分配 _v(N+1) 文件名并写入新内容
 2. archive_artifact.py 归档旧版 _vN
-3. （可选）手工把新行状态从「草稿」改为「当前/已交付」
+3. 完成（v2 结构无 INDEX，归档目录即版本台账）
 
 用法：
-    python scripts/archive_artifact.py --path 产出物/报告/季度方案_v1.docx [--project-root .]
+    python scripts/archive_artifact.py --path 季度方案_v1.docx [--project-root .]
 """
 from __future__ import annotations
 
@@ -39,21 +38,22 @@ def main() -> int:
     if not p.is_absolute():
         p = root / p
     p = p.resolve()
-    out_root = (root / C.OUTPUT_DIR).resolve()
-    try:
-        p.relative_to(out_root)
-    except ValueError:
-        print(f"错误：只能归档 {C.OUTPUT_DIR}/ 下的文件：{args.path}", file=sys.stderr)
-        return 2
     if not p.is_file():
         print(f"错误：文件不存在：{args.path}", file=sys.stderr)
         return 2
-    if p.parent.name == C.ARCHIVE_SUBDIR:
+    if p.parent == (root / C.ARCHIVE_DIR).resolve():
         print(f"跳过：已在归档目录中：{args.path}")
         return 0
+    # 只归档项目根目录的直接文件（交付物都在根目录；深层路径报错提示）
+    if p.parent != root:
+        print(
+            f"错误：v2 结构的交付物在项目根目录，归档目标应为根目录文件：{args.path}\n"
+            f"（存量旧结构 产出物/ 下的文件请保持在原结构内，不跨结构归档）",
+            file=sys.stderr,
+        )
+        return 2
 
-    cat_dir = p.parent
-    archive = cat_dir / C.ARCHIVE_SUBDIR
+    archive = root / C.ARCHIVE_DIR
     archive.mkdir(parents=True, exist_ok=True)
     dest = archive / f"{C.today()}_{p.name}"
     i = 2
@@ -61,10 +61,6 @@ def main() -> int:
         dest = archive / f"{C.today()}_{i}_{p.name}"
         i += 1
     shutil.move(str(p), str(dest))
-
-    index = cat_dir / "INDEX.md"
-    if index.exists():
-        C.archive_row(index, p.name, dest.name, C.today())
 
     print(dest.relative_to(root).as_posix())
     return 0

@@ -345,7 +345,7 @@ export const api = {
       `/api/install/jobs/${encodeURIComponent(id)}/${action}`, { method: "POST" }
     ),
 
-  // ------------------------------------------------------------ 办公场景：文件上传 / 产出物下载（AGI 通用入口）
+  // ------------------------------------------------------------ 办公场景：文件上传 / 素材列表 / 文件下载（AGI 通用入口）
 
   uploadFile: (file: File) => {
     const form = new FormData();
@@ -360,16 +360,11 @@ export const api = {
     `/api/files/download?path=${encodeURIComponent(path)}`,
   fileRawUrl: (path: string) =>
     `/api/files/raw?path=${encodeURIComponent(path)}`,
-  outputs: () =>
-    req<{ groups: import("./types").OutputGroup[]; total: number }>("/api/outputs"),
+  /** 素材/ 文件列表（Composer 的 # 引用面板数据源；v2 结构：交付物走文件树，不再有收件箱） */
+  uploads: () =>
+    req<{ items: import("./types").UploadItem[]; total: number }>("/api/uploads"),
   filePreview: (path: string) =>
     req<FilePreviewResponse>(`/api/files/preview?path=${encodeURIComponent(path)}`),
-  outputsZipUrl: (includeUploads = false) =>
-    `/api/outputs/zip${includeUploads ? "?include_uploads=true" : ""}`,
-  clearOutputs: (scope: "outputs" | "uploads" | "all" = "outputs") =>
-    req<{ ok: boolean; scope: string; deleted: number }>(`/api/outputs?scope=${scope}`, {
-      method: "DELETE",
-    }),
   // 删除工作区文件/目录：目录必须显式 recursive（含内容一并删除，后端二次校验）
   deleteFile: (path: string, opts?: { recursive?: boolean }) =>
     req<{ ok: boolean; path: string; kind?: "file" | "dir" }>(

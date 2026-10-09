@@ -14,13 +14,16 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# 目录约定（与 skills/project-init/scripts/_common.py 一致）
+# 目录约定（与 skills/project-init/scripts/_common.py 一致）。
+# v2 新项目结构（参考 Muse/dots 的 Artifacts 思路：成品平铺直给）：
+# - 交付物直接放项目根目录（不建 产出物/ 目录树）；
+# - 中间产物/ 与 归档/ 提升为顶层目录；
+# - 存量项目的 产出物/ 旧结构保留识别（兼容，不迁移）。
 MATERIAL_DIR = "素材"
 MATERIAL_SUBDIRS = ("原始", "参考")
-OUTPUT_DIR = "产出物"
-WORK_SUBDIR = "中间产物"
-ARCHIVE_SUBDIR = "归档"
-DEFAULT_CATEGORIES = ("报告", "演示", "表格数据", "图表", "专利", "论文")
+OUTPUT_DIR = "产出物"          # 仅存量项目识别用，新项目不再创建
+WORK_DIR = "中间产物"           # 顶层：草稿/检索/渲染中间件（非交付）
+ARCHIVE_DIR = "归档"            # 顶层：旧版本（YYYY-MM-DD_<原名>）
 
 # 代码仓库标记文件（命中即判 code，优先级最高）
 _CODE_MARKER_FILES = (
@@ -42,22 +45,6 @@ _SCAN_MAX_FILES = 500
 _SCAN_SKIP_DIRS = {".git", ".lite-work", "node_modules", "__pycache__", "venv", ".venv"}
 
 
-def _index_header(category: str) -> str:
-    return (
-        f"# 产出物 · {category}\n"
-        "\n"
-        "> 本清单由 project-init 脚本维护（行格式固定，手工补充请保持一致）。\n"
-        "\n"
-        "| 文件 | 版本 | 日期 | 状态 | 说明 |\n"
-        "| --- | --- | --- | --- | --- |\n"
-        "\n"
-        "## 归档\n"
-        "\n"
-        "| 文件 | 归档日期 |\n"
-        "| --- | --- |\n"
-    )
-
-
 def _agents_template() -> Optional[str]:
     """定位内置技能 project-init 的 AGENTS.md 模板（dev / 打包态通用）。"""
     try:
@@ -76,16 +63,18 @@ def _agents_template() -> Optional[str]:
 def scaffold_project(root: str, categories: Optional[List[str]] = None) -> Dict[str, List[str]]:
     """初始化项目结构（幂等，绝不覆盖已有文件）。
 
+    v2 结构（成品平铺直给）：
     - 素材/{原始,参考}
-    - 产出物/INDEX.md（总览）+ 各品类 {INDEX.md, 中间产物/, 归档/}
+    - 中间产物/、归档/（顶层，可见目录）
+    - 交付物不建目录：Agent 生成时直接写项目根目录
     - AGENTS.md：仅当缺失时从技能模板生成（填入项目名）；已存在不动
 
+    categories 参数保留只为兼容旧调用方签名，v2 结构不再使用。
     返回 {"created": [...], "kept": [...]}（相对项目根的路径）。
     """
     root_path = Path(root)
     if not root_path.is_dir():
         raise ValueError(f"项目根不存在: {root}")
-    cats = [c.strip() for c in (categories or []) if c.strip()] or list(DEFAULT_CATEGORIES)
 
     created: List[str] = []
     kept: List[str] = []
@@ -97,28 +86,10 @@ def scaffold_project(root: str, categories: Optional[List[str]] = None) -> Dict[
             rel.mkdir(parents=True)
             created.append(rel.as_posix())
 
-    def _ensure_file(rel: Path, content: str) -> None:
-        if rel.exists():
-            kept.append(rel.as_posix())
-        else:
-            rel.parent.mkdir(parents=True, exist_ok=True)
-            rel.write_text(content, encoding="utf-8")
-            created.append(rel.as_posix())
-
     for sub in MATERIAL_SUBDIRS:
         _ensure_dir(root_path / MATERIAL_DIR / sub)
-
-    _ensure_file(
-        root_path / OUTPUT_DIR / "INDEX.md",
-        "# 产出物 · 总览\n\n"
-        "> 各品类明细见 `产出物/<品类>/INDEX.md`；本表只列品类。\n\n"
-        "| 品类 | 说明 |\n| --- | --- |\n"
-        + "".join(f"| {c} |  |\n" for c in cats),
-    )
-    for cat in cats:
-        _ensure_dir(root_path / OUTPUT_DIR / cat / WORK_SUBDIR)
-        _ensure_dir(root_path / OUTPUT_DIR / cat / ARCHIVE_SUBDIR)
-        _ensure_file(root_path / OUTPUT_DIR / cat / "INDEX.md", _index_header(cat))
+    _ensure_dir(root_path / WORK_DIR)
+    _ensure_dir(root_path / ARCHIVE_DIR)
 
     agents_rel = root_path / "AGENTS.md"
     if agents_rel.exists():
@@ -170,7 +141,7 @@ def classify_project_kind(path: str) -> str:
 
     优先级：
     1. 根目录存在代码标记文件（pyproject.toml / package.json 等）→ code；
-    2. 存在项目结构（素材/ 或 产出物/）→ project；
+    2. 存在项目结构（素材/ 或 中间产物/ 或 归档/，或旧结构的 产出物/）→ project；
     3. 浅层扫描：文档文件多于代码文件 → project；代码文件 ≥ 文档文件 → code；
     4. 兜底：仅 .git（空仓库按代码处理）→ code；其余 → project。
 
@@ -183,7 +154,7 @@ def classify_project_kind(path: str) -> str:
     for marker in _CODE_MARKER_FILES:
         if (root / marker).is_file():
             return "code"
-    if (root / MATERIAL_DIR).is_dir() or (root / OUTPUT_DIR).is_dir():
+    if any((root / d).is_dir() for d in (MATERIAL_DIR, WORK_DIR, ARCHIVE_DIR, OUTPUT_DIR)):
         return "project"
     code_n, doc_n = _count_code_vs_doc(root)
     if doc_n > code_n and doc_n > 0:

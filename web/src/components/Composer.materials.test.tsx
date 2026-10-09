@@ -8,12 +8,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Composer from "./Composer";
 import { api } from "../api";
 
-// 面板打开时懒加载命令/技能/素材（与服务端对齐：素材 source=uploads，产出入 source=outputs）
+// 面板打开时懒加载命令/技能/素材（/api/uploads 只列 素材/，交付物走文件树）
 vi.mock("../api", () => ({
   api: {
     commands: vi.fn(),
     skills: vi.fn(),
-    outputs: vi.fn(),
+    uploads: vi.fn(),
   },
 }));
 
@@ -22,17 +22,12 @@ vi.mock("../api", () => ({
 beforeEach(() => {
   (api.commands as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ commands: [] });
   (api.skills as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ skills: [] });
-  (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-    groups: [
-      { name: "素材", source: "uploads", items: [
-        { name: "报表.xlsx", path: "素材/报表.xlsx", source: "uploads", size: 2048, mtime: "2026-01-01 10:00" },
-        { name: "数据.csv", path: "素材/数据.csv", source: "uploads", size: 512, mtime: "2026-01-01 10:00" },
-      ] },
-      { name: "报告", source: "outputs", items: [
-        { name: "报告.docx", path: "产出物/报告/报告.docx", source: "outputs", size: 4096, mtime: "2026-01-01 10:00" },
-      ] },
+  (api.uploads as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    items: [
+      { name: "报表.xlsx", path: "素材/报表.xlsx", source: "uploads", size: 2048, mtime: "2026-01-01 10:00" },
+      { name: "数据.csv", path: "素材/数据.csv", source: "uploads", size: 512, mtime: "2026-01-01 10:00" },
     ],
-    total: 3,
+    total: 2,
   });
 });
 
@@ -55,7 +50,7 @@ const baseProps = {
 };
 
 describe("Composer · # 素材引用面板", () => {
-  it("办公 Agent 输入 # 列出 素材/ 文件（不含产出物）", async () => {
+  it("办公 Agent 输入 # 列出 素材/ 文件", async () => {
     const user = userEvent.setup();
     const { container } = render(<Composer {...baseProps} />);
     const textarea = container.querySelector("textarea")!;
@@ -63,8 +58,6 @@ describe("Composer · # 素材引用面板", () => {
     expect(container.querySelector(".command-palette")).not.toBeNull();
     expect(await screen.findByText("#素材/报表.xlsx")).toBeInTheDocument();
     expect(screen.getByText("#素材/数据.csv")).toBeInTheDocument();
-    // 产出物不进入 # 候选
-    expect(screen.queryByText("#产出物/报告.docx")).not.toBeInTheDocument();
   });
 
   it("输入 #报 过滤出匹配的素材", async () => {

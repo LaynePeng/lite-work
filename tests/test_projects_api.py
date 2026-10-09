@@ -78,12 +78,14 @@ def test_create_project_remembered(client_and_app):
     r = client.post("/api/projects/create", json={"parent": ws, "name": "新项目", "git": False})
     assert r.status_code == 200
     body = r.json()
-    # 默认初始化结构（structure 缺省 = True）：素材/产出物/AGENTS.md 就位
+    # 默认初始化结构（structure 缺省 = True）：素材/中间产物/归档/AGENTS.md 就位
     assert body["scaffolded"] is True
     assert body["kind"] == "project"
     target = body["path"]
     assert os.path.isdir(os.path.join(target, "素材", "原始"))
-    assert os.path.isdir(os.path.join(target, "产出物", "报告"))
+    assert os.path.isdir(os.path.join(target, "中间产物"))
+    assert os.path.isdir(os.path.join(target, "归档"))
+    assert not os.path.exists(os.path.join(target, "产出物"))
     with open(os.path.join(target, "AGENTS.md"), encoding="utf-8") as f:
         assert "新项目" in f.read()
     # 新建即进入最近列表

@@ -41,7 +41,6 @@ vi.mock("./api", () => {
     // 字符串 URL 辅助方法（渲染期直接进 href，不能是函数）
     fileDownloadUrl: "/mock/download",
     fileRawUrl: "/mock/raw",
-    outputsZipUrl: "/mock/zip",
   };
   const __mocks: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const [k, v] of Object.entries(__defaults)) __mocks[k] = vi.fn().mockResolvedValue(v);

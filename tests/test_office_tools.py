@@ -35,14 +35,14 @@ def test_docx_append_roundtrip(tmp_path, monkeypatch):
 
     # 2) 追加章节
     r2 = asyncio.run(call("docx_append", {
-        "path": "产出物/方案.docx",
+        "path": "方案.docx",
         "content": "\n# 补充章节\n\n追加的正文段落",
     }))
     assert "已追加内容" in r2
 
     # 3) 校验：原内容与新内容都在
     from docx import Document
-    doc = Document(str(tmp_path / "产出物" / "方案.docx"))
+    doc = Document(str(tmp_path / "方案.docx"))
     texts = [p.text for p in doc.paragraphs]
     joined = "\n".join(texts)
     assert "第一版内容" in joined
@@ -61,18 +61,18 @@ def test_docx_append_page_break_and_errors(tmp_path):
 
     # 分页符参数可用
     r = asyncio.run(call("docx_append", {
-        "path": "产出物/d.docx", "content": "新页内容", "page_break": True,
+        "path": "d.docx", "content": "新页内容", "page_break": True,
     }))
     assert "已追加内容" in r
 
     # 文件不存在
-    r2 = asyncio.run(call("docx_append", {"path": "产出物/nope.docx", "content": "x"}))
+    r2 = asyncio.run(call("docx_append", {"path": "nope.docx", "content": "x"}))
     assert "不存在" in r2
     # 非 docx 扩展名
-    r3 = asyncio.run(call("docx_append", {"path": "产出物/x.txt", "content": "x"}))
+    r3 = asyncio.run(call("docx_append", {"path": "x.txt", "content": "x"}))
     assert "仅支持" in r3
     # 空内容
-    r4 = asyncio.run(call("docx_append", {"path": "产出物/d.docx", "content": "  "}))
+    r4 = asyncio.run(call("docx_append", {"path": "d.docx", "content": "  "}))
     assert "为空" in r4
     # 路径越界
     r5 = asyncio.run(call("docx_append", {"path": "../../etc/hosts", "content": "x"}))
@@ -117,7 +117,7 @@ def test_office_execute_does_not_block_event_loop(tmp_path):
     gaps = [b - a for a, b in zip(ticks, ticks[1:])]
     assert gaps, "心跳未运行"
     assert max(gaps) < 1.0, f"事件循环被阻塞：心跳间隔 {max(gaps):.2f}s"
-    assert (tmp_path / "产出物" / "hb.png").exists()
+    assert (tmp_path / "hb.png").exists()
 
 
 # ---------------------------------------------------------------- 图表代码块自动渲染（工具层兜底）
@@ -140,7 +140,7 @@ def test_docx_mermaid_block_kept_when_render_fails(tmp_path, monkeypatch):
     assert "兜底.docx" in r
 
     from docx import Document
-    doc = Document(str(tmp_path / "产出物" / "兜底.docx"))
+    doc = Document(str(tmp_path / "兜底.docx"))
     all_text = "\n".join(p.text for p in doc.paragraphs)
     assert "flowchart LR" in all_text, "渲染失败时源码文本被丢弃了！"
     assert "A-->B" in all_text
@@ -158,7 +158,7 @@ def test_docx_normal_code_block_unaffected(tmp_path):
 
     asyncio.run(call())
     from docx import Document
-    doc = Document(str(tmp_path / "产出物" / "代码.docx"))
+    doc = Document(str(tmp_path / "代码.docx"))
     all_text = "\n".join(p.text for p in doc.paragraphs)
     assert "print('hi')" in all_text
     assert len(doc.inline_shapes) == 0  # 普通代码块不应被渲染成图
@@ -237,14 +237,14 @@ def test_docx_read_roundtrip(tmp_path):
         "content": "# 标题\n\n正文段落\n\n| 列A | 列B |\n| --- | --- |\n| 1 | 2 |",
         "filename": "读.docx",
     }))
-    r = asyncio.run(call("docx_read", {"path": "产出物/读.docx"}))
+    r = asyncio.run(call("docx_read", {"path": "读.docx"}))
     assert "已读取" in r
     assert "标题" in r
     assert "正文段落" in r
     assert "列A" in r
 
     # 文件不存在
-    r2 = asyncio.run(call("docx_read", {"path": "产出物/nope.docx"}))
+    r2 = asyncio.run(call("docx_read", {"path": "nope.docx"}))
     assert "不存在" in r2
     # 路径越界
     r3 = asyncio.run(call("docx_read", {"path": "../../etc/hosts"}))
@@ -261,17 +261,17 @@ def test_xlsx_read_roundtrip(tmp_path):
         "data": '{"sheet1": [{"城市": "北京", "销量": 100}, {"城市": "上海", "销量": 200}]}',
         "filename": "读.xlsx",
     }))
-    r = asyncio.run(call("xlsx_read", {"path": "产出物/读.xlsx"}))
+    r = asyncio.run(call("xlsx_read", {"path": "读.xlsx"}))
     assert "已读取" in r
     assert "北京" in r
     assert "上海" in r
     assert "销量" in r
 
     # sheet 参数
-    r2 = asyncio.run(call("xlsx_read", {"path": "产出物/读.xlsx", "sheet": "sheet1"}))
+    r2 = asyncio.run(call("xlsx_read", {"path": "读.xlsx", "sheet": "sheet1"}))
     assert "北京" in r2
     # 不存在的 sheet
-    r3 = asyncio.run(call("xlsx_read", {"path": "产出物/读.xlsx", "sheet": "nope"}))
+    r3 = asyncio.run(call("xlsx_read", {"path": "读.xlsx", "sheet": "nope"}))
     assert "不存在" in r3
 
 
@@ -285,7 +285,7 @@ def test_pptx_read_roundtrip(tmp_path):
         "slides": '[{"title": "第一页", "bullets": ["要点1", "要点2"]}]',
         "filename": "读.pptx",
     }))
-    r = asyncio.run(call("pptx_read", {"path": "产出物/读.pptx"}))
+    r = asyncio.run(call("pptx_read", {"path": "读.pptx"}))
     assert "已读取" in r
     assert "第一页" in r
     assert "要点1" in r
@@ -299,7 +299,7 @@ def test_pdf_read_roundtrip(tmp_path):
 
     # reportlab 默认字体不支持中文（会被丢弃），用 ASCII 验证提取链路
     asyncio.run(call("pdf_create", {"content": "# PDF Title\n\nPDF body content", "filename": "read.pdf"}))
-    r = asyncio.run(call("pdf_read", {"path": "产出物/read.pdf"}))
+    r = asyncio.run(call("pdf_read", {"path": "read.pdf"}))
     assert "PDF 共" in r
     assert "PDF Title" in r or "PDF body" in r
 

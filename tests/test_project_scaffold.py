@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""project_scaffold 测试：脚手架（幂等/模板/自定义品类）+ 项目类型启发式判定。"""
+"""project_scaffold 测试：脚手架（幂等/模板，v2 顶层结构）+ 项目类型启发式判定。"""
 from __future__ import annotations
 
 from pathlib import Path
 
 from litework.tools.project_scaffold import (
-    DEFAULT_CATEGORIES,
+    ARCHIVE_DIR,
     MATERIAL_DIR,
     OUTPUT_DIR,
+    WORK_DIR,
     classify_project_kind,
     scaffold_project,
 )
@@ -19,14 +20,12 @@ from litework.tools.project_scaffold import (
 
 def test_scaffold_creates_structure(tmp_path: Path):
     r = scaffold_project(str(tmp_path))
+    # v2 结构：素材/{原始,参考} + 顶层 中间产物/ 归档/；交付物不建目录
     for sub in ("原始", "参考"):
         assert (tmp_path / MATERIAL_DIR / sub).is_dir()
-    assert (tmp_path / OUTPUT_DIR / "INDEX.md").is_file()
-    for cat in DEFAULT_CATEGORIES:
-        cat_dir = tmp_path / OUTPUT_DIR / cat
-        assert (cat_dir / "中间产物").is_dir()
-        assert (cat_dir / "归档").is_dir()
-        assert (cat_dir / "INDEX.md").is_file()
+    assert (tmp_path / WORK_DIR).is_dir()
+    assert (tmp_path / ARCHIVE_DIR).is_dir()
+    assert not (tmp_path / OUTPUT_DIR).exists()
     # AGENTS.md 从内置技能模板生成（填入项目名）
     agents = tmp_path / "AGENTS.md"
     assert agents.is_file()
@@ -34,8 +33,12 @@ def test_scaffold_creates_structure(tmp_path: Path):
     assert tmp_path.name in content
     assert "{{PROJECT_NAME}}" not in content
     assert "禁止新增补充文件" in content
+    assert "交付物" in content and "项目根目录" in content
     assert "created" in r and "kept" in r
     assert "AGENTS.md" in r["created"]
+    # created/kept 为绝对路径（root 由调用方传入）；按后缀断言顶层目录名
+    assert any(p.endswith(f"/{WORK_DIR}") for p in r["created"])
+    assert any(p.endswith(f"/{ARCHIVE_DIR}") for p in r["created"])
 
 
 def test_scaffold_idempotent_and_keeps_agents(tmp_path: Path):
@@ -47,11 +50,16 @@ def test_scaffold_idempotent_and_keeps_agents(tmp_path: Path):
     assert "AGENTS.md" in r2["kept"]
 
 
-def test_scaffold_custom_categories(tmp_path: Path):
-    scaffold_project(str(tmp_path), categories=["专利", "调研"])
-    assert (tmp_path / OUTPUT_DIR / "专利").is_dir()
-    assert (tmp_path / OUTPUT_DIR / "调研").is_dir()
-    assert not (tmp_path / OUTPUT_DIR / "报告").exists()
+def test_scaffold_legacy_structure_untouched(tmp_path: Path):
+    """存量项目：已有 产出物/ 旧结构不被迁移或删除。"""
+    legacy = tmp_path / OUTPUT_DIR / "报告"
+    legacy.mkdir(parents=True)
+    (legacy / "方案_v1.docx").write_bytes(b"x")
+    scaffold_project(str(tmp_path))
+    assert (legacy / "方案_v1.docx").is_file()
+    # 新结构目录照常创建（兼容共存）
+    assert (tmp_path / WORK_DIR).is_dir()
+    assert (tmp_path / ARCHIVE_DIR).is_dir()
 
 
 def test_scaffold_rejects_missing_root(tmp_path: Path):
@@ -79,10 +87,17 @@ def test_classify_code_marker_wins_over_structure(tmp_path: Path):
 
 
 def test_classify_project_structure(tmp_path: Path):
+    # v2 结构目录与旧结构 产出物/ 均判 project
     (tmp_path / MATERIAL_DIR).mkdir()
     assert classify_project_kind(str(tmp_path)) == "project"
     (tmp_path / MATERIAL_DIR).rmdir()
     (tmp_path / OUTPUT_DIR).mkdir()
+    assert classify_project_kind(str(tmp_path)) == "project"
+    (tmp_path / OUTPUT_DIR).rmdir()
+    (tmp_path / WORK_DIR).mkdir()
+    assert classify_project_kind(str(tmp_path)) == "project"
+    (tmp_path / WORK_DIR).rmdir()
+    (tmp_path / ARCHIVE_DIR).mkdir()
     assert classify_project_kind(str(tmp_path)) == "project"
 
 

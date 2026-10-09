@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
-"""检查「禁止补充文件」硬性规则：扫描 产出物/<品类>/ 顶层文件，
-命中违例命名（*补充* / *追加* / *addendum* / *supplement*）即报警并以非零码退出。
+"""检查「禁止补充文件」硬性规则：扫描项目根目录的交付物文件（及存量项目
+产出物/ 旧结构顶层），命中违例命名（*补充* / *追加* / *addendum* / *supplement*）
+即报警并以非零码退出。
 
 修订/补充信息的正确做法：合并进下一版本（new_artifact → 写 _v(N+1) →
 archive_artifact 归档旧版），而不是新增补充文件。
@@ -28,12 +29,23 @@ def main() -> int:
 
     root = Path(args.project_root).expanduser().resolve()
     violations: list = []
-    for cat_dir in C.iter_category_roots(root):
-        if cat_dir.name in (C.WORK_SUBDIR, C.ARCHIVE_SUBDIR):
-            continue
-        for f in sorted(cat_dir.iterdir()):
-            if f.is_file() and C.is_forbidden_name(f.name):
-                violations.append(f.relative_to(root).as_posix())
+
+    # v2：项目根目录的交付物文件（跳过素材/中间产物/归档 目录与隐藏文件）
+    if root.is_dir():
+        for f in sorted(root.iterdir()):
+            if (f.is_file() and not f.name.startswith(".")
+                    and C.is_deliverable(f.name) and C.is_forbidden_name(f.name)):
+                violations.append(f.name)
+
+    # 兼容存量项目：旧结构 产出物/<品类>/ 顶层文件
+    legacy_root = root / C.OUTPUT_DIR
+    if legacy_root.is_dir():
+        for cat_dir in sorted(legacy_root.iterdir()):
+            if not cat_dir.is_dir() or cat_dir.name in (C.WORK_DIR, C.ARCHIVE_DIR):
+                continue
+            for f in sorted(cat_dir.iterdir()):
+                if f.is_file() and C.is_forbidden_name(f.name):
+                    violations.append(f.relative_to(root).as_posix())
 
     if violations:
         print("发现违例：以下文件疑似「补充文件」（应合并为下一版本，而不是新增文件）：")

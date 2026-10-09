@@ -387,19 +387,17 @@ export default function Composer({
     let cancelled = false;
     void (async () => {
       try {
-        const [cmdResp, skillResp, outResp] = await Promise.all([
+        const [cmdResp, skillResp, upResp] = await Promise.all([
           api.commands().catch(() => ({ commands: [] })),
           api.skills().catch(() => ({ skills: [] })),
-          api.outputs().catch(() => ({ groups: [], total: 0 })),
+          api.uploads().catch(() => ({ items: [], total: 0 })),
         ]);
         if (!cancelled) {
           setCommands(cmdResp.commands);
           setSkills(skillResp.skills);
-          // # 只引用「素材/」（用户上传的分析素材），不含 Agent 产出物
+          // # 只引用「素材/」（用户上传的分析素材），不含 Agent 交付物
           setMaterials(
-            outResp.groups
-              .filter((g) => g.source === "uploads")
-              .flatMap((g) => g.items)
+            upResp.items
               .map((i) => ({ name: i.name, path: i.path, size: i.size }))
           );
         }

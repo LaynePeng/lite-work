@@ -33,7 +33,7 @@ const TREE_TOUCH_TOOLS = new Set([
   "git_commit",
 ]);
 
-// 办公产出工具：执行成功后刷新侧边栏「产出物」Tab
+// 办公产出工具：执行成功后刷新侧栏「文件」树（交付物直接落项目根目录，v2 结构）
 const OFFICE_TOUCH_TOOLS = new Set([
   "docx_create", "xlsx_create", "pptx_create", "pdf_create",
   "data_analyze", "chart_make", "write_file", "execute_command",
@@ -64,7 +64,7 @@ const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
 // 「打开项目」整页重载后默认落「文件」页签：同属**跨重载的一次性意图**（非配置），
 // 由启动 effect 消费并立即清除。配置类内容一律走 localStorage 之外（见 UiPrefs）。
 const PENDING_SIDEBAR_TAB_KEY = "litework.pendingSidebarTab";
-const SIDEBAR_TABS: SidebarTab[] = ["sessions", "files", "terminal", "outputs"];
+const SIDEBAR_TABS: SidebarTab[] = ["sessions", "files", "terminal"];
 const DEFAULT_SIDEBAR_TAB: SidebarTab = "sessions";
 const isSidebarTab = (v: unknown): v is SidebarTab =>
   typeof v === "string" && (SIDEBAR_TABS as string[]).includes(v);
@@ -241,24 +241,16 @@ export default function App() {
   const currentAgentRef = useRef<string>("build");
   const [success, setSuccess] = useState<string | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
-  const [outputRevision, setOutputRevision] = useState(0);
   // 刷新合并（400ms）：任务执行中每次 write_file/execute_command 都会命中
-  // TREE_TOUCH/OFFICE_TOUCH，直接 setState 会让文件树/产出物面板反复全量刷新
+  // TREE_TOUCH，直接 setState 会让文件树反复全量刷新
   // （后端目录扫描 + worktree git 调用），形成"刷新风暴"。这里首个事件后
   // 400ms 才真正推进一次 revision，窗口内的后续事件合并进同一次刷新。
-  const bumpTimersRef = useRef<{ tree: number | null; output: number | null }>({ tree: null, output: null });
+  const bumpTimersRef = useRef<{ tree: number | null }>({ tree: null });
   const bumpTree = useCallback(() => {
     if (bumpTimersRef.current.tree !== null) return;
     bumpTimersRef.current.tree = window.setTimeout(() => {
       bumpTimersRef.current.tree = null;
       setTreeRevision((v) => v + 1);
-    }, 400);
-  }, []);
-  const bumpOutput = useCallback(() => {
-    if (bumpTimersRef.current.output !== null) return;
-    bumpTimersRef.current.output = window.setTimeout(() => {
-      bumpTimersRef.current.output = null;
-      setOutputRevision((v) => v + 1);
     }, 400);
   }, []);
   const [draftModels, setDraftModels] = useState<Record<string, SessionModel | null>>({});
@@ -758,7 +750,7 @@ export default function App() {
       window.alert(
         `「${baseName(filePath)}」不是文本类文件。\n` +
         "桌面应用中将调用系统默认程序打开；当前浏览器模式不支持，请下载后查看" +
-        `（下载入口见「产出物」面板）或到 ${api.fileDownloadUrl(filePath)} 下载。`
+        `（下载入口见侧栏「文件」页签）或到 ${api.fileDownloadUrl(filePath)} 下载。`
       );
       return;
     }
@@ -1499,7 +1491,7 @@ export default function App() {
         }
         case "tool:after_execute": {
           if (TREE_TOUCH_TOOLS.has(ev.data.toolName)) bumpTree();
-          if (OFFICE_TOUCH_TOOLS.has(ev.data.toolName) && ev.data.status !== "error") bumpOutput();
+          if (OFFICE_TOUCH_TOOLS.has(ev.data.toolName) && ev.data.status !== "error") bumpTree();
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming;
           if (!cur) break;
           // callId 精确匹配（并行安全），缺失时回退 name+running 启发式（兼容旧后端）
@@ -2967,7 +2959,6 @@ export default function App() {
         workspace={status?.workspace ?? "未打开项目"}
         tab={sidebarTab}
         treeRevision={treeRevision}
-        outputRevision={outputRevision}
         version={status?.version ?? "?"}
         recentProjects={recentProjects}
         projectsView={projectsView}

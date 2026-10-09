@@ -3,14 +3,14 @@
 # Copyright (c) 2026 lite-work contributors
 """脚手架：初始化项目结构（幂等，绝不覆盖已有文件）。
 
-创建：
-- 素材/原始、素材/参考                    （输入，Agent 只读）
-- 产出物/INDEX.md（总览）
-- 产出物/<品类>/{INDEX.md, 中间产物/, 归档/}（默认品类可用 --categories 覆盖）
+v2 结构（成品平铺直给）：
+- 素材/原始、素材/参考          （输入，Agent 只读）
+- 中间产物/、归档/              （顶层可见目录）
+- 交付物不建目录：Agent 生成时直接写项目根目录
 - AGENTS.md（仅当不存在时，从模板生成并填入项目名）
 
 用法（脚本位于技能目录 scripts/ 下，相对技能目录调用）：
-    python scripts/scaffold.py <项目根> [--categories 报告,演示,专利]
+    python scripts/scaffold.py <项目根>
 """
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ def main() -> int:
     C._utf8_stdout()
     ap = argparse.ArgumentParser(description="初始化项目结构（幂等）")
     ap.add_argument("project_root", nargs="?", default=".", help="项目根目录（默认当前目录）")
-    ap.add_argument("--categories", default="", help="逗号分隔的品类列表，覆盖默认品类")
     args = ap.parse_args()
 
     root = Path(args.project_root).expanduser().resolve()
@@ -34,44 +33,21 @@ def main() -> int:
         print(f"错误：项目根不存在：{root}", file=sys.stderr)
         return 2
 
-    categories = [c.strip() for c in args.categories.split(",") if c.strip()]
-    if not categories:
-        categories = list(C.DEFAULT_CATEGORIES)
-
     created: list = []
     kept: list = []
 
-    # 素材（只读输入）
-    for sub in C.MATERIAL_SUBDIRS:
-        d = root / C.MATERIAL_DIR / sub
-        if d.is_dir():
-            kept.append(d.relative_to(root).as_posix())
+    def _ensure_dir(rel_path: Path) -> None:
+        if rel_path.is_dir():
+            kept.append(rel_path.relative_to(root).as_posix())
         else:
-            d.mkdir(parents=True)
-            created.append(d.relative_to(root).as_posix())
+            rel_path.mkdir(parents=True)
+            created.append(rel_path.relative_to(root).as_posix())
 
-    # 产出物总览
-    out_root = root / C.OUTPUT_DIR
-    out_index = out_root / "INDEX.md"
-    if out_index.exists():
-        kept.append(out_index.relative_to(root).as_posix())
-    else:
-        out_root.mkdir(parents=True, exist_ok=True)
-        rows = "\n".join(f"| {c} |  |" for c in categories)
-        out_index.write_text(
-            "# 产出物 · 总览\n\n"
-            "> 各品类明细见 `产出物/<品类>/INDEX.md`；本表只列品类。\n\n"
-            "| 品类 | 说明 |\n| --- | --- |\n" + rows + "\n",
-            encoding="utf-8",
-        )
-        created.append(out_index.relative_to(root).as_posix())
-
-    # 品类目录
-    for cat in categories:
-        existed = C.category_dir(root, cat).is_dir()
-        C.ensure_category(root, cat)
-        rel = C.category_dir(root, cat).relative_to(root).as_posix()
-        (kept if existed else created).append(rel)
+    # 素材（只读输入）+ 顶层 中间产物/ 归档/
+    for sub in C.MATERIAL_SUBDIRS:
+        _ensure_dir(root / C.MATERIAL_DIR / sub)
+    _ensure_dir(root / C.WORK_DIR)
+    _ensure_dir(root / C.ARCHIVE_DIR)
 
     # AGENTS.md（只在缺失时生成，已有则提示合并）
     agents = root / "AGENTS.md"

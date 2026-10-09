@@ -10,7 +10,7 @@ import Composer from "./Composer";
 import { api } from "../api";
 
 vi.mock("../api", () => ({
-  api: { commands: vi.fn(), skills: vi.fn(), outputs: vi.fn() },
+  api: { commands: vi.fn(), skills: vi.fn(), uploads: vi.fn() },
 }));
 
 const baseProps = {
@@ -49,7 +49,7 @@ describe("Composer · 输入历史翻阅", () => {
     // setup.ts 的 vi.restoreAllMocks() 会清掉 mock 实现 → 逐用例重设
     (api.commands as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ commands: [] });
     (api.skills as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ skills: [] });
-    (api.outputs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ groups: [], total: 0 });
+    (api.uploads as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], total: 0 });
     localStorage.setItem("litework.inputHistory", JSON.stringify(HISTORY));
   });
 

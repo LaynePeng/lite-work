@@ -7,16 +7,25 @@ v1.2.0 新增：已有文件的格式化编辑（字体/粗体/斜体/颜色/高
 v1.4.0 新增：pdf_create 中文字体嵌入与 CJK 断行、Markdown 表格渲染、内联
 格式（粗体/斜体/删除线/行内代码）、主题配色（theme/accent_color）、封面与
 页脚页码。
+v1.5.0 新增：LibreOffice 可选增强层——office_convert（Office/旧格式 → PDF
+或 OOXML 转换）、office_render（PDF/Office 文档 → PNG 页面渲染，PDF 输入
+零外部依赖）、xlsx_recalculate（Excel 公式重算回写计算值）。三个工具在
+soffice 缺失时返回安装指引并优雅降级（设计参考 dsh-libreoffice-kit 的
+进程隔离/超时/串行纪律与本仓库 academic-paper-engineering 的实践），
+其余 15 个纯 Python 工具不受影响。
+v1.6.0 变更：输出目录约定与 lite-work 新项目结构对齐——交付物默认直接写
+工作区根目录（不再套 产出物/ 目录），中间产物（文档内嵌图表、渲染预览）
+写 中间产物/ 顶层目录；存量项目的 产出物/ 目录保留原地不迁移。
 
 所有依赖包已包含在主依赖中（pyproject.toml dependencies），
 `pip install -e .` 时自动安装。
 """
 # 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
-# plugins/office-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本。
-# v1.2.0+ 含社区版独有功能（格式化/查找替换），同步时需保留。
-# 注意：本副本另含主仓库侧修复「图表渲染失败不残留空 diagrams 目录」
-# （office.py _render_diagram，主仓库 commit 1d666b9/3a5e076）——该修复尚未
-# 回传上游 lite-work-plugins，未来同步上游时不要回退它。
+# plugins/office-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本，
+# 当前同步版本：社区 office-plugin v1.6.0（含 v1.5.0 LibreOffice 增强层）。
+# 主仓库侧机械适配（仅此一处差异，勿扩散）：
+# - _ensure_ignored：把 素材/中间产物/归档 追加到项目 .gitignore（主仓库
+#   commit 历史，社区版无此函数）。
 from __future__ import annotations
 
 import io
@@ -24,8 +33,11 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Dict, List, Optional
 
 from litework.core.types import ToolDefinition
@@ -87,6 +99,19 @@ try:
 except ImportError:
     _pypdf = None  # type: ignore
 
+# pymupdf：主程序已捆绑（AGENTS.md），用于 office_render 的 PDF→PNG 渲染。
+# 新版包名是 pymupdf，fitz 是其旧别名（有弃用警告），两个都试。
+_HAS_PYMUPDF: bool = False
+try:
+    import pymupdf as _fitz
+    _HAS_PYMUPDF = True
+except ImportError:
+    try:
+        import fitz as _fitz  # type: ignore
+        _HAS_PYMUPDF = True
+    except ImportError:
+        _fitz = None  # type: ignore
+
 
 def _missing_dep_msg(pkg: str, tools: str) -> str:
     return (
@@ -98,31 +123,41 @@ def _missing_dep_msg(pkg: str, tools: str) -> str:
 # ---------------------------------------------------------------- 工具函数
 
 
-# 产出物/素材目录名（1.3.0 起为工作区内**可见**目录——交付物要在
-# Finder/IDE 里直接可见，不再藏进 .outputs 隐藏目录；历史 .outputs/.uploads
-# 保留原地不动，不迁移）。
-OUTPUT_DIR_NAME = "产出物"
+# 输出目录约定（v1.6.0 与 lite-work 新项目结构对齐——参考 Muse/dots 的
+# Artifacts 思路：成品平铺直给，过程文件退到幕后）：
+# - 交付物（用户要的成品：docx/xlsx/pptx/pdf/图表/分析导出）默认直接写
+#   工作区根目录，Finder/IDE 打开即见，不再套 产出物/ 目录；
+# - 中间产物（文档内嵌图表、渲染预览 PNG 等非交付文件）写 中间产物/ 顶层目录；
+# - 历史的 产出物/ 与 .outputs/.uploads 保留原地不动，不迁移（存量项目兼容，
+#   旧文件照常可读）。
 UPLOADS_DIR_NAME = "素材"
+WORK_DIR_NAME = "中间产物"
 
 
 def _ensure_output_dir(workspace: str, subdir=None):
-    """确保输出目录存在，返回绝对路径。"""
+    """返回输出目录的绝对路径（v1.6.0 语义）。
+
+    - subdir=None：交付物 → 工作区根目录本身（目录必已存在，仅做兜底）；
+    - subdir 给定（如 diagrams / previews）：中间产物 → 中间产物/<subdir>/，
+      目录不存在时创建。
+    """
     if subdir is None:
-        subdir = OUTPUT_DIR_NAME
-    elif not subdir.startswith(OUTPUT_DIR_NAME):
-        subdir = os.path.join(OUTPUT_DIR_NAME, subdir)
-    out_dir = os.path.join(os.path.abspath(workspace), subdir)
+        out_dir = os.path.abspath(workspace)
+        os.makedirs(out_dir, exist_ok=True)
+        _ensure_ignored(workspace)
+        return out_dir
+    out_dir = os.path.join(os.path.abspath(workspace), WORK_DIR_NAME, subdir)
     os.makedirs(out_dir, exist_ok=True)
     _ensure_ignored(workspace)
     return out_dir
 
 
 def _ensure_ignored(workspace: str) -> None:
-    """把 产出物/ 与 素材/ 追加到项目 .gitignore（仅 git 仓库；幂等）。
+    """把 素材/ 与 中间产物/、归档/ 追加到项目 .gitignore（仅 git 仓库；幂等）。
 
-    这两个目录是**运行时产物**，不应进版本库。缺少 ignore 条目时，Agent 产物
-    会以未跟踪文件出现在 `git status` 里，有被误提交的风险。只在缺失且项目确为
-    git 仓库时追加，失败静默（不影响产物落盘）。
+    主仓库侧适配：这三个目录是**运行时产物**，不应进版本库。缺少 ignore
+    条目时，Agent 产物会以未跟踪文件出现在 `git status` 里，有被误提交的
+    风险。只在缺失且项目确为 git 仓库时追加，失败静默（不影响产物落盘）。
     """
     ws = os.path.abspath(workspace)
     if not os.path.isdir(os.path.join(ws, ".git")):
@@ -134,7 +169,7 @@ def _ensure_ignored(workspace: str) -> None:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 existing = f.read()
         lines = {ln.strip() for ln in existing.splitlines()}
-        missing = [n for n in (OUTPUT_DIR_NAME, UPLOADS_DIR_NAME)
+        missing = [n for n in (UPLOADS_DIR_NAME, WORK_DIR_NAME, "归档")
                    if f"{n}/" not in lines and n not in lines]
         if not missing:
             return
@@ -153,6 +188,96 @@ def _safe_filename(name: str) -> str:
     """清理文件名，移除不安全字符。"""
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     return name.strip() or "output"
+
+
+# ------------------------------------- LibreOffice 可选集成（v1.5.0 新增）
+# 设计参考 dsh-libreoffice-kit 的工程纪律（每次转换独立进程+私有 profile、
+# 串行化、超时清理）与本仓库 academic-paper-engineering 的 run_soffice 实践。
+# LibreOffice 是用户机器上的可选外部程序：不分发、不安装，只在运行时探测；
+# 缺失时相关工具返回安装指引，其余工具不受影响。
+
+_SOFFICE_BIN: Optional[str] = None
+_SOFFICE_CHECKED: bool = False
+_SOFFICE_LOCK = threading.Lock()  # soffice 并发多开易挂死，模块级串行
+
+
+class _SofficeMissing(RuntimeError):
+    """本机未安装 LibreOffice（office_convert / xlsx_recalculate 需要）。"""
+
+
+def _find_soffice() -> Optional[str]:
+    """探测本机 soffice 可执行文件（结果缓存）。找不到返回 None。"""
+    global _SOFFICE_BIN, _SOFFICE_CHECKED
+    if _SOFFICE_CHECKED:
+        return _SOFFICE_BIN
+    _SOFFICE_CHECKED = True
+    exe = shutil.which("soffice")
+    if not exe and sys.platform == "darwin":
+        # macOS 的 LibreOffice.app 默认不进 PATH，brew cask 也不做 symlink
+        for cand in (
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            os.path.expanduser("~/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+        ):
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                exe = cand
+                break
+    _SOFFICE_BIN = exe
+    return exe
+
+
+def _soffice_hint(action: str) -> str:
+    """LibreOffice 缺失时的降级提示（含安装指引）。"""
+    return (
+        f"[Office Error]: {action}需要本机安装 LibreOffice（可选外部程序，"
+        "不影响其他办公工具）。\n"
+        "安装方法：\n"
+        "  macOS  : brew install --cask libreoffice（或官网下载 dmg）\n"
+        "  Windows: https://www.libreoffice.org/download/\n"
+        "  Linux  : sudo apt install libreoffice 或 sudo dnf install libreoffice"
+    )
+
+
+def _run_soffice(args: List[str], timeout: int = 120,
+                 profile_dir: Optional[str] = None):
+    """串行执行 soffice：私有 profile + 超时杀进程。
+
+    - 不传 profile_dir 时自动创建一次性临时 profile（-env:UserInstallation），
+      不污染用户配置、不与其他 LibreOffice 实例互踩
+    - 超时后 kill 进程并等待退出（subprocess.run(timeout=) 不清理子进程）
+    返回 (returncode, stdout_bytes, stderr_bytes)；
+    未安装抛 _SofficeMissing，超时抛 RuntimeError。
+    """
+    exe = _find_soffice()
+    if not exe:
+        raise _SofficeMissing()
+    env = os.environ.copy()
+    env["SAL_USE_VCLPLUGIN"] = "svp"  # 无头渲染插件，避免依赖图形环境
+    with _SOFFICE_LOCK:
+        if profile_dir is not None:
+            return _soffice_once(exe, args, profile_dir, env, timeout)
+        with tempfile.TemporaryDirectory(
+                prefix="litework_lo_profile_",
+                ignore_cleanup_errors=True) as profile:
+            return _soffice_once(exe, args, profile, env, timeout)
+
+
+def _soffice_once(exe: str, args: List[str], profile: str,
+                  env: Dict[str, str], timeout: int):
+    from pathlib import Path
+    argv = [
+        exe,
+        f"-env:UserInstallation={Path(profile).as_uri()}",
+        "--headless", "--norestore",
+    ] + list(args)
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError(f"LibreOffice 超时（{timeout}s），已终止进程")
+    return proc.returncode, out or b"", err or b""
 
 
 # ------------------------------------------------- PDF 渲染辅助（v1.4.0 新增）
@@ -399,7 +524,7 @@ class OfficeTools:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "已有 docx 文件路径（相对工作区，如 产出物/方案.docx）",
+                            "description": "已有 docx 文件路径（相对工作区，如 方案.docx）",
                         },
                         "content": {
                             "type": "string",
@@ -435,7 +560,7 @@ class OfficeTools:
                 parameters={
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "docx 文件路径（相对工作区，如 产出物/方案.docx）"},
+                        "path": {"type": "string", "description": "docx 文件路径（相对工作区，如 方案.docx）"},
                         "target": {"type": "string", "enum": ["all", "heading", "search"], "description": "格式化目标（默认 all）"},
                         "search_text": {"type": "string", "description": "target=search 时必填：要命中的文字"},
                         "heading_level": {"type": "number", "description": "target=heading 时必填：标题层级 1-6"},
@@ -717,6 +842,105 @@ class OfficeTools:
                     "required": ["data", "chart_type"],
                 },
             ),
+            # ---------------------------------------------- LibreOffice 增强工具
+            # 描述开头就标注依赖，让 Agent 在工具选择阶段避开不可用路径
+            ToolDefinition(
+                name="office_convert",
+                description=(
+                    "把已有的 Word/Excel/PPT/旧格式文件转换为 PDF 或 OOXML 格式"
+                    "（需要本机安装 LibreOffice，未安装时返回安装指引，不影响其他工具）。"
+                    "支持输入 .doc/.docx/.rtf/.odt/.xls/.xlsx/.ods/.ppt/.pptx/.odp。"
+                    "典型场景：docx→pdf 高保真导出、旧格式 .doc/.xls/.ppt 升级为 "
+                    "OOXML。返回输出文件路径。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "input_path": {
+                            "type": "string",
+                            "description": "源文件路径（相对工作区或绝对路径）",
+                        },
+                        "output_format": {
+                            "type": "string",
+                            "enum": ["pdf", "docx", "xlsx", "pptx"],
+                            "description": "目标格式（默认 pdf）",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "输出文件名（不含路径，默认 '源文件名.新扩展名'）",
+                        },
+                        "timeout": {
+                            "type": "number",
+                            "description": "转换超时秒数（10-300，默认 120）",
+                        },
+                    },
+                    "required": ["input_path"],
+                },
+            ),
+            ToolDefinition(
+                name="office_render",
+                description=(
+                    "把 PDF 或 Office 文档的指定页渲染成 PNG 图片，用于预览和视觉"
+                    "检查（颜色/排版/图表尽收眼底，与 *_read 的纯文本提取互补）。"
+                    "PDF 输入无需任何外部程序；docx/xlsx/pptx 等输入需要本机 "
+                    "LibreOffice。输出到 中间产物/previews/，返回图片路径列表。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "input_path": {
+                            "type": "string",
+                            "description": "文档路径（相对工作区或绝对路径），支持 .pdf 及常见 Office 格式",
+                        },
+                        "pages": {
+                            "type": "string",
+                            "description": "页码表达式：'1'（默认）/ '1-3' / '2,4,5'",
+                        },
+                        "dpi": {
+                            "type": "number",
+                            "description": "渲染分辨率 DPI（72-300，默认 150）",
+                        },
+                        "timeout": {
+                            "type": "number",
+                            "description": "Office 转 PDF 阶段的超时秒数（10-300，默认 120）",
+                        },
+                    },
+                    "required": ["input_path"],
+                },
+            ),
+            ToolDefinition(
+                name="xlsx_recalculate",
+                description=(
+                    "用 LibreOffice 重算 Excel 全部公式并把计算值写回文件缓存，"
+                    "之后 xlsx_read / data_analyze 即可读到数值而非公式字符串"
+                    "（需要本机安装 LibreOffice，未安装时返回安装指引）。"
+                    "注意：LibreOffice 实现的函数比 Excel 少，XLOOKUP/XMATCH/SORT/"
+                    "FILTER 等新函数可能算成 #NAME?；含外部链接的工作簿需显式传 "
+                    "force=true 才会重算。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "input_path": {
+                            "type": "string",
+                            "description": "Excel 文件路径（.xlsx/.xlsm，相对工作区或绝对路径）",
+                        },
+                        "in_place": {
+                            "type": "boolean",
+                            "description": "true（默认）直接重算回写原文件；false 则先复制到工作区根目录再重算副本",
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "工作簿含外部链接时是否仍强制重算（默认 false，将拒绝并说明原因）",
+                        },
+                        "timeout": {
+                            "type": "number",
+                            "description": "重算超时秒数（10-300，默认 60）",
+                        },
+                    },
+                    "required": ["input_path"],
+                },
+            ),
             # -------------------------------------------------------- 读取已有办公文件
             ToolDefinition(
                 name="docx_read",
@@ -729,7 +953,7 @@ class OfficeTools:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "docx 文件路径（相对工作区，如 产出物/方案.docx 或 素材/素材.docx）",
+                            "description": "docx 文件路径（相对工作区，如 方案.docx 或 素材/素材.docx）",
                         },
                     },
                     "required": ["path"],
@@ -826,6 +1050,9 @@ class OfficeTools:
             "xlsx_read": self._xlsx_read,
             "pptx_read": self._pptx_read,
             "pdf_read": self._pdf_read,
+            "office_convert": self._office_convert,
+            "office_render": self._office_render,
+            "xlsx_recalculate": self._xlsx_recalculate,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -1447,7 +1674,7 @@ class OfficeTools:
             def _do_render() -> Optional[str]:
                 import shutil as _shutil
 
-                # 先在临时目录渲染，成功后落盘到 产出物/diagrams：渲染失败
+                # 先在临时目录渲染，成功后落盘到 中间产物/diagrams：渲染失败
                 # （引擎缺失/语法错）时不留空的 diagrams 缓存目录
                 with tempfile.TemporaryDirectory(prefix="litework-md-diagram-") as tmpdir:
                     tmp_png = os.path.join(tmpdir, "diagram.png")
@@ -1468,7 +1695,8 @@ class OfficeTools:
             from concurrent.futures import ThreadPoolExecutor as _TPE
             with _TPE(max_workers=1) as pool:
                 future = pool.submit(_do_render)
-                return future.result(timeout=60)
+                out_path = future.result(timeout=60)
+            return out_path
         except Exception:
             # 引擎缺失/语法错误/渲染失败 → 回退源码文本（内容不丢）
             return None
@@ -2765,6 +2993,333 @@ class OfficeTools:
         _plt.close(fig)
 
         return f"[Office OK]: 已生成图表 → {filepath}"
+
+    # ------------------------------------------ LibreOffice 增强工具（v1.5.0）
+    # 三个工具都遵循「soffice 缺失 → 返回安装指引」的降级模式，
+    # 其中 office_render 的 PDF 输入路径完全不需要 soffice。
+
+    # office_convert 支持的输入扩展名（LibreOffice 过滤器覆盖面）
+    _CONVERT_INPUT_EXTS = {
+        ".doc", ".docx", ".rtf", ".odt",
+        ".xls", ".xlsx", ".ods",
+        ".ppt", ".pptx", ".odp",
+    }
+    _CONVERT_FORMATS = {"pdf", "docx", "xlsx", "pptx"}
+    # office_render 支持「先经 soffice 转 PDF 再渲染」的输入扩展名
+    _RENDER_OFFICE_EXTS = {
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".odt", ".ods", ".odp",
+    }
+
+    @staticmethod
+    def _clamp_int(val, default: int, lo: int, hi: int, field: str) -> Any:
+        """钳制整数参数到 [lo, hi]，非法值返回错误字符串（沿用 _coerce_pt 风格）。"""
+        if val is None or val == "":
+            return default
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            return f"[Office Error]: {field} 必须是整数（收到: {val!r}）"
+        return max(lo, min(hi, n))
+
+    @staticmethod
+    def _parse_pages(spec: str, total: int) -> Any:
+        """解析页码表达式（"1" / "1-3" / "2,4-5"）为去重升序页码列表（1 起）。
+
+        返回列表或错误字符串；页码越界直接报错，避免静默渲染错页。
+        """
+        pages: List[int] = []
+        for part in re.split(r"[，,\s]+", str(spec).strip()):
+            if not part:
+                continue
+            m = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", part)
+            if not m:
+                return f"[Office Error]: 无法解析页码表达式: {part!r}（示例: '1' / '1-3' / '2,4,5'）"
+            a = int(m.group(1))
+            b = int(m.group(2)) if m.group(2) else a
+            if a < 1 or b < a:
+                return f"[Office Error]: 非法页码范围: {part}（页码从 1 开始）"
+            pages.extend(range(a, b + 1))
+        if not pages:
+            return "[Office Error]: pages 参数为空"
+        pages = sorted(set(pages))
+        bad = [p for p in pages if p > total]
+        if bad:
+            return f"[Office Error]: 页码越界: {bad}（文档共 {total} 页）"
+        return pages
+
+    def _office_convert(self, args: Dict[str, Any]) -> str:
+        """把已有 Office/旧格式文件转换为 PDF 或 OOXML（需本机 LibreOffice）。"""
+        rel_path = str(args.get("input_path") or args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 input_path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+
+        out_format = str(args.get("output_format") or "pdf").strip().lower()
+        if out_format not in self._CONVERT_FORMATS:
+            return (f"[Office Error]: output_format 仅支持 "
+                    f"{', '.join(sorted(self._CONVERT_FORMATS))}（当前: {out_format}）")
+        timeout = self._clamp_int(args.get("timeout"), 120, 10, 300, "timeout")
+        if isinstance(timeout, str):
+            return timeout
+
+        src_ext = os.path.splitext(resolved)[1].lower()
+        if src_ext not in self._CONVERT_INPUT_EXTS:
+            return (f"[Office Error]: 不支持的输入格式 {src_ext}（支持: "
+                    f"{', '.join(sorted(self._CONVERT_INPUT_EXTS))}）")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="litework-convert-") as tmpdir:
+                rc, out, err = _run_soffice(
+                    ["--convert-to", out_format, "--outdir", tmpdir, resolved],
+                    timeout=timeout)
+                if rc != 0:
+                    detail = (err or b"").decode("utf-8", "replace").strip()[:500]
+                    return (f"[Office Error]: LibreOffice 转换失败（退出码 {rc}）: "
+                            f"{detail or '无错误输出'}")
+                stem = os.path.splitext(os.path.basename(resolved))[0]
+                produced = os.path.join(tmpdir, f"{stem}.{out_format}")
+                if not os.path.isfile(produced):
+                    # 输出文件名与预期不符时扫描目录兜底
+                    cands = [f for f in os.listdir(tmpdir)
+                             if f.lower().endswith("." + out_format)]
+                    if not cands:
+                        stdout = (out or b"").decode("utf-8", "replace").strip()[:300]
+                        return (f"[Office Error]: LibreOffice 未产出 {out_format} 文件"
+                                f"（stdout: {stdout or '无输出'}）")
+                    produced = os.path.join(tmpdir, cands[0])
+
+                out_dir = _ensure_output_dir(self.workspace)
+                filename = _safe_filename(
+                    args.get("filename") or f"{stem}.{out_format}")
+                if not filename.lower().endswith("." + out_format):
+                    filename += "." + out_format
+                dest = os.path.join(out_dir, filename)
+                base, ext = os.path.splitext(dest)
+                n = 1
+                while os.path.exists(dest):  # 不覆盖已有产出物
+                    dest = f"{base}({n}){ext}"
+                    n += 1
+                shutil.move(produced, dest)
+            return f"[Office OK]: 已转换 {os.path.basename(resolved)} → {dest}"
+        except _SofficeMissing:
+            return _soffice_hint("格式转换")
+        except RuntimeError as exc:
+            return f"[Office Error]: {exc}"
+
+    def _office_render(self, args: Dict[str, Any]) -> str:
+        """把 PDF/Office 文档的指定页渲染成 PNG 图片（PDF 输入无需 LibreOffice）。"""
+        if not _HAS_PYMUPDF:
+            return _missing_dep_msg("pymupdf", "office_render")
+        rel_path = str(args.get("input_path") or args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 input_path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+
+        dpi = self._clamp_int(args.get("dpi"), 150, 72, 300, "dpi")
+        if isinstance(dpi, str):
+            return dpi
+        timeout = self._clamp_int(args.get("timeout"), 120, 10, 300, "timeout")
+        if isinstance(timeout, str):
+            return timeout
+
+        src_ext = os.path.splitext(resolved)[1].lower()
+        if src_ext not in (".pdf",) and src_ext not in self._RENDER_OFFICE_EXTS:
+            return (f"[Office Error]: 不支持的输入格式 {src_ext}（支持: .pdf 及 "
+                    f"{', '.join(sorted(self._RENDER_OFFICE_EXTS))}）")
+
+        tmpdir = None
+        try:
+            if src_ext == ".pdf":
+                pdf_path = resolved  # 纯 pymupdf 路径，零外部依赖
+            else:
+                # Office 文档 → 临时目录转 PDF → 再渲染（需 LibreOffice）
+                tmpdir = tempfile.mkdtemp(prefix="litework-render-")
+                rc, out, err = _run_soffice(
+                    ["--convert-to", "pdf", "--outdir", tmpdir, resolved],
+                    timeout=timeout)
+                if rc != 0:
+                    detail = (err or b"").decode("utf-8", "replace").strip()[:500]
+                    return (f"[Office Error]: LibreOffice 转换失败（退出码 {rc}）: "
+                            f"{detail or '无错误输出'}")
+                stem = os.path.splitext(os.path.basename(resolved))[0]
+                pdf_path = os.path.join(tmpdir, f"{stem}.pdf")
+                if not os.path.isfile(pdf_path):
+                    cands = [f for f in os.listdir(tmpdir)
+                             if f.lower().endswith(".pdf")]
+                    if not cands:
+                        return "[Office Error]: LibreOffice 未产出 PDF 中间文件"
+                    pdf_path = os.path.join(tmpdir, cands[0])
+
+            doc = _fitz.open(pdf_path)
+            try:
+                total = len(doc)
+                pages = self._parse_pages(args.get("pages") or "1", total)
+                if isinstance(pages, str):
+                    return pages
+                out_dir = _ensure_output_dir(self.workspace, "previews")
+                stem = _safe_filename(
+                    os.path.splitext(os.path.basename(resolved))[0])
+                paths = []
+                for p in pages:
+                    pix = doc[p - 1].get_pixmap(dpi=dpi)
+                    png = os.path.join(out_dir, f"{stem}_p{p}.png")
+                    pix.save(png)
+                    paths.append(png)
+            finally:
+                doc.close()
+            return (f"[Office OK]: 已渲染 {len(paths)} 页（文档共 {total} 页，"
+                    f"{dpi} DPI）→ " + ", ".join(paths))
+        except _SofficeMissing:
+            return _soffice_hint("渲染 Office 文档")
+        except RuntimeError as exc:
+            return f"[Office Error]: {exc}"
+        except Exception as exc:
+            return f"[Office Error]: 渲染失败: {exc}"
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # RecalculateAndSave 宏（移植自 academic-paper-engineering/scripts/xlsx/recalc.py）
+    _RECALC_MACRO = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" '
+        '"module.dtd">\n'
+        '<script:module xmlns:script="http://openoffice.org/2000/script" '
+        'script:name="Module1" script:language="StarBasic">\n'
+        "    Sub RecalculateAndSave()\n"
+        "      ThisComponent.calculateAll()\n"
+        "      ThisComponent.store()\n"
+        "      ThisComponent.close(True)\n"
+        "    End Sub\n"
+        "</script:module>"
+    )
+
+    @staticmethod
+    def _xlsx_has_external_links(path: str) -> bool:
+        """工作簿是否含外部链接（重算会把丢失缓存值的外链单元格写成 #NAME?）。"""
+        import zipfile
+        try:
+            with zipfile.ZipFile(path) as zf:
+                return any(n.startswith("xl/externalLinks/") for n in zf.namelist())
+        except (zipfile.BadZipFile, OSError):
+            return False
+
+    def _xlsx_recalculate(self, args: Dict[str, Any]) -> str:
+        """用 LibreOffice 重算 Excel 公式并把计算值写回文件缓存。
+
+        移植自 academic-paper-engineering/scripts/xlsx/recalc.py：
+        私有 profile 预置 RecalculateAndSave 宏 → soffice 以宏 URI 打开文件
+        → calculateAll + store 回写。重算后 xlsx_read/data_analyze（data_only
+        模式）即可读到数值而非公式字符串。
+        """
+        if not _HAS_OPENPYXL:
+            return _missing_dep_msg("openpyxl", "xlsx_recalculate")
+        rel_path = str(args.get("input_path") or args.get("path") or "").strip()
+        if not rel_path:
+            return "[Office Error]: 缺少 input_path 参数"
+        try:
+            resolved = self._resolve_path(rel_path)
+        except ValueError as exc:
+            return f"[Office Error]: {exc}"
+        if os.path.splitext(resolved)[1].lower() not in (".xlsx", ".xlsm"):
+            return "[Office Error]: 仅支持 .xlsx / .xlsm 文件（旧格式 .xls 请先用 office_convert 转换）"
+
+        timeout = self._clamp_int(args.get("timeout"), 60, 10, 300, "timeout")
+        if isinstance(timeout, str):
+            return timeout
+        force = bool(args.get("force"))
+
+        in_place = args.get("in_place")
+        in_place = True if in_place is None else bool(in_place)
+        target = resolved
+        if not in_place:
+            out_dir = _ensure_output_dir(self.workspace)
+            dest = os.path.join(out_dir, os.path.basename(resolved))
+            base, ext = os.path.splitext(dest)
+            n = 1
+            while os.path.exists(dest):
+                dest = f"{base}({n}){ext}"
+                n += 1
+            shutil.copy2(resolved, dest)
+            target = dest
+
+        if not force and self._xlsx_has_external_links(target):
+            where = "原文件" if in_place else os.path.basename(target)
+            return (
+                "[Office Error]: 该工作簿包含指向其他文件的外部链接，重算会把丢失"
+                "缓存值的外链单元格解析成 #NAME? 并永久删除链接。确认接受该损失请"
+                f"传 force=true 重试（目标: {where}）。"
+            )
+        if not os.access(target, os.W_OK):
+            return f"[Office Error]: 文件不可写，无法重算回写: {target}"
+
+        def _stamp(p: str):
+            st = os.stat(p)
+            return st.st_mtime_ns, st.st_size
+
+        try:
+            with tempfile.TemporaryDirectory(
+                    prefix="litework-recalc-",
+                    ignore_cleanup_errors=True) as profile:
+                # ① 初始化 profile（--terminate_after_init 建出 user/ 目录结构）
+                _run_soffice(["--terminate_after_init"], timeout=min(60, timeout),
+                             profile_dir=profile)
+                # ② 写入重算宏
+                macro_dir = os.path.join(profile, "user", "basic", "Standard")
+                if not os.path.isdir(macro_dir):
+                    return "[Office Error]: LibreOffice 未能创建可用 profile，无法重算"
+                with open(os.path.join(macro_dir, "Module1.xba"), "w",
+                          encoding="utf-8") as f:
+                    f.write(self._RECALC_MACRO)
+                # ③ 以宏 URI 打开目标文件 → calculateAll + store 回写
+                before = _stamp(target)
+                rc, out, err = _run_soffice(
+                    ["vnd.sun.star.script:Standard.Module1.RecalculateAndSave"
+                     "?language=Basic&location=application", target],
+                    timeout=timeout, profile_dir=profile)
+                if rc != 0:
+                    detail = (err or b"").decode("utf-8", "replace").strip()[:500]
+                    return (f"[Office Error]: LibreOffice 重算失败（退出码 {rc}）: "
+                            f"{detail or '无错误输出'}")
+                if _stamp(target) == before:
+                    return ("[Office Error]: LibreOffice 正常退出但没有回写文件，"
+                            "重算未生效（请确认没有其他 LibreOffice 实例占用后重试）")
+        except _SofficeMissing:
+            return _soffice_hint("Excel 公式重算")
+        except RuntimeError as exc:
+            return f"[Office Error]: {exc}"
+
+        # 重算结果速览：公式数 + 错误值计数（openpyxl 读缓存值）
+        formula_count = 0
+        error_count = 0
+        try:
+            wb = _openpyxl.load_workbook(target, data_only=False)
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str) and cell.value.startswith("="):
+                            formula_count += 1
+            wb.close()
+            wb = _openpyxl.load_workbook(target, data_only=True)
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str) and cell.value.startswith("#"):
+                            error_count += 1
+            wb.close()
+        except Exception:
+            pass  # 速览失败不影响重算结果本身
+        note = (f"，发现 {error_count} 个错误值（#NAME?/#VALUE! 等，"
+                "可能是 LibreOffice 不支持的函数）" if error_count else "")
+        return (f"[Office OK]: 已重算 {formula_count} 个公式并回写计算值{note}"
+                f" → {target}")
 
     # ------------------------------------------------------------ 读取已有办公文件
 
