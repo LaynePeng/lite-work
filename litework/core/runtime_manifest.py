@@ -69,6 +69,14 @@ def load_runtime_manifest(workspace: Optional[str]) -> Optional[Dict[str, Any]]:
     return _normalize(raw)
 
 
+def _safe_int(val: Any, default: int) -> int:
+    """宽容转 int：非数字字符串 / None → default（不抛 ValueError）。"""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     """校验与归一化：宽容解析（字段缺失/类型不对 → 默认空值），不抛错。"""
     def _str_list(v: Any) -> List[str]:
@@ -79,7 +87,7 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     _nw = raw.get("network")
     network_raw: Dict[str, Any] = _nw if isinstance(_nw, dict) else {}
     return {
-        "version": int(raw.get("version") or 1),
+        "version": _safe_int(raw.get("version"), 1),
         "runtime": {str(k): str(v) for k, v in (raw.get("runtime") or {}).items()}
         if isinstance(raw.get("runtime"), dict) else {},
         "setup": _str_list(raw.get("setup")),
@@ -101,7 +109,8 @@ def generate_runtime_manifest(workspace: str) -> Dict[str, Any]:
     ws = Path(workspace)
     detected: List[Dict[str, Any]] = []
     for detector in _DETECTORS:
-        if any((ws / f).is_file() for f in detector["files"]):
+        # 不跟随符号链接：指向外部的 symlink 不算本项目的特征文件
+        if any((ws / f).is_file() and not (ws / f).is_symlink() for f in detector["files"]):
             detected.append(detector)
 
     setup: List[str] = []

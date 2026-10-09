@@ -166,6 +166,8 @@ def analyze_trajectory(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # 1. 重试风暴
     tool_failures: Dict[str, int] = {}
     consecutive: Dict[str, int] = {}
+    # 每工具只记一条（连续失败结束时取峰值），避免同一场风暴产出 N 条 findings
+    storm_peak: Dict[str, int] = {}
     for e in events:
         if e.get("type") != "tool_call":
             continue
@@ -173,29 +175,33 @@ def analyze_trajectory(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if e.get("outcome") == "error":
             consecutive[tool] = consecutive.get(tool, 0) + 1
             tool_failures[tool] = tool_failures.get(tool, 0) + 1
-            if consecutive[tool] >= RETRY_STORM_THRESHOLD:
-                findings.append({
-                    "rule": "retry_storm",
-                    "tool": tool,
-                    "consecutive_failures": consecutive[tool],
-                    "total_failures": tool_failures[tool],
-                    "severity": "high" if consecutive[tool] >= 5 else "medium",
-                })
+            storm_peak[tool] = max(storm_peak.get(tool, 0), consecutive[tool])
         else:
             consecutive[tool] = 0
+    # 风暴结束后（或到末尾）统一记录
+    for tool, peak in storm_peak.items():
+        if peak >= RETRY_STORM_THRESHOLD:
+            findings.append({
+                "rule": "retry_storm",
+                "tool": tool,
+                "consecutive_failures": peak,
+                "total_failures": tool_failures[tool],
+                "severity": "high" if peak >= 5 else "medium",
+            })
 
     # 2. 成本异常
-    for e in events:
-        if e.get("type") == "outcome":
-            cost = float(e.get("cost_estimate") or 0)
-            if cost > COST_OUTLIER_THRESHOLD:
-                findings.append({
-                    "rule": "cost_outlier",
-                    "cost_estimate": cost,
-                    "threshold": COST_OUTLIER_THRESHOLD,
-                    "severity": "medium",
-                })
-            break  # 只看最终 outcome
+    # 取最后一条 outcome（events 按时间序，最后一条才是最终结果）
+    outcome_events = [e for e in events if e.get("type") == "outcome"]
+    if outcome_events:
+        final = outcome_events[-1]
+        cost = float(final.get("cost_estimate") or 0)
+        if cost > COST_OUTLIER_THRESHOLD:
+            findings.append({
+                "rule": "cost_outlier",
+                "cost_estimate": cost,
+                "threshold": COST_OUTLIER_THRESHOLD,
+                "severity": "medium",
+            })
 
     # 3. 上下文膨胀
     compactions = sum(1 for e in events

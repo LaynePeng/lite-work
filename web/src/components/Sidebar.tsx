@@ -164,7 +164,10 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
     if (!window.confirm(`删除「${name}」？此操作不可恢复`)) return;
     void api.deleteFile(path)
       .then(() => void refresh())
-      .catch((err) => window.alert(`删除失败：${err instanceof Error ? err.message : err}`));
+      .catch((err) => {
+        window.alert(`删除失败：${err instanceof Error ? err.message : err}`);
+        void refresh(); // 失败也刷新：目录已被外部删除时（400），树要与磁盘对齐
+      });
   };
 
   /** 删除目录（右键菜单）：连同内容递归删除，二次确认后调用后端。 */
@@ -173,9 +176,11 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
     if (!window.confirm(`删除目录「${name}」及其全部内容？此操作不可恢复`)) return;
     void api.deleteFile(path, { recursive: true })
       .then(() => void refresh())
-      .catch((err) => window.alert(`删除目录失败：${err instanceof Error ? err.message : err}`));
+      .catch((err) => {
+        window.alert(`删除目录失败：${err instanceof Error ? err.message : err}`);
+        void refresh(); // 失败也刷新：目录已被外部删除时（400），树要与磁盘对齐
+      });
   };
-
   /** 在指定目录下新建空文件/空目录（右键菜单）：成功后刷新并展开该目录。 */
   const createInDir = async (dirPath: string, kind: "file" | "dir") => {
     setMenu(null);

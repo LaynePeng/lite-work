@@ -54,14 +54,19 @@ def wrap_untrusted(content: str, source: str = "web", url: str = "") -> str:
     """
     if not content:
         return content
-    if content.lstrip().startswith("<untrusted"):
+    # 幂等检测：完整的开标签 + 闭标签成对存在才算已包裹（恶意网页只以
+    # <untrusted 开头不能绕过——必须同时有我们生成的闭合标签和提示规则）
+    if _UNTRUSTED_CLOSE in content and "[注意]" in content:
         return content  # 已包裹
     attrs = f'source="{source}"'
     if url:
         # URL 截断（太长的 URL 在上下文里是浪费）
         safe_url = url[:200].replace('"', "'")
         attrs += f' url="{safe_url}"'
-    return f"{_UNTRUSTED_OPEN.format(source=source)}\n{content}\n{_UNTRUSTED_CLOSE}{_UNTRUSTED_RULE}"
+    # 转义外部内容中的伪造标签（防止攻击者在内容里嵌 <untrusted source=...>
+    # 混淆 extract_untrusted_sources / 审批卡的 provenance_note）
+    safe_content = content.replace("<untrusted", "&lt;untrusted")
+    return f"{_UNTRUSTED_OPEN.format(source=source)}\n{safe_content}\n{_UNTRUSTED_CLOSE}{_UNTRUSTED_RULE}"
 
 
 def contains_untrusted(text: str) -> bool:

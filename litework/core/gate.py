@@ -249,7 +249,8 @@ def derive_submissions(traces: Dict[str, Any]) -> Dict[str, Submission]:
         unparsed = [c for c in commands if c.get("exit_code") is None]
         if failed:
             status = "blocked"
-        elif unparsed and len(unparsed) == len(commands):
+        elif unparsed:
+            # 有任何一条未解析出退出码 → 不能当 pass（门禁铁律：UNKNOWN 绝不当 PASS）
             status = "unknown"
         else:
             status = "pass"
