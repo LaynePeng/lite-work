@@ -1371,6 +1371,25 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--green);
 }
 
+/* W4：插件权限声明徽标——安装/更新前可见"这个插件能做什么" */
+.plugin-perm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-top: 3px;
+}
+.plugin-perm-badge.danger {
+  color: #f85149;
+  border-color: color-mix(in srgb, #f85149 40%, var(--border));
+  background: color-mix(in srgb, #f85149 8%, var(--bg-2));
+}
+
 /* 右面板「工具」tab：指标整合版（W3）。单列、无横向滚动（tm-name flex-1 截断）。 */
 .tm-panel {
   display: flex;

@@ -109,6 +109,20 @@ function fmtAge(seconds: number | null): string {
   return `${Math.round(hours / 24)} 天前`;
 }
 
+/** W4：插件权限声明徽标——显示"这个插件能做什么"（有 exec 等高危权限时醒目）。 */
+function PermissionBadge({ permissions }: { permissions?: Record<string, string[]> }) {
+  if (!permissions || Object.keys(permissions).length === 0) return null;
+  const hasExec = (permissions.exec?.length ?? 0) > 0;
+  const hasNet = (permissions.network?.length ?? 0) > 0;
+  const parts: string[] = [];
+  if (hasExec) parts.push("⚠ 可执行命令");
+  if (hasNet) parts.push("🌐 可联网");
+  const other = Object.keys(permissions).filter((k) => k !== "exec" && k !== "network");
+  if (other.length > 0) parts.push(`${other.length} 项其他权限`);
+  if (parts.length === 0) return null;
+  return <span className={`plugin-perm-badge ${hasExec ? "danger" : ""}`}>{parts.join(" · ")}</span>;
+}
+
 /** 安装进度卡：步骤链 + 下载进度条（可续传下载时显示已下载/总字节）。 */
 function InstallProgressCard({ job, onControl }: {
   job: InstallJobStatus | null;
@@ -2163,6 +2177,7 @@ export default function SettingsModal({
                               </span>
                             </div>
                             <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                            <PermissionBadge permissions={plugins.find((p) => p.name === cp.name)?.permissions} />
                           </div>
                           <div className="skill-item-actions">
                             <button className="btn-update" disabled={pluginBusy || !communitySrc(cp.name)}
@@ -2181,6 +2196,7 @@ export default function SettingsModal({
                               <span className="plugin-version">v{cp.version}</span>
                             </div>
                             <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
+                            <PermissionBadge permissions={plugins.find((p) => p.name === cp.name)?.permissions} />
                           </div>
                           <div className="skill-item-actions">
                             <button className="btn-test" disabled={pluginBusy || !communitySrc(cp.name)}

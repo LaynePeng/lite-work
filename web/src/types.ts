@@ -796,6 +796,8 @@ export interface PluginInfo {
   status?: { state: string; reason?: string } | null;
   /** 加载失败原因（空/缺省=正常）；列表仍返回，前端显示"⚠ 加载失败"而非整页挂掉 */
   error?: string;
+  /** W4：权限声明（{类别: [范围]}）；安装/升级弹窗展示"这个插件能做什么" */
+  permissions?: Record<string, string[]>;
 }
 
 /** 通用插件设置项声明（`Plugin.contributes.settings` 的一项） */

@@ -127,6 +127,13 @@ def record_installed(config_dir: str, name: str, version: str,
         entry["version"] = version
     if source:
         entry["source"] = source
+    # W4：记录当前版本的权限声明（升级时 diff 的旧版本基准）
+    try:
+        from ..core.plugin_permissions import read_plugin_permissions
+        plugin_dir = os.path.join(_plugin_root(config_dir), name)
+        entry["permissions"] = read_plugin_permissions(plugin_dir)
+    except Exception:
+        pass  # 权限读取失败不影响安装
     entry["installed_at"] = _now_iso()
     data[name] = entry
     try:
@@ -135,7 +142,6 @@ def record_installed(config_dir: str, name: str, version: str,
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError:
         logger.warning("[PluginLoader] 写入 installed.json 失败")
-
 
 def unrecord_installed(config_dir: str, name: str) -> None:
     data = read_installed(config_dir)
@@ -577,6 +583,8 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
             "contributes": contributes,
             # 插件自述的运行状态：{"state": "running"|"not_started", "reason": "..."}
             "status": status,
+            # W4：权限声明（安装弹窗 / 插件页展示"这个插件能做什么"）
+            "permissions": rec.get("permissions") or {},
             # 加载失败原因（空=正常）；前端插件页显示"⚠ 加载失败：原因"而非整页挂掉
             "error": load_error,
         })
@@ -743,8 +751,24 @@ def import_source(config_dir: str, source: str, name: Optional[str] = None,
                 results = import_zip_bytes(config_dir, f.read(), name, overwrite)
         else:
             raise ValueError(f"不支持的导入来源: {source}（支持目录 / .zip / GitHub URL）")
+    # W4：安装前读旧权限（升级场景），安装后读新权限 → diff 附到返回值
     for r in results:
-        record_installed(config_dir, r["name"], version or "", source)
+        _name = r["name"]
+        _old_perms: dict = {}
+        try:
+            _old_entry = read_installed(config_dir).get(_name, {})
+            _old_perms = _old_entry.get("permissions") or {}
+        except Exception:
+            pass
+        record_installed(config_dir, _name, version or "", source)
+        try:
+            from ..core.plugin_permissions import diff_permissions, read_plugin_permissions
+            _new_dir = os.path.join(_plugin_root(config_dir), _name)
+            _new_perms = read_plugin_permissions(_new_dir)
+            r["permission_diff"] = diff_permissions(_old_perms, _new_perms)
+            r["permissions"] = _new_perms
+        except Exception:
+            r["permission_diff"] = None
     return results
 
 
