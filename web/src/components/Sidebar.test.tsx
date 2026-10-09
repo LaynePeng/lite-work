@@ -434,4 +434,15 @@ describe("Sidebar · 任务 Tab（Goals 视图）", () => {
     expect(onDeriveSession).toHaveBeenCalledWith("s-done", "APP 竞品调研");
     expect(onContinueSession).not.toHaveBeenCalled();
   });
+
+  it("任务 Tab 顶部「←」：返回项目列表并切回第一个 Tab（项目）", async () => {
+    const user = userEvent.setup();
+    const onBackToProjects = vi.fn();
+    const onTabChange = vi.fn();
+    render(<Sidebar {...taskProps} onBackToProjects={onBackToProjects} onTabChange={onTabChange} />);
+    await screen.findByText("季度报告汇总");
+    await user.click(screen.getByTitle("返回项目列表"));
+    expect(onBackToProjects).toHaveBeenCalledTimes(1);
+    expect(onTabChange).toHaveBeenCalledWith("sessions");
+  });
 });

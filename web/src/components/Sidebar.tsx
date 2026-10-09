@@ -722,7 +722,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
 }
 
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
-function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession }: {
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   workspace: string;
@@ -734,6 +734,8 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
   onDeriveSession?: (id: string, title?: string) => void;
   onDeleteSession: (id: string) => void;
   onNewSession: () => void;
+  /** 任务 Tab 专用：打开新建任务向导（优先于 onNewSession） */
+  onNewTask?: () => void;
 }) {
   const sorted = [...sessions].sort((a, b) => {
     // 运行中的任务钉在最前（Goals 视图：正在替我干活的优先可见）
@@ -750,7 +752,7 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
           {projectKind === "code" ? "💻" : "📁"} {projectName}
         </div>
       </div>
-      <button className="btn-new-session" onClick={onNewSession}>＋ 新建任务</button>
+      <button className="btn-new-session" onClick={onNewTask || onNewSession}>＋ 新建任务</button>
       {sorted.length === 0 && (
         <div className="sidebar-empty">
           还没有任务
@@ -792,6 +794,7 @@ export default function Sidebar({
   onDeriveSession,
   onOpenSessionWithProject,
   onNewSession,
+  onNewTask,
   onDeleteSession,
   onDeleteSessions,
   onOpenProject,
@@ -830,6 +833,8 @@ export default function Sidebar({
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
+  /** 任务 Tab「＋ 新建任务」：打开任务向导弹窗（区别于项目 Tab 的新建会话） */
+  onNewTask?: () => void;
   /** 批量删除会话（App 层调 api.deleteSessionsBatch 并同步页签/会话列表） */
   onDeleteSessions?: (ids: string[]) => void;
   onOpenProject: () => void;
@@ -1102,6 +1107,9 @@ export default function Sidebar({
           )
         )}
 
+        {/* 任务 Tab 的「←」语义 = 回到第一个 Tab（项目）列表：返回项目列表视图的同时切 Tab。
+            只调 onBackToProjects 时 projectsView 虽变为 list，但任务卡只在 tab==="tasks"
+            分支渲染，点击无可见效果（此前是「点击无效」的 bug）。 */}
         {tab === "tasks" && (
           <TaskList
             sessions={sessions}
@@ -1109,12 +1117,13 @@ export default function Sidebar({
             workspace={workspace}
             projectKind={projectKind ?? "project"}
             projectName={projectName}
-            onBackToProjects={onBackToProjects}
+            onBackToProjects={() => { onBackToProjects(); onTabChange("sessions"); }}
             onSelectSession={onSelectSession}
             onContinueSession={onContinueSession}
             onDeriveSession={onDeriveSession}
             onDeleteSession={onDeleteSession}
             onNewSession={onNewSession}
+            onNewTask={onNewTask}
           />
         )}
 

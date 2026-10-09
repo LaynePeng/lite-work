@@ -4,6 +4,23 @@
 
 ## [未发布]
 
+### 新增（任务 Tab P2 续作：新建任务向导弹窗）
+- **「＋ 新建任务」改为目标向导**（不再开空白对话）：任务目标（必填）+ 执行方式
+  （先规划再执行 / 直接干）+ **计划项（可选，每行一个 TODO 步骤；留空则 Agent
+  自动规划）**+ 可选开关（目标循环 /loop · 自动续推 /continue · 隔离工作树
+  /worktree，非 git 仓库时置灰）+ 协作模式下拉；
+- **开始任务**：建会话 → 写目标（🎯 横幅 + 任务 system prompt 注入）→ 填了计划项
+  就经新端点 `POST /api/sessions/{id}/todos` 预置 TODO 看板（进对话即有进度）→
+  套配置 → 进入会话 → 自动发出引导指令（先规划分支要求 Agent 先 todo_write 建
+  TODO 再逐项推进；直接干分支不强制；有预置计划则一并列出供 review）→ 任务 Tab
+  立即出现运行中置顶的任务卡，Agent 建立看板后即显示进度；
+- 无模板、无任务类型快捷（目标与计划均由用户手动输入）；后端仅新增
+  `POST /api/sessions/{id}/todos`（复用 TodoPlugin.seed_board），其余全复用
+  createSession / setSessionGoal / setSessionWorktree / setSessionCollab /
+  taskLauncher 既有管道。
+- 修复：任务 Tab 顶部「←」此前只切 projectsView 不切 Tab，点击无效——现在
+  一并切回第一个 Tab（项目）。
+
 ### 新增（任务 Tab P2：续任务 / 派生按钮）
 - **任务卡「⏭ 续」**：未完成且不在运行的会话可直接从卡片续推——进入该会话并
   自动发送推进指令（复用 AUTO_CONTINUE 同款 prompt 与发送管线）；

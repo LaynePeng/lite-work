@@ -161,6 +161,11 @@ export const api = {
     req<{ ok: boolean; goal: string | null }>(`/api/sessions/${id}/goal`, {
       method: "POST", body: JSON.stringify({ goal }),
     }),
+  /** 预置会话 TODO（新建任务向导「计划项」）：每行一个待办，状态全置 pending。 */
+  seedTodos: (id: string, items: string[]) =>
+    req<{ ok: boolean; seeded: number }>(`/api/sessions/${id}/todos`, {
+      method: "POST", body: JSON.stringify({ items }),
+    }),
   setSessionCollab: (id: string, mode: string | null) =>
     req<{ ok: boolean; mode: string | null }>(`/api/sessions/${id}/collab`, {
       method: "POST", body: JSON.stringify({ mode }),

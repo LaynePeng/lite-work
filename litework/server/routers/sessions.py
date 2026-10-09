@@ -22,6 +22,10 @@ class SessionDeriveRequest(BaseModel):
     """会话派生请求：可选自定义新会话名称（默认「源标题 · 派生」）。"""
     name: Optional[str] = None
 
+class SessionTodosSeedRequest(BaseModel):
+    """预置会话 TODO（新建任务向导「计划项」）：每行为一个待办项，状态全置 pending。"""
+    items: list[str] = []
+
 
 class CompactRequest(BaseModel):
     session_id: str
@@ -330,6 +334,28 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if not session_id:
             return {"todos": []}
         return {"todos": app.todo_plugin.get(session_id.strip())}
+
+    @router.post("/api/sessions/{session_id}/todos")
+    async def seed_session_todos(session_id: str, payload: SessionTodosSeedRequest, request: Request):
+        """预置会话 TODO（新建任务向导「计划项」）：全部置为 pending（覆写已有看板）。
+
+        种子经由 TodoPlugin.seed_board 落盘；若目标会话有事件总线（任务已在跑），
+        广播 todo:updated 让前端 TODOs 面板 / 任务卡实时更新。
+        """
+        ctx.check_auth(request)
+        snapshot = app.session_store.load(session_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        items = [t.strip() for t in (payload.items or []) if t and t.strip()][:100]
+        # seed_board 以「内容 dict 列表」为输入（{content}），字符串列表归一化后传入
+        seeded = app.todo_plugin.seed_board(session_id, [{"content": t} for t in items])
+        try:
+            events = app.todo_plugin._events.get(session_id)
+            if events is not None:
+                await events.emit("todo:updated", {"todos": app.todo_plugin.get(session_id)})
+        except Exception:
+            pass
+        return {"ok": True, "seeded": seeded}
 
     @router.get("/api/sessions/{session_id}/model")
     async def get_session_model(session_id: str, request: Request):

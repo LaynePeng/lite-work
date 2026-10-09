@@ -8,6 +8,7 @@ import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
 import ErrorBoundary from "./components/ErrorBoundary";
+import NewTaskWizard, { type NewTaskConfig } from "./components/NewTaskWizard";
 import PendingQueue from "./components/PendingQueue";
 import FileViewer from "./components/FileViewer";
 import ProjectPicker from "./components/ProjectPicker";
@@ -271,6 +272,8 @@ export default function App() {
   const [registeredTools, setRegisteredTools] = useState<{ name: string; description: string }[]>([]);
   // 已安装协作模式（对话框选择器数据源；设置里安装新插件后随 refreshAll 更新）
   const [collabModes, setCollabModes] = useState<CollabMode[]>([]);
+  // 新建任务向导弹窗开关（任务 Tab「＋ 新建任务」入口）
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   // 综合设置（AppConfig 子集）：聊天区折叠阈值等 UI 行为，保存设置后随 refreshAll 生效
   const [uiConfig, setUiConfig] = useState<AppConfig | null>(null);
   const refreshCollabModes = useCallback(() => {
@@ -2757,6 +2760,59 @@ export default function App() {
     })();
   };
 
+  // 「＋ 新建任务」（任务 Tab 入口）：打开向导弹窗。
+  const requestNewTask = useCallback(() => setNewTaskOpen(true), []);
+
+  // 向导确认：建会话 → 写目标/配置 → 进入会话 → 自动发出引导指令（不等用户再敲一次）。
+  const startTaskFromWizard = useCallback(async (cfg: NewTaskConfig) => {
+    setNewTaskOpen(false);
+    try {
+      const { session_id } = await api.createSession();
+      patchChat(session_id, { ...EMPTY_CHAT, messages: [] });
+      const title = cfg.goal.length > 24 ? `${cfg.goal.slice(0, 24)}…` : cfg.goal;
+      openSessionTab(session_id, title || "新任务");
+      // 目标：写后端 metadata（注入任务 system prompt）+ 前端 🎯 横幅
+      if (cfg.goal) {
+        await api.setSessionGoal(session_id, cfg.goal).catch(() => {});
+        patchChat(session_id, { goal: cfg.goal });
+      }
+      // 预置 TODO（向导「计划项」）：进对话即有看板；留空跳过（交由 Agent 规划）
+      if (cfg.planItems.length > 0) {
+        await api.seedTodos(session_id, cfg.planItems).catch(() => {});
+      }
+      // 隔离工作树（向导已按 git 状态置灰；后端校验失败不阻断，退回普通模式）
+      if (cfg.worktree) {
+        try {
+          await api.setSessionWorktree(session_id, true);
+          patchChat(session_id, { worktreeEnabled: true });
+        } catch {
+          /* 非 git 或创建失败：保持普通模式 */
+        }
+      }
+      // 协作模式
+      if (cfg.collab) {
+        try {
+          await api.setSessionCollab(session_id, cfg.collab);
+          patchChat(session_id, { collabMode: cfg.collab });
+        } catch {
+          /* 未知模式：后端按默认执行 */
+        }
+      }
+      // 局部开关（/loop · /continue 为前端本地状态）
+      patchChat(session_id, { loopEnabled: cfg.loop, autoContinue: cfg.autoContinue });
+      await selectSession(session_id, title || "新任务");
+      const prompt = cfg.mode === "plan"
+        ? cfg.planItems.length > 0
+          ? `[新任务] 目标：${cfg.goal}\n已预置 TODO 计划：\n${cfg.planItems.map((p) => `  - ${p}`).join("\n")}\n请 review 并按需用 todo_write 调整后提交进看板，再逐项推进直到全部完成。`
+          : `[新任务] 目标：${cfg.goal}\n第 1 步：请先用 todo_write 建立完整的 TODO 计划（多步骤任务），再逐项执行直到全部完成。`
+        : `[新任务] 目标：${cfg.goal}\n直接执行，完成后输出总结。`;
+      taskLauncherRef.current(session_id, prompt);
+      await refreshSessions();
+    } catch (e) {
+      pushLog(`✗ 新建任务失败: ${(e as Error).message}`);
+    }
+  }, [api, openSessionTab, patchChat, refreshSessions, selectSession, pushLog]);
+
   // 任务卡「⏭ 续」：进入该会话并自动续推（复用 AUTO_CONTINUE 同款 prompt 与发送管线）。
   const continueSession = useCallback(async (sid: string, title?: string) => {
     try {
@@ -3020,6 +3076,7 @@ export default function App() {
         onDeriveSession={(id, title) => void deriveSession(id, title)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
+        onNewTask={requestNewTask}
         onDeleteSession={(id) => void deleteSession(id)}
         onDeleteSessions={(ids) => void deleteSessions(ids)}
         onOpenProject={openProjectEntry}
@@ -3252,6 +3309,14 @@ export default function App() {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onSaved={() => { void refreshAll(); }}
+        />
+      )}
+      {newTaskOpen && (
+        <NewTaskWizard
+          collabModes={collabModes}
+          workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
+          onCancel={() => setNewTaskOpen(false)}
+          onSubmit={(cfg) => void startTaskFromWizard(cfg)}
         />
       )}
       {showAbout && (

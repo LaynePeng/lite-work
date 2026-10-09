@@ -7748,3 +7748,195 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .task-deliv .btn-derive-card:hover {
   background: var(--bg-3);
 }
+
+/* ─────────────────────────────── 新建任务向导弹窗（wizard） */
+.wizard-modal {
+  width: 520px;
+}
+
+.wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wizard-label {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+
+.wizard-goal {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wizard-goal:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.wizard-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.wizard-radio-row {
+  display: flex;
+  gap: 10px;
+}
+
+.wizard-radio {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--bg-1);
+  transition: border-color 0.15s;
+}
+
+.wizard-radio.checked {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+
+.wizard-radio input {
+  display: none;
+}
+
+.wizard-radio span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.wizard-radio small {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.wizard-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.wizard-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  cursor: pointer;
+  user-select: none;
+}
+
+.wizard-check input {
+  accent-color: var(--accent);
+}
+
+.wizard-check code {
+  font-size: 11px;
+  background: var(--bg-2);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.wizard-check.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wizard-collab-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.wizard-collab {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 12.5px;
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.wizard-actions .btn-cancel {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wizard-actions .btn-cancel:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.wizard-actions .btn-start {
+  padding: 7px 20px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wizard-actions .btn-start:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 向导「计划项（可选）」输入区 */
+.wizard-plan {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wizard-plan:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.wizard-hint {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-2);
+}
