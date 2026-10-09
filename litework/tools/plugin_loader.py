@@ -127,7 +127,7 @@ def record_installed(config_dir: str, name: str, version: str,
         entry["version"] = version
     if source:
         entry["source"] = source
-    # W4：记录当前版本的权限声明（升级时 diff 的旧版本基准）
+    # 记录当前版本的权限声明（升级时 diff 的旧版本基准）
     try:
         from ..core.plugin_permissions import read_plugin_permissions
         plugin_dir = os.path.join(_plugin_root(config_dir), name)
@@ -583,7 +583,7 @@ def list_plugins(config_dir: str) -> List[Dict[str, Any]]:
             "contributes": contributes,
             # 插件自述的运行状态：{"state": "running"|"not_started", "reason": "..."}
             "status": status,
-            # W4：权限声明（安装弹窗 / 插件页展示"这个插件能做什么"）
+            # 权限声明（安装弹窗 / 插件页展示"这个插件能做什么"）
             "permissions": rec.get("permissions") or {},
             # 加载失败原因（空=正常）；前端插件页显示"⚠ 加载失败：原因"而非整页挂掉
             "error": load_error,
@@ -728,7 +728,7 @@ def _wrap_as_plugin_dir(base: Path, plugin_name: str) -> Path:
 
 
 def _attach_permission_diff(config_dir: str, results: List[Dict[str, Any]]) -> None:
-    """W4：给安装结果附加权限声明与新旧 diff（所有安装入口共用）。
+    """给安装结果附加权限声明与新旧 diff（所有安装入口共用）。
 
     H3 修复：此前 diff 只在 import_source 里做，zip 字节流上传（settings 页
     plugins_import_zip）绕过了它——升级时权限悄悄扩张不报警。

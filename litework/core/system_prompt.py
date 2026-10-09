@@ -99,7 +99,7 @@ class SystemPromptBuilder:
             f"{project_instructions}"
             if project_instructions else ""
         )
-        # W5：项目运行环境清单（.litework/project.json）——安装/验证命令进稳定层。
+        # 项目运行环境清单（.litework/project.json）——安装/验证命令进稳定层。
         # 无清单 → 空串，prompt 不变（保证已有会话的缓存前缀不受影响）。
         from .runtime_manifest import load_runtime_manifest, runtime_summary_for_prompt
         runtime_section = runtime_summary_for_prompt(load_runtime_manifest(cwd))

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""不可信内容来源标记与包裹（W6，对齐手册 p.55「输入侧 Prompt 防火墙」）。
+"""不可信内容来源标记与包裹。
 
 解决什么：网页/文件/第三方内容被 Agent 当作指令执行——提示注入是 Agent 最大的
 安全风险之一。本模块给内容打上 trust 标记并用 <untrusted> 包裹，让所有

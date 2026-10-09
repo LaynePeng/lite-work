@@ -92,19 +92,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "skill_trigger_mode": "substring",
     # 并行工具执行："auto"（只读轮并行/含写类整轮串行）| "always" | "never"
     "parallel_tool_calls": "auto",
-    # 完成证据门禁（W2，对齐手册 Guardrail）：Agent 声称完成时按机械事实核验
+    # 完成证据门禁：Agent 声称完成时按机械事实核验
     #   "off"      不评估
     #   "advisory" （默认）只记录 + 发 gate:result 事件，不打断收尾
     #   "enforced" 未通过则不收尾：注入提醒再给一轮（见 completion_gate_retries）
     "completion_gate": "advisory",
     # enforced 模式下"再给一轮补证据"的最大次数（防死循环）
     "completion_gate_retries": 2,
-    # 工具/技能指标（W3，对齐手册 p.47 工具评测）：只记结构化计数（工具名/成败/
-    # 耗时/归属技能），不落参数与正文；用于算「命中率 / 成功率」并反向改进描述
+    # 工具/技能指标：只记结构化计数（工具名/成败/耗时/归属技能），不落参数
+    # 与正文；用于算命中率与成功率并反向改进工具描述
     "tool_metrics": True,
-    # Agent 轨迹（W7，对齐手册 pp.64-66）：持久化执行轨迹（JSONL），供复盘/
-    # 评测/审计。默认关闭——轨迹是低频需求的持久化数据，不应默认产生存储压力；
-    # 需要时在设置页开启（开启后新任务开始记录，已有的照常保留）
+    # Agent 轨迹：持久化执行轨迹（JSONL），供复盘/评测/审计。默认关闭——
+    # 轨迹是低频需求的持久化数据，不应默认产生存储压力；需要时在设置页开启
+    # （开启后新任务开始记录，已有的照常保留）
     "trajectory_enabled": False,
     # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
     # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
@@ -1533,8 +1533,8 @@ class AgentApp:
         """启动时回收上一次运行遗留的后台命令（服务端 TTL 兜底）。
 
         为什么需要：Agent 可能因后端崩溃/断连而失去对子进程的管理，此时进程树
-        会继续占用 CPU/端口/文件锁（手册 Sandbox 生命周期控制面：到期回收应由
-        服务端负责，而不是指望调用方）。判定与保守策略见 tools.shell.reclaim_orphaned_tasks。
+        会继续占用 CPU/端口/文件锁。到期回收应由服务端负责，而不是指望
+        调用方。判定与保守策略见 tools.shell.reclaim_orphaned_tasks。
         """
         result = reclaim_orphaned_tasks(self._bg_journal_path)
         if result.get("killed"):
@@ -2206,7 +2206,7 @@ class AgentApp:
         _, deny_perms = domains_to_allowed_and_permissions(
             profile.domains, self._all_tool_names(), profile.extra_tools
         )
-        # W7 轨迹写入器：trajectory_enabled 开启时创建，关闭时 None（零开销）
+        # 轨迹写入器：trajectory_enabled 开启时创建，关闭时 None（零开销）
         _trajectory = None
         if bool(self.config.get("trajectory_enabled", False)):
             from .core.trajectory import TrajectoryWriter
@@ -2237,12 +2237,12 @@ class AgentApp:
             reducer_adapter=reducer_adapter,
             enable_observation_pack=bool(self.config.get("observation_pack", True)),
             enable_compaction_economics=bool(self.config.get("compaction_economics", True)),
-            # W3 工具/技能指标：只记结构化计数（见 core/metrics.py）
+            # 工具/技能指标：只记结构化计数（见 core/metrics.py）
             metrics=ToolMetrics(
                 self.tool_metrics_path(),
                 enabled=bool(self.config.get("tool_metrics", True)),
             ),
-            # W7 轨迹：默认关闭（trajectory_enabled=false 时为 None，零开销）
+            # 轨迹：默认关闭（trajectory_enabled=false 时为 None，零开销）
             trajectory=_trajectory,
         )
         # 流式空闲看门狗透传（主/证据收据适配器；子 Agent 走适配器默认值）

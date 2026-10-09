@@ -420,7 +420,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=result.get("reason", "压缩失败"))
         return result
 
-    # ------------------------------------------------------------ W7：轨迹
+    # ------------------------------------------------------------ 轨迹
 
     @router.get("/api/trajectories/{session_id}")
     async def list_trajectories(session_id: str, request: Request,

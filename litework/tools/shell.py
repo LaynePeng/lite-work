@@ -77,8 +77,7 @@ class BackgroundRegistry:
     我们让后台任务不绑定目录，而不是让目录随请求流动。
 
     任务日志（journal_path）：add/remove 时把在跑的任务写到磁盘，供**下次启动
-    回收孤儿进程**用（服务端 TTL 兜底——Agent 可能因崩溃/断连失去管理者，见
-    手册 Sandbox 生命周期控制面）。写失败一律吞掉，绝不因为日志影响工具执行。
+    回收孤儿进程**用（服务端 TTL 兜底——Agent 可能因崩溃/断连失去管理者）。写失败一律吞掉，绝不因为日志影响工具执行。
     """
 
     def __init__(self, journal_path: Optional[str] = None) -> None:

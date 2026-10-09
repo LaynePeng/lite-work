@@ -188,7 +188,7 @@ class AgentLoop:
         self._speed_output_tokens = 0   # Σ 有生成窗口那几轮的输出 tokens
         self._speed_gen_ms = 0          # Σ 生成窗口（毫秒）
         self._speed_turns = 0           # 计入平均的轮数
-        # ---- 完成证据门禁（W2，对齐手册 Guardrail pp.60-63）----
+        # ---- 完成证据门禁 ----
         # 事实由 loop 自己收集（命令退出码 / 改动文件），不依赖模型自述；
         # 聚合是机械的（缺失或 blocked/unknown → 不得放行，UNKNOWN 绝不当 PASS）。
         # 模式：off 不评估 / advisory 只记录+发事件 / enforced 未通过则不收尾
@@ -198,14 +198,14 @@ class AgentLoop:
         self._gate_traces: Dict[str, List[Any]] = {"commands": [], "changed_files": []}
         self._gate_retries = 0
         self.last_gate_result: Optional[Dict[str, Any]] = None
-        # ---- 工具/技能指标（W3，对齐手册 p.47「工具评测」）----
+        # ---- 工具/技能指标 ----
         # 只记结构化计数（工具名/成败/耗时/归属技能），不记参数与输出正文；
         # 用于算命中率与成功率，反向推动工具描述与技能边界（见 core/metrics.py）
         self.metrics = metrics
         self._loaded_skills: List[str] = []
-        # W6：本轮已回填的工具结果（检测"外部内容+高危动作"组合用）
+        # 本轮已回填的工具结果（检测"外部内容+高危动作"组合用）
         self._recent_tool_results: List[str] = []
-        # W7：轨迹写入器（trajectory_enabled=false 时为 None，零开销）
+        # 轨迹写入器（trajectory_enabled=false 时为 None，零开销）
         self.trajectory = trajectory
         self._turn_count = 0
         self._register_obs_recall_tool()
@@ -436,7 +436,7 @@ class AgentLoop:
 
                 # F. 无工具调用 → 任务收敛，输出最终文本
                 if not tool_calls:
-                    # W2「完成证据门禁」：Agent 声称完成的这一刻做机械核验。
+                    # 完成证据门禁：Agent 声称完成的这一刻做机械核验。
                     # - advisory：只记录 + 发 gate:result 事件（不打断）；
                     # - enforced：verdict 非 pass 时注入提醒（含缺失/UNKNOWN 项），
                     #   再给一轮补证据的机会（次数上限 completion_gate_retries）。
@@ -487,13 +487,13 @@ class AgentLoop:
                 #     走与普通工具完全相同的审批/守卫/截断链路，不绕过安全边界。
                 results = await self._apply_action_fusion(tool_calls, results, stats)
 
-                # W2 门禁事实收集：命令退出码 / 改动文件（不依赖模型自述）
+                # 门禁事实收集：命令退出码 / 改动文件（不依赖模型自述）
                 self._record_gate_traces(tool_calls, results)
 
-                # W3 工具/技能指标：记录成败与归属（只计数，不落正文）
+                # 工具/技能指标：记录成败与归属（只计数，不落正文）
                 self._record_tool_metrics(tool_calls, results)
 
-                # W7 轨迹：工具调用落盘（trajectory 为 None 时零开销）
+                # 轨迹：工具调用落盘（trajectory 为 None 时零开销）
                 if self.trajectory is not None:
                     from .metrics import classify_outcome
                     self._turn_count += 1
@@ -508,7 +508,7 @@ class AgentLoop:
 
                 await self._append_tool_results(tool_calls, results, messages)
 
-                # W6：更新本轮工具结果（下一轮工具调用前检测"外部内容+高危动作"）
+                # 更新本轮工具结果（下一轮工具调用前检测"外部内容+高危动作"）
                 self._recent_tool_results = [str(r) for r in results]
 
                 # G2. 工具结果回填完成后注入排队输入（消息链合法位置），
@@ -1046,13 +1046,13 @@ class AgentLoop:
             return violation
 
         # 3. beforeTool 安全管道（SecurityPlugin 等）
-        # W6 不可信内容防护：同一轮"外部内容 + 高危动作"→ 强制走审批（升级）
+        # 不可信内容防护：同一轮"外部内容 + 高危动作"→ 强制走审批（升级）
         # 检测方式：本轮已回填的工具结果里是否有 <untrusted> 包裹
         _turn_external = any(
             contains_untrusted(str(r)) for r in self._recent_tool_results
         ) if hasattr(self, "_recent_tool_results") else False
         if should_escalate(_turn_external, tool_name):
-            logger.warning("[AgentLoop] W6 升级审批：%s 紧随外部内容之后", tool_name)
+            logger.warning("[AgentLoop] 升级审批：%s 紧随外部内容之后", tool_name)
             hook_data = {
                 "toolName": tool_name, "args": args, "cancel": False, "reason": "",
                 "provenance_note": provenance_note(
@@ -1269,7 +1269,7 @@ class AgentLoop:
 
     # ------------------------------------------------------------------ 收尾
 
-    # ------------------------------------------------------------------ 完成门禁（W2）
+    # ------------------------------------------------------------------ 完成门禁
 
     def _record_gate_traces(self, tool_calls: List[ToolCall], results: List[str]) -> None:
         """收集门禁事实（命令退出码、改动文件）——机械核验的依据。
@@ -1308,7 +1308,7 @@ class AgentLoop:
                     })
 
     def _record_tool_metrics(self, tool_calls: List[ToolCall], results: List[str]) -> None:
-        """记录工具调用成败与技能归属（W3；未装配指标时零开销）。
+        """记录工具调用成败与技能归属（未装配指标时零开销）。
 
         归属口径：**任务级**——本任务加载过的技能都会带上（明确不精确，但足以回答
         "某个技能带来的调用成功率如何"，见 core/metrics.py 的 summarize）。
@@ -1344,7 +1344,7 @@ class AgentLoop:
 
         spec = load_spec(self.workspace)
         result = aggregate(spec, derive_submissions(self._gate_traces))
-        # W5 集成：环境清单的 verify 命令是否已执行（项目声明了验证却没跑 → 补充证据）
+        # 环境清单的 verify 命令是否已执行（项目声明了验证却没跑 → 补充证据）
         # 检查方式：verify 命令的前缀（如 "pytest"）是否出现在已执行的命令列表里
         from .runtime_manifest import load_runtime_manifest, verify_commands
         _manifest = load_runtime_manifest(self.workspace)
@@ -1404,7 +1404,7 @@ class AgentLoop:
 
     async def _finish(self, content: str, messages: List[Message], stats: Dict[str, Any],
                       store_snapshot: bool) -> Tuple[str, Dict[str, Any]]:
-        # W7 轨迹：写最终 outcome（verdict + gate + 成本 + 轮数）
+        # 轨迹：写最终 outcome（verdict + gate + 成本 + 轮数）
         if self.trajectory is not None:
             try:
                 gate = self.last_gate_result or {}

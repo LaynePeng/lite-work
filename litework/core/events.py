@@ -210,7 +210,7 @@ class GateCheckPayload(TypedDict):
 
 
 class GateResultPayload(TypedDict):
-    """完成证据门禁的机械聚合结果（W2，对齐手册 Guardrail）。
+    """完成证据门禁的机械聚合结果。
 
     verdict：pass / blocked / unknown（缺必检项或存在 blocked/unknown → 非 pass；
     UNKNOWN 绝不当 PASS）。opinion 为判定类插件附加的建议（插件自报 source），只加信息。

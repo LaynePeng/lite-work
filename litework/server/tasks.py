@@ -672,7 +672,7 @@ class TaskManager:
                                     reasoning_effort_override=reasoning_effort,
                                     workspace=task_workspace)
         loop.parallel_tool_calls = str(self.app.config.get("parallel_tool_calls", "auto")).lower()
-        # 完成证据门禁（W2）：off / advisory / enforced（默认 advisory，不打断收尾）
+        # 完成证据门禁：off / advisory / enforced（默认 advisory，不打断收尾）
         loop.completion_gate = str(self.app.config.get("completion_gate", "advisory")).lower()
         try:
             loop.completion_gate_retries = max(0, int(self.app.config.get("completion_gate_retries", 2)))

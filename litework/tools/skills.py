@@ -444,7 +444,7 @@ class SkillsTools:
                     "triggers": str(meta.get("triggers") or ""),
                     # frontmatter 可选 version：社区技能更新对比用（缺失为空串）
                     "version": str(meta.get("version") or ""),
-                    # 触发边界（W3，工具评测/命中率）：`not-for` 命中的提示词直接
+                    # 触发边界：`not-for` 命中的提示词直接
                     # 抑制本技能（负向触发比正向触发更能提升命中率）；`scope` 说明
                     # 适用范围（供人/评测参考，不参与匹配）
                     "not_for": str(meta.get("not-for") or meta.get("not_for") or ""),
@@ -496,7 +496,7 @@ class SkillsTools:
 
     @staticmethod
     def _suppressed_by_not_for(skill: Dict[str, Any], lowered_prompt: str) -> bool:
-        """`not-for` 命中的提示词 → 抑制该技能（W3 命中率）。
+        """`not-for` 命中的提示词 → 抑制该技能。
 
         为什么需要负向触发：triggers 是"包含即命中"的宽松匹配，含糊/邻近词很容易
         误触发（例如"改个 PPT 里的表格"同时命中 presentation 与 xlsx 类技能）。

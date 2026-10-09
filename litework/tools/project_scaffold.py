@@ -131,7 +131,7 @@ def scaffold_project(root: str, categories: Optional[List[str]] = None) -> Dict[
             )
             created.append("AGENTS.md")
 
-    # 运行环境清单（W5）：.litework/project.json——按项目类型检测产出初版。
+    # 运行环境清单：.litework/project.json——按项目类型检测产出初版。
     # 仅当缺失时生成（幂等）；桌面端「新建项目」与 Agent 手动 scaffold 共用此入口。
     from ..core.runtime_manifest import generate_runtime_manifest, save_runtime_manifest
     if save_runtime_manifest(str(root_path), generate_runtime_manifest(str(root_path))):

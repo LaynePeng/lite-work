@@ -357,7 +357,7 @@ class WebFetchTools:
 
             if len(text) > max_chars:
                 text = text[:max_chars] + f"\n...[输出截断，仅显示前 {max_chars} 字符]"
-            # W6：外部内容用 <untrusted> 包裹（下游消费者——模型/判定插件/审批——都能识别）
+            # 外部内容用 <untrusted> 包裹（下游消费者——模型/判定插件/审批——都能识别）
             from ..core.provenance import wrap_untrusted
             wrapped = wrap_untrusted(text, source="web", url=str(target))
             return (

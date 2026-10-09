@@ -52,7 +52,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     @router.get("/api/metrics/tools")
     async def tool_metrics(request: Request):
-        """工具/技能指标聚合（W3）：命中与成功率视角，用于改进工具描述与技能边界。
+        """工具/技能指标聚合：命中与成功率视角，用于改进工具描述与技能边界。
 
         读的是 `core/metrics.py` 落盘的 JSONL（只含结构化计数，无参数与输出正文）。
         数据缺失（未运行过任务 / 指标被关）时返回空表，不报错。
@@ -78,11 +78,11 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "llm_retries", "skill_permissions", "subagent_timeout",
                 # 效率机制（v1.6.0）：观察打包 / 压缩经济学 / 证据收据小模型
                 "observation_pack", "compaction_economics", "reducer_model", "reducer_provider",
-                # 完成证据门禁（W2）：off / advisory / enforced + 补证据轮数上限
+                # 完成证据门禁：off / advisory / enforced + 补证据轮数上限
                 "completion_gate", "completion_gate_retries",
-                # 工具/技能指标（W3）：只记结构化计数
+                # 工具/技能指标：只记结构化计数
                 "tool_metrics",
-                # Agent 轨迹（W7）：默认关闭，设置页开启
+                # Agent 轨迹：默认关闭，设置页开启
                 "trajectory_enabled",
                 # 聊天区展示折叠阈值（轮数 / 消息数，任一超限即折叠）
                 "chat_fold_turns", "chat_fold_messages",

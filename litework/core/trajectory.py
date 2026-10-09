@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""Agent 轨迹（W7，对齐手册 pp.64-66「Trajectory 对象模型」）。
+"""Agent 轨迹。
 
 解决什么：现有事件流是瞬态的（SSE 发完即弃），没有"Agent 为什么这样行动"的
 持久化轨迹；评测/复盘/审计都缺数据基础。

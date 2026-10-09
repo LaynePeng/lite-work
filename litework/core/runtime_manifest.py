@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""项目运行环境清单（W5，对齐手册 pp.52-55「环境即第一类上下文」）。
+"""项目运行环境清单。
 
 解决什么：交付了仓库 ≠ 交付了能跑的项目。工具链、安装命令、验证命令、
 数据基线——这些信息目前全靠用户手打或 Agent 猜（然后猜错）。
@@ -11,7 +11,7 @@
   为配置文件加依赖不值得，尤其 pyyaml 目前只是传递依赖）；
 - 加载失败一律回退"无清单"——**不因配置坏掉而卡任务**；
 - prompt 注入只给**命令列表**（紧凑摘要），不灌全文（token 考虑）；
-- `verify` 命令直接喂给 W2 完成门禁作为默认验证源（两个特性互补而非重复）。
+- `verify` 命令直接喂给完成门禁作为默认验证源（两个特性互补而非重复）。
 """
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def runtime_summary_for_prompt(manifest: Optional[Dict[str, Any]]) -> str:
 
 
 def verify_commands(manifest: Optional[Dict[str, Any]]) -> List[str]:
-    """给 W2 完成门禁用的默认验证命令列表。"""
+    """给完成门禁用的默认验证命令列表。"""
     if not manifest:
         return []
     return list(manifest.get("verify") or [])
