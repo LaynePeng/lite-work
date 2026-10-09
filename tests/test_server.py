@@ -72,9 +72,12 @@ async def test_status_and_sessions(live_client):
 
 
 async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) -> None:
-    """等待会话首条 user 消息落盘（chat 异步任务内 save，POST /api/chat 返回时
-    可能尚未完成——随后立刻断言「会话出现在列表」与后台任务线程调度竞争，
-    是本测试历史上的偶发失败根因）。直接查 session_store，与列表过滤无关。"""
+    """等待 chat 的首条 user 消息落盘。
+
+    POST /api/chat 返回时消息尚未保存（由后台任务异步写入 session_store），
+    此后立即断言「会话出现在列表」会与后台写入竞态。列表接口会过滤掉没有
+    user 消息的会话，因此断言前必须先等到消息可见。
+    """
     import time as _time
 
     deadline = _time.monotonic() + timeout
@@ -83,9 +86,7 @@ async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) 
         if snap and any(m.role == "user" for m in snap.messages):
             return
         await asyncio.sleep(0.05)
-    raise AssertionError(
-        f"会话 {session_id} 的首条消息在 {timeout}s 内未落盘"
-        "——后台任务被卡住或 save 逻辑异常")
+    raise AssertionError(f"会话 {session_id} 的首条消息在 {timeout}s 内未落盘")
 
 
 async def test_sessions_list_strictly_scoped_to_workspace(live_client):
@@ -124,17 +125,25 @@ async def test_sessions_list_strictly_scoped_to_workspace(live_client):
 
 
 async def test_sessions_list_task_card_fields(live_client):
-    """任务卡聚合字段（Goals 视图）：todo_progress / last_activity / running。"""
+    """任务卡聚合字段：todo_progress / last_activity / running / 元信息。
+
+    直接向 session_store 写快照而非走 /api/chat：chat 起的后台任务何时落盘、
+    何时结束取决于执行环境（CI runner 慢于本机），而快照构造让全部断言
+    与时序无关。
+    """
     c, app, _ = live_client
     ws = app.workspace
 
-    r = await c.post("/api/sessions", json={})
-    sid = r.json()["session_id"]
-    await c.post("/api/chat", json={"session_id": sid, "prompt": "帮我整理数据"})
-    # chat 异步落盘首条消息：等落盘再列表断言（消除与后台任务的时序竞态）
-    await _wait_first_message_saved(app, sid)
+    from litework.core.types import Message, ToolCall
 
-    # 写一个 TODO 看板（模拟 todo_write 落盘）
+    sid = f"session_taskcard_{uuid.uuid4().hex[:8]}"
+    app.session_store.save(sid, [
+        Message(role="user", content="帮我整理数据"),
+        Message(role="assistant", content="", tool_calls=[
+            ToolCall(id="c1", name="write_file", arguments='{"filePath":"x.txt","content":"hi"}'),
+        ]),
+        Message(role="tool", content="[File OK]: 已写入 x.txt", tool_call_id="c1"),
+    ], {"workspace": ws})
     app.todo_plugin._items[sid] = [
         {"content": "收集数据", "status": "completed"},
         {"content": "写正文", "status": "in_progress"},
@@ -143,18 +152,23 @@ async def test_sessions_list_task_card_fields(live_client):
 
     r = await c.get("/api/sessions", params={"workspace": ws})
     entry = next(s for s in r.json() if s["session_id"] == sid)
-    # 聚合字段全部可选返回；该会话有看板 → todo_progress 完整
+
     tp = entry["todo_progress"]
     assert tp["total"] == 3 and tp["done"] == 1
     assert tp["current"] == "写正文"
     assert tp["next"] == ["排版"]
-    # 无工具调用的会话：last_activity 为助手文本摘要或 None（不抛异常即可）
-    assert "last_activity" in entry
+
+    la = entry["last_activity"]
+    assert la["tool"] == "write_file"
+    assert la["summary"] == "write_file x.txt"
+    assert la["ok"] is True
+
     assert entry["running"] is False
     assert entry["subagent_count"] == 0
+    assert not entry.get("cost_usd")
 
-    # 清理（避免看板残留影响其他用例）
     app.todo_plugin.delete_board(sid)
+    app.session_store.delete(sid)
 
 
 async def test_rapid_session_creation_does_not_overwrite(live_client):

@@ -109,8 +109,9 @@ def _last_activity(messages: list) -> Optional[Dict[str, Any]]:
                 args_raw = tc.get("arguments") or ""
                 try:
                     args: Dict[str, Any] = _json.loads(args_raw) if isinstance(args_raw, str) else {}
-                    # 摘要用关键参数：filename / path / query / command / url
-                    key = next((args[k] for k in ("filename", "path", "query", "command", "url")
+                    # 摘要取首个命中的关键参数（含 camelCase 变体，如 write_file 的 filePath）
+                    key = next((args[k] for k in
+                                ("filePath", "filename", "path", "query", "command", "url", "name")
                                 if args.get(k)), "")
                     summary = f"{name} {str(key)[:40]}".strip()
                 except Exception:
