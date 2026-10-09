@@ -180,11 +180,15 @@ function resolvePython() {
     const isWin = process.platform === "win32";
     const exe = isWin ? "lite-work-backend.exe" : "lite-work-backend";
     const dir = path.join(process.resourcesPath, "litework-bin", "lite-work-backend");
+    // 必须是「文件」：自动更新落盘过程中 litework-bin/lite-work-backend 会先以
+    // 目录形式存在、内部二进制尚未就绪，直接 spawn 目录会抛 EACCES（v1.10.5
+    // 更新窗口内启动失败即此因）。旧版单文件同理。
+    const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
     const bundled = path.join(dir, exe);
-    if (fs.existsSync(bundled)) return bundled;
+    if (isFile(bundled)) return bundled;
     // 兼容旧版单文件
     const legacy = path.join(process.resourcesPath, "litework-bin", exe);
-    if (fs.existsSync(legacy)) return legacy;
+    if (isFile(legacy)) return legacy;
   }
   // 开发模式：优先项目 venv，其次系统 python3
   const projectRoot = app.getAppPath();
