@@ -80,6 +80,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     # ------------------------------------------------------------ 工作区
 
+    def _switch_workspace_guarded(path: str) -> None:
+        """切换工作区的公共守卫：任务/后台 Agent 运行中一律拒绝。"""
+        if tasks.active_count() > 0:
+            raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
+        bg = app.background_agent_count()
+        if bg > 0:
+            raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
+
     @router.post("/api/workspace")
     async def set_workspace(payload: WorkspaceUpdateRequest, request: Request):
         ctx.check_auth(request)
@@ -87,11 +95,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         path = _os.path.abspath(_os.path.expanduser(payload.path))
         if not _os.path.isdir(path):
             raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
-        if tasks.active_count() > 0:
-            raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
-        bg = app.background_agent_count()
-        if bg > 0:
-            raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
+        _switch_workspace_guarded(path)
         # 后台命令（execute_command background=true）**不再拦截切换**：注册表是
         # app 级共享的（AgentApp._bg_registry），任务归属与工作区解耦——切换后
         # 仍可从任务面板查询/终止旧任务。
@@ -196,11 +200,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         path = _os.path.abspath(_os.path.expanduser(payload.path))
         if not _os.path.isdir(path):
             raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
-        if tasks.active_count() > 0:
-            raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
-        bg = app.background_agent_count()
-        if bg > 0:
-            raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
+        _switch_workspace_guarded(path)
         # 后台命令运行中不再拦截（注册表 app 级共享，见 set_workspace 注释）
         # 类型按目录内容启发式判定（与 git 解耦）；手动标记过的项目由
         # remember_project 的 kind_locked 保护，不会被这里覆盖
@@ -322,7 +322,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "is_workspace": base == app.workspace,
             "dirs": dirs[:cap],
             "files": files[:cap],
-            "truncated": len(dirs) + len(files) > cap,
+            # L2 修复：dirs/files 各自 cap，truncated 也应按各自判断——
+            # 此前按总数 > cap 误报（如 300+300=600 全部完整返回却标 truncated）
+            "truncated": len(dirs) > cap or len(files) > cap,
             # Windows 全部可用盘符，供前端盘符下拉（非 Windows 返回空数组）
             "drives": list_drives() if is_win else [],
         }

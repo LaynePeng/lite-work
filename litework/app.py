@@ -1635,12 +1635,15 @@ class AgentApp:
 
     def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
                            overwrite: bool = False) -> List[Dict[str, Any]]:
-        from .tools.plugin_loader import import_zip_bytes, record_installed
+        from .tools.plugin_loader import _attach_permission_diff, import_zip_bytes, record_installed
 
         results = import_zip_bytes(self.config_dir, data, name, overwrite)
         # zip 上传无更新源 URL，记录占位来源以保持列表一致（版本从插件自身读取）
         for r in results:
             record_installed(self.config_dir, r["name"], "", "zip-upload")
+        # H3 修复：zip 上传路径同样做权限 diff（此前只在 import_source 里做，
+        # zip 覆盖安装升级时权限悄悄扩张不报警）
+        _attach_permission_diff(self.config_dir, results)
         self._invalidate_plugin_cache()
         return results
 
@@ -1715,9 +1718,9 @@ class AgentApp:
     def plugins_install(self, source: str, name: Optional[str] = None,
                         overwrite: bool = False, version: Optional[str] = None) -> List[Dict[str, Any]]:
         """安装/更新插件，记录版本与来源。"""
-        from .tools.plugin_loader import install_from_source
+        from .tools.plugin_loader import import_source
 
-        results = install_from_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
+        results = import_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
         self._invalidate_plugin_cache()
         return results
 

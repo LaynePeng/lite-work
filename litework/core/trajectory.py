@@ -105,25 +105,9 @@ class TrajectoryWriter:
     def _append(self, event: Dict[str, Any]) -> None:
         if not self.enabled:
             return
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._rotate_if_needed()
-            with open(self._path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
-        except OSError:
-            pass  # 轨迹是旁路数据：绝不因它影响任务
-
-    def _rotate_if_needed(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            if self._path.stat().st_size <= TRAJECTORY_MAX_FILE_BYTES:
-                return
-            lines = self._path.read_text(encoding="utf-8").splitlines(keepends=True)
-            keep = lines[len(lines) // 2:]
-            self._path.write_text("".join(keep), encoding="utf-8")
-        except OSError:
-            pass
+        # R1 重构：公共 JSONL 追加（含自动轮转），见 core/jsonl_io.py
+        from .jsonl_io import append_jsonl
+        append_jsonl(self._path, event, max_bytes=TRAJECTORY_MAX_FILE_BYTES)
 
 
 # ---------------------------------------------------------------- 读取与分析
@@ -131,23 +115,9 @@ class TrajectoryWriter:
 def read_trajectory(config_dir: str, session_id: str, task_id: str,
                     offset: int = 0, limit: int = 500) -> List[Dict[str, Any]]:
     """读一个任务的轨迹（分页）。文件缺失返回空列表。"""
+    from .jsonl_io import read_jsonl
     path = Path(config_dir) / "trajectories" / session_id / f"{task_id}.jsonl"
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    out: List[Dict[str, Any]] = []
-    for line in lines[offset:offset + limit]:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-            if isinstance(data, dict):
-                out.append(data)
-        except json.JSONDecodeError:
-            continue
-    return out
+    return read_jsonl(path, offset=offset, limit=limit)
 
 
 def list_session_trajectories(config_dir: str, session_id: str) -> List[Dict[str, Any]]:

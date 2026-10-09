@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -85,29 +86,37 @@ class BackgroundRegistry:
         self.journal_path = journal_path
         # task_id → 启动它的工作区（日志用；注册表本身与工作区无关）
         self.workspaces: Dict[str, str] = {}
+        # M1 线程安全：add/remove 可能从不同 agent loop 并发调用（工具普遍经
+        # to_thread 执行）；journal_payload 迭代 tasks 期间并发修改会
+        # RuntimeError: dictionary changed size during iteration
+        self._lock = threading.RLock()
 
     def add(self, task_id: str, task: _BackgroundTask, workspace: str = "") -> None:
-        self.tasks[task_id] = task
-        self.workspaces[task_id] = workspace
-        self._write_journal()
+        with self._lock:
+            self.tasks[task_id] = task
+            self.workspaces[task_id] = workspace
+            self._write_journal()
 
     def get(self, task_id: str) -> Optional[_BackgroundTask]:
         return self.tasks.get(task_id)
 
     def remove(self, task_id: str) -> None:
-        self.tasks.pop(task_id, None)
-        self.workspaces.pop(task_id, None)
-        self._write_journal()
+        with self._lock:
+            self.tasks.pop(task_id, None)
+            self.workspaces.pop(task_id, None)
+            self._write_journal()
 
     def journal_payload(self) -> Dict[str, Any]:
         """当前在跑任务的持久化快照（回收时按 pid + 启动时间核对，防 pid 复用）。"""
+        with self._lock:
+            items = [(tid, t, self.workspaces.get(tid, "")) for tid, t in self.tasks.items()]
         return {"tasks": [{
             "task_id": tid,
             "pid": t.proc.pid if t.proc is not None else None,
             "command": t.command[:500],
-            "workspace": self.workspaces.get(tid, ""),
+            "workspace": ws,
             "started_at": t.wall_started_at,
-        } for tid, t in self.tasks.items()]}
+        } for tid, t, ws in items]}
 
     def _write_journal(self) -> None:
         if not self.journal_path:
@@ -116,7 +125,7 @@ class BackgroundRegistry:
             parent = os.path.dirname(self.journal_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            tmp = f"{self.journal_path}.tmp"
+            tmp = f"{self.journal_path}.{uuid.uuid4().hex[:8]}.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.journal_payload(), f, ensure_ascii=False)
             os.replace(tmp, self.journal_path)
@@ -125,13 +134,15 @@ class BackgroundRegistry:
 
     def list(self) -> List[Dict[str, Any]]:
         """列出所有后台任务（供工具面板「后台」tab 展示）。"""
+        with self._lock:
+            items = list(self.tasks.items())
         return [{
             "task_id": tid,
             "command": t.command[:300],
             "running": not t.done,
             "elapsed": round(t.elapsed, 1),
             "exit_code": t.exit_code,
-        } for tid, t in self.tasks.items()]
+        } for tid, t in items]
 
     def kill(self, task_id: str) -> bool:
         """终止指定后台任务（返回是否成功发起终止）。"""

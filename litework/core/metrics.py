@@ -85,54 +85,17 @@ class ToolMetrics:
     def _append(self, event: Dict[str, Any]) -> None:
         if not self.enabled or not self.path:
             return
-        try:
-            parent = os.path.dirname(self.path)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            self._rotate_if_needed()
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
-        except OSError:
-            # 指标是旁路数据：任何写失败都不该影响任务
-            pass
-
-    def _rotate_if_needed(self) -> None:
-        """文件超限时保留最近一半（按行截断），避免指标无限增长。"""
-        if not self.path or not os.path.exists(self.path):
-            return
-        try:
-            if os.path.getsize(self.path) <= _MAX_FILE_BYTES:
-                return
-            with open(self.path, encoding="utf-8") as f:
-                lines = f.readlines()
-            keep = lines[len(lines) // 2:]
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.writelines(keep)
-        except OSError:
-            pass
+        # R1 重构：公共 JSONL 追加（含自动轮转），见 core/jsonl_io.py
+        from .jsonl_io import append_jsonl
+        append_jsonl(self.path, event, max_bytes=_MAX_FILE_BYTES)
 
 
 def read_events(path: Optional[str], limit: int = 20000) -> List[Dict[str, Any]]:
     """读指标事件（只取最近 limit 行；文件缺失/损坏返回空列表）。"""
-    if not path or not os.path.exists(path):
+    if not path:
         return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.readlines()[-limit:]
-    except OSError:
-        return []
-    out: List[Dict[str, Any]] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict):
-            out.append(data)
-    return out
+    from .jsonl_io import read_jsonl
+    return read_jsonl(path, tail=limit)
 
 
 def summarize(events: List[Dict[str, Any]], worst_n: int = 3) -> Dict[str, Any]:

@@ -430,7 +430,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
         trajectory_enabled=false 时只返回空列表（不报错——轨迹是 opt-in 的）。
         """
         ctx.check_auth(request)
+        import re as _re
         from ...core.trajectory import analyze_trajectory, list_session_trajectories, read_trajectory
+
+        # H1 路径穿越修复：session_id/task_id 只允许安全字符（禁止 / \ .. 等）
+        # Starlette 的 path param 会解码 %2F，不加校验可读任意 .jsonl / 列任意目录
+        _SAFE_ID = _re.compile(r"^[\w\-.]+$")
+        if not _SAFE_ID.match(session_id) or (task_id and not _SAFE_ID.match(task_id)):
+            raise HTTPException(status_code=400, detail="session_id / task_id 含非法字符")
 
         if task_id:
             events = read_trajectory(app.config_dir, session_id, task_id,
@@ -445,5 +452,4 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "trajectories": list_session_trajectories(app.config_dir, session_id),
             "enabled": bool(app.config.get("trajectory_enabled", False)),
         }
-
     return router

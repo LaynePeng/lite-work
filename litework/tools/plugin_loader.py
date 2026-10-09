@@ -727,6 +727,33 @@ def _wrap_as_plugin_dir(base: Path, plugin_name: str) -> Path:
     return inner
 
 
+def _attach_permission_diff(config_dir: str, results: List[Dict[str, Any]]) -> None:
+    """W4：给安装结果附加权限声明与新旧 diff（所有安装入口共用）。
+
+    H3 修复：此前 diff 只在 import_source 里做，zip 字节流上传（settings 页
+    plugins_import_zip）绕过了它——升级时权限悄悄扩张不报警。
+    """
+    import os as _os
+    from ..core.plugin_permissions import diff_permissions, read_plugin_permissions
+    for r in results:
+        _name = r.get("name", "")
+        if not _name:
+            continue
+        _old_perms: dict = {}
+        try:
+            _old_entry = read_installed(config_dir).get(_name, {})
+            _old_perms = _old_entry.get("permissions") or {}
+        except Exception:
+            pass
+        try:
+            _new_dir = _os.path.join(_plugin_root(config_dir), _name)
+            _new_perms = read_plugin_permissions(_new_dir)
+            r["permission_diff"] = diff_permissions(_old_perms, _new_perms)
+            r["permissions"] = _new_perms
+        except Exception:
+            r["permission_diff"] = None
+
+
 def import_source(config_dir: str, source: str, name: Optional[str] = None,
                   overwrite: bool = False, version: Optional[str] = None) -> List[Dict[str, Any]]:
     """从本地目录 / zip 文件 / GitHub URL 导入插件，并在 installed.json 记录元信息。"""
@@ -751,24 +778,9 @@ def import_source(config_dir: str, source: str, name: Optional[str] = None,
                 results = import_zip_bytes(config_dir, f.read(), name, overwrite)
         else:
             raise ValueError(f"不支持的导入来源: {source}（支持目录 / .zip / GitHub URL）")
-    # W4：安装前读旧权限（升级场景），安装后读新权限 → diff 附到返回值
     for r in results:
-        _name = r["name"]
-        _old_perms: dict = {}
-        try:
-            _old_entry = read_installed(config_dir).get(_name, {})
-            _old_perms = _old_entry.get("permissions") or {}
-        except Exception:
-            pass
-        record_installed(config_dir, _name, version or "", source)
-        try:
-            from ..core.plugin_permissions import diff_permissions, read_plugin_permissions
-            _new_dir = os.path.join(_plugin_root(config_dir), _name)
-            _new_perms = read_plugin_permissions(_new_dir)
-            r["permission_diff"] = diff_permissions(_old_perms, _new_perms)
-            r["permissions"] = _new_perms
-        except Exception:
-            r["permission_diff"] = None
+        record_installed(config_dir, r["name"], version or "", source)
+    _attach_permission_diff(config_dir, results)
     return results
 
 
@@ -935,9 +947,3 @@ def fetch_community_manifest(url: str = DEFAULT_COMMUNITY_URL) -> Dict[str, Any]
         "plugins": data.get("plugins") if isinstance(data.get("plugins"), list) else [],
         "skills": data.get("skills") if isinstance(data.get("skills"), list) else [],
     }
-
-
-def install_from_source(config_dir: str, source: str, name: Optional[str] = None,
-                        overwrite: bool = False, version: Optional[str] = None) -> List[Dict[str, Any]]:
-    """统一安装入口（别名）：URL / zip / 本地目录，记录版本与来源。"""
-    return import_source(config_dir, source, name=name, overwrite=overwrite, version=version)

@@ -526,6 +526,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
         # 扩展名约束只对文件生效：目录改名无扩展名语义（如 `v1.2` 不是后缀）
         if _os.path.isfile(target) and _os.path.splitext(rel)[1].lower() != _os.path.splitext(new_name)[1].lower():
             raise HTTPException(status_code=400, detail="不允许修改文件扩展名")
+        # M4：新名字也不能是 .git（_is_git_internal 只查旧路径；把目录改名成
+        # .git 会污染后续 git 语义——工作区根目录变成 git 仓库元数据目录）
+        parent_rel = _os.path.dirname(rel)
+        new_rel_check = f"{parent_rel}/{new_name}" if parent_rel else new_name
+        if _is_git_internal(new_rel_check):
+            raise HTTPException(status_code=403, detail="不允许改名为 .git 内部项")
 
         # 与原文件/目录同目录（支持嵌套目录下的源码文件）
         parent = _os.path.dirname(rel)
