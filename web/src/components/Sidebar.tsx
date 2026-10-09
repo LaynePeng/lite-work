@@ -11,7 +11,7 @@ import type { RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../t
 import { baseName } from "../lib/path";
 import { isTextLikePath, resolveOpenTarget } from "../lib/fileOpen";
 
-export type SidebarTab = "sessions" | "files" | "terminal";
+export type SidebarTab = "sessions" | "tasks" | "files" | "terminal";
 
 export interface OpenFileOptions {
   /** 强制用内置查看器（右键「用内置查看」），绕过 markdown 的系统优先规则 */
@@ -539,6 +539,225 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
   );
 }
 
+// ---------------------------------------------------------------- 任务 Tab（Goals 视图：Muse/dots 的「任务与对话解耦」）
+
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 日期。 */
+function relTime(ts: number): string {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 172_800_000) return "昨天";
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  return new Date(ts).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+/** 轨迹抽屉（W7 透出）：列出会话轨迹任务 + 最新一条的事件与 findings。 */
+function TrajectoryDrawer({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const [state, setState] = useState<{
+    loading: boolean;
+    enabled: boolean;
+    trajectories: { task_id: string; started_at?: number; events?: number }[];
+    detail: { task_id: string; events: { type: string; [k: string]: unknown }[]; findings: { kind: string; message?: string; [k: string]: unknown }[] } | null;
+    error: string;
+  }>({ loading: true, enabled: false, trajectories: [], detail: null, error: "" });
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, error: "" }));
+    try {
+      const r = await api.trajectoryList(sessionId);
+      let detail = state.detail;
+      if (r.trajectories.length > 0) {
+        const latest = r.trajectories[r.trajectories.length - 1];
+        const ev = await api.trajectoryEvents(sessionId, latest.task_id, 0, 60);
+        detail = { task_id: latest.task_id, events: ev.events, findings: ev.findings };
+      }
+      setState({ loading: false, enabled: r.enabled, trajectories: r.trajectories, detail, error: "" });
+    } catch (err) {
+      setState((s) => ({ ...s, loading: false, error: err instanceof Error ? err.message : String(err) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const EVENT_ICONS: Record<string, string> = {
+    header: "🏁", step: "→", model_call: "🤖", tool_call: "🔧",
+    skill_exec: "📦", state_change: "🔄", outcome: "✅",
+  };
+
+  return (
+    <div className="traj-overlay" onClick={onClose}>
+      <div className="traj-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="traj-head">
+          <span>📈 执行轨迹（W7）</span>
+          <button className="traj-close" onClick={onClose}>✕</button>
+        </div>
+        {state.loading && <div className="traj-empty">加载中…</div>}
+        {!state.loading && state.error && <div className="traj-empty traj-err">✗ {state.error}</div>}
+        {!state.loading && !state.error && !state.enabled && (
+          <div className="traj-empty">
+            轨迹未开启
+            <div className="traj-empty-sub">设置 → 效率与诊断机制 → Agent 轨迹，开启后新任务开始记录</div>
+          </div>
+        )}
+        {!state.loading && !state.error && state.enabled && state.trajectories.length === 0 && (
+          <div className="traj-empty">开启后尚无已记录的任务</div>
+        )}
+        {!state.loading && !state.error && state.detail && (
+          <>
+            <div className="traj-meta">
+              {state.trajectories.length} 条轨迹 · 当前：{state.detail.task_id.slice(0, 18)}…
+            </div>
+            {state.detail.findings.length > 0 && (
+              <div className="traj-findings">
+                {state.detail.findings.map((f, i) => (
+                  <div key={i} className="traj-finding">⚠ {f.kind}{f.message ? `：${f.message}` : ""}</div>
+                ))}
+              </div>
+            )}
+            <div className="traj-events">
+              {state.detail.events.map((ev, i) => (
+                <div key={i} className="traj-event">
+                  <span className="traj-ev-icon">{EVENT_ICONS[ev.type] ?? "·"}</span>
+                  <span className="traj-ev-type">{ev.type}</span>
+                  <span className="traj-ev-detail">
+                    {String(ev.tool ?? ev.model ?? ev.summary ?? ev.result ?? "")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
+ *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
+ *  步骤最多 3 行；完成态自动收敛。 */
+function TaskCard({ task, active, onSelect, onDelete }: {
+  task: SessionInfo;
+  active: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const [trajOpen, setTrajOpen] = useState(false);
+  const p = task.todo_progress;
+  const done = p ? p.done >= p.total : false;
+  const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  const la = task.last_activity;
+
+  return (
+    <div className={`task-card ${active ? "active" : ""} ${done ? "done-card" : ""}`} onClick={onSelect}>
+      <div className="task-head">
+        {task.running ? (
+          <span className="running-dot" title="任务运行中" />
+        ) : (
+          <span className="task-icon">{done ? "✅" : p ? "📊" : "💬"}</span>
+        )}
+        <span className="task-title" title={task.title}>{task.title}</span>
+        {p && <span className={`task-pct ${done ? "done" : ""}`}>{pct}% {p.done}/{p.total}</span>}
+      </div>
+
+      {p && !done && (
+        <>
+          <div className="task-bar"><div className="task-bar-fill" style={{ width: `${pct}%` }} /></div>
+          <div className="task-steps">
+            {p.current && <div className="task-step cur"><span className="mark">▶</span>{p.current}</div>}
+            {p.next.slice(0, p.current ? 2 : 3).map((n, i) => (
+              <div key={i} className="task-step"><span className="mark">☐</span>{n}</div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {p && done && <div className="task-bar"><div className="task-bar-fill done" style={{ width: "100%" }} /></div>}
+
+      {la && !done && (
+        <div className="task-activity" title={la.summary}>
+          <span className={la.ok === false ? "err" : "ok"}>{la.ok === false ? "✗" : "✓"}</span>
+          <span className="trunc">{la.summary}</span>
+          <span className="when">{relTime(task.updated_at)}</span>
+        </div>
+      )}
+
+      {!done && (
+        <div className="task-meta">
+          {typeof task.cost_usd === "number" && task.cost_usd > 0 && (
+            <span className="cost">${task.cost_usd < 0.01 ? "<0.01" : task.cost_usd}</span>
+          )}
+          {!!task.subagent_count && <span title="历史子 Agent 数">🤖 {task.subagent_count}</span>}
+          <span title={`${task.message_count} 条消息`}>💬 {task.message_count}</span>
+          <div className="task-actions">
+            <button title="执行轨迹（W7）" onClick={(e) => { e.stopPropagation(); setTrajOpen(true); }}>📈</button>
+            <button className="run" title="进入会话" onClick={(e) => { e.stopPropagation(); onSelect(); }}>进入 ›</button>
+            <button title="删除任务" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除任务「${task.title}」？`)) onDelete(); }}>✕</button>
+          </div>
+        </div>
+      )}
+
+      {done && (
+        <div className="task-deliv" title={`完成于 ${relTime(task.updated_at)}`}>
+          <span>✓ 全部完成</span>
+          <span style={{ marginLeft: "auto" }}>{relTime(task.updated_at)}</span>
+        </div>
+      )}
+
+      {trajOpen && <TrajectoryDrawer sessionId={task.session_id} onClose={() => setTrajOpen(false)} />}
+    </div>
+  );
+}
+
+/** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onDeleteSession, onNewSession }: {
+  sessions: SessionInfo[];
+  activeSessionId: string | null;
+  workspace: string;
+  projectKind: "code" | "project";
+  projectName: string;
+  onBackToProjects: () => void;
+  onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
+  onNewSession: () => void;
+}) {
+  const sorted = [...sessions].sort((a, b) => {
+    // 运行中的任务钉在最前（Goals 视图：正在替我干活的优先可见）
+    const run = (Number(b.running ?? false) - Number(a.running ?? false));
+    if (run !== 0) return run;
+    return (b.updated_at ?? 0) - (a.updated_at ?? 0);
+  });
+
+  return (
+    <div className="tasks-list">
+      <div className="project-context">
+        <button className="btn-back-projects" onClick={onBackToProjects} title="返回项目列表">←</button>
+        <div className="project-context-name" title={workspace}>
+          {projectKind === "code" ? "💻" : "📁"} {projectName}
+        </div>
+      </div>
+      <button className="btn-new-session" onClick={onNewSession}>＋ 新建任务</button>
+      {sorted.length === 0 && (
+        <div className="sidebar-empty">
+          还没有任务
+          <div className="sidebar-empty-sub">新建任务后，Agent 建立了 TODO 看板就会在这里显示进度</div>
+        </div>
+      )}
+      {sorted.map((s) => (
+        <TaskCard
+          key={s.session_id}
+          task={s}
+          active={s.session_id === activeSessionId}
+          onSelect={() => onSelectSession(s.session_id)}
+          onDelete={() => onDeleteSession(s.session_id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- 侧边栏
 
 export default function Sidebar({
@@ -661,6 +880,9 @@ export default function Sidebar({
         <button className={tab === "sessions" ? "active" : ""} onClick={() => onTabChange("sessions")}>
           项目
         </button>
+        <button className={tab === "tasks" ? "active" : ""} onClick={() => onTabChange("tasks")}>
+          任务
+        </button>
         <button className={tab === "files" ? "active" : ""} onClick={() => onTabChange("files")}>
           文件
         </button>
@@ -670,7 +892,7 @@ export default function Sidebar({
       </div>
 
       {/* 终端 Tab 时 body 隐藏，让 .sidebar-terminal 独占 tabs 与 footer 之间的空间 */}
-      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" ? "sidebar-body--panel" : ""}`}>
+      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" || tab === "tasks" ? "sidebar-body--panel" : ""}`}>
         {tab === "sessions" && (
           projectsView === "list" ? (
             <div className="projects-list">
@@ -858,6 +1080,20 @@ export default function Sidebar({
               ))}
             </div>
           )
+        )}
+
+        {tab === "tasks" && (
+          <TaskList
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            workspace={workspace}
+            projectKind={projectKind ?? "project"}
+            projectName={projectName}
+            onBackToProjects={onBackToProjects}
+            onSelectSession={onSelectSession}
+            onDeleteSession={onDeleteSession}
+            onNewSession={onNewSession}
+          />
         )}
 
         {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} onOpenWorktreeSession={onOpenWorktreeSession} />}

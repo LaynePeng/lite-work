@@ -5,6 +5,11 @@
 
 ## 1\. 版本管理（单一事实源）
 
+-   **🚫 未经用户明确要求，禁止 bump 版本号**：Agent 不得自行把新功能写成
+    新版本（`__version__`、npm 侧 4 个文件、CHANGELOG 新版本标题都不许动）。
+    功能做完就是做完；要不要发版、发什么版本号，由用户决定。新增的
+    CHANGELOG 内容并入**当前未发版**的条目（无未发版条目时新建
+    `[未发布]` 小节，不占版本号）。
 -   版本号唯一来源：`litework/__init__.py` 的 `__version__`；
 -   **改版本号后必须执行** `node scripts/sync-version.mjs`——它把版本同步到  
     根 `package.json`、根 `package-lock.json`、`web/package.json`、`web/package-lock.json`；

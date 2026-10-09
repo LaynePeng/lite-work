@@ -71,24 +71,45 @@ async def test_status_and_sessions(live_client):
     assert all(s["session_id"] != sid for s in r.json())
 
 
+async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) -> None:
+    """等待会话首条 user 消息落盘（chat 异步任务内 save，POST /api/chat 返回时
+    可能尚未完成——随后立刻断言「会话出现在列表」与后台任务线程调度竞争，
+    是本测试历史上的偶发失败根因）。直接查 session_store，与列表过滤无关。"""
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        snap = app.session_store.load(session_id)
+        if snap and any(m.role == "user" for m in snap.messages):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(
+        f"会话 {session_id} 的首条消息在 {timeout}s 内未落盘"
+        "——后台任务被卡住或 save 逻辑异常")
+
+
 async def test_sessions_list_strictly_scoped_to_workspace(live_client):
     """会话列表严格绑定项目：无 workspace 绑定（旧版）与其它项目的会话不显示。"""
     c, app, _ = live_client
     ws = app.workspace
 
     # 1. 正常会话（带首条消息，绑定当前 workspace）→ 显示
+    #    chat 返回≠消息已落盘（异步任务内 save），先等落盘再断言，消除时序竞态。
     r = await c.post("/api/sessions", json={})
     bound = r.json()["session_id"]
     await c.post("/api/chat", json={"session_id": bound, "prompt": "你好"})
+    await _wait_first_message_saved(app, bound)
     r = await c.get("/api/sessions", params={"workspace": ws})
     ids = [s["session_id"] for s in r.json()]
     assert bound in ids
 
-    # 2. 其它项目的会话 → 不显示
+    # 2. 其它项目的会话 → 不显示（同样等落盘：不等的话「未显示」可能是
+    #    还没保存而非 workspace 过滤生效，断言会假阳性通过）
     other_ws = str(Path(ws).parent / "other-project")
     r = await c.post("/api/sessions", json={"workspace": other_ws})
     other = r.json()["session_id"]
     await c.post("/api/chat", json={"session_id": other, "prompt": "别处的会话"})
+    await _wait_first_message_saved(app, other)
     r = await c.get("/api/sessions", params={"workspace": ws})
     ids = [s["session_id"] for s in r.json()]
     assert other not in ids
@@ -100,6 +121,40 @@ async def test_sessions_list_strictly_scoped_to_workspace(live_client):
     r = await c.get("/api/sessions", params={"workspace": ws})
     ids = [s["session_id"] for s in r.json()]
     assert legacy not in ids
+
+
+async def test_sessions_list_task_card_fields(live_client):
+    """任务卡聚合字段（Goals 视图）：todo_progress / last_activity / running。"""
+    c, app, _ = live_client
+    ws = app.workspace
+
+    r = await c.post("/api/sessions", json={})
+    sid = r.json()["session_id"]
+    await c.post("/api/chat", json={"session_id": sid, "prompt": "帮我整理数据"})
+    # chat 异步落盘首条消息：等落盘再列表断言（消除与后台任务的时序竞态）
+    await _wait_first_message_saved(app, sid)
+
+    # 写一个 TODO 看板（模拟 todo_write 落盘）
+    app.todo_plugin._items[sid] = [
+        {"content": "收集数据", "status": "completed"},
+        {"content": "写正文", "status": "in_progress"},
+        {"content": "排版", "status": "pending"},
+    ]
+
+    r = await c.get("/api/sessions", params={"workspace": ws})
+    entry = next(s for s in r.json() if s["session_id"] == sid)
+    # 聚合字段全部可选返回；该会话有看板 → todo_progress 完整
+    tp = entry["todo_progress"]
+    assert tp["total"] == 3 and tp["done"] == 1
+    assert tp["current"] == "写正文"
+    assert tp["next"] == ["排版"]
+    # 无工具调用的会话：last_activity 为助手文本摘要或 None（不抛异常即可）
+    assert "last_activity" in entry
+    assert entry["running"] is False
+    assert entry["subagent_count"] == 0
+
+    # 清理（避免看板残留影响其他用例）
+    app.todo_plugin.delete_board(sid)
 
 
 async def test_rapid_session_creation_does_not_overwrite(live_client):

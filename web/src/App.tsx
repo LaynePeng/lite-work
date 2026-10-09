@@ -64,7 +64,7 @@ const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
 // 「打开项目」整页重载后默认落「文件」页签：同属**跨重载的一次性意图**（非配置），
 // 由启动 effect 消费并立即清除。配置类内容一律走 localStorage 之外（见 UiPrefs）。
 const PENDING_SIDEBAR_TAB_KEY = "litework.pendingSidebarTab";
-const SIDEBAR_TABS: SidebarTab[] = ["sessions", "files", "terminal"];
+const SIDEBAR_TABS: SidebarTab[] = ["sessions", "tasks", "files", "terminal"];
 const DEFAULT_SIDEBAR_TAB: SidebarTab = "sessions";
 const isSidebarTab = (v: unknown): v is SidebarTab =>
   typeof v === "string" && (SIDEBAR_TABS as string[]).includes(v);
@@ -518,6 +518,18 @@ export default function App() {
       return [];
     }
   }, [status?.workspace]);
+
+  // 任务卡（Goals 视图）刷新合并（400ms）：todo:updated 每轮任务都会触发多次，
+  // 直接拉列表会形成刷新风暴（后端聚合读 TODO 看板 + 消息尾部）；首个事件后
+  // 400ms 才真正拉一次，窗口内的后续事件合并进同一次刷新。
+  const sessionsBumpRef = useRef<number | null>(null);
+  const bumpSessions = useCallback(() => {
+    if (sessionsBumpRef.current !== null) return;
+    sessionsBumpRef.current = window.setTimeout(() => {
+      sessionsBumpRef.current = null;
+      void refreshSessions();
+    }, 400);
+  }, [refreshSessions]);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -1606,10 +1618,12 @@ export default function App() {
         }
         case "todo:updated": {
           patchChat(sid, { todos: ev.data.todos ?? [] });
+          bumpSessions();   // 任务卡（Goals 视图）进度实时更新
           break;
         }
         case "task:done": {
           bumpTree();
+          bumpSessions();
           const cur = streamingRefs.current.get(sid);
           // 归档本轮的子 Agent 活动卡到会话级记录（最终回复下方折叠展示）
           const finished = (cur?.items ?? [])

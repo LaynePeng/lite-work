@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 // 文件 Tab：右键菜单（重命名 / 删除）、行内重命名与批量删除
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./Sidebar";
@@ -11,6 +11,8 @@ import { api } from "../api";
 vi.mock("../api", () => ({
   api: {
     uploads: vi.fn(async () => ({ items: [], total: 0 })),
+    trajectoryList: vi.fn(async () => ({ session_id: "", trajectories: [], enabled: false })),
+    trajectoryEvents: vi.fn(async () => ({ session_id: "", task_id: "", events: [], count: 0, findings: [] })),
     deleteFile: vi.fn(),
     renameFile: vi.fn(),
     createEntry: vi.fn(),
@@ -311,5 +313,100 @@ describe("Sidebar · 目录被删除/变化后文件树仍可显示", () => {
     await waitFor(() => expect(api.workspaceTree).toHaveBeenCalledWith("src"));
     expect(screen.queryByText(/无法读取工作区/)).toBeNull();
     expect(screen.getByText("a.txt")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------- 任务 Tab（Goals 视图）
+
+describe("Sidebar · 任务 Tab（Goals 视图）", () => {
+  const taskSessions = [
+    {
+      session_id: "s-run", created_at: 1, updated_at: Date.now() - 120_000, message_count: 46,
+      title: "季度报告汇总", metadata: {},
+      todo_progress: { total: 13, done: 8, current: "写正文第 3 章", next: ["图表排版", "校对"] },
+      last_activity: { summary: "docx_append 报告_v2.docx", ok: true, tool: "docx_append" },
+      subagent_count: 3, cost_usd: 0.42, running: true,
+    },
+    {
+      session_id: "s-done", created_at: 1, updated_at: Date.now() - 86_400_000, message_count: 20,
+      title: "APP 竞品调研", metadata: {},
+      todo_progress: { total: 6, done: 6, current: "", next: [] },
+      last_activity: { summary: "done", ok: true, tool: "" },
+      subagent_count: 0, cost_usd: 1.2, running: false,
+    },
+    {
+      session_id: "s-plain", created_at: 1, updated_at: Date.now() - 3 * 86_400_000, message_count: 6,
+      title: "问一下路由方案怎么选", metadata: {},
+    },
+  ];
+
+  const taskProps = {
+    ...baseProps,
+    tab: "tasks" as const,
+    projectsView: "sessions" as const,
+    sessions: taskSessions as never,
+  };
+
+  it("进行中任务卡：进度/当前步骤/最近活动/成本/子Agent 完整呈现", async () => {
+    render(<Sidebar {...taskProps} />);
+    expect(await screen.findByText("季度报告汇总")).toBeInTheDocument();
+    // 进度（62% 8/13）
+    expect(screen.getByText(/62% 8\/13/)).toBeInTheDocument();
+    // 当前步骤 + 下一步
+    expect(screen.getByText(/写正文第 3 章/)).toBeInTheDocument();
+    expect(screen.getByText(/图表排版/)).toBeInTheDocument();
+    // 最近活动
+    expect(screen.getByText(/docx_append 报告_v2\.docx/)).toBeInTheDocument();
+    // 成本与子 Agent
+    expect(screen.getByText("$0.42")).toBeInTheDocument();
+    expect(screen.getByText(/🤖 3/)).toBeInTheDocument();
+    // 运行徽标存在
+    expect(document.querySelector(".running-dot")).not.toBeNull();
+  });
+
+  it("完成态卡自动收敛：显示 100%，无最近活动行与操作按钮组", async () => {
+    render(<Sidebar {...taskProps} />);
+    const doneCard = (await screen.findByText("APP 竞品调研")).closest(".task-card");
+    expect(doneCard).not.toBeNull();
+    expect(doneCard!.className).toContain("done-card");
+    expect(screen.getByText(/100%/)).toBeInTheDocument();
+    expect(screen.getByText(/全部完成/)).toBeInTheDocument();
+    // 完成态不渲染轨迹按钮（traj 无 detail 时也画不出事件行）
+    expect(within(doneCard as HTMLElement).queryByTitle("执行轨迹（W7）")).toBeNull();
+  });
+
+  it("无 TODO 的会话退化为轻量卡（无进度条）", async () => {
+    render(<Sidebar {...taskProps} />);
+    const plain = await screen.findByText("问一下路由方案怎么选");
+    const card = plain.closest(".task-card");
+    expect(card).not.toBeNull();
+    expect(card!.querySelector(".task-bar")).toBeNull();
+  });
+
+  it("运行中的任务排在最前", async () => {
+    const { container } = render(<Sidebar {...taskProps} />);
+    await screen.findByText("季度报告汇总");
+    const titles = Array.from(container.querySelectorAll(".task-title")).map((t) => t.textContent);
+    expect(titles[0]).toBe("季度报告汇总");
+  });
+
+  it("点击卡片进入会话；点「进入 ›」同样触发 onSelectSession", async () => {
+    const user = userEvent.setup();
+    const onSelectSession = vi.fn();
+    render(<Sidebar {...taskProps} onSelectSession={onSelectSession} />);
+    await user.click(await screen.findByText("季度报告汇总"));
+    expect(onSelectSession).toHaveBeenCalledWith("s-run");
+    // 多张卡都有「进入」按钮：按运行中那张卡的范围取
+    const runCard = (await screen.findByText("季度报告汇总")).closest(".task-card") as HTMLElement;
+    await user.click(within(runCard).getByTitle("进入会话"));
+    expect(onSelectSession).toHaveBeenCalledWith("s-run");
+  });
+
+  it("轨迹按钮打开抽屉：未开启时提示去设置开启", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar {...taskProps} />);
+    const runCard = (await screen.findByText("季度报告汇总")).closest(".task-card") as HTMLElement;
+    await user.click(within(runCard).getByTitle("执行轨迹（W7）"));
+    expect(await screen.findByText(/轨迹未开启/)).toBeInTheDocument();
   });
 });

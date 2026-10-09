@@ -64,6 +64,24 @@ export interface SessionInfo {
   message_count: number;
   title: string;
   metadata: Record<string, unknown>;
+  // —— 任务卡聚合字段（Goals 视图；后端可选返回，旧数据无这些字段）——
+  /** TODO 看板进度摘要；无看板时缺省（前端退化为轻量卡） */
+  todo_progress?: {
+    total: number;
+    done: number;
+    /** in_progress 项内容 */
+    current: string;
+    /** 接下来的 pending 项（最多 2 个） */
+    next: string[];
+  };
+  /** 最近活动摘要（最后一个工具调用或助手文本）；无则缺省 */
+  last_activity?: { summary: string; ok: boolean | null; tool: string };
+  /** 历史子 Agent 归档数（会话 metadata subagent_records） */
+  subagent_count?: number;
+  /** 本进程运行期的会话累计成本（跨重启无值）；美元 */
+  cost_usd?: number | null;
+  /** 是否有任务正在执行（TaskManager active_for_session） */
+  running?: boolean;
 }
 
 /** 最近打开的项目（侧边栏「项目」页签） */

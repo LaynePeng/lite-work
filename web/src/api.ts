@@ -345,6 +345,23 @@ export const api = {
       `/api/install/jobs/${encodeURIComponent(id)}/${action}`, { method: "POST" }
     ),
 
+  // ------------------------------------------------------------ 任务卡（Goals 视图）：W7 轨迹
+  /** 会话轨迹列表（trajectory_enabled=false 时返回空列表 + enabled 标记） */
+  trajectoryList: (sessionId: string) =>
+    req<{
+      session_id: string;
+      trajectories: { task_id: string; path?: string; started_at?: number; events?: number }[];
+      enabled: boolean;
+    }>(`/api/trajectories/${encodeURIComponent(sessionId)}`),
+  /** 单条轨迹事件（分页）+ 漏斗 findings */
+  trajectoryEvents: (sessionId: string, taskId: string, offset = 0, limit = 200) =>
+    req<{
+      session_id: string; task_id: string;
+      events: { type: string; [k: string]: unknown }[];
+      count: number;
+      findings: { kind: string; [k: string]: unknown }[];
+    }>(`/api/trajectories/${encodeURIComponent(sessionId)}?task_id=${encodeURIComponent(taskId)}&offset=${offset}&limit=${limit}`),
+
   // ------------------------------------------------------------ 办公场景：文件上传 / 素材列表 / 文件下载（AGI 通用入口）
 
   uploadFile: (file: File) => {

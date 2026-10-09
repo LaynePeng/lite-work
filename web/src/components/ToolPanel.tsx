@@ -1341,7 +1341,9 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
   }, []);
 
   useEffect(() => {
-    void api.plugins()
+    // Promise.resolve 包一层：api.plugins 异常/未实现（返回 undefined）时
+    // 同步抛 TypeError 会穿透到 ErrorBoundary 崩掉整个面板；包一层后走 catch 静默。
+    void Promise.resolve(api.plugins())
       .then((r) => {
         const out: PluginPanelRef[] = [];
         for (const p of r.plugins ?? []) {

@@ -2,7 +2,31 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [1.10.5] — 项目结构 v2：交付物平铺直给 + 设置页配置全量透出
+## [1.10.5] — 项目结构 v2 + 设置页配置全量透出 + 侧栏「任务」Tab
+
+### 新增（任务 Tab：Goals 视图，参考 Muse / dots 的 Goals 设计；设计文档 docs/goals-tab-design.md）
+- **侧栏「任务」Tab**：会话从聊天列表升格为目标看板——任务卡四段式呈现：
+  进度（TODO 看板百分比 + 渐变条）/ 当前步骤（▶ in_progress + 下一步）/
+  最近活动（最后工具调用 + 成败 + 相对时间）/ 元信息（成本 · 子 Agent 数 ·
+  消息数 · 快捷操作）。宽度纪律：280px 侧栏内设计，标题/活动行
+  nowrap+ellipsis，步骤最多 3 行；**完成态卡自动收敛**为三行（✅ + 100% 细条 +
+  全部完成），翻历史不被旧任务占满；无 TODO 的会话退化为轻量卡。
+- **运行中徽标**：绿点脉动（TaskManager active_for_session），运行中的任务
+  钉在列表最前——「正在替我干活的优先可见」。
+- **轨迹抽屉（W7 透出）**：任务卡 📈 按钮打开，展示最新轨迹的事件时间线
+  （7 类事件图标）+ 级联漏斗 findings；未开启轨迹时引导去设置页开启。
+- **/api/sessions 聚合字段**（全部可选，旧前端无感）：`todo_progress` /
+  `last_activity`（消息尾部倒扫，含工具成败对齐）/ `subagent_count` /
+  `cost_usd`（内存态，跨重启留空）/ `running`。
+- **刷新链路**：`todo:updated` / `task:done` → 400ms 合并刷新（防 TODO 高频
+  更新引发列表刷新风暴）。
+
+### 修复
+- **test_sessions_list_strictly_scoped_to_workspace 偶发失败**（本会话两次复现）：
+  根因是 `POST /api/chat` 异步落盘首条消息与测试断言竞态。新增
+  `_wait_first_message_saved` 轮询等落盘——顺带修复「other 会话未等落盘就断言
+  not in」的假阳性漏洞（未显示可能是还没保存而非过滤生效）。单测×8、
+  全文件×8、全量×3 连续通过。
 
 ### 变更（项目结构 v2，参考 Muse / dots 的 Artifacts 思路）
 - **交付物直接放项目根目录**：不再建 `产出物/<品类>/` 四层目录树（6 品类 ×

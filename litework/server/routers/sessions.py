@@ -66,6 +66,64 @@ async def _shutdown_session_agents(app, session_id: str) -> None:
         pass
 
 
+def _todo_progress(todos: list) -> Optional[Dict[str, Any]]:
+    """TODO 看板 → 任务卡进度摘要；无看板返回 None（前端退化为轻量卡）。"""
+    if not todos:
+        return None
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    current = next((t.get("content") for t in todos if t.get("status") == "in_progress"), "")
+    pending = [t.get("content") for t in todos if t.get("status") == "pending"]
+    return {
+        "total": len(todos),
+        "done": done,
+        "current": current,
+        "next": pending[:2],
+    }
+
+
+def _last_activity(messages: list) -> Optional[Dict[str, Any]]:
+    """消息尾部倒扫：最后一个工具调用（含成败）或助手文本 → 最近活动摘要。
+
+    消息序列形如 assistant(tool_calls) → tool(结果) → assistant(…)；
+    倒扫时先记住尾部 tool 结果的成败（按 tool_call_id 对齐），遇到带
+    tool_calls 的 assistant 消息即组装返回；纯文本回复则截断为摘要。
+    """
+    import json as _json
+
+    tail_results: Dict[str, Any] = {}  # tool_call_id → {ok}
+    for m in reversed(messages):
+        role = m.get("role")
+        if role == "tool":
+            content = m.get("content") or ""
+            tc_id = m.get("tool_call_id") or ""
+            tail_results[tc_id] = {
+                "ok": not (content.startswith("[Error]") or content.startswith("[Execution Exception]")),
+            }
+            continue
+        if role == "assistant":
+            calls = m.get("tool_calls") or []
+            if calls:
+                call = calls[-1]
+                tc = call.get("function", {}) if isinstance(call, dict) else {}
+                name = tc.get("name") or "tool"
+                args_raw = tc.get("arguments") or ""
+                try:
+                    args: Dict[str, Any] = _json.loads(args_raw) if isinstance(args_raw, str) else {}
+                    # 摘要用关键参数：filename / path / query / command / url
+                    key = next((args[k] for k in ("filename", "path", "query", "command", "url")
+                                if args.get(k)), "")
+                    summary = f"{name} {str(key)[:40]}".strip()
+                except Exception:
+                    summary = name
+                tc_id = call.get("id") or ""
+                ok = tail_results.get(tc_id, {}).get("ok")
+                return {"summary": summary, "ok": ok, "tool": name}
+            content = (m.get("content") or "").strip()
+            if content:
+                return {"summary": content[:60], "ok": None, "tool": ""}
+    return None
+
+
 def create_router(ctx: ServerContext) -> APIRouter:
     router = APIRouter()
     app, tasks = ctx.app, ctx.tasks
@@ -93,13 +151,28 @@ def create_router(ctx: ServerContext) -> APIRouter:
             if not any(m.get("role") == "user" for m in messages):
                 # 列表接口必须是纯读取；创建与首条消息之间存在短暂空窗。
                 continue
+            session_id = str(s.get("session_id") or "")
+            metadata = s.get("metadata", {})
+            # —— 任务卡聚合字段（Goals 视图；全部可选，旧前端无感）——
+            todo_progress = _todo_progress(app.todo_plugin.get(session_id))
+            last_activity = _last_activity(messages)
+            subagent_count = len(metadata.get("subagent_records") or [])
+            # 成本为内存态（本进程运行过的会话才有）；跨重启留空，不显示
+            stats = app.get_context_session_stats(session_id)
+            cost_usd = round(float(stats.get("cost_estimate", 0) or 0), 2) or None
+            running = tasks.active_for_session(session_id) is not None
             result.append({
-                "session_id": s.get("session_id"),
+                "session_id": session_id,
                 "created_at": s.get("created_at"),
                 "updated_at": s.get("updated_at"),
                 "message_count": len(messages),
                 "title": _session_title(s),
-                "metadata": s.get("metadata", {}),
+                "metadata": metadata,
+                "todo_progress": todo_progress,
+                "last_activity": last_activity,
+                "subagent_count": subagent_count,
+                "cost_usd": cost_usd,
+                "running": running,
             })
         return result
 

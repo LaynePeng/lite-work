@@ -761,6 +761,347 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
 }
 
+/* ==================== 任务 Tab（Goals 视图：Muse/dots「任务与对话解耦」） ==================== */
+/* 宽度纪律：全部按 --sidebar-w（默认 280px）设计；标题/活动行 nowrap+ellipsis，
+   步骤最多 3 行；完成态卡自动收敛为两三行。 */
+
+.tasks-list {
+  padding: 2px 2px 12px;
+}
+
+.task-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 11px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.task-card:hover {
+  border-color: var(--accent);
+}
+
+.task-card.active {
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+
+.task-card.done-card {
+  padding: 8px 11px;
+}
+
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.task-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-pct {
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.task-pct.done {
+  color: var(--green);
+}
+
+.task-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-0);
+  margin: 7px 0 8px;
+  overflow: hidden;
+}
+
+.task-card.done-card .task-bar {
+  height: 2px;
+  margin: 6px 0 0;
+}
+
+.task-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.task-bar-fill.done {
+  background: var(--green);
+}
+
+.task-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.task-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.task-step .mark {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+}
+
+.task-step.cur {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.task-step.cur .mark {
+  color: var(--accent);
+}
+
+.task-activity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  padding: 5px 7px;
+  background: var(--bg-0);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.task-activity .ok {
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.task-activity .err {
+  color: var(--red);
+  flex-shrink: 0;
+}
+
+.task-activity .trunc {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-activity .when {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-2);
+  border-top: 1px solid var(--border);
+  padding-top: 7px;
+}
+
+.task-meta .cost {
+  font-family: var(--font-mono);
+}
+
+.task-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.task-actions button {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.task-actions button:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+
+.task-actions .run {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.task-card.done-card .task-deliv,
+.task-deliv {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-top: 6px;
+}
+
+.running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+  animation: task-pulse 1.2s infinite;
+}
+
+@keyframes task-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* —— 轨迹抽屉（任务卡 📈 按钮；W7 透出） —— */
+.traj-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.traj-drawer {
+  width: min(560px, 88vw);
+  max-height: 76vh;
+  background: var(--bg-1, #1a1f2b);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.traj-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  flex-shrink: 0;
+}
+
+.traj-close {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.traj-close:hover { color: var(--text-0); background: var(--bg-3); }
+
+.traj-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.traj-empty.traj-err { color: var(--red); }
+.traj-empty-sub { font-size: 11px; margin-top: 6px; }
+
+.traj-meta {
+  padding: 8px 16px 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.traj-findings {
+  padding: 0 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.traj-finding {
+  font-size: 11px;
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.traj-events {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 16px 14px;
+}
+
+.traj-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+  min-width: 0;
+}
+
+.traj-ev-icon { flex-shrink: 0; font-size: 11px; }
+
+.traj-ev-type {
+  flex-shrink: 0;
+  width: 84px;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.traj-ev-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .session-delete {
   color: var(--text-2);
   font-size: 11px;
