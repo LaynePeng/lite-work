@@ -2177,7 +2177,7 @@ export default function SettingsModal({
                               </span>
                             </div>
                             <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
-                            <PermissionBadge permissions={plugins.find((p) => p.name === cp.name)?.permissions} />
+                            <PermissionBadge permissions={cp.permissions ?? plugins.find((p) => p.name === cp.name)?.permissions} />
                           </div>
                           <div className="skill-item-actions">
                             <button className="btn-update" disabled={pluginBusy || !communitySrc(cp.name)}
@@ -2196,7 +2196,7 @@ export default function SettingsModal({
                               <span className="plugin-version">v{cp.version}</span>
                             </div>
                             <span className="plugin-desc-row" title={cp.description}>{cp.description}</span>
-                            <PermissionBadge permissions={plugins.find((p) => p.name === cp.name)?.permissions} />
+                            <PermissionBadge permissions={cp.permissions ?? plugins.find((p) => p.name === cp.name)?.permissions} />
                           </div>
                           <div className="skill-item-actions">
                             <button className="btn-test" disabled={pluginBusy || !communitySrc(cp.name)}

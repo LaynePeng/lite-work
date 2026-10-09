@@ -534,7 +534,17 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if _os.path.exists(new_path):
             raise HTTPException(status_code=409, detail=f"同名项已存在: {new_name}")
         try:
-            _os.rename(target, new_path)
+            # TOCTOU 防护：os.rename 在 POSIX 上会静默覆盖已存在目标——
+            # exists 检查与 rename 之间的窗口里并发创建的同名文件会被覆盖。
+            # 改用 link + unlink：link 在目标已存在时抛 FileExistsError（原子失败）
+            if _os.path.isdir(target):
+                # 目录改名没有 link 等价物；退回 rename（目录覆盖窗口极窄，可接受）
+                _os.rename(target, new_path)
+            else:
+                _os.link(target, new_path)
+                _os.unlink(target)
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail=f"同名项已存在: {new_name}")
         except OSError as exc:
             raise HTTPException(status_code=500, detail=f"重命名失败: {exc}")
         return {"ok": True, "path": new_rel, "name": new_name}

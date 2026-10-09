@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ... import __version__
@@ -99,9 +99,47 @@ def create_router(ctx: ServerContext) -> APIRouter:
             )
         }
 
+    # POST /api/config 的可写键白名单：与 GET 的展示白名单对齐，加上插件配置
+    # （任意键）——插件配置是合法的全量写入场景（savePluginConfig 走这里）
+    _WRITABLE_KEYS = frozenset({
+        "max_steps", "token_budget", "tool_timeout", "auto_approve",
+        "context_full_turns", "llm_timeout", "llm_retries", "llm",
+        "skill_permissions", "subagent_timeout", "observation_pack",
+        "compaction_economics", "reducer_model", "reducer_provider",
+        "completion_gate", "completion_gate_retries", "tool_metrics",
+        "trajectory_enabled", "chat_fold_turns", "chat_fold_messages",
+        "max_parallel_agents", "agent_total_limit", "agent_max_steps",
+        "agent_max_steps_cap", "agent_spawn_depth", "agent_message_max_chars",
+        "agent_meeting_rounds", "agent_ledger_interval", "agent_persist_max",
+        "agent_collab_mode", "collab_policy", "collab_recipe",
+        "ui_prefs", "mcp_servers", "skill_trigger_mode", "parallel_tool_calls",
+        "pricing", "pricing_overrides", "pricing_check_ttl_days",
+        "max_zip_size_mb", "auto_approve", "approval_timeout",
+        # 插件配置（任意插件名的顶层键——savePluginConfig 的合法通道）
+        # 由 app.save_config 内部处理，此处不逐一列举
+    })
+
     @router.post("/api/config")
     async def update_config(payload: ConfigUpdateRequest, request: Request):
+        """更新配置（POST）：可写键白名单校验——防止通过 API 塞任意键。
+
+        白名单外的键（尤其内部状态键）拒绝写入。插件配置走「插件名」作为
+        顶层键，属于合法通道（savePluginConfig），不在此拦截。
+        """
         ctx.check_auth(request)
+        # 插件配置：顶层键在已安装插件名列表里 → 放行
+        from ...tools.plugin_loader import read_installed
+        _plugin_names = set(read_installed(app.config_dir).keys())
+        _plugin_names.update({"builtin", "local"})  # 内置/本地前缀
+
+        rejected = [k for k in payload.updates
+                    if k not in _WRITABLE_KEYS and k not in _plugin_names]
+        if rejected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不允许写入的配置键: {', '.join(rejected[:5])}"
+                       f"{'…' if len(rejected) > 5 else ''}（可写键见 GET /api/config）"
+            )
         app.save_config(payload.updates)
         return {"ok": True}
 

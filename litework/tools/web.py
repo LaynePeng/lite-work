@@ -156,7 +156,6 @@ class WebFetchTools:
             timeout=TIMEOUT,
             headers=dict(profile),
         )
-
     # ------------------------------------------------------------ 工具定义
 
     def get_tools(self) -> List[ToolDefinition]:
@@ -341,6 +340,23 @@ class WebFetchTools:
                     self._cache_set(target, status, content_type, text)
                     flag = "cache=miss,curl-impersonate"
                 else:
+                    # 重定向逐跳校验：3xx 到内网地址不再绕过 validate_url
+                    # （follow_redirects=False + 手动跟随并逐跳校验）
+                    redirect_count = 0
+                    while resp.status_code in (301, 302, 303, 307, 308) and redirect_count < 5:
+                        location = resp.headers.get("location", "")
+                        if not location:
+                            break
+                        if location.startswith("/"):
+                            from urllib.parse import urljoin
+                            location = urljoin(str(resp.url), location)
+                        try:
+                            validated = self.validate_url(location)
+                        except (PermissionError, ValueError):
+                            return f"[Fetch Blocked]: 重定向到不允许的地址被拦截：{location}"
+                        async with self._client_factory() as redir_client:
+                            resp = await redir_client.get(validated)
+                        redirect_count += 1
                     resp.raise_for_status()
                     status = resp.status_code
                     content_type = resp.headers.get("content-type", "")
@@ -353,7 +369,7 @@ class WebFetchTools:
                     else:
                         text = _WS_RE.sub(" ", text).strip()
                     self._cache_set(target, status, content_type, text)
-                    flag = "cache=miss" + (",retry=1" if retried else "")
+                    flag = "cache=miss" + (",retry=1" if retried else "") + (f",redirects={redirect_count}" if redirect_count else "")
 
             if len(text) > max_chars:
                 text = text[:max_chars] + f"\n...[输出截断，仅显示前 {max_chars} 字符]"

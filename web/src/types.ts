@@ -835,6 +835,6 @@ export interface CommunityManifest {
   version: string;
   min_app_version: string;
   /** path 为插件目录（相对仓库根），如 "plugins/office-plugin"；kind=collab 为协作模式包，icon 为仓库内图标路径 */
-  plugins: { name: string; version: string; description: string; path: string; tools?: string[]; kind?: string; icon?: string }[];
+  plugins: { name: string; version: string; description: string; path: string; tools?: string[]; kind?: string; icon?: string; permissions?: Record<string, string[]> }[];
   skills: { name: string; version: string; description: string; path: string }[];
 }
