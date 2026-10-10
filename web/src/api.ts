@@ -141,14 +141,19 @@ export const api = {
     const url = workspace ? `/api/sessions?workspace=${encodeURIComponent(workspace)}` : "/api/sessions";
     return req<SessionInfo[]>(url);
   },
-  createSession: (name?: string) =>
-    req<{ session_id: string }>("/api/sessions", { method: "POST", body: JSON.stringify(name ? { name } : {}) }),
+  createSession: (name?: string, workspace?: string) =>
+    req<{ session_id: string }>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ ...(name ? { name } : {}), ...(workspace ? { workspace } : {}) }),
+    }),
   /** 派生会话：克隆源会话骨架（goal/协作模式/模型/隔离工作树/TODO 结构）到新会话。 */
   deriveSession: (sourceId: string, name?: string) =>
     req<{ session_id: string; workspace?: string; goal?: string | null; todos_copied: number; worktree: boolean }>(
       `/api/sessions/${encodeURIComponent(sourceId)}/derive`, {
         method: "POST", body: JSON.stringify(name ? { name } : {}),
       }),
+  /** 个人任务落盘区（Goals 全局视图）：确保存在并返回路径（~/lite-work/personal）。 */
+  personalWorkspace: () => req<{ path: string }>("/api/personal-workspace"),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
   /** 任务卡重命名/置顶：字段缺省 = 不改；name 传空串 = 清除自定义名。 */
   patchSession: (id: string, patch: { name?: string; pinned?: boolean }) =>

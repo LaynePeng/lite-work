@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld("liteWork", {
   openProject: () => ipcRenderer.invoke("open-project"),
   openProjectNewWindow: () => ipcRenderer.invoke("open-project-new-window"),
   /**
+   * 通用目录选择（不切换工作区）。新建任务向导「任意目录」落盘位置用。
+   * 返回 { ok: true, path } 或 { ok: false, error: "cancelled" }。
+   */
+  chooseDirectory: () => ipcRenderer.invoke("choose-directory"),
+  /**
    * 重启当前窗口的本地 Core（插件变更后换取全新进程状态）。
    * 成功后页面整页刷新；有任务运行中时返回 { ok: false, error }。
    */

@@ -8046,6 +8046,39 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   cursor: not-allowed;
 }
 
+/* 落盘位置「任意目录」：路径输入 + 浏览按钮（Goals 全局视图） */
+.wizard-custom-ws {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.wizard-custom-ws-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+.btn-browse-ws {
+  flex-shrink: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-browse-ws:hover {
+  background: var(--bg-3);
+}
+
 .wizard-collab-row {
   flex-direction: row;
   align-items: center;

@@ -7,6 +7,9 @@ import type { CollabMode } from "../types";
 
 export type TaskExecMode = "plan" | "direct";
 
+/** 任务落盘位置（Goals 全局视图：任务属于我，项目只是落盘选择之一）。 */
+export type TaskWorkspaceMode = "current" | "personal" | "custom";
+
 /** 向导确认后的任务配置（App 层据此建会话/写目标/套配置/发引导指令）。 */
 export interface NewTaskConfig {
   goal: string;
@@ -18,15 +21,22 @@ export interface NewTaskConfig {
   collab: string;
   /** 用户预填的计划项（每行一个）；空数组 = 交给 Agent 自己规划 */
   planItems: string[];
+  /** 落盘位置：current=当前项目 / personal=个人区 / custom=自定义目录 */
+  workspaceMode: TaskWorkspaceMode;
+  /** workspaceMode=custom 时的目录绝对路径 */
+  customWorkspace: string;
 }
 
 export default function NewTaskWizard({
   collabModes,
+  workspaceName,
   workspaceIsGit,
   onCancel,
   onSubmit,
 }: {
   collabModes: CollabMode[];
+  /** 当前项目显示名（落盘位置「当前项目」的标签） */
+  workspaceName: string;
   workspaceIsGit: boolean;
   onCancel: () => void;
   onSubmit: (cfg: NewTaskConfig) => void;
@@ -39,8 +49,14 @@ export default function NewTaskWizard({
   const [collab, setCollab] = useState("");
   // 计划项（可选）：每行一个 TODO 步骤；留空则交给 Agent 规划
   const [planText, setPlanText] = useState("");
+  // 落盘位置（Goals 全局视图）：任务属于我，项目只是落盘选择之一
+  const [wsMode, setWsMode] = useState<TaskWorkspaceMode>("current");
+  const [customWs, setCustomWs] = useState("");
 
-  const canStart = useMemo(() => goal.trim().length > 0, [goal]);
+  const canStart = useMemo(
+    () => goal.trim().length > 0 && (wsMode !== "custom" || customWs.trim().length > 0),
+    [goal, wsMode, customWs]
+  );
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -97,6 +113,60 @@ export default function NewTaskWizard({
             </div>
           </div>
 
+          <div className="wizard-section">
+            <div className="wizard-label">
+              落盘位置
+              <span className="wizard-hint">任务属于我；项目只是产物放哪的选择</span>
+            </div>
+            <div className="wizard-radio-row">
+              <label className={`wizard-radio ${wsMode === "current" ? "checked" : ""}`}>
+                <input
+                  type="radio" name="wizard-ws" checked={wsMode === "current"}
+                  onChange={() => setWsMode("current")}
+                />
+                <span>当前项目</span>
+                <small>{workspaceName}</small>
+              </label>
+              <label className={`wizard-radio ${wsMode === "personal" ? "checked" : ""}`}
+                title="不隶属任何项目的任务（发邮件、整理照片等）产物落个人区 ~/lite-work/personal">
+                <input
+                  type="radio" name="wizard-ws" checked={wsMode === "personal"}
+                  onChange={() => setWsMode("personal")}
+                />
+                <span>👤 个人</span>
+                <small>生活杂务与跨项目任务</small>
+              </label>
+              <label className={`wizard-radio ${wsMode === "custom" ? "checked" : ""}`}>
+                <input
+                  type="radio" name="wizard-ws" checked={wsMode === "custom"}
+                  onChange={() => setWsMode("custom")}
+                />
+                <span>📂 任意目录</span>
+                <small>{customWs || "选择一个目录"}</small>
+              </label>
+            </div>
+            {wsMode === "custom" && (
+              <div className="wizard-custom-ws">
+                <input
+                  className="wizard-custom-ws-input"
+                  value={customWs}
+                  onChange={(e) => setCustomWs(e.target.value)}
+                  placeholder="目录绝对路径，如 /Users/me/Documents/整理2026"
+                />
+                <button
+                  type="button"
+                  className="btn-browse-ws"
+                  onClick={async () => {
+                    const r = await window.liteWork?.chooseDirectory?.();
+                    if (r?.ok && r.path) setCustomWs(r.path);
+                  }}
+                >
+                  浏览…
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="wizard-check-row">
             <label className="wizard-check" title="任务结束后自动循环推进，直到目标完成（/loop）">
               <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
@@ -107,13 +177,15 @@ export default function NewTaskWizard({
               自动续推 <code>/continue</code>
             </label>
             <label
-              className={`wizard-check ${workspaceIsGit ? "" : "disabled"}`}
-              title={workspaceIsGit
-                ? "在独立分支+目录中执行，主工作区不受影响（/worktree）"
-                : "当前项目不是 git 仓库，隔离工作树不可用"}
+              className={`wizard-check ${workspaceIsGit && wsMode === "current" ? "" : "disabled"}`}
+              title={wsMode !== "current"
+                ? "仅当前项目支持隔离工作树（个人区/自定义目录无 git 上下文）"
+                : workspaceIsGit
+                  ? "在独立分支+目录中执行，主工作区不受影响（/worktree）"
+                  : "当前项目不是 git 仓库，隔离工作树不可用"}
             >
               <input
-                type="checkbox" checked={worktree} disabled={!workspaceIsGit}
+                type="checkbox" checked={worktree} disabled={!workspaceIsGit || wsMode !== "current"}
                 onChange={(e) => setWorktree(e.target.checked)}
               />
               隔离工作树 <code>/worktree</code>
@@ -136,8 +208,11 @@ export default function NewTaskWizard({
               className="btn-start"
               disabled={!canStart}
               onClick={() => onSubmit({
-                goal: goal.trim(), mode, loop, autoContinue, worktree, collab,
+                goal: goal.trim(), mode, loop, autoContinue,
+                worktree: wsMode === "current" && worktree, collab,
                 planItems: planText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+                workspaceMode: wsMode,
+                customWorkspace: wsMode === "custom" ? customWs.trim() : "",
               })}
             >
               开始任务

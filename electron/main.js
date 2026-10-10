@@ -355,6 +355,18 @@ async function hotSwitchWorkspace(instance, workspace) {
   }
 }
 
+// Goals 全局视图：通用目录选择（不切换工作区；新建任务向导「任意目录」用）。
+ipcMain.handle("choose-directory", async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(owner, {
+    title: "选择任务落盘目录",
+    buttonLabel: "选择",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || result.filePaths.length === 0) return { ok: false, error: "cancelled" };
+  return { ok: true, path: result.filePaths[0] };
+});
+
 async function chooseWorkspace(owner) {
   const result = await dialog.showOpenDialog(owner, {
     title: "选择要打开的项目目录",

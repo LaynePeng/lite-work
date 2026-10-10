@@ -2791,7 +2791,15 @@ export default function App() {
   const startTaskFromWizard = useCallback(async (cfg: NewTaskConfig) => {
     setNewTaskOpen(false);
     try {
-      const { session_id } = await api.createSession();
+      // 落盘位置（Goals 全局视图）：个人/自定义目录 = 会话 workspace 显式绑定，
+      // 不热切换当前项目（任务照跑，产物落别处；任务卡全局视图按此归属显示）
+      let taskWs: string | undefined;
+      if (cfg.workspaceMode === "personal") {
+        taskWs = (await api.personalWorkspace().catch(() => null))?.path;
+      } else if (cfg.workspaceMode === "custom" && cfg.customWorkspace) {
+        taskWs = cfg.customWorkspace;
+      }
+      const { session_id } = await api.createSession(undefined, taskWs);
       patchChat(session_id, { ...EMPTY_CHAT, messages: [] });
       const title = cfg.goal.length > 24 ? `${cfg.goal.slice(0, 24)}…` : cfg.goal;
       openSessionTab(session_id, title || "新任务");
@@ -3363,6 +3371,7 @@ export default function App() {
       {newTaskOpen && (
         <NewTaskWizard
           collabModes={collabModes}
+          workspaceName={status?.workspace?.split(/[\\/]/).filter(Boolean).pop() ?? "未打开项目"}
           workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
           onCancel={() => setNewTaskOpen(false)}
           onSubmit={(cfg) => void startTaskFromWizard(cfg)}

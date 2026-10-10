@@ -16,6 +16,7 @@ function renderWizard(props?: Partial<React.ComponentProps<typeof NewTaskWizard>
   const view = render(
     <NewTaskWizard
       collabModes={collabModes}
+      workspaceName="lite-work"
       workspaceIsGit
       onCancel={onCancel}
       onSubmit={onSubmit}
@@ -34,7 +35,7 @@ describe("NewTaskWizard 新建任务向导", () => {
     expect(plan).toBeChecked();
   });
 
-  it("输入目标后提交完整配置（默认 mode=plan，开关全关，collab 跟随默认）", async () => {
+  it("输入目标后提交完整配置（默认 mode=plan，开关全关，collab 跟随默认，落盘=当前项目）", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderWizard();
     await user.type(screen.getByRole("textbox", { name: "任务目标" }), "写一份季度 PPT 大纲");
@@ -47,6 +48,8 @@ describe("NewTaskWizard 新建任务向导", () => {
       worktree: false,
       collab: "",
       planItems: [],
+      workspaceMode: "current",
+      customWorkspace: "",
     });
   });
 
@@ -68,6 +71,47 @@ describe("NewTaskWizard 新建任务向导", () => {
       worktree: true,
       collab: "review",
       planItems: [],
+      workspaceMode: "current",
+      customWorkspace: "",
+    });
+  });
+
+  it("落盘位置选「任意目录」时提交 customWorkspace 路径", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderWizard();
+    await user.type(screen.getByRole("textbox", { name: "任务目标" }), "整理家庭相册");
+    await user.click(screen.getByRole("radio", { name: /任意目录/ }));
+    await user.type(screen.getByPlaceholderText(/目录绝对路径/), "/Users/me/Documents/相册2026");
+    await user.click(screen.getByRole("button", { name: "开始任务" }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      goal: "整理家庭相册",
+      mode: "plan",
+      loop: false,
+      autoContinue: false,
+      worktree: false,
+      collab: "",
+      planItems: [],
+      workspaceMode: "custom",
+      customWorkspace: "/Users/me/Documents/相册2026",
+    });
+  });
+
+  it("落盘位置选「个人」时提交 workspaceMode=personal", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderWizard();
+    await user.type(screen.getByRole("textbox", { name: "任务目标" }), "给老同学写封邮件");
+    await user.click(screen.getByRole("radio", { name: /个人/ }));
+    await user.click(screen.getByRole("button", { name: "开始任务" }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      goal: "给老同学写封邮件",
+      mode: "plan",
+      loop: false,
+      autoContinue: false,
+      worktree: false,
+      collab: "",
+      planItems: [],
+      workspaceMode: "personal",
+      customWorkspace: "",
     });
   });
 
