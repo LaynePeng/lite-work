@@ -714,7 +714,7 @@ function SubagentTreeDrawer({ sessionId, onClose }: { sessionId: string; onClose
 /** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
  *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
  *  步骤最多 3 行；完成态自动收敛。 */
-function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRename, onTogglePin }: {
+function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRename, onTogglePin, onOpenDeliverable }: {
   task: SessionInfo;
   active: boolean;
   onSelect: () => void;
@@ -725,6 +725,8 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
   onRename?: (name: string) => void;
   /** 置顶开关（运行中之后的第二优先级） */
   onTogglePin?: (pinned: boolean) => void;
+  /** 打开交付物（完成态卡「交付：」行点击；App 层走文件页签管线） */
+  onOpenDeliverable?: (name: string) => void;
 }) {
   const [trajOpen, setTrajOpen] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
@@ -832,6 +834,23 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
         </div>
       )}
 
+      {/* 交付物指针（P3）：任务期间产出的根目录文档，点击经文件页签打开 */}
+      {done && !!task.deliverables?.length && (
+        <div className="task-deliv-files">
+          {(task.deliverables ?? []).slice(0, 2).map((d) => (
+            <button key={d.name} className="task-deliv-file" title={`打开 ${d.name}`}
+              onClick={(e) => { e.stopPropagation(); onOpenDeliverable?.(d.name); }}>
+              📄 {d.name}
+            </button>
+          ))}
+          {(task.deliverables?.length ?? 0) > 2 && (
+            <span className="task-deliv-more" title={(task.deliverables ?? []).slice(2).map((d) => d.name).join("\n")}>
+              +{(task.deliverables?.length ?? 0) - 2} 个
+            </span>
+          )}
+        </div>
+      )}
+
       {trajOpen && <TrajectoryDrawer sessionId={task.session_id} onClose={() => setTrajOpen(false)} />}
       {treeOpen && <SubagentTreeDrawer sessionId={task.session_id} onClose={() => setTreeOpen(false)} />}
     </div>
@@ -839,7 +858,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
 }
 
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
-function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession }: {
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession, onOpenDeliverable }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   workspace: string;
@@ -857,6 +876,8 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
   onRenameSession?: (id: string, name: string) => void;
   /** 置顶开关（metadata.pinned） */
   onTogglePinSession?: (id: string, pinned: boolean) => void;
+  /** 打开交付物（完成态卡「交付：」行点击；相对落盘目录的文件名） */
+  onOpenDeliverable?: (name: string) => void;
 }) {
   const sorted = [...sessions].sort((a, b) => {
     // 运行中 → 置顶（Goals 视图：正在替我干活的优先可见；用户钉住的其次）
@@ -893,6 +914,7 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
           onDelete={() => onDeleteSession(s.session_id)}
           onRename={onRenameSession ? (name) => onRenameSession(s.session_id, name) : undefined}
           onTogglePin={onTogglePinSession ? (pinned) => onTogglePinSession(s.session_id, pinned) : undefined}
+          onOpenDeliverable={onOpenDeliverable}
         />
       ))}
     </div>
@@ -919,6 +941,7 @@ export default function Sidebar({
   onDeriveSession,
   onRenameSession,
   onTogglePinSession,
+  onOpenDeliverable,
   onOpenSessionWithProject,
   onNewSession,
   onNewTask,
@@ -961,6 +984,8 @@ export default function Sidebar({
   onRenameSession?: (id: string, name: string) => void;
   /** 任务卡置顶开关（PATCH /api/sessions/{id} pinned；与项目置顶 onTogglePin 区分） */
   onTogglePinSession?: (id: string, pinned: boolean) => void;
+  /** 打开交付物（完成态任务卡「交付：」行；相对落盘目录的文件名） */
+  onOpenDeliverable?: (name: string) => void;
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
@@ -1257,6 +1282,7 @@ export default function Sidebar({
             onNewTask={onNewTask}
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePinSession}
+            onOpenDeliverable={onOpenDeliverable}
           />
         )}
 

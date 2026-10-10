@@ -95,6 +95,52 @@ def _todo_progress(todos: list) -> Optional[Dict[str, Any]]:
     }
 
 
+#: 交付物识别（P3 交付物指针）：项目结构 v2「交付物平铺根目录」——完成态任务卡
+#: 的交付物 = 落盘目录顶层、任务期间产出（mtime ≥ 会话创建时间）的文档/媒体文件。
+#: 正向扩展名清单保守取常见产出格式；代码类（.py/.ts/...）与配置不在此列。
+_DELIV_EXT = {
+    ".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt",
+    ".md", ".txt", ".csv", ".html", ".rtf", ".odt",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".zip", ".7z",
+}
+#: 根目录里这些 .md 是工程约定文件，不算交付物
+_DELIV_NAME_SKIP = {"agents.md", "readme.md", "changelog.md", "claude.md", "todo.md"}
+
+
+def _deliverables(workspace: str, created_at_ms: int, limit: int = 5) -> list:
+    """完成态任务的交付物快照：根目录顶层文件，按修改时间倒序。
+
+    - mtime ≥ 会话创建时间（毫秒转秒）：只认任务期间产出，项目里的存量
+      文档不冒充本次交付；
+    - 隐藏文件/目录跳过；单个 scandir 完成，列表页 O(n) 轻量读可接受
+      （仅对「TODO 全部完成」的会话计算）。
+    """
+    if not workspace or not os.path.isdir(workspace):
+        return []
+    created_s = created_at_ms / 1000 if created_at_ms else 0
+    out = []
+    try:
+        with os.scandir(workspace) as it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False) or e.name.startswith("."):
+                        continue
+                    if os.path.splitext(e.name)[1].lower() not in _DELIV_EXT:
+                        continue
+                    if e.name.lower() in _DELIV_NAME_SKIP:
+                        continue
+                    st = e.stat(follow_symlinks=False)
+                    if created_s and st.st_mtime < created_s:
+                        continue
+                    out.append({"name": e.name, "mtime": int(st.st_mtime)})
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    out.sort(key=lambda x: -x["mtime"])
+    return out[:limit]
+
+
 def _last_activity(messages: list) -> Optional[Dict[str, Any]]:
     """消息尾部倒扫：最后一个工具调用（含成败）或助手文本 → 最近活动摘要。
 
@@ -171,6 +217,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
             # —— 任务卡聚合字段（Goals 视图；全部可选，旧前端无感）——
             todo_progress = _todo_progress(app.todo_plugin.get(session_id))
             last_activity = _last_activity(messages)
+            # 交付物指针（P3）：仅 TODO 全部完成的会话计算（省一次根目录扫描）
+            deliverables = (
+                _deliverables(s_ws, int(s.get("created_at") or 0))
+                if todo_progress and todo_progress["done"] >= todo_progress["total"]
+                else []
+            )
             subagent_count = len(metadata.get("subagent_records") or [])
             # 成本为内存态（本进程运行过的会话才有）；跨重启留空，不显示
             stats = app.get_context_session_stats(session_id)
@@ -189,6 +241,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "cost_usd": cost_usd,
                 "running": running,
                 "pinned": bool(metadata.get("pinned", False)),
+                "deliverables": deliverables,
             })
         return result
 

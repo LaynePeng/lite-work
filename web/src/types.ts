@@ -80,6 +80,8 @@ export interface SessionInfo {
   subagent_count?: number;
   /** 任务 Tab 置顶（metadata.pinned；排序：运行中 → pinned → 更新时间倒序） */
   pinned?: boolean;
+  /** 交付物指针（P3）：TODO 全部完成时聚合的根目录顶层文件快照（mtime 倒序） */
+  deliverables?: { name: string; mtime: number }[];
   /** 本进程运行期的会话累计成本（跨重启无值）；美元 */
   cost_usd?: number | null;
   /** 是否有任务正在执行（TaskManager active_for_session） */

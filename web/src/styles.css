@@ -1012,6 +1012,40 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-3);
 }
 
+/* —— 交付物指针（P3；完成态卡「交付：」行） —— */
+.task-deliv-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+.task-deliv-file {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.task-deliv-file:hover {
+  background: var(--bg-3);
+}
+
+.task-deliv-more {
+  color: var(--text-3);
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
 .running-dot {
   width: 6px;
   height: 6px;

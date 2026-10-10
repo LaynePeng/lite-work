@@ -3096,6 +3096,7 @@ export default function App() {
         onDeriveSession={(id, title) => void deriveSession(id, title)}
         onRenameSession={(id, name) => void renameSession(id, name)}
         onTogglePinSession={(id, pinned) => void togglePinSession(id, pinned)}
+        onOpenDeliverable={(name) => void openFileTab(name)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onNewTask={requestNewTask}

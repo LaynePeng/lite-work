@@ -207,6 +207,61 @@ async def test_session_patch_rename_and_pin(live_client):
     app.session_store.delete(sid)
 
 
+async def test_sessions_list_deliverables(live_client, tmp_path):
+    """交付物指针（P3）：TODO 全部完成的会话聚合根目录顶层、任务期间产出的
+    文档文件；未完成会话不计算（省一次目录扫描）。"""
+    c, app, _ = live_client
+    ws = app.workspace
+
+    from litework.core.types import Message
+
+    # 会话创建时间之后落盘的交付物 + 之前的存量文档 + 非交付物
+    sid_done = f"session_deliv_done_{uuid.uuid4().hex[:8]}"
+    app.session_store.save(sid_done, [
+        Message(role="user", content="写报告"),
+    ], {"workspace": ws})
+    snap = app.session_store.load(sid_done)
+    created_ms = snap.created_at
+    old_file = tmp_path / "存量旧报告.docx"
+    old_file.write_bytes(b"old")
+    os.utime(old_file, (created_ms / 1000 - 3600,) * 2)
+    (tmp_path / "报告_v2.docx").write_bytes(b"new")
+    (tmp_path / "main.py").write_text("# code")
+    (tmp_path / "AGENTS.md").write_text("# rules")
+
+    app.todo_plugin._items[sid_done] = [
+        {"content": "写", "status": "completed"},
+    ]
+
+    # 未完成会话（同一 workspace）
+    sid_running = f"session_deliv_run_{uuid.uuid4().hex[:8]}"
+    app.session_store.save(sid_running, [
+        Message(role="user", content="另一任务"),
+    ], {"workspace": ws})
+    app.todo_plugin._items[sid_running] = [
+        {"content": "做", "status": "in_progress"},
+    ]
+
+    entries = {s["session_id"]: s for s in (await c.get("/api/sessions", params={"workspace": ws})).json()}
+
+    done = entries[sid_done]
+    names = [d["name"] for d in done["deliverables"]]
+    assert "报告_v2.docx" in names
+    assert "存量旧报告.docx" not in names  # 任务开始前已存在
+    assert "main.py" not in names            # 非文档扩展名
+    assert "AGENTS.md" not in names          # 工程约定文件
+    # mtime 倒序
+    mtimes = [d["mtime"] for d in done["deliverables"]]
+    assert mtimes == sorted(mtimes, reverse=True)
+
+    assert entries[sid_running]["deliverables"] == []
+
+    app.todo_plugin.delete_board(sid_done)
+    app.todo_plugin.delete_board(sid_running)
+    app.session_store.delete(sid_done)
+    app.session_store.delete(sid_running)
+
+
 async def test_rapid_session_creation_does_not_overwrite(live_client):
     c, _, _ = live_client
     responses = await asyncio.gather(
