@@ -4,6 +4,66 @@
 
 ## [未发布]
 
+### 新增（富内容气泡：render_card 工具）
+- **Agent 可生成富内容卡片**（对齐 Muse 富气泡场景）：新工具 `render_card(html,
+  title, height)`——多实体对比（商品/方案配图片价格）、图表、结构化展示在
+  聊天流内直接渲染，不再只是一坨 markdown 文字；
+- **渲染安全**：HTML 落盘 `.lite-work/cards/<session>/`（消息流只存卡片 id，
+  LLM 上下文不回填 HTML）；前端 sandbox iframe 渲染（无 allow-scripts，
+  LLM 生成的脚本不执行、无弹窗/顶层导航）；`<script>` 落盘前再剔一层；
+- **媒体引用**：卡片内 `<img>/<video>/<audio>` 支持远程 https URL 与
+  workspace 相对路径（前端 rewrite 到 `/api/files/raw`，复用越界检查与鉴权）；
+- **markdown 图片修复**：assistant 回复里的 `![](相对路径)` 此前断链——现在
+  同样 rewrite 到 `/api/files/raw` 渲染（本地截图/图表/技能产物直接可见）；
+- 后端新增 `GET /api/cards/{session}/{id}`（card_id 格式校验防路径注入）。
+
+### 新增（任务后反思 → 技能草稿，路线图 W10）
+- 任务完成后基于 W7 轨迹（未开启轨迹时退化用会话消息尾部）提炼可复用流程，
+  生成 SKILL.md 草稿落个人区 `~/lite-work/personal/skill-drafts/`，文件头带
+  会话/素材溯源与采纳指引——**用户审阅后手动采纳，绝不自动生效**；
+- 旁路纪律：反思失败静默（不阻塞任务收尾）；LLM 判定不值得沉淀（NO_SKILL）
+  则不落盘；默认关闭（`reflection_enabled=false`，反思花 LLM 费用）。
+
+### 新增（「规则」Tab，dots custom rules 思路）
+- 侧栏新 Tab：**全局规则**（`~/.lite-work/RULES.md`，注入所有任务的 system
+  prompt 基线）与**项目规则**（当前项目 AGENTS.md 可视化编辑）双 scope 切换；
+  全局先注入、项目指令就近覆盖；保存后新任务即生效；
+- 后端 `GET/PUT /api/rules`；system prompt 新增全局规则注入段（文件不存在时
+  prompt 与旧版逐字节一致，缓存前缀不受影响）。
+
+### 新增（Goals 全局视图 + 个人区，设计对齐 Muse/dots「任务属于我」）
+- **任务 Tab「本项目 | 全部」切换**：「全部」显示跨项目全部任务（含个人区），
+  按运行中 → 置顶 → 最近活动排序——目标不属于某个聊天窗口，属于我；
+- **项目徽标**：全局视图每张任务卡显示归属（📁 项目名 + 路径 hash 色点 /
+  👤 个人），点跨项目卡 = 热切换项目 + 进会话（复用 openSessionWithProject
+  管线，无确认弹窗）；
+- **新建任务向导「落盘位置」**：当前项目 / 👤 个人（`~/lite-work/personal`，
+  跨平台 expanduser，与隐藏数据目录 `~/.lite-work` 区分）/ 📂 任意目录
+  （新增 Electron `choose-directory` IPC 纯选目录不切工作区）；个人/自定义
+  目录时隔离工作树置灰（无 git 上下文）；
+- **批量目录授权**（跨项目任务核心）：新工具 `request_path_permissions`
+  ——Agent 规划第一步统一盘点所需目录一次性申请（避免边做边逐个触发审批），
+  批准后落 path_prefix 通配规则（`tool:"*"` 任意路径型工具命中，读写分离）；
+  漏盘点的路径仍走既有单路径审批兜底；向导「先规划」分支注入盘点指令。
+
+### 新增（任务 Tab P2 补齐：重命名/置顶 + 子 Agent 树 + 交付物指针）
+- **任务卡重命名/置顶**：`PATCH /api/sessions/{id}`（name 空串 = 清除自定义名；
+  metadata.pinned）；排序变为运行中 → 置顶 → 更新时间倒序；卡片行内重命名
+  输入 + 📌 置顶按钮（完成态卡同样可用）；
+- **子 Agent 派生树**：任务卡「🌳」按钮打开派生树抽屉（subagent_records
+  归档 + 运行态合并展示，按嵌套深度缩进）；subagent:completed 事件与归档
+  记录补 depth 字段，跨重启恢复保真；
+- **交付物指针（P3）**：TODO 全部完成的任务卡聚合根目录顶层、任务期间产出
+  （mtime ≥ 会话创建时间）的文档/媒体文件（正向扩展名清单 + 工程约定文件
+  排除），完成卡显示「📄 文件名」chips 点击经文件页签打开；仅对完成态计算
+  （省 O(n) 目录扫描）。
+
+### 修复
+- **后端可执行路径必须判定为文件**（electron/main.js resolvePython）：自动
+  更新落盘过程中 `litework-bin/lite-work-backend` 会先以目录形式存在，旧逻辑
+  `existsSync` 一看存在就 spawn → EACCES（v1.10.5 更新窗口内启动失败即此因）；
+  改为 `statSync().isFile()` 判定（打包产物已含此修复的 DMG 曾验证）。
+
 ### 新增（任务 Tab P2 续作：新建任务向导弹窗）
 - **「＋ 新建任务」改为目标向导**（不再开空白对话）：任务目标（必填）+ 执行方式
   （先规划再执行 / 直接干）+ **计划项（可选，每行一个 TODO 步骤；留空则 Agent
