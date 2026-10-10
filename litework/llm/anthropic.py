@@ -232,6 +232,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         self, response: httpx.Response, events: Optional[TypedEventBus]
     ) -> Tuple[str, List[ToolCall], Optional[Dict[str, int]]]:
         full_content = ""
+        thinking_text = ""
         tool_calls: List[ToolCall] = []
         current_tool: Optional[ToolCall] = None
         usage: Optional[Dict[str, int]] = None
@@ -305,9 +306,11 @@ class AnthropicAdapter(BaseLLMAdapter):
                                 await events.emit("llm:progress", meter.progress())
                             await events.emit("llm:stream", {"chunk": text})
                     elif delta.get("type") == "thinking_delta":
-                        # 扩展思考内容：转发给 UI（与 OpenAI 的 reasoning_content 对齐）
+                        # 扩展思考：只流式转发给 UI（与 OpenAI 兼容适配器的思考
+                        # 通道一致），不并入最终 content——CoT 混进 assistant
+                        # 消息会污染落盘历史与回传上下文。
                         thinking = delta.get("thinking", "")
-                        full_content += thinking
+                        thinking_text += thinking
                         due = meter.feed(thinking) if meter is not None else False
                         if events:
                             if due and meter is not None:
@@ -319,7 +322,12 @@ class AnthropicAdapter(BaseLLMAdapter):
                     current_tool = None
 
         calls = [tc for tc in tool_calls if tc.name]
-        # 兜底：补齐缺失的 tool_use id（正常情况下 Anthropic 一定带 id）
+        # 兜底 1：整段流只有思考、没有正文也没有工具调用时，用思考文本充当
+        # content（与 OpenAI 兼容适配器的思考通道兜底一致）；有工具调用时
+        # 保持空正文，不让 CoT 混进 assistant 消息。
+        if not full_content.strip() and thinking_text.strip() and not calls:
+            full_content = thinking_text
+        # 兜底 2：补齐缺失的 tool_use id（正常情况下 Anthropic 一定带 id）
         for tc in calls:
             if not tc.id:
                 tc.id = f"call_{uuid.uuid4().hex[:12]}"

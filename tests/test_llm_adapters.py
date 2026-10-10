@@ -64,7 +64,7 @@ async def test_openai_stream_text_and_usage():
 
 
 async def test_openai_reasoning_content_streamed():
-    """思考增量（reasoning_content）也并入正文并转发 llm:stream 事件。"""
+    """思考增量（reasoning_content）只流式转发 llm:stream，不并入最终 content。"""
     def handler(request):
         return httpx.Response(200, content=_sse([
             {"choices": [{"delta": {"reasoning_content": "思考中…"}}]},
@@ -76,8 +76,86 @@ async def test_openai_reasoning_content_streamed():
     bus.on("llm:stream", lambda p: chunks.append(p["chunk"]))
     adapter = _openai_adapter(handler)
     content, _, _ = await adapter.chat_stream([Message(role="user", content="hi")], [], bus)
-    assert "思考中…" in content and "答案" in content
+    assert content == "答案"
     assert chunks == ["思考中…", "答案"]
+
+
+async def test_openai_reasoning_with_tool_calls_keeps_content_clean():
+    """思考 + 工具调用：正文保持为空，CoT 不混入 assistant 消息（deepseek v4.x 实测场景）。"""
+    args_json = '{"query": "鞋"}'
+    def handler(request):
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"reasoning_content": "先想一想…"}}]},
+            {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "call_1", "function": {"name": "web_search",
+                                                            "arguments": args_json}}
+            ]}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _openai_adapter(handler)
+    content, calls, _ = await adapter.chat_stream([Message(role="user", content="hi")], [])
+    assert content == ""
+    assert len(calls) == 1
+    assert calls[0].name == "web_search"
+    assert json.loads(calls[0].arguments) == {"query": "鞋"}
+
+
+async def test_openai_reasoning_only_falls_back_to_content():
+    """个别网关把最终答案放进思考通道（正文全空且无工具调用）：用思考文本兜底。"""
+    def handler(request):
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"reasoning_content": "整段答案在思考通道"}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _openai_adapter(handler)
+    content, calls, _ = await adapter.chat_stream([Message(role="user", content="hi")], [])
+    assert content == "整段答案在思考通道"
+    assert calls == []
+
+
+async def test_openai_dsml_tool_calls_rescued():
+    """content 里混入 DeepSeek DSML 工具调用标记：解析成 ToolCall 并剔除原文。"""
+    dsml = (
+        '<｜DSML｜ calls>\n'
+        '<｜DSML｜ invoke name="webfetch_batch">\n'
+        '<｜DSML｜ parameter name="maxChars" string="false">9000</｜DSML｜ parameter>\n'
+        '<｜DSML｜ parameter name="urls" string="false">'
+        '["https://a.com", "https://b.com"]</｜DSML｜ parameter>\n'
+        '<｜DSML｜ parameter name="note" string="true">搜索词</｜DSML｜ parameter>\n'
+        '</｜DSML｜ invoke>\n'
+        '</｜DSML｜ calls>'
+    )
+
+    def handler(request):
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"content": "我改用代理来抓取。"}}]},
+            {"choices": [{"delta": {"content": dsml}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _openai_adapter(handler)
+    content, calls, _ = await adapter.chat_stream([Message(role="user", content="hi")], [])
+    assert content == "我改用代理来抓取。"
+    assert len(calls) == 1
+    assert calls[0].name == "webfetch_batch"
+    assert calls[0].id.startswith("call_dsml_")
+    assert json.loads(calls[0].arguments) == {
+        "maxChars": 9000,
+        "urls": ["https://a.com", "https://b.com"],
+        "note": "搜索词",
+    }
+
+
+async def test_openai_dsml_malformed_left_untouched():
+    """不完整的 DSML 标记（无闭合）：原样保留，不误删正文（fail-open）。"""
+    def handler(request):
+        return httpx.Response(200, content=_sse([
+            {"choices": [{"delta": {"content": '前缀 <｜DSML｜ invoke name="x"> 未闭合'}}]},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _openai_adapter(handler)
+    content, calls, _ = await adapter.chat_stream([Message(role="user", content="hi")], [])
+    assert content == '前缀 <｜DSML｜ invoke name="x"> 未闭合'
+    assert calls == []
 
 
 async def test_openai_tool_calls_incremental_assembly():
@@ -188,7 +266,8 @@ async def test_anthropic_stream_text_thinking_and_tool_use():
     adapter = _anthropic_adapter(handler)
     content, calls, usage = await adapter.chat_stream(
         [Message(role="user", content="hi")], [])
-    assert "先想…" in content and "结论" in content
+    assert content == "结论"
+    assert "先想…" not in content
     assert len(calls) == 1
     assert calls[0].id == "toolu_1"
     assert calls[0].name == "read_file"
@@ -196,6 +275,26 @@ async def test_anthropic_stream_text_thinking_and_tool_use():
     # usage：message_start 的 input/cache_read + message_delta 的 output 覆盖
     assert usage == {"prompt_tokens": 80, "completion_tokens": 12,
                      "prompt_cache_hit_tokens": 40}
+
+
+async def test_anthropic_thinking_only_falls_back_to_content():
+    """整段流只有思考、没有正文也没有工具调用：思考文本兜底 content。"""
+    def handler(request):
+        return httpx.Response(200, content=_anthropic_sse([
+            {"type": "message_start", "message": {"usage": {
+                "input_tokens": 10, "output_tokens": 0, "cache_read_input_tokens": 0,
+            }}},
+            {"type": "content_block_start", "content_block": {"type": "text"}},
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta",
+                                                      "thinking": "只有思考"}},
+            {"type": "content_block_stop"},
+        ]), headers={"content-type": "text/event-stream"})
+
+    adapter = _anthropic_adapter(handler)
+    content, calls, _ = await adapter.chat_stream(
+        [Message(role="user", content="hi")], [])
+    assert content == "只有思考"
+    assert calls == []
 
 
 async def test_anthropic_error_classification():

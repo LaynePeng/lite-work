@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,6 +32,65 @@ from .base import (
 from .stream_meter import current_stream_meter
 
 logger = logging.getLogger("litework.llm")
+
+
+# ---- DeepSeek DSML 工具调用救援 ---------------------------------------------
+# deepseek v4.x 经 OpenAI 兼容中转网关（如 opencode zen go）实测：偶发把工具
+# 调用以原生 DSML 标记写进 content 通道而非结构化 tool_calls——结果原文泄漏
+# 到聊天界面、工具也不执行。全角竖线 ｜（U+FF5C）是其特殊 token 的组成部分。
+# 按观测到的格式宽容解析；格式不认识则原样返回（fail-open，不改变既有行为）。
+_DSML_BAR = "\uff5c"
+_DSML_CALLS_BLOCK_RE = re.compile(
+    rf"<{_DSML_BAR}DSML{_DSML_BAR}\s*calls\s*>"
+    rf".*?</{_DSML_BAR}DSML{_DSML_BAR}\s*calls\s*>",
+    re.DOTALL,
+)
+_DSML_INVOKE_RE = re.compile(
+    rf'<{_DSML_BAR}DSML{_DSML_BAR}\s*invoke\s+name\s*=\s*"([^"]+)"\s*>'
+    rf"(.*?)</{_DSML_BAR}DSML{_DSML_BAR}\s*invoke\s*>",
+    re.DOTALL,
+)
+_DSML_PARAM_RE = re.compile(
+    rf'<{_DSML_BAR}DSML{_DSML_BAR}\s*parameter\s+name\s*=\s*"([^"]+)"'
+    rf'(?:\s+string\s*=\s*"(true|false)")?\s*>'
+    rf"(.*?)</{_DSML_BAR}DSML{_DSML_BAR}\s*parameter\s*>",
+    re.DOTALL,
+)
+
+
+def _parse_dsml_value(raw: str, is_string: bool) -> Any:
+    """string="true" 为字面字符串；否则按 JSON 字面量解析，失败回退原样。"""
+    raw = raw.strip()
+    if is_string or not raw:
+        return raw
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+
+
+def _extract_dsml_tool_calls(content: str) -> Tuple[str, List[ToolCall]]:
+    """从 content 提取 DSML 工具调用标记，返回（剔除标记后的正文, 调用列表）。"""
+    invokes = list(_DSML_INVOKE_RE.finditer(content))
+    if not invokes:
+        return content, []
+    calls: List[ToolCall] = []
+    for m in invokes:
+        args: Dict[str, Any] = {}
+        for pm in _DSML_PARAM_RE.finditer(m.group(2)):
+            args[pm.group(1)] = _parse_dsml_value(
+                pm.group(3), (pm.group(2) or "false") == "true"
+            )
+        calls.append(
+            ToolCall(
+                id=f"call_dsml_{uuid.uuid4().hex[:12]}",
+                name=m.group(1),
+                arguments=json.dumps(args, ensure_ascii=False),
+            )
+        )
+    cleaned = _DSML_CALLS_BLOCK_RE.sub("", content)
+    cleaned = _DSML_INVOKE_RE.sub("", cleaned)
+    return cleaned.strip(), calls
 
 
 class OpenAICompatAdapter(BaseLLMAdapter):
@@ -199,10 +259,12 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         self, response: httpx.Response, events: Optional[TypedEventBus]
     ) -> Tuple[str, List[ToolCall], Optional[Dict[str, int]]]:
         full_content = ""
+        reasoning_text = ""
         tool_calls_map: Dict[int, ToolCall] = {}
         usage: Optional[Dict[str, int]] = None
         buffer = ""
         byte_buffer = b""
+        done = False
 
         # token 速度计量器（由 AgentLoop 通过 contextvar 注入；没有就纯流式转发）
         meter = current_stream_meter()
@@ -229,7 +291,8 @@ class OpenAICompatAdapter(BaseLLMAdapter):
                 if not line or line.startswith(":"):
                     continue
                 if line == "data: [DONE]":
-                    return full_content, self._finalize_tool_calls(tool_calls_map), usage
+                    done = True
+                    break
                 if not line.startswith("data: "):
                     continue
 
@@ -247,16 +310,29 @@ class OpenAICompatAdapter(BaseLLMAdapter):
                     continue
 
                 # 不同 OpenAI 兼容供应商对思考增量使用不同字段名。
-                # 工具调用前的内容也要转发，否则 UI 只会显示零散片段。
-                stream_content = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
-                if stream_content:
-                    full_content += stream_content
+                # 正文与思考分通道累计：思考（reasoning_content/reasoning/thinking）
+                # 只做流式转发（UI 实时可见，message:added 后被最终正文替换），
+                # 不并入 full_content——推理模型的 CoT 混进 assistant 消息会
+                # 同时污染落盘历史与回传上下文（deepseek v4.x 经中转实测）。
+                content_delta = delta.get("content")
+                reasoning_delta = (
+                    delta.get("reasoning_content")
+                    or delta.get("reasoning")
+                    or delta.get("thinking")
+                )
+                if content_delta:
+                    full_content += content_delta
+                if reasoning_delta:
+                    reasoning_text += reasoning_delta
+                for stream_piece in (content_delta, reasoning_delta):
+                    if not stream_piece:
+                        continue
                     # 计量（速度）：只对增量做小正则累加；到节流窗口才推一次实时进度
-                    due = meter.feed(stream_content) if meter is not None else False
+                    due = meter.feed(stream_piece) if meter is not None else False
                     if events:
                         if due and meter is not None:
                             await events.emit("llm:progress", meter.progress())
-                        await events.emit("llm:stream", {"chunk": stream_content})
+                        await events.emit("llm:stream", {"chunk": stream_piece})
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
@@ -272,10 +348,27 @@ class OpenAICompatAdapter(BaseLLMAdapter):
                     if fn.get("arguments"):
                         target.arguments += fn["arguments"]
 
-        # 响应没有 [DONE] 时也不能静默丢掉最后一个不完整的 UTF-8 字符。
-        if byte_buffer:
+            if done:
+                break
+
+        # 响应没有 [DONE] 时也不能静默丢掉最后一个不完整的 UTF-8 字符
+        # （收到 [DONE] 提前结束时与旧行为一致：不追加残余字节）。
+        if byte_buffer and not done:
             full_content += byte_buffer.decode("utf-8", errors="replace")
-        return full_content, self._finalize_tool_calls(tool_calls_map), usage
+
+        calls = self._finalize_tool_calls(tool_calls_map)
+        # 兜底：个别网关会把最终答案放进思考通道（正文全空且没有工具调用）
+        # ——此时用思考文本充当 content（维持旧行为）。有工具调用时保持空
+        # 正文，不让 CoT 混进 assistant 消息污染历史与回传上下文。
+        if not full_content.strip() and reasoning_text.strip() and not calls:
+            full_content = reasoning_text
+        # DSML 工具调用救援：模型把工具调用以原生 DSML 标记写进 content 通道
+        # 时（deepseek v4.x 经 OpenAI 兼容中转实测），解析成 ToolCall 并剔除
+        # 原文——工具得以执行，而不是标记泄漏到界面后任务中断。
+        if _DSML_INVOKE_RE.search(full_content):
+            full_content, dsml_calls = _extract_dsml_tool_calls(full_content)
+            calls.extend(dsml_calls)
+        return full_content, calls, usage
 
     @staticmethod
     def _finalize_tool_calls(tool_calls_map: Dict[int, ToolCall]) -> List[ToolCall]:
