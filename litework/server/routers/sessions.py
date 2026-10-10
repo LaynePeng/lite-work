@@ -95,6 +95,39 @@ def _todo_progress(todos: list) -> Optional[Dict[str, Any]]:
     }
 
 
+#: 个人任务落盘区（Goals 全局视图）：跨平台 ~/lite-work/personal——可见目录
+#: （与隐藏的数据目录 ~/.lite-work 区分：日志/会话在数据目录，产物在可见目录）。
+#: macOS: /Users/<name>/lite-work/personal；Windows: %USERPROFILE%\lite-work\personal。
+#: 「个人」是默认落盘位置而非伪项目：发邮件/整理照片这类不隶属任何项目的任务
+#: 的产物落在这里，任务卡徽标显示 👤 个人。
+PERSONAL_WORKSPACE = os.path.join(
+    os.path.expanduser("~"), "lite-work", "personal")
+
+
+def ensure_personal_workspace() -> str:
+    """确保个人落盘区存在（惰性创建，幂等）。返回其绝对路径。"""
+    os.makedirs(PERSONAL_WORKSPACE, exist_ok=True)
+    return PERSONAL_WORKSPACE
+
+
+def _project_badge(workspace: str) -> Dict[str, Any]:
+    """任务卡项目徽标数据（全局视图）：名称 + 类型；个人区固定 👤 个人。
+
+    kind 复用 project_scaffold 的目录内容启发式（code/project），仅在
+    全局视图（无 workspace 过滤）时逐会话调用；文件存在性检查轻量可接受。
+    """
+    if os.path.normcase(os.path.abspath(workspace)) == os.path.normcase(os.path.abspath(PERSONAL_WORKSPACE)):
+        return {"name": "个人", "kind": "personal"}
+    name = os.path.basename(workspace.rstrip("/\\")) or workspace
+    kind = "project"
+    try:
+        from ...tools.project_scaffold import classify_project_kind as _classify
+        kind = _classify(workspace)
+    except Exception:
+        pass
+    return {"name": name, "kind": kind}
+
+
 #: 交付物识别（P3 交付物指针）：项目结构 v2「交付物平铺根目录」——完成态任务卡
 #: 的交付物 = 落盘目录顶层、任务期间产出（mtime ≥ 会话创建时间）的文档/媒体文件。
 #: 正向扩展名清单保守取常见产出格式；代码类（.py/.ts/...）与配置不在此列。
@@ -118,7 +151,7 @@ def _deliverables(workspace: str, created_at_ms: int, limit: int = 5) -> list:
     if not workspace or not os.path.isdir(workspace):
         return []
     created_s = created_at_ms / 1000 if created_at_ms else 0
-    out = []
+    out: list = []
     try:
         with os.scandir(workspace) as it:
             for e in it:
@@ -242,8 +275,16 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "running": running,
                 "pinned": bool(metadata.get("pinned", False)),
                 "deliverables": deliverables,
+                # 项目徽标（全局视图用；本项目视图忽略）
+                "project": _project_badge(s_ws),
             })
         return result
+
+    @router.get("/api/personal-workspace")
+    async def get_personal_workspace(request: Request):
+        """个人任务落盘区（Goals 全局视图）：确保存在并返回路径（新建任务向导用）。"""
+        ctx.check_auth(request)
+        return {"path": ensure_personal_workspace()}
 
     @router.post("/api/sessions")
     async def create_session(payload: SessionCreateRequest, request: Request):

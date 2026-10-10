@@ -262,6 +262,41 @@ async def test_sessions_list_deliverables(live_client, tmp_path):
     app.session_store.delete(sid_running)
 
 
+async def test_global_sessions_view_and_personal_workspace(live_client, tmp_path):
+    """Goals 全局视图（P3）：GET /api/sessions 不带 workspace → 跨项目全部会话，
+    每条带 project 徽标（名称+kind）。个人区常量/惰性创建/徽标判定在模块函数
+    层单独断言（避免在真实 HOME 上创建目录）。"""
+    c, app, _ = live_client
+    ws_a = app.workspace
+    ws_b = str(tmp_path / "proj-b")
+    os.makedirs(ws_b, exist_ok=True)
+
+    from litework.core.types import Message
+    from litework.server.routers.sessions import PERSONAL_WORKSPACE, _project_badge
+
+    sid_a = f"session_ga_{uuid.uuid4().hex[:8]}"
+    app.session_store.save(sid_a, [Message(role="user", content="A 任务")], {"workspace": ws_a})
+    sid_b = f"session_gb_{uuid.uuid4().hex[:8]}"
+    app.session_store.save(sid_b, [Message(role="user", content="B 任务")], {"workspace": ws_b})
+
+    # 全局视图：两个项目的会话都在，project 徽标可区分
+    all_entries = (await c.get("/api/sessions")).json()
+    ids = {s["session_id"] for s in all_entries}
+    assert sid_a in ids and sid_b in ids
+    badge_a = next(s["project"] for s in all_entries if s["session_id"] == sid_a)
+    badge_b = next(s["project"] for s in all_entries if s["session_id"] == sid_b)
+    assert badge_a["name"] != badge_b["name"]
+    assert badge_a["kind"] in ("code", "project", "personal")
+
+    # 模块层断言：个人区路径 = ~/lite-work/personal；徽标判定
+    assert PERSONAL_WORKSPACE == os.path.join(os.path.expanduser("~"), "lite-work", "personal")
+    assert _project_badge(PERSONAL_WORKSPACE) == {"name": "个人", "kind": "personal"}
+    assert _project_badge(ws_b)["name"] == "proj-b"
+
+    app.session_store.delete(sid_a)
+    app.session_store.delete(sid_b)
+
+
 async def test_rapid_session_creation_does_not_overwrite(live_client):
     c, _, _ = live_client
     responses = await asyncio.gather(
