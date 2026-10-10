@@ -31,6 +31,12 @@ class ProjectCreateRequest(BaseModel):
     kind: Optional[str] = None
 
 
+class RulesPutRequest(BaseModel):
+    """规则保存（Rules Tab）：scope=global（~/.lite-work/RULES.md）/ project（AGENTS.md）。"""
+    scope: str = "global"
+    content: str = ""
+
+
 class ProjectKindRequest(BaseModel):
     """手动标记项目类型（写入最近项目并锁定，不再被启发式覆盖）。"""
     path: str
@@ -382,5 +388,43 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "diff": diff_text,
         }
 
+    # ------------------------------------------------------------ 规则（Rules Tab）
+
+    @router.get("/api/rules")
+    async def get_rules(request: Request, scope: str = "global"):
+        """读取规则：global=全局规则（~/.lite-work/RULES.md）；
+        project=当前项目的 AGENTS.md（无 → 空串）。"""
+        ctx.check_auth(request)
+        import os as _os
+        if scope == "project":
+            workspace = ctx.require_workspace()
+            path = _os.path.join(workspace, "AGENTS.md")
+        else:
+            path = _os.path.join(_os.path.expanduser("~"), ".lite-work", "RULES.md")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            content = ""
+        return {"scope": scope, "path": path, "content": content}
+
+    @router.put("/api/rules")
+    async def put_rules(payload: RulesPutRequest, request: Request):
+        """保存规则（全局 RULES.md / 项目 AGENTS.md）。保存后新任务即注入生效。"""
+        ctx.check_auth(request)
+        import os as _os
+        scope = (payload.scope or "global").strip()
+        if scope == "project":
+            workspace = ctx.require_workspace()
+            path = _os.path.join(workspace, "AGENTS.md")
+        elif scope == "global":
+            path = _os.path.join(_os.path.expanduser("~"), ".lite-work", "RULES.md")
+            _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        else:
+            raise HTTPException(status_code=400, detail="scope 仅支持 global / project")
+        content = payload.content or ""
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "scope": scope, "path": path, "bytes": len(content.encode("utf-8"))}
 
     return router

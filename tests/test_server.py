@@ -725,3 +725,53 @@ async def test_config_ui_prefs_roundtrip(live_client):
     assert (await c.get("/api/config")).json()["ui_prefs"] == {"sidebarTab": "terminal"}
 
 
+
+
+async def test_rules_endpoints_global_and_project(live_client, tmp_path, monkeypatch):
+    """「规则」Tab：GET/PUT /api/rules——global 写 ~/.lite-work/RULES.md，
+    project 写当前项目 AGENTS.md；system prompt 注入全局规则（就近覆盖）。"""
+    import tempfile
+    import importlib
+
+    c, app, _ = live_client
+    ws = app.workspace
+
+    # 隔离 HOME：全局规则不落真实用户目录
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    from litework.core import system_prompt as sp_mod
+    importlib.reload(sp_mod)
+
+    # 保存全局规则
+    r = await c.put("/api/rules", json={"scope": "global", "content": "# 全局\n- 回复用中文"})
+    assert r.status_code == 200
+    global_path = fake_home / ".lite-work" / "RULES.md"
+    assert global_path.is_file()
+
+    # 读回
+    r = await c.get("/api/rules", params={"scope": "global"})
+    assert "回复用中文" in r.json()["content"]
+
+    # 项目规则
+    r = await c.put("/api/rules", json={"scope": "project", "content": "# 项目规则\n- 测试先跑 pytest"})
+    assert r.status_code == 200
+    assert (Path(ws) / "AGENTS.md").is_file()
+    r = await c.get("/api/rules", params={"scope": "project"})
+    assert "pytest" in r.json()["content"]
+
+    # 非法 scope
+    r = await c.put("/api/rules", json={"scope": "bogus", "content": "x"})
+    assert r.status_code == 400
+
+    # system prompt 注入：全局规则段 + 项目指令段都出现（全局在前=基线）
+    prompt = sp_mod.SystemPromptBuilder.build(str(ws), [])
+    assert "全局规则" in prompt and "回复用中文" in prompt
+    assert "项目规则" in prompt and "pytest" in prompt
+    gi = prompt.index("全局规则")
+    pi = prompt.index("项目指令")
+    assert gi < pi
+
+    # 还原模块级 HOME 影响（reload 过）
+    monkeypatch.undo()
+    importlib.reload(sp_mod)

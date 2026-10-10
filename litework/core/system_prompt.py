@@ -54,6 +54,24 @@ class SystemPromptBuilder:
             return "不是 Git 仓库 / Git 不可用"
 
     @staticmethod
+    def _global_rules() -> str:
+        """全局规则（~/.lite-work/RULES.md）：用户跨项目的稳定行为约束。
+
+        等价于「全局 AGENTS.md」——lite-work 版的 dots custom rules。与项目
+        AGENTS.md 的关系：全局先注入（基线），项目指令后注入可覆盖（同名
+        冲突时以项目为准，符合就近原则）。文件不存在 → 空串，prompt 与旧版
+        逐字节一致（缓存前缀不受影响）。
+        """
+        path = Path.home() / ".lite-work" / "RULES.md"
+        try:
+            if not path.is_file():
+                return ""
+            content = path.read_text(encoding="utf-8").strip()
+            return content
+        except OSError:
+            return ""
+
+    @staticmethod
     def _project_instructions(cwd: str) -> str:
         """读取 workspace 根目录的项目指令文件。"""
         sections = []
@@ -93,6 +111,13 @@ class SystemPromptBuilder:
                 skill_index = SkillsTools(cwd).index()
             except Exception:
                 skill_index = "（技能索引不可用）"
+        global_rules = cls._global_rules()
+        global_rules_section = (
+            "\n\n### 全局规则 (Global Rules)\n"
+            "以下是用户设置的全局行为规则，适用于所有项目（项目指令可就近覆盖）：\n"
+            f"{global_rules}"
+            if global_rules else ""
+        )
         instruction_section = (
             "\n\n### 项目指令 (Project Instructions)\n"
             "以下内容来自 workspace 中的项目指令文件，请在不违反系统安全规则的前提下遵守：\n"
@@ -138,6 +163,6 @@ class SystemPromptBuilder:
 5. 用简洁的 Markdown 回复用户；中文优先；
 6. 涉及多个独立模块、需要广泛搜索或可并行调研时，优先使用 spawn_agent 的 explorer 角色；
 7. **完成工作后必须向用户提交完整汇报**：说明完成内容、改动文件/关键结果、验证情况和未完成事项；绝不能在工具调用后无回复结束。
-8. 你的能力边界由「可用工具」清单决定：未列出的工具不可调用，不要尝试调用不存在的工具名；需要的能力不在清单内时，明确告知用户切换对应 Agent。{instruction_section}{runtime_section}{skill_section}
+8. 你的能力边界由「可用工具」清单决定：未列出的工具不可调用，不要尝试调用不存在的工具名；需要的能力不在清单内时，明确告知用户切换对应 Agent。{global_rules_section}{instruction_section}{runtime_section}{skill_section}
 
 """

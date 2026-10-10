@@ -65,7 +65,7 @@ const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
 // 「打开项目」整页重载后默认落「文件」页签：同属**跨重载的一次性意图**（非配置），
 // 由启动 effect 消费并立即清除。配置类内容一律走 localStorage 之外（见 UiPrefs）。
 const PENDING_SIDEBAR_TAB_KEY = "litework.pendingSidebarTab";
-const SIDEBAR_TABS: SidebarTab[] = ["sessions", "tasks", "files", "terminal"];
+const SIDEBAR_TABS: SidebarTab[] = ["sessions", "tasks", "rules", "files", "terminal"];
 const DEFAULT_SIDEBAR_TAB: SidebarTab = "sessions";
 const isSidebarTab = (v: unknown): v is SidebarTab =>
   typeof v === "string" && (SIDEBAR_TABS as string[]).includes(v);

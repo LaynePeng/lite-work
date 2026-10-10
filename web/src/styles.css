@@ -1012,6 +1012,114 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-3);
 }
 
+/* —— 「规则」Tab（设计文档 §6：dots custom rules 思路） —— */
+.rules-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 8px;
+  gap: 8px;
+}
+
+.rules-scope-toggle {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.rules-scope-toggle button {
+  flex: 1;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.rules-scope-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.rules-scope-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rules-path {
+  font-size: 10px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.rules-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+.rules-empty {
+  color: var(--text-3);
+  font-size: 11.5px;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.rules-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.rules-hint {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.rules-save-btn {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  font-size: 11.5px;
+  padding: 4px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.rules-save-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rules-session-note {
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+
+.rules-session-note code {
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
 /* —— Goals 全局视图（P3）：视图切换 + 项目徽标 —— */
 .tasks-view-toggle {
   display: flex;

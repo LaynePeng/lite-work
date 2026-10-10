@@ -11,7 +11,7 @@ import type { RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../t
 import { baseName } from "../lib/path";
 import { isTextLikePath, resolveOpenTarget } from "../lib/fileOpen";
 
-export type SidebarTab = "sessions" | "tasks" | "files" | "terminal";
+export type SidebarTab = "sessions" | "tasks" | "files" | "rules" | "terminal";
 
 export interface OpenFileOptions {
   /** 强制用内置查看器（右键「用内置查看」），绕过 markdown 的系统优先规则 */
@@ -879,6 +879,82 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
   );
 }
 
+/** 「规则」Tab（设计文档 §6，dots custom rules 思路）：
+ *  用户可视化编辑 Agent 行为规则的入口（左边 = 操作面）。
+ *  - 全局规则：~/.lite-work/RULES.md，注入所有任务的 system prompt（基线）；
+ *  - 项目规则：当前项目 AGENTS.md（就近覆盖全局）；
+ *  - 会话规则：/goal 等会话内机制（此处只指引，不重复编辑面）。 */
+function RulesPanel({ workspace, hasProject }: { workspace: string; hasProject: boolean }) {
+  const [scope, setScope] = useState<"global" | "project">("global");
+  const [content, setContent] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [savedAt, setSavedAt] = useState("");
+
+  const load = useCallback(async (s: "global" | "project") => {
+    setLoading(true);
+    try {
+      const r = await api.rules(s);
+      setContent(r.content);
+      setDirty(false);
+    } catch {
+      setContent("");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(scope); }, [scope, load]);
+
+  const save = useCallback(async () => {
+    try {
+      await api.saveRules(scope, content);
+      setDirty(false);
+      setSavedAt(new Date().toLocaleTimeString());
+    } catch (e) {
+      window.alert(`保存失败: ${(e as Error).message}`);
+    }
+  }, [scope, content]);
+
+  return (
+    <div className="rules-panel">
+      <div className="rules-scope-toggle">
+        <button className={scope === "global" ? "active" : ""} onClick={() => setScope("global")}
+          title="适用于所有项目（~/.lite-work/RULES.md）">🌐 全局</button>
+        <button
+          className={scope === "project" ? "active" : ""}
+          disabled={!hasProject}
+          title={hasProject ? `当前项目的 AGENTS.md（就近覆盖全局）` : "未打开项目"}
+          onClick={() => setScope("project")}
+        >📁 项目</button>
+      </div>
+      {scope === "project" && (
+        <div className="rules-path" title={workspace}>{workspace}/AGENTS.md</div>
+      )}
+      {loading ? (
+        <div className="rules-empty">加载中…</div>
+      ) : (
+        <textarea
+          className="rules-editor"
+          value={content}
+          placeholder={scope === "global"
+            ? "# 全局规则（Markdown）\n\n所有项目的任务都会遵守这里的内容，例如：\n- 回复一律用中文\n- 生成文档前先确认目录结构\n- …"
+            : "# 项目规则（AGENTS.md）\n\n只对当前项目生效，就近覆盖全局规则…"}
+          onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+          spellCheck={false}
+        />
+      )}
+      <div className="rules-footer">
+        <span className="rules-hint">{dirty ? "未保存" : savedAt ? `已保存 ${savedAt}` : "保存后新任务生效"}</span>
+        <button className="rules-save-btn" disabled={!dirty} onClick={() => void save()}>保存</button>
+      </div>
+      <div className="rules-session-note" title="会话级规则机制">
+        💡 会话级规则：会话内用 <code>/goal</code> 设目标、协作选择器换模式——按会话覆盖，无需在此编辑。
+      </div>
+    </div>
+  );
+}
+
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
 function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession, onOpenDeliverable, globalMode, onSwitchView }: {
   sessions: SessionInfo[];
@@ -1108,13 +1184,16 @@ export default function Sidebar({
         <button className={tab === "files" ? "active" : ""} onClick={() => onTabChange("files")}>
           文件
         </button>
+        <button className={tab === "rules" ? "active" : ""} onClick={() => onTabChange("rules")}>
+          规则
+        </button>
         <button className={tab === "terminal" ? "active" : ""} onClick={() => onTabChange("terminal")}>
           终端
         </button>
       </div>
 
       {/* 终端 Tab 时 body 隐藏，让 .sidebar-terminal 独占 tabs 与 footer 之间的空间 */}
-      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" || tab === "tasks" ? "sidebar-body--panel" : ""}`}>
+      <div className={`sidebar-body ${tab === "terminal" ? "hidden" : ""} ${tab === "files" || tab === "tasks" || tab === "rules" ? "sidebar-body--panel" : ""}`}>
         {tab === "sessions" && (
           projectsView === "list" ? (
             <div className="projects-list">
@@ -1330,6 +1409,8 @@ export default function Sidebar({
         )}
 
         {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} onOpenWorktreeSession={onOpenWorktreeSession} />}
+
+        {tab === "rules" && <RulesPanel workspace={workspace} hasProject={!!workspace && workspace !== "未打开项目"} />}
 
       </div>
 

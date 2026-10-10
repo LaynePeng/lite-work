@@ -154,6 +154,14 @@ export const api = {
       }),
   /** 个人任务落盘区（Goals 全局视图）：确保存在并返回路径（~/lite-work/personal）。 */
   personalWorkspace: () => req<{ path: string }>("/api/personal-workspace"),
+  /** 「规则」Tab：读取规则（global=~/.lite-work/RULES.md / project=AGENTS.md）。 */
+  rules: (scope: "global" | "project") =>
+    req<{ scope: string; path: string; content: string }>(`/api/rules?scope=${scope}`),
+  /** 「规则」Tab：保存规则（保存后新任务的 system prompt 即注入）。 */
+  saveRules: (scope: "global" | "project", content: string) =>
+    req<{ ok: boolean; scope: string; path: string; bytes: number }>("/api/rules", {
+      method: "PUT", body: JSON.stringify({ scope, content }),
+    }),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
   /** 任务卡重命名/置顶：字段缺省 = 不改；name 传空串 = 清除自定义名。 */
   patchSession: (id: string, patch: { name?: string; pinned?: boolean }) =>
