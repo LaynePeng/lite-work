@@ -2,7 +2,7 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [1.10.7] — Goals 全局视图 + 个人区与批量授权 + 「规则」Tab + 反思草稿（W10）+ 富内容气泡
 
 ### 新增（富内容气泡：render_card 工具）
 - **Agent 可生成富内容卡片**（对齐 Muse 富气泡场景）：新工具 `render_card(html,
