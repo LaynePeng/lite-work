@@ -638,15 +638,21 @@ function TrajectoryDrawer({ sessionId, onClose }: { sessionId: string; onClose: 
 /** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
  *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
  *  步骤最多 3 行；完成态自动收敛。 */
-function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
+function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRename, onTogglePin }: {
   task: SessionInfo;
   active: boolean;
   onSelect: () => void;
   onContinue?: () => void;
   onDerive?: () => void;
   onDelete: () => void;
+  /** 重命名（传空串 = 清除自定义名） */
+  onRename?: (name: string) => void;
+  /** 置顶开关（运行中之后的第二优先级） */
+  onTogglePin?: (pinned: boolean) => void;
 }) {
   const [trajOpen, setTrajOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
   const p = task.todo_progress;
   const done = p ? p.done >= p.total : false;
   const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
@@ -660,7 +666,27 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
         ) : (
           <span className="task-icon">{done ? "✅" : p ? "📊" : "💬"}</span>
         )}
-        <span className="task-title" title={task.title}>{task.title}</span>
+        {renaming ? (
+          <input
+            className="task-rename-input"
+            autoFocus
+            value={draft}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") { setRenaming(false); onRename?.(draft.trim()); }
+              if (e.key === "Escape") setRenaming(false);
+            }}
+            onBlur={() => setRenaming(false)}
+            placeholder={task.title}
+          />
+        ) : (
+          <span className="task-title" title={task.title}>
+            {task.pinned && <span className="task-pin-mark" title="已置顶">📌</span>}
+            {task.title}
+          </span>
+        )}
         {p && <span className={`task-pct ${done ? "done" : ""}`}>{pct}% {p.done}/{p.total}</span>}
       </div>
 
@@ -694,6 +720,10 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
           {!!task.subagent_count && <span title="历史子 Agent 数">🤖 {task.subagent_count}</span>}
           <span title={`${task.message_count} 条消息`}>💬 {task.message_count}</span>
           <div className="task-actions">
+            <button title={task.pinned ? "取消置顶" : "置顶（排在运行中任务之后）"}
+              onClick={(e) => { e.stopPropagation(); onTogglePin?.(!task.pinned); }}>{task.pinned ? "📌" : "📍"}</button>
+            {onRename && <button title="重命名"
+              onClick={(e) => { e.stopPropagation(); setDraft(""); setRenaming(true); }}>✎</button>}
             <button title="执行轨迹（W7）" onClick={(e) => { e.stopPropagation(); setTrajOpen(true); }}>📈</button>
             {!task.running && onContinue && (
               <button className="btn-continue-card" title="续任务：TODO 有未完成项，继续推进（等同聊天区「继续执行未完成的任务」）"
@@ -712,6 +742,12 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
             <button className="btn-derive-card" title="派生：克隆目标与 TODO 结构到新会话（不复制对话历史）"
               onClick={(e) => { e.stopPropagation(); onDerive(); }}>⤴ 派生</button>
           )}
+          <span className="task-done-actions">
+            <button title={task.pinned ? "取消置顶" : "置顶"}
+              onClick={(e) => { e.stopPropagation(); onTogglePin?.(!task.pinned); }}>{task.pinned ? "📌" : "📍"}</button>
+            {onRename && <button title="重命名"
+              onClick={(e) => { e.stopPropagation(); setDraft(""); setRenaming(true); }}>✎</button>}
+          </span>
           <span style={{ marginLeft: "auto" }}>{relTime(task.updated_at)}</span>
         </div>
       )}
@@ -722,7 +758,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete }: {
 }
 
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
-function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask }: {
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   workspace: string;
@@ -736,11 +772,17 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
   onNewSession: () => void;
   /** 任务 Tab 专用：打开新建任务向导（优先于 onNewSession） */
   onNewTask?: () => void;
+  /** 重命名会话（空串 = 清除自定义名） */
+  onRenameSession?: (id: string, name: string) => void;
+  /** 置顶开关（metadata.pinned） */
+  onTogglePinSession?: (id: string, pinned: boolean) => void;
 }) {
   const sorted = [...sessions].sort((a, b) => {
-    // 运行中的任务钉在最前（Goals 视图：正在替我干活的优先可见）
+    // 运行中 → 置顶（Goals 视图：正在替我干活的优先可见；用户钉住的其次）
     const run = (Number(b.running ?? false) - Number(a.running ?? false));
     if (run !== 0) return run;
+    const pin = (Number(b.pinned ?? false) - Number(a.pinned ?? false));
+    if (pin !== 0) return pin;
     return (b.updated_at ?? 0) - (a.updated_at ?? 0);
   });
 
@@ -768,6 +810,8 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
           onContinue={onContinueSession ? () => onContinueSession(s.session_id, s.title) : undefined}
           onDerive={onDeriveSession ? () => onDeriveSession(s.session_id, s.title) : undefined}
           onDelete={() => onDeleteSession(s.session_id)}
+          onRename={onRenameSession ? (name) => onRenameSession(s.session_id, name) : undefined}
+          onTogglePin={onTogglePinSession ? (pinned) => onTogglePinSession(s.session_id, pinned) : undefined}
         />
       ))}
     </div>
@@ -792,6 +836,8 @@ export default function Sidebar({
   onSelectSession,
   onContinueSession,
   onDeriveSession,
+  onRenameSession,
+  onTogglePinSession,
   onOpenSessionWithProject,
   onNewSession,
   onNewTask,
@@ -830,6 +876,10 @@ export default function Sidebar({
   onContinueSession?: (id: string, title?: string) => void;
   /** 任务卡「派生」：克隆会话骨架到新会话（App 层调 derive API） */
   onDeriveSession?: (id: string, title?: string) => void;
+  /** 任务卡重命名（PATCH /api/sessions/{id} name；空串 = 清除自定义名） */
+  onRenameSession?: (id: string, name: string) => void;
+  /** 任务卡置顶开关（PATCH /api/sessions/{id} pinned；与项目置顶 onTogglePin 区分） */
+  onTogglePinSession?: (id: string, pinned: boolean) => void;
   onOpenSessionWithProject: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
@@ -1124,6 +1174,8 @@ export default function Sidebar({
             onDeleteSession={onDeleteSession}
             onNewSession={onNewSession}
             onNewTask={onNewTask}
+            onRenameSession={onRenameSession}
+            onTogglePinSession={onTogglePinSession}
           />
         )}
 

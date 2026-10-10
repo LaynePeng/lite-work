@@ -27,6 +27,12 @@ class SessionTodosSeedRequest(BaseModel):
     items: list[str] = []
 
 
+class SessionPatchRequest(BaseModel):
+    """会话属性更新（任务卡重命名/置顶）：字段缺省 = 不改。"""
+    name: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
 class CompactRequest(BaseModel):
     session_id: str
     focus: str = ""
@@ -182,6 +188,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "subagent_count": subagent_count,
                 "cost_usd": cost_usd,
                 "running": running,
+                "pinned": bool(metadata.get("pinned", False)),
             })
         return result
 
@@ -252,6 +259,38 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "goal": new_meta.get("goal"),
             "todos_copied": todos_copied,
             "worktree": worktree,
+        }
+
+    @router.patch("/api/sessions/{session_id}")
+    async def patch_session(session_id: str, payload: SessionPatchRequest, request: Request):
+        """更新会话属性（任务卡重命名/置顶）。
+
+        - name：空串 = 清除自定义名（回退到首条消息推导）；
+        - pinned：任务 Tab 排序时置顶（运行中 → pinned → 其余按更新时间倒序）。
+        """
+        ctx.check_auth(request)
+        snap = app.session_store.load(session_id)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        updates: Dict[str, Any] = {}
+        if payload.name is not None:
+            name = payload.name.strip()
+            if name:
+                updates["name"] = name[:120]
+            else:
+                # 清除自定义名：save 会把空串当缺省，这里显式删除键
+                meta = snap.metadata or {}
+                meta.pop("name", None)
+                app.session_store.save(session_id, snap.messages, meta)
+        if payload.pinned is not None:
+            updates["pinned"] = bool(payload.pinned)
+        if updates:
+            app.session_store.update_metadata(session_id, updates)
+        refreshed = app.session_store.load(session_id)
+        return {
+            "session_id": session_id,
+            "name": (refreshed.metadata or {}).get("name") if refreshed else None,
+            "pinned": bool((refreshed.metadata or {}).get("pinned", False)) if refreshed else False,
         }
 
     @router.get("/api/sessions/{session_id}")

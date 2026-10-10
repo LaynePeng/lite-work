@@ -971,6 +971,47 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   margin-top: 6px;
 }
 
+/* —— 任务卡重命名/置顶（P2 补齐） —— */
+.task-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  outline: none;
+}
+
+.task-pin-mark {
+  margin-right: 3px;
+  font-size: 10px;
+}
+
+.task-done-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: 6px;
+}
+
+.task-done-actions button {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.task-done-actions button:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+
 .running-dot {
   width: 6px;
   height: 6px;

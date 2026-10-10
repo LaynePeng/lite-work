@@ -2846,6 +2846,26 @@ export default function App() {
     }
   }, [selectSession, refreshSessions, patchChat, pushLog]);
 
+  /** 任务卡重命名（空串 = 清除自定义名，回退首条消息推导）。 */
+  const renameSession = useCallback(async (sid: string, name: string) => {
+    try {
+      await api.patchSession(sid, { name });
+      await refreshSessions();
+    } catch (e) {
+      pushLog(`✗ 重命名失败: ${(e as Error).message}`);
+    }
+  }, [refreshSessions, pushLog]);
+
+  /** 任务卡置顶开关（排序：运行中 → pinned → 更新时间倒序）。 */
+  const togglePinSession = useCallback(async (sid: string, pinned: boolean) => {
+    try {
+      await api.patchSession(sid, { pinned });
+      await refreshSessions();
+    } catch (e) {
+      pushLog(`✗ 置顶失败: ${(e as Error).message}`);
+    }
+  }, [refreshSessions, pushLog]);
+
   const stop = useCallback(async () => {
     const sid = activeSessionId;
     if (!sid) return;
@@ -3074,6 +3094,8 @@ export default function App() {
         onSelectSession={(id) => void selectSession(id)}
         onContinueSession={(id, title) => void continueSession(id, title)}
         onDeriveSession={(id, title) => void deriveSession(id, title)}
+        onRenameSession={(id, name) => void renameSession(id, name)}
+        onTogglePinSession={(id, pinned) => void togglePinSession(id, pinned)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onNewTask={requestNewTask}

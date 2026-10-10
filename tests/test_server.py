@@ -171,6 +171,42 @@ async def test_sessions_list_task_card_fields(live_client):
     app.session_store.delete(sid)
 
 
+async def test_session_patch_rename_and_pin(live_client):
+    """PATCH /api/sessions/{id}：重命名（含空串清除）与置顶（metadata.pinned），
+    列表接口透出 pinned 供任务 Tab 排序（运行中 → pinned → 更新时间倒序）。"""
+    c, app, _ = live_client
+    ws = app.workspace
+    sid = f"session_patch_{uuid.uuid4().hex[:8]}"
+    from litework.core.types import Message
+    app.session_store.save(sid, [
+        Message(role="user", content="原始任务标题"),
+    ], {"workspace": ws})
+
+    # 重命名
+    r = await c.patch(f"/api/sessions/{sid}", json={"name": "新名字"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "新名字"
+    # 空串清除：回退到首条消息推导
+    r = await c.patch(f"/api/sessions/{sid}", json={"name": ""})
+    assert r.json()["name"] is None
+    entry = next(s for s in (await c.get("/api/sessions", params={"workspace": ws})).json()
+                 if s["session_id"] == sid)
+    assert entry["title"] == "原始任务标题"
+
+    # 置顶
+    r = await c.patch(f"/api/sessions/{sid}", json={"pinned": True})
+    assert r.json()["pinned"] is True
+    entry = next(s for s in (await c.get("/api/sessions", params={"workspace": ws})).json()
+                 if s["session_id"] == sid)
+    assert entry["pinned"] is True
+
+    # 不存在的会话 → 404
+    r = await c.patch("/api/sessions/session_nothing", json={"pinned": True})
+    assert r.status_code == 404
+
+    app.session_store.delete(sid)
+
+
 async def test_rapid_session_creation_does_not_overwrite(live_client):
     c, _, _ = live_client
     responses = await asyncio.gather(

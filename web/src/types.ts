@@ -78,6 +78,8 @@ export interface SessionInfo {
   last_activity?: { summary: string; ok: boolean | null; tool: string };
   /** 历史子 Agent 归档数（会话 metadata subagent_records） */
   subagent_count?: number;
+  /** 任务 Tab 置顶（metadata.pinned；排序：运行中 → pinned → 更新时间倒序） */
+  pinned?: boolean;
   /** 本进程运行期的会话累计成本（跨重启无值）；美元 */
   cost_usd?: number | null;
   /** 是否有任务正在执行（TaskManager active_for_session） */

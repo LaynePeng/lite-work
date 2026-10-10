@@ -150,6 +150,11 @@ export const api = {
         method: "POST", body: JSON.stringify(name ? { name } : {}),
       }),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
+  /** 任务卡重命名/置顶：字段缺省 = 不改；name 传空串 = 清除自定义名。 */
+  patchSession: (id: string, patch: { name?: string; pinned?: boolean }) =>
+    req<{ session_id: string; name: string | null; pinned: boolean }>(`/api/sessions/${id}`, {
+      method: "PATCH", body: JSON.stringify(patch),
+    }),
   sessionModel: (id: string) => req<import("./types").SessionModelResponse>(`/api/sessions/${id}/model`),
   setSessionModel: (id: string, model: import("./types").SessionModel | null) =>
     req<import("./types").SessionModelResponse>(`/api/sessions/${id}/model`, {
