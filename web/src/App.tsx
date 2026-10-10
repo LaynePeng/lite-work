@@ -2833,11 +2833,16 @@ export default function App() {
       // 局部开关（/loop · /continue 为前端本地状态）
       patchChat(session_id, { loopEnabled: cfg.loop, autoContinue: cfg.autoContinue });
       await selectSession(session_id, title || "新任务");
+      // 跨项目任务的资料盘点指令：落盘位置在当前项目之外时，要求 Agent 在
+      // 规划第一步统一盘点所需目录并批量申请授权（而非边做边逐个触发审批）
+      const sourcesHint = taskWs
+        ? `\n注意：本任务的落盘目录是 ${taskWs}（非当前项目）。如果需要读写工作区之外的目录（如其他项目、照片库等资料来源），请在规划的第一步完成全部目录盘点，并用 request_path_permissions 工具一次性统一申请授权（每项注明 read/write 与理由），不要执行到一半才逐个申请。`
+        : "";
       const prompt = cfg.mode === "plan"
         ? cfg.planItems.length > 0
-          ? `[新任务] 目标：${cfg.goal}\n已预置 TODO 计划：\n${cfg.planItems.map((p) => `  - ${p}`).join("\n")}\n请 review 并按需用 todo_write 调整后提交进看板，再逐项推进直到全部完成。`
-          : `[新任务] 目标：${cfg.goal}\n第 1 步：请先用 todo_write 建立完整的 TODO 计划（多步骤任务），再逐项执行直到全部完成。`
-        : `[新任务] 目标：${cfg.goal}\n直接执行，完成后输出总结。`;
+          ? `[新任务] 目标：${cfg.goal}\n已预置 TODO 计划：\n${cfg.planItems.map((p) => `  - ${p}`).join("\n")}\n请 review 并按需用 todo_write 调整后提交进看板，再逐项推进直到全部完成。${sourcesHint}`
+          : `[新任务] 目标：${cfg.goal}\n第 1 步：请先用 todo_write 建立完整的 TODO 计划（多步骤任务），再逐项执行直到全部完成。${sourcesHint}`
+        : `[新任务] 目标：${cfg.goal}\n直接执行，完成后输出总结。${sourcesHint}`;
       taskLauncherRef.current(session_id, prompt);
       await refreshSessions();
     } catch (e) {

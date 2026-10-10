@@ -26,6 +26,7 @@ from .security.plugin import SecurityPlugin
 from .security.question import QuestionGate
 from .tools.ask import QuestionPlugin
 from .tools.agent_tools import MultiAgentPlugin
+from .tools.path_permissions import PathPermissionsPlugin
 from .tools.plugin import (
     ASTPlugin,
     CodebasePlugin,
@@ -1171,6 +1172,7 @@ class AgentApp:
             SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
+            PathPermissionsPlugin(self),
         ]
         # 内置目录（litework/builtin_plugins/）里的工具插件（如定价插件 pricing-plugin）
         # 与上面硬编码的内置插件同样进内核装配与插件页元信息；按 name 去重。
@@ -1957,11 +1959,16 @@ class AgentApp:
         if not rules:
             return False
         for r in rules:
-            if r.get("tool") != tool_name:
+            # "*" = 路径通配规则（批量目录授权）：任意路径型工具都可命中，
+            # 仍受 access（read/write）与 pattern 前缀约束
+            tool_pat = r.get("tool")
+            if tool_pat != "*" and tool_pat != tool_name:
                 continue
             kind = r.get("kind")
             pattern = r.get("pattern") or ""
             if kind == "tool_exact":
+                if tool_pat == "*":
+                    continue  # 通配规则不允许 tool_exact 语义（防止放行一切工具）
                 return True  # tool 已匹配（pattern 仅语义标注）
             if kind == "command_prefix" and tool_name == "execute_command":
                 cmd = str(args.get("command") or "").strip()

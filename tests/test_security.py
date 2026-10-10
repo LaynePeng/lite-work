@@ -315,3 +315,100 @@ async def test_approval_session_id_falls_back_to_own_session():
     main_kernel = Kernel(session_id="plain-session")
     assert not hasattr(main_kernel, "root_session_id")
     assert await _pending_session_id(main_kernel) == "plain-session"
+
+
+# ---------------------------------------------------------------- 批量目录授权
+
+class _FakeApp:
+    """PathPermissionsPlugin 最小 app 替身：approval_gate + 规则存储。"""
+
+    def __init__(self):
+        from litework.security.approval import ApprovalGate
+        self.approval_gate = ApprovalGate()
+        self.approval_rules = {}
+
+    def remember_approval_rule(self, session_id, rule):
+        import copy
+        r = copy.deepcopy(rule)
+        if not r.get("tool") or not r.get("pattern"):
+            return {"ok": False}
+        rules = self.approval_rules.setdefault(session_id, [])
+        if r not in rules:
+            rules.append(r)
+        return {"ok": True, "rule": r}
+
+
+async def test_request_path_permissions_batches_approval(tmp_path):
+    """批量目录授权：批准项落 path_prefix 通配规则（读写分离），拒绝项不落。"""
+    from litework.tools.path_permissions import PathPermissionsPlugin
+    from litework.tools.todos import current_session_id
+
+    app = _FakeApp()
+    plugin = PathPermissionsPlugin(app)
+    ws = tmp_path / "project"
+    ws.mkdir()
+    dir_a = tmp_path / "dir-a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "dir-b"
+    dir_b.mkdir()
+
+    # gate 拒绝 dir_b（模拟用户在第二张卡上点拒绝）
+    orig_request = app.approval_gate.request_approval
+    import asyncio
+
+    def _conditional_request(action, reason, session_id=None, rule=None):
+        fut = asyncio.get_event_loop().create_future()
+        if "dir-b" in action:
+            fut.set_result(False)
+        else:
+            fut.set_result(True)
+        # 手动登记 pending 语义不需要——request_approval 真实实现做了登记；
+        # 这里替换为简化版，仅验证 plugin 分支
+        return fut
+
+    app.approval_gate.request_approval = _conditional_request
+
+    token = current_session_id.set("session_batch_perm")
+    try:
+        result = await plugin.execute("request_path_permissions", {
+            "paths": [
+                {"path": str(dir_a), "access": "read", "reason": "读照片源"},
+                {"path": str(dir_b), "access": "write", "reason": "写整理结果"},
+            ],
+        })
+    finally:
+        current_session_id.reset(token)
+
+    assert "批准 1 项" in result and "拒绝 1 项" in result
+    rules = app.approval_rules["session_batch_perm"]
+    assert len(rules) == 1
+    r = rules[0]
+    assert r["tool"] == "*" and r["kind"] == "path_prefix"
+    assert r["pattern"] == str(dir_a)
+    assert r["access"] == "read"
+
+
+def test_match_approval_rule_wildcard_covers_path_tools(tmp_path):
+    """通配 path_prefix 规则：任意路径型工具命中（access 与前缀约束不放松）。"""
+    from litework.app import AgentApp
+
+    app = AgentApp.__new__(AgentApp)  # 不跑 __init__（避免目录副作用）
+    app.approval_rules = {"s1": [
+        {"tool": "*", "kind": "path_prefix", "pattern": str(tmp_path / "photos"),
+         "access": "read"},
+    ]}
+    # read 工具命中
+    assert app.match_approval_rule("s1", "read_file", {
+        "filePath": str(tmp_path / "photos" / "a.jpg"), "_rule_access": "read"})
+    # 其他读工具也命中（通配）
+    assert app.match_approval_rule("s1", "list_dir", {
+        "path": str(tmp_path / "photos"), "_rule_access": "read"})
+    # write 调用不命中 read 授权
+    assert not app.match_approval_rule("s1", "write_file", {
+        "filePath": str(tmp_path / "photos" / "a.jpg"), "_rule_access": "write"})
+    # 前缀外不命中
+    assert not app.match_approval_rule("s1", "read_file", {
+        "filePath": str(tmp_path / "other" / "x.txt"), "_rule_access": "read"})
+    # 其他会话不命中
+    assert not app.match_approval_rule("s2", "read_file", {
+        "filePath": str(tmp_path / "photos" / "a.jpg"), "_rule_access": "read"})
