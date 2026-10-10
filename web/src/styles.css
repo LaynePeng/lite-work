@@ -9021,7 +9021,105 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   margin-top: 3px;
 }
+/* ── 交互式图解（分块可点击切换；纯 state，无脚本） ── */
+.md-ix-summary {
+  font-size: 11.5px;
+  color: var(--text-1);
+  line-height: 1.55;
+  margin-bottom: 9px;
+}
 
+.md-ix-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.md-ix-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.md-ix-part:hover {
+  border-color: var(--accent);
+  color: var(--text-0);
+}
+.md-ix-part.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.md-ix-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.md-ix-part.active .md-ix-no {
+  background: var(--accent);
+  color: #fff;
+}
+
+.md-ix-name {
+  white-space: nowrap;
+}
+
+.md-ix-meta {
+  font-size: 10px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.md-ix-part.active .md-ix-meta {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.md-ix-detail {
+  background: var(--bg-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+}
+
+.md-ix-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+.md-ix-detail-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.md-ix-desc {
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 /* ── ask_user 多选（QuestionBar multiSelect） ── */
 .question-options-multi {
   flex-wrap: wrap;

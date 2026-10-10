@@ -18,6 +18,7 @@ import {
   CardsBlock,
   ChartBlock,
   CompareBlock,
+  InteractiveBlock,
   KpiBlock,
   ProgressBlock,
   RICH_LANGS,
@@ -68,10 +69,41 @@ function ToolIcon({ name }: { name: string }) {
  *  - ```html 围栏：内容含 HTML 标签即渲染——片段也行（浏览器对 srcDoc
  *     自动补全文档结构）。仅纯文本（无标签）保留为普通代码块；
  *  - 富块围栏（RICH_LANGS）：JSON 可解析且形状合法 → 原生组件，
- *    否则保留为普通代码块。 */
+ *    否则保留为普通代码块。
+ *  - streaming=true（流式渐进渲染）：末尾**未闭合**的围栏也尝试解析，
+ *    让图表/卡片/图解随生成逐步出现，不必等整段回答收尾（对齐 GPT
+ *    Intelligent UI 的流式编译器行为）。 */
 type Segment = { kind: "md"; text: string } | { kind: "html"; html: string } | RichSegment;
 
-function splitSegments(text: string): Segment[] {
+/** 流式期未闭合围栏的「半截 JSON」容错：补齐被截断的括号/引号后重试解析。
+ *  仅在 streaming 模式启用——完整消息里的坏 JSON 仍回退代码块（不猜测）。 */
+function repairTruncatedJson(raw: string): string | null {
+  const s = raw.trim();
+  if (!s || s[0] !== "{") return null;
+  let inStr = false;
+  let esc = false;
+  const stack: string[] = []; // 未闭合的容器：{ 或 [
+  for (const ch of s) {
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = s;
+  if (inStr) out += '"';
+  // 丢弃结尾不完整的片段：悬挂逗号 / `"key":` / `"key": 值`
+  out = out.replace(/,\s*$/, "");
+  out = out.replace(/"[^"]*"\s*:\s*$/, "");
+  out = out.replace(/,\s*"[^"]*"\s*:\s*$/, "");
+  out = out.replace(/,\s*$/, "");
+  // 按未闭合容器逆序补齐（数组补 ]、对象补 }）
+  for (let i = stack.length - 1; i >= 0; i -= 1) out += stack[i] === "[" ? "]" : "}";
+  return out;
+}
+
+function splitSegments(text: string, streaming = false): Segment[] {
   const t = text ?? "";
   const trimmed = t.trim();
   if (
@@ -82,9 +114,12 @@ function splitSegments(text: string): Segment[] {
   }
   const segs: Segment[] = [];
   let last = 0;
-  const re = new RegExp("```(html|" + RICH_LANGS.join("|") + ")[ \\t]*\\r?\\n?([\\s\\S]*?)```", "gi");
+  const langs = "html|" + RICH_LANGS.join("|");
+  const closed = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*?)```", "gi");
+  // 流式期：末尾未闭合围栏（直到字符串结尾都没有收尾 ```）
+  const open = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*)$", "i");
   let m: RegExpExecArray | null;
-  while ((m = re.exec(t)) !== null) {
+  while ((m = closed.exec(t)) !== null) {
     const lang = m[1].toLowerCase();
     const raw = (m[2] ?? "").trim();
     let seg: Segment | null = null;
@@ -97,6 +132,32 @@ function splitSegments(text: string): Segment[] {
       if (m.index > last) segs.push({ kind: "md", text: t.slice(last, m.index) });
       segs.push(seg);
       last = m.index + m[0].length;
+    }
+  }
+  // 未闭合围栏：只在此前已闭合围栏**之后**的剩余文本里找（否则会误匹配
+  // 到已闭合围栏的开头），且仅 streaming 期尝试——完整消息里的坏 JSON 不猜测
+  if (streaming && last < t.length) {
+    const rest = t.slice(last);
+    const om = open.exec(rest);
+    if (om) {
+      const lang = om[1].toLowerCase();
+      const raw = (om[2] ?? "").trim();
+      let seg: Segment | null = null;
+      if (lang === "html") {
+        if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
+      } else if (raw.startsWith("{")) {
+        seg = tryParseRichBlock(lang, raw);
+        if (!seg) {
+          const repaired = repairTruncatedJson(raw);
+          if (repaired) seg = tryParseRichBlock(lang, repaired);
+        }
+      }
+      if (seg) {
+        const abs = last + om.index;
+        if (abs > last) segs.push({ kind: "md", text: t.slice(last, abs) });
+        segs.push(seg);
+        last = t.length; // 未闭合部分已被消费
+      }
     }
   }
   if (last < t.length) segs.push({ kind: "md", text: t.slice(last) });
@@ -209,8 +270,8 @@ function HtmlPreview({ html }: { html: string }) {
   );
 }
 
-export function Markdown({ text }: { text: string }) {
-  const segs = useMemo(() => splitSegments(text), [text]);
+export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const segs = useMemo(() => splitSegments(text, streaming), [text, streaming]);
   return (
     <div className="md">
       {segs.map((s, i) => {
@@ -223,6 +284,7 @@ export function Markdown({ text }: { text: string }) {
         if (s.kind === "compare") return <CompareBlock key={i} spec={s.spec} />;
         if (s.kind === "board") return <BoardBlock key={i} spec={s.spec} />;
         if (s.kind === "progress") return <ProgressBlock key={i} spec={s.spec} />;
+        if (s.kind === "interactive") return <InteractiveBlock key={i} spec={s.spec} />;
         return (
           <ReactMarkdown
             key={i}
@@ -489,7 +551,7 @@ function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[];
             <div className="msg-row assistant timeline-text" key={item.id}>
               <AgentAvatar agent={item.agent} />
               <div className="bubble assistant-bubble">
-                <Markdown text={item.content} />
+                <Markdown text={item.content} streaming={streaming} />
                 {streaming && item.id === items[items.length - 1]?.id && <span className="cursor"><span /></span>}
               </div>
             </div>

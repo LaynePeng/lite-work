@@ -362,3 +362,93 @@ describe("Markdown 代码块增强（语言标签 / 复制 / 长代码折叠）"
     expect(container.querySelector(".md-code pre")?.textContent).toContain("const x = 42;");
   });
 });
+
+// ---------------------------------------------------------------- 交互式图解
+
+describe("Markdown 交互式图解（```interactive 分块点击切换）", () => {
+  const SPEC =
+    '```interactive\n{"title":"7 速自行车结构","summary":"点击分块查看各部分作用",' +
+    '"numbered":true,"parts":[{"name":"车架","desc":"承载全部部件的骨架","meta":"铝合金"},' +
+    '{"name":"传动","desc":"通过链条把脚踏力传到后轮","meta":"11-32T"},' +
+    '{"name":"制动","desc":"盘式刹车，湿滑路面也能稳定减速"}]}\n```';
+
+  it("渲染分块标签与默认选中块（首个），带序号与 meta", () => {
+    const { container } = render(<Markdown text={SPEC} />);
+    const tabs = container.querySelectorAll(".md-ix-part");
+    expect(tabs.length).toBe(3);
+    expect(tabs[0].className).toContain("active");      // 默认选中首个
+    expect(container.querySelector(".md-ix-detail-name")?.textContent).toBe("车架");
+    expect(container.querySelector(".md-ix-desc")?.textContent).toContain("骨架");
+    expect(container.querySelector(".md-ix-summary")?.textContent).toContain("点击分块");
+    // numbered=true → 显示序号
+    expect(container.querySelectorAll(".md-ix-no").length).toBeGreaterThan(0);
+  });
+
+  it("点击其他分块切换详情内容（纯 state，无脚本执行）", () => {
+    const { container } = render(<Markdown text={SPEC} />);
+    const tabs = container.querySelectorAll(".md-ix-part");
+    fireEvent.click(tabs[2]);
+    expect(container.querySelector(".md-ix-detail-name")?.textContent).toBe("制动");
+    expect(container.querySelector(".md-ix-desc")?.textContent).toContain("盘式刹车");
+    expect(tabs[2].className).toContain("active");
+    expect(tabs[0].className).not.toContain("active");
+    // 切换后仍无 iframe/script（安全模型不变）
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("缺 name/desc 的分块被丢弃；全空 → 回退代码块", () => {
+    const { container: c1 } = render(
+      <Markdown text={'```interactive\n{"parts":[{"name":"只有名字"},{"name":"A","desc":"说明"}]}\n```'} />
+    );
+    expect(c1.querySelectorAll(".md-ix-part").length).toBe(1);
+
+    const { container: c2 } = render(<Markdown text={'```interactive\n{"parts":[]}\n```'} />);
+    expect(c2.querySelector(".md-ix-part")).toBeNull();
+    expect(c2.querySelector("code")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- 流式渐进渲染
+
+describe("Markdown 流式渐进渲染（未闭合围栏随生成逐步出现）", () => {
+  it("streaming=true：未闭合的 kpi 围栏也能渐进渲染（半截 JSON 自动补齐）", () => {
+    // 生成到一半：JSON 未闭合，围栏也没有收尾 ```
+    const partial =
+      "先给指标：\n\n```kpi\n{\"items\":[{\"label\":\"营收\",\"value\":\"¥1.24M\"}," +
+      "{\"label\":\"活跃\",\"value\":\"38.2k\"}";
+    const { container } = render(<Markdown text={partial} streaming />);
+    expect(container.querySelector(".md-kpi")).not.toBeNull();
+    expect(container.querySelectorAll(".md-kpi").length).toBe(2);
+    expect(screen.getByText("先给指标：")).toBeInTheDocument();
+  });
+
+  it("streaming=false（完整消息）：未闭合围栏保持为代码块，不猜测", () => {
+    const partial = '```kpi\n{"items":[{"label":"营收","value":"¥1.24M"}]';
+    const { container } = render(<Markdown text={partial} />);
+    expect(container.querySelector(".md-kpi")).toBeNull();
+  });
+
+  it("流式：未闭合围栏内 JSON 完全不成形（尚无 items）→ 不渲染空块", () => {
+    const { container } = render(<Markdown text={'```kpi\n{"items":['} streaming />);
+    expect(container.querySelector(".md-kpi")).toBeNull();
+  });
+
+  it("流式：已闭合围栏正常渲染，未闭合的后续围栏也渐进渲染", () => {
+    const text =
+      "已完成：\n\n```table\n{\"columns\":[\"k\",\"v\"],\"rows\":[[\"a\",\"1\"]]}\n```\n\n" +
+      "正在写：\n\n```kpi\n{\"items\":[{\"label\":\"L\",\"value\":\"V\"}";
+    const { container } = render(<Markdown text={text} streaming />);
+    expect(container.querySelector(".md-table")).not.toBeNull();
+    expect(container.querySelector(".md-kpi")).not.toBeNull();
+    expect(screen.getByText("已完成：")).toBeInTheDocument();
+    expect(screen.getByText("正在写：")).toBeInTheDocument();
+  });
+
+  it("流式：未闭合的 html 围栏含标签即渲染（片段）", () => {
+    const { container } = render(
+      <Markdown text={"预览：\n\n```html\n<div><b>hi</b></div>"} streaming />
+    );
+    expect(container.querySelector("iframe.md-html-iframe")).not.toBeNull();
+  });
+});

@@ -2,11 +2,14 @@
 // Copyright (c) 2026 lite-work contributors
 //
 // 原生富内容块（intelligent UI / generative UI 思路）：
-// Agent 在回复里输出「数据 + 组件类型」围栏（```chart / ```cards），
+// Agent 在回复里输出「数据 + 组件类型」围栏（```chart / ```cards / ```kpi /
+// ```timeline / ```table / ```compare / ```board / ```progress / ```interactive），
 // 前端用应用设计系统原生渲染——不生成 HTML 文档/图片文件，随文字流式
 // 出现，样式与应用一致。同时提供 rewriteLocalUrls / toFileUrl：本地
 // 相对路径统一 rewrite 到 /api/files/raw（复用后端越界检查与鉴权），
 // 修复 iframe / 卡片内相对路径断链。
+
+import { useState } from "react";
 
 // ---------------------------------------------------------------- 本地资源 URL
 
@@ -147,6 +150,27 @@ export interface ProgressSpec {
   items: ProgressItem[];
 }
 
+/** 交互式图解：分块 + 点击切换说明（GPT Intelligent UI 的「可交互图解」）。
+ *  纯前端 state 切换，无脚本执行——沙箱安全模型不变。 */
+export interface InteractivePart {
+  /** 分块名（显示在可点击标签上），如「Frame」「车轮」 */
+  name: string;
+  /** 该分块的说明（支持多行） */
+  desc: string;
+  /** 数值/规格补充，如「700c」「11-32T」 */
+  meta?: string;
+}
+
+export interface InteractiveSpec {
+  title?: string;
+  /** 图解总览（一句话，始终显示） */
+  summary?: string;
+  /** 可点击分块（首个默认选中） */
+  parts: InteractivePart[];
+  /** 是否显示分块序号（结构拆解类默认可读性更好） */
+  numbered?: boolean;
+}
+
 export type RichSegment =
   | { kind: "chart"; spec: ChartSpec }
   | { kind: "cards"; spec: CardsSpec }
@@ -155,11 +179,13 @@ export type RichSegment =
   | { kind: "table"; spec: TableSpec }
   | { kind: "compare"; spec: CompareSpec }
   | { kind: "board"; spec: BoardSpec }
-  | { kind: "progress"; spec: ProgressSpec };
+  | { kind: "progress"; spec: ProgressSpec }
+  | { kind: "interactive"; spec: InteractiveSpec };
 
 /** 富块围栏语言（ChatView 分段正则与解析器共用一份，防两处漂移）。 */
 export const RICH_LANGS = [
   "chart", "cards", "kpi", "timeline", "table", "compare", "board", "progress",
+  "interactive",
 ] as const;
 
 function toNums(v: unknown): number[] {
@@ -315,6 +341,25 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
       .slice(0, 20);
     if (!items.length) return null;
     return { kind: "progress", spec: { items, ...(title ? { title } : {}) } };
+  }
+
+  if (l === "interactive") {
+    const parts: InteractivePart[] = (Array.isArray(rec.parts) ? rec.parts : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it): InteractivePart => ({
+        name: str(it.name, 40) ?? "",
+        desc: str(it.desc, 1200) ?? "",
+        meta: str(it.meta, 40),
+      }))
+      .filter((it) => it.name && it.desc)
+      .slice(0, 12);
+    if (!parts.length) return null;
+    const spec: InteractiveSpec = { parts };
+    if (title) spec.title = title;
+    const summary = str(rec.summary, 200);
+    if (summary) spec.summary = summary;
+    if (rec.numbered === true) spec.numbered = true;
+    return { kind: "interactive", spec };
   }
 
   if (l === "chart") {
@@ -897,6 +942,50 @@ export function BoardBlock({ spec }: { spec: BoardSpec }) {
 function progressTone(v: number): "bad" | "warn" | "good" {
   return v < 40 ? "bad" : v < 80 ? "warn" : "good";
 }
+
+// ---------------------------------------------------------------- 交互式图解
+
+/** 交互式图解：分块标签（可点击）+ 当前分块说明。
+ *  对齐 GPT Intelligent UI 的「点不同模块看对应原理」；纯 state 切换，
+ *  不执行任何脚本（安全模型与 render_card 沙箱一致）。 */
+export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
+  const [active, setActive] = useState(0);
+  const parts = spec.parts;
+  const cur = parts[Math.min(active, parts.length - 1)];
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      {spec.summary && <div className="md-ix-summary">{spec.summary}</div>}
+      <div className="md-ix-parts" role="tablist" aria-label="图解分块">
+        {parts.map((p, i) => (
+          <button
+            key={i}
+            type="button"
+            role="tab"
+            aria-selected={i === active}
+            className={`md-ix-part ${i === active ? "active" : ""}`}
+            onClick={() => setActive(i)}
+            title={p.meta ? `${p.name} · ${p.meta}` : p.name}
+          >
+            {spec.numbered && <span className="md-ix-no">{i + 1}</span>}
+            <span className="md-ix-name">{p.name}</span>
+            {p.meta && <span className="md-ix-meta">{p.meta}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="md-ix-detail" role="tabpanel">
+        <div className="md-ix-detail-head">
+          {spec.numbered && <span className="md-ix-no">{Math.min(active, parts.length - 1) + 1}</span>}
+          <span className="md-ix-detail-name">{cur.name}</span>
+          {cur.meta && <span className="md-ix-meta">{cur.meta}</span>}
+        </div>
+        <div className="md-ix-desc">{cur.desc}</div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 进度条
 
 export function ProgressBlock({ spec }: { spec: ProgressSpec }) {
   return (
