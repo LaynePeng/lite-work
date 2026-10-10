@@ -8357,3 +8357,77 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-weight: 400;
   color: var(--text-2);
 }
+
+/* ── 内联 HTML 回复（assistant 消息中 ```html 完整文档 → 沙箱 iframe 渲染） ── */
+.md-html-frame {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+.md-html-iframe {
+  display: block;
+  width: 100%;
+  height: 380px;
+  border: none;
+  background: #fff;
+}
+
+.md-html-toggle {
+  border: none;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 3px 10px;
+  margin: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.md-html-toggle:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+
+.md-html-src {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── ask_user 多选（QuestionBar multiSelect） ── */
+.question-options-multi {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn-option-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-option-check .option-check {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.btn-option-check.picked {
+  border-color: var(--accent, #4f8cff);
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+
+.btn-submit-picked {
+  align-self: flex-end;
+}

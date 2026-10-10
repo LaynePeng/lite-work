@@ -190,6 +190,7 @@ class QuestionRequestPayload(TypedDict):
     id: str
     question: str
     options: List[str]
+    multi_select: bool
 
 
 class QuestionResolvedPayload(TypedDict):

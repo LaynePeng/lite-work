@@ -19,14 +19,20 @@ class QuestionGate:
         self._ids = itertools.count(1)
         self._pending: Dict[str, Dict[str, Any]] = {}
 
-    def request(self, question: str, options: Optional[List[str]] = None) -> asyncio.Future:
-        """挂起等待用户回答，返回 future（await 后得到用户回答字符串）。"""
+    def request(self, question: str, options: Optional[List[str]] = None,
+                multi_select: bool = False) -> asyncio.Future:
+        """挂起等待用户回答，返回 future（await 后得到用户回答字符串）。
+
+        multi_select=True 时前端渲染为多选（勾选多项后一次提交，答案为
+        多项拼接的字符串）；默认单选/自定义输入。
+        """
         qid = f"q_{next(self._ids)}"
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending[qid] = {
             "id": qid,
             "question": question,
             "options": options or [],
+            "multi_select": bool(multi_select),
             "created_at": int(time.time() * 1000),
             "future": future,
         }
@@ -67,5 +73,6 @@ class QuestionGate:
             "id": entry["id"],
             "question": entry["question"],
             "options": list(entry["options"]),
+            "multi_select": bool(entry.get("multi_select", False)),
             "created_at": entry["created_at"],
         }

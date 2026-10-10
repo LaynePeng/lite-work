@@ -1590,7 +1590,8 @@ export default function App() {
           patchChat(sid, {
             pendingQuestions: [
               ...(cur.pendingQuestions ?? []).filter((q) => q.id !== ev.data.id),
-              { id: ev.data.id, question: ev.data.question, options: ev.data.options ?? [] },
+              { id: ev.data.id, question: ev.data.question, options: ev.data.options ?? [],
+                multiSelect: !!(ev.data as { multi_select?: boolean }).multi_select },
             ],
           });
           break;

@@ -29,8 +29,11 @@ def make_ask_user_handler(question_gate, events=None):
         if not isinstance(options, list):
             options = []
         options = [str(o) for o in options if str(o).strip()]
+        multi_select = bool(args.get("multi_select", False))
+        if multi_select and not options:
+            return "[Error] multi_select 需要 options（至少提供两个选项）"
 
-        future = question_gate.request(question, options)
+        future = question_gate.request(question, options, multi_select=multi_select)
         qid = question_gate.current_id(future)
 
         if events is not None:
@@ -38,6 +41,7 @@ def make_ask_user_handler(question_gate, events=None):
                 "id": qid,
                 "question": question,
                 "options": options,
+                "multi_select": multi_select,
             })
 
         # 等待用户回答（异步挂起，不阻塞其他协程）
@@ -74,6 +78,9 @@ class QuestionPlugin(ToolPlugin):
             description=(
                 "向用户提问，并等待用户回答。"
                 "可提供选项列表供用户选择，用户也可输入自定义回答。"
+                "默认单选（点一个选项即提交）；当答案允许多项并存时"
+                "（如「要启用哪些功能」「保留哪些方案」），设 multi_select=true，"
+                "用户可勾选多项后一次提交。"
                 "多个问题可同时提出，用户会逐个回答。"
                 "适用于需要用户确认、选择或提供信息才能继续的场景。"
             ),
@@ -88,6 +95,10 @@ class QuestionPlugin(ToolPlugin):
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "可选的选项列表，用户可直接选择其中之一，也可自定义输入",
+                    },
+                    "multi_select": {
+                        "type": "boolean",
+                        "description": "允许多选（默认 false 单选）。true 时用户可勾选多项后一次提交；需要 options 非空",
                     },
                 },
                 "required": ["question"],

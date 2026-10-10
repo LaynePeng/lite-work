@@ -435,6 +435,40 @@ describe("QuestionBar（ask_user 非阻塞提问条）", () => {
     await user.click(screen.getByRole("button", { name: "提交回答" }));
     expect(onAnswer).toHaveBeenCalledWith("q1", "MySQL");
   });
+
+  it("多选：勾选两项后一次提交（；拼接），可取消勾选", async () => {
+    const onAnswer = vi.fn();
+    const user = userEvent.setup();
+    const multiQuestions = [{
+      id: "q2", question: "要启用哪些功能？",
+      options: ["邮件", "日历", "文档"], multiSelect: true,
+    }];
+    render(<QuestionBar pendingQuestions={multiQuestions} onAnswerQuestion={onAnswer} />);
+    // 未选时提交按钮禁用
+    const submit = screen.getByRole("button", { name: /提交所选/ });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    // 勾选两项
+    await user.click(screen.getByRole("button", { name: /邮件/ }));
+    await user.click(screen.getByRole("button", { name: /日历/ }));
+    // 取消一项再选回
+    await user.click(screen.getByRole("button", { name: /日历/ }));
+    await user.click(screen.getByRole("button", { name: /日历/ }));
+    await user.click(submit);
+    expect(onAnswer).toHaveBeenCalledWith("q2", "邮件；日历");
+  });
+
+  it("多选问题也支持自定义输入补充", async () => {
+    const onAnswer = vi.fn();
+    const user = userEvent.setup();
+    const multiQuestions = [{
+      id: "q3", question: "保留哪些方案？", options: ["A", "B"], multiSelect: true,
+    }];
+    render(<QuestionBar pendingQuestions={multiQuestions} onAnswerQuestion={onAnswer} />);
+    const input = screen.getByPlaceholderText(/自定义回答/);
+    await user.type(input, "C 和 D");
+    await user.click(screen.getByRole("button", { name: "提交回答" }));
+    expect(onAnswer).toHaveBeenCalledWith("q3", "C 和 D");
+  });
 });
 
 // ---------------------------------------------------------------- 对话跳转

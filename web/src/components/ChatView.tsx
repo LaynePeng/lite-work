@@ -45,7 +45,86 @@ function ToolIcon({ name }: { name: string }) {
   return <span className="tool-icon">{emoji}</span>;
 }
 
+/** 提取回复中可内联渲染的 HTML（展示型回复）。两条路径：
+ *  1) 无围栏：整条消息就是完整 HTML 文档（<!DOCTYPE html> / <html 开头且
+ *     </html> 结尾）→ 整条渲染；
+ *  2) ```html 围栏：内容含 HTML 标签即渲染——片段也行（浏览器对 srcDoc
+ *     自动补全文档结构）。仅纯文本（无标签）保留为普通代码块。 */
+function extractInlineHtml(text: string): { html: string | null; rest: string } {
+  const t = text ?? "";
+  const trimmed = t.trim();
+  if (
+    /^<(!DOCTYPE\s+html|html[\s>])/i.test(trimmed) &&
+    /<\/html>\s*$/i.test(trimmed)
+  ) {
+    return { html: trimmed, rest: "" };
+  }
+  const m = /```html\s*\n?([\s\S]*?)```/i.exec(t);
+  if (!m) return { html: null, rest: t };
+  const raw = (m[1] ?? "").trim();
+  if (!/<[a-zA-Z]/.test(raw)) return { html: null, rest: t };
+  const rest = t.slice(0, m.index) + t.slice(m.index + m[0].length);
+  return { html: raw, rest };
+}
+
+/** 沙箱 iframe 渲染 Agent 回复中的 HTML（sandbox 无 allow-scripts，同 render_card 安全模型）。 */
+function HtmlPreview({ html }: { html: string }) {
+  const [showSrc, setShowSrc] = useState(false);
+  return (
+    <div className="md-html-frame">
+      <iframe
+        className="md-html-iframe"
+        sandbox=""
+        srcDoc={html}
+        title="内联 HTML 预览"
+      />
+      <button className="md-html-toggle" onClick={() => setShowSrc((v) => !v)}>
+        {showSrc ? "隐藏源码" : "查看源码"}
+      </button>
+      {showSrc && <pre className="md-html-src">{html}</pre>}
+    </div>
+  );
+}
+
 export function Markdown({ text }: { text: string }) {
+  const { html, rest } = extractInlineHtml(text);
+  if (html) {
+    return (
+      <div className="md">
+        <HtmlPreview html={html} />
+        {rest && rest.trim() && (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkBreaks]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const h = href ?? "";
+                    if (/^(https?:|mailto:)/i.test(h)) window.open(h, "_blank");
+                  }}
+                  title={href}
+                >
+                  {children}
+                </a>
+              ),
+              img: ({ src, alt }) => {
+                const s = src ?? "";
+                const resolved = /^(https?:|data:|\/api\/)/i.test(s)
+                  ? s
+                  : `/api/files/raw?path=${encodeURIComponent(s)}`;
+                return <img src={resolved} alt={alt ?? ""} loading="lazy" />;
+              },
+            }}
+          >
+            {rest}
+          </ReactMarkdown>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="md">
       <ReactMarkdown
@@ -1050,15 +1129,17 @@ export function QuestionBar({
   pendingQuestions,
   onAnswerQuestion,
 }: {
-  pendingQuestions: { id: string; question: string; options: string[] }[];
+  pendingQuestions: { id: string; question: string; options: string[]; multiSelect?: boolean }[];
   onAnswerQuestion: (questionId: string, answer: string) => void;
 }) {
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
   const [customAnswer, setCustomAnswer] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
 
   if (pendingQuestions.length === 0) return null;
 
   const active = pendingQuestions[activeQuestionIdx] ?? pendingQuestions[0];
+  const multi = !!active.multiSelect && active.options.length > 0;
 
   return (
     <div className="question-bar">
@@ -1072,7 +1153,7 @@ export function QuestionBar({
             <button
               key={q.id}
               className={`question-tab ${i === activeQuestionIdx ? "active" : ""}`}
-              onClick={() => { setActiveQuestionIdx(i); setCustomAnswer(""); }}
+              onClick={() => { setActiveQuestionIdx(i); setCustomAnswer(""); setPicked([]); }}
             >
               问题 {i + 1}
             </button>
@@ -1081,7 +1162,7 @@ export function QuestionBar({
       )}
       <div className="question-card">
         <p className="question-text">{active.question}</p>
-        {active.options.length > 0 && (
+        {active.options.length > 0 && !multi && (
           <div className="question-options">
             {active.options.map((opt, i) => (
               <button
@@ -1092,6 +1173,36 @@ export function QuestionBar({
                 {opt}
               </button>
             ))}
+          </div>
+        )}
+        {multi && (
+          <div className="question-options question-options-multi">
+            {active.options.map((opt, i) => {
+              const on = picked.includes(opt);
+              return (
+                <button
+                  key={i}
+                  className={`btn-option btn-option-check ${on ? "picked" : ""}`}
+                  aria-pressed={on}
+                  onClick={() =>
+                    setPicked(on ? picked.filter((x) => x !== opt) : [...picked, opt])
+                  }
+                >
+                  <span className="option-check">{on ? "☑" : "☐"}</span>
+                  {opt}
+                </button>
+              );
+            })}
+            <button
+              className="btn-approve btn-submit-picked"
+              disabled={picked.length === 0}
+              onClick={() => {
+                onAnswerQuestion(active.id, picked.join("；"));
+                setPicked([]);
+              }}
+            >
+              提交所选{picked.length > 0 ? `（${picked.length}）` : ""}
+            </button>
           </div>
         )}
         <div className="question-custom-row">

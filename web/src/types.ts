@@ -680,7 +680,7 @@ export interface ChatSessionState {
   // 任务 TODO 清单（todo_write 工具推送，任务结束后保留展示）
   todos: TodoItem[];
   /** 待回答的提问（ask_user 工具） */
-  pendingQuestions?: { id: string; question: string; options: string[] }[];
+  pendingQuestions?: { id: string; question: string; options: string[]; multiSelect?: boolean }[];
   /** 当前会话的推理强度（""=关闭 / "low" / "medium" / "high" / "max"） */
   reasoningEffort?: string;
   /** 待发送队列：任务运行中追加的消息，任务完成后逐一发送（类似 Codex） */
