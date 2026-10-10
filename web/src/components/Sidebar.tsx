@@ -868,6 +868,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
               onClick={(e) => { e.stopPropagation(); onTogglePin?.(!task.pinned); }}>{task.pinned ? "📌" : "📍"}</button>
             {onRename && <button title="重命名"
               onClick={(e) => { e.stopPropagation(); setDraft(""); setRenaming(true); }}>✎</button>}
+            <button title="删除任务" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除任务「${task.title}」？`)) onDelete(); }}>✕</button>
           </span>
           <span style={{ marginLeft: "auto" }}>{relTime(task.updated_at)}</span>
         </div>

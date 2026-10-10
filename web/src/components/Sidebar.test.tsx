@@ -420,6 +420,29 @@ describe("Sidebar · 任务 Tab（Goals 视图）", () => {
     expect(onContinueSession).toHaveBeenCalledWith("s-idle", "季度报告汇总");
   });
 
+  it("完成任务卡也显示删除 ✕；确认后触发 onDeleteSession（personal 任务同样可删）", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onDeleteSession = vi.fn();
+    render(<Sidebar {...taskProps} onDeleteSession={onDeleteSession} />);
+    const doneCard = (await screen.findByText("APP 竞品调研")).closest(".task-card") as HTMLElement;
+    await user.click(within(doneCard).getByTitle("删除任务"));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onDeleteSession).toHaveBeenCalledWith("s-done");
+    confirmSpy.mockRestore();
+  });
+
+  it("完成任务卡删除取消确认时不触发删除", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onDeleteSession = vi.fn();
+    render(<Sidebar {...taskProps} onDeleteSession={onDeleteSession} />);
+    const doneCard = (await screen.findByText("APP 竞品调研")).closest(".task-card") as HTMLElement;
+    await user.click(within(doneCard).getByTitle("删除任务"));
+    expect(onDeleteSession).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
   it("运行中的任务不显示「续」；完成任务卡显示「⤴ 派生」并触发 onDeriveSession", async () => {
     const user = userEvent.setup();
     const onContinueSession = vi.fn();
