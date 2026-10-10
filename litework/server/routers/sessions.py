@@ -268,6 +268,28 @@ def create_router(ctx: ServerContext) -> APIRouter:
             })
         return result
 
+    @router.get("/api/cards/{session_id}/{card_id}")
+    async def get_card(session_id: str, card_id: str, request: Request):
+        """读取富内容卡片（render_card 落盘的 HTML）。
+
+        card_id 经格式校验（防路径注入）；文件不存在 → 404。HTML 由前端在
+        sandbox iframe 中渲染（无脚本执行）。
+        """
+        ctx.check_auth(request)
+        from ...tools.render_card import card_path
+        try:
+            path = card_path(app.config_dir, session_id, card_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="卡片不存在")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"读取失败: {exc}")
+        return {"session_id": session_id, "card_id": card_id, "html": content}
+
     @router.get("/api/personal-workspace")
     async def get_personal_workspace(request: Request):
         """个人任务落盘区（Goals 全局视图）：确保存在并返回路径（新建任务向导用）。"""

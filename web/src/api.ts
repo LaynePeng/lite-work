@@ -162,6 +162,10 @@ export const api = {
     req<{ ok: boolean; scope: string; path: string; bytes: number }>("/api/rules", {
       method: "PUT", body: JSON.stringify({ scope, content }),
     }),
+  /** 富内容卡片（render_card）：读取落盘 HTML（sandbox iframe 渲染）。 */
+  card: (sessionId: string, cardId: string) =>
+    req<{ session_id: string; card_id: string; html: string }>(
+      `/api/cards/${encodeURIComponent(sessionId)}/${encodeURIComponent(cardId)}`),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
   /** 任务卡重命名/置顶：字段缺省 = 不改；name 传空串 = 清除自定义名。 */
   patchSession: (id: string, patch: { name?: string; pinned?: boolean }) =>

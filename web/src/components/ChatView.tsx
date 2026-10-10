@@ -12,6 +12,7 @@ import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem, WorktreeStatus } from "../types";
 import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
 import { agentIconOf } from "../lib/agentMeta";
+import { api } from "../api";
 
 // ---------------------------------------------------------------- 渲染助手
 
@@ -67,6 +68,16 @@ export function Markdown({ text }: { text: string }) {
               {children}
             </a>
           ),
+          // 图片：远程 URL 原样；workspace 相对路径 rewrite 到 /api/files/raw
+          // （复用后端越界检查与鉴权）——assistant 引用本地图片（技能产物、
+          // 截图、图表导出）不再断链。
+          img: ({ src, alt }) => {
+            const s = src ?? "";
+            const resolved = /^(https?:|data:|\/api\/)/i.test(s)
+              ? s
+              : `/api/files/raw?path=${encodeURIComponent(s)}`;
+            return <img src={resolved} alt={alt ?? ""} loading="lazy" />;
+          },
         }}
       >
         {text}
@@ -91,6 +102,87 @@ function ToolElapsed({ since }: { since: number }) {
     <span className={`tool-status running ${slow ? "tool-slow" : ""}`} title={slow ? "运行较久：工具超时上限 120s，超时会被强制终止" : undefined}>
       ⏱ {sec}s{slow ? " · 运行较久" : ""}
     </span>
+  );
+}
+
+/** 富内容卡片（render_card）：HTML 落盘 → sandbox iframe 渲染。
+ *
+ * 安全模型：iframe 无 allow-scripts（LLM 生成的脚本不执行）、无弹窗/顶层
+ * 导航；相对路径（src="a.png"）rewrite 到 /api/files/raw（复用后端越界
+ * 检查与鉴权），远程 https URL 原样。折叠态显示标题（元信息注释头解析）。
+ */
+function RichCard({ sessionId, card }: { sessionId: string; card: ToolCardInfo }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(true);
+  const [height, setHeight] = useState(0);
+
+  // result 形如 "[Rich Card]: card_xxx\n卡片「标题」已渲染…"
+  const cardId = useMemo(() => {
+    const m = /\[Rich Card\]:\s*(card_[a-z0-9]+)/.exec(card.result ?? "");
+    return m ? m[1] : null;
+  }, [card.result]);
+
+  useEffect(() => {
+    if (!cardId || card.status !== "done" || html !== null) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.card(sessionId, cardId);
+        if (!alive) return;
+        // 元信息注释头：<!-- litework-card: id=... title=... height=N at=... -->
+        const meta = /<!--\s*litework-card:[^>]*-->/.exec(r.html)?.[0] ?? "";
+        const h = /height=(\d+)/.exec(meta)?.[1];
+        if (h) setHeight(parseInt(h, 10) || 0);
+        // 相对路径 rewrite：src/href 的非 http(s)/data/# 值 → /api/files/raw
+        const rewritten = r.html.replace(
+          /(src|href)\s*=\s*"([^"]*)"/gi,
+          (full, attr: string, val: string) => {
+            if (/^(https?:|data:|#|\/api\/|mailto:)/i.test(val)) return full;
+            return `${attr}="/api/files/raw?path=${encodeURIComponent(val)}"`;
+          },
+        );
+        setHtml(rewritten);
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { alive = false; };
+  }, [cardId, card.status, sessionId, html]);
+
+  const titleMatch = /title=([^\s>]*)/.exec(
+    /<!--\s*litework-card:[^>]*-->/.exec(html ?? "")?.[0] ?? "",
+  );
+  const title = titleMatch ? decodeURIComponent(titleMatch[1]) : "";
+
+  return (
+    <div className={`rich-card ${open ? "open" : ""}`}>
+      <button className="rich-card-head" onClick={() => setOpen((v) => !v)}>
+        <span className="rich-card-icon">🎨</span>
+        <span className="rich-card-title">{title || "富内容卡片"}</span>
+        <span className="tool-status done">✓</span>
+        <span className="tool-chevron">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="rich-card-body">
+          {card.status === "running" && <div className="rich-card-loading">🎨 渲染卡片中…</div>}
+          {card.status === "error" && <div className="rich-card-error">✗ 卡片生成失败</div>}
+          {card.status === "done" && error && <div className="rich-card-error">✗ {error}</div>}
+          {card.status === "done" && !error && html === null && (
+            <div className="rich-card-loading">加载卡片…</div>
+          )}
+          {card.status === "done" && html !== null && (
+            <iframe
+              title={title || "rich card"}
+              className="rich-card-frame"
+              style={height ? { height: `${height}px` } : undefined}
+              sandbox=""
+              srcDoc={html}
+            />
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -242,7 +334,7 @@ function SubAgentCard({ card }: { card: ToolCardInfo }) {
   );
 }
 
-function WorkItems({ items, streaming = false }: { items: WorkItem[]; streaming?: boolean }) {
+function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[]; sessionId: string; streaming?: boolean }) {
   return (
     <div className="work-timeline">
       {items.map((item) => {
@@ -265,13 +357,18 @@ function WorkItems({ items, streaming = false }: { items: WorkItem[]; streaming?
           return (
             <div className="work-item-group" key={item.id}>
               {compact.length > 0 && <ToolActivity tools={compact} />}
-              {important.map((tool) => <ToolCard key={tool.id} card={tool} />)}
+              {important.map((tool) => tool.name === "render_card"
+                ? <RichCard key={tool.id} sessionId={sessionId} card={tool} />
+                : <ToolCard key={tool.id} card={tool} />)}
             </div>
           );
         }
         // spawn_sub_agent 独立卡：渲染子 Agent 活动面板
         if (item.card.name === "spawn_sub_agent") {
           return <SubAgentCard key={item.id} card={item.card} />;
+        }
+        if (item.card.name === "render_card") {
+          return <RichCard key={item.id} sessionId={sessionId} card={item.card} />;
         }
         return <ToolCard key={item.id} card={item.card} />;
       })}
@@ -304,11 +401,11 @@ function MessageBubble({ message }: { message: Msg }) {
 
 // ---------------------------------------------------------------- 正在生成
 
-function StreamingTurn({ items, turn }: { items: WorkItem[]; turn?: number }) {
+function StreamingTurn({ items, sessionId, turn }: { items: WorkItem[]; sessionId: string; turn?: number }) {
   return (
     <>
       {items.length === 0 && <div className="timeline-thinking"><span className="dot" /><span className="dot" /><span className="dot" /><span className="thinking-text">思考中…{turn ? ` (第 ${turn} 轮)` : ""}</span></div>}
-      <WorkItems items={items} streaming />
+      <WorkItems items={items} sessionId={sessionId} streaming />
     </>
   );
 }
@@ -325,16 +422,16 @@ function StreamingTurn({ items, turn }: { items: WorkItem[]; turn?: number }) {
 // 单轮渲染组件：props 只有 turn 对象本身。流式刷新（~80ms/次）时
 // 历史 turns 引用不变（useMemo 缓存），memo 直接跳过重渲染，
 // 只有正在增长的流式轮次重新渲染——长会话也不怕
-const TurnItem = memo(function TurnItem({ turn }: { turn: RenderTurn }) {
+const TurnItem = memo(function TurnItem({ turn, sessionId }: { turn: RenderTurn; sessionId: string }) {
   return (
     <div>
       {turn.key.startsWith("streaming-") ? (
-        <StreamingTurn items={turn.items} turn={turn.streamTurn} />
+        <StreamingTurn items={turn.items} sessionId={sessionId} turn={turn.streamTurn} />
       ) : (
         <>
           {turn.user && <MessageBubble message={turn.user} />}
           {turn.items.length > 0 && (
-            <WorkItems items={turn.items} />
+            <WorkItems items={turn.items} sessionId={sessionId} />
           )}
           {turn.assistant && turn.assistant.content && (
             <div className="msg-row assistant">
@@ -675,7 +772,7 @@ export default function ChatView({
             </button>
           )}
           {renderTurns.map((t) => (
-            <TurnItem key={t.key} turn={t} />
+            <TurnItem key={t.key} turn={t} sessionId={sessionId} />
           ))}
           {skillLoaded && skillLoaded.length > 0 && (
             <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>

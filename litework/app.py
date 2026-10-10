@@ -27,6 +27,7 @@ from .security.question import QuestionGate
 from .tools.ask import QuestionPlugin
 from .tools.agent_tools import MultiAgentPlugin
 from .tools.path_permissions import PathPermissionsPlugin
+from .tools.render_card import RenderCardPlugin
 from .tools.plugin import (
     ASTPlugin,
     CodebasePlugin,
@@ -1176,6 +1177,7 @@ class AgentApp:
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
             PathPermissionsPlugin(self),
+            RenderCardPlugin(self),
         ]
         # 内置目录（litework/builtin_plugins/）里的工具插件（如定价插件 pricing-plugin）
         # 与上面硬编码的内置插件同样进内核装配与插件页元信息；按 name 去重。

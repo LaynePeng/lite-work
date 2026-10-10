@@ -1012,6 +1012,70 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-3);
 }
 
+/* —— 富内容卡片（render_card；sandbox iframe） —— */
+.rich-card {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.rich-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--bg-2);
+  border: none;
+  color: var(--text-1);
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.rich-card-head:hover {
+  background: var(--bg-3);
+}
+
+.rich-card-icon {
+  font-size: 13px;
+}
+
+.rich-card-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.rich-card-body {
+  padding: 0;
+}
+
+.rich-card-frame {
+  width: 100%;
+  min-height: 200px;
+  height: 320px;
+  border: none;
+  display: block;
+  background: #fff;
+}
+
+.rich-card-loading,
+.rich-card-error {
+  padding: 18px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.rich-card-error {
+  color: var(--red);
+}
+
 /* —— 「规则」Tab（设计文档 §6：dots custom rules 思路） —— */
 .rules-panel {
   display: flex;
