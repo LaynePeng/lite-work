@@ -711,10 +711,17 @@ function SubagentTreeDrawer({ sessionId, onClose }: { sessionId: string; onClose
   );
 }
 
+/** 项目徽标色点（Goals 全局视图）：路径 hash → 固定色相，跨刷新稳定。 */
+function projectDotColor(workspace: string): string {
+  let h = 0;
+  for (let i = 0; i < workspace.length; i++) h = (h * 31 + workspace.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 55%, 50%)`;
+}
+
 /** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
  *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
  *  步骤最多 3 行；完成态自动收敛。 */
-function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRename, onTogglePin, onOpenDeliverable }: {
+function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRename, onTogglePin, onOpenDeliverable, showProjectBadge }: {
   task: SessionInfo;
   active: boolean;
   onSelect: () => void;
@@ -727,6 +734,8 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
   onTogglePin?: (pinned: boolean) => void;
   /** 打开交付物（完成态卡「交付：」行点击；App 层走文件页签管线） */
   onOpenDeliverable?: (name: string) => void;
+  /** 全局视图：显示项目徽标（色点 + 名称；个人区 👤 个人） */
+  showProjectBadge?: boolean;
 }) {
   const [trajOpen, setTrajOpen] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
@@ -736,9 +745,22 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
   const done = p ? p.done >= p.total : false;
   const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
   const la = task.last_activity;
+  const taskWs = (task.metadata?.workspace as string) || "";
 
   return (
     <div className={`task-card ${active ? "active" : ""} ${done ? "done-card" : ""}`} onClick={onSelect}>
+      {showProjectBadge && task.project && (
+        <div className="task-project-badge" title={taskWs}>
+          {task.project.kind === "personal" ? (
+            <span className="task-project-dot" style={{ background: "var(--accent)" }} />
+          ) : (
+            <span className="task-project-dot" style={{ background: projectDotColor(taskWs) }} />
+          )}
+          <span className="task-project-name">
+            {task.project.kind === "personal" ? "👤" : task.project.kind === "code" ? "💻" : "📁"} {task.project.name}
+          </span>
+        </div>
+      )}
       <div className="task-head">
         {task.running ? (
           <span className="running-dot" title="任务运行中" />
@@ -858,7 +880,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
 }
 
 /** 任务 Tab：当前项目的会话按 Goals 视图呈现（运行中在前，其余按更新时间倒序）。 */
-function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession, onOpenDeliverable }: {
+function TaskList({ sessions, activeSessionId, workspace, projectKind, projectName, onBackToProjects, onSelectSession, onContinueSession, onDeriveSession, onDeleteSession, onNewSession, onNewTask, onRenameSession, onTogglePinSession, onOpenDeliverable, globalMode, onSwitchView }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   workspace: string;
@@ -878,6 +900,10 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
   onTogglePinSession?: (id: string, pinned: boolean) => void;
   /** 打开交付物（完成态卡「交付：」行点击；相对落盘目录的文件名） */
   onOpenDeliverable?: (name: string) => void;
+  /** Goals 全局视图：true=显示跨项目全部任务（卡片带项目徽标，点击=切项目+进会话） */
+  globalMode?: boolean;
+  /** 切换「本项目|全部」视图 */
+  onSwitchView?: (global: boolean) => void;
 }) {
   const sorted = [...sessions].sort((a, b) => {
     // 运行中 → 置顶（Goals 视图：正在替我干活的优先可见；用户钉住的其次）
@@ -893,14 +919,22 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
       <div className="project-context">
         <button className="btn-back-projects" onClick={onBackToProjects} title="返回项目列表">←</button>
         <div className="project-context-name" title={workspace}>
-          {projectKind === "code" ? "💻" : "📁"} {projectName}
+          {globalMode ? "🌐 全部任务" : `${projectKind === "code" ? "💻" : "📁"} ${projectName}`}
         </div>
+        {onSwitchView && (
+          <div className="tasks-view-toggle" title="Goals 是全局的：目标不属于某个聊天窗口，属于我">
+            <button className={!globalMode ? "active" : ""} onClick={() => onSwitchView(false)}>本项目</button>
+            <button className={globalMode ? "active" : ""} onClick={() => onSwitchView(true)}>全部</button>
+          </div>
+        )}
       </div>
       <button className="btn-new-session" onClick={onNewTask || onNewSession}>＋ 新建任务</button>
       {sorted.length === 0 && (
         <div className="sidebar-empty">
-          还没有任务
-          <div className="sidebar-empty-sub">新建任务后，Agent 建立了 TODO 看板就会在这里显示进度</div>
+          {globalMode ? "还没有任何任务" : "还没有任务"}
+          <div className="sidebar-empty-sub">{globalMode
+            ? "各项目与个人区的任务都会出现在这里，按最近活动排序"
+            : "新建任务后，Agent 建立了 TODO 看板就会在这里显示进度"}</div>
         </div>
       )}
       {sorted.map((s) => (
@@ -915,6 +949,7 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
           onRename={onRenameSession ? (name) => onRenameSession(s.session_id, name) : undefined}
           onTogglePin={onTogglePinSession ? (pinned) => onTogglePinSession(s.session_id, pinned) : undefined}
           onOpenDeliverable={onOpenDeliverable}
+          showProjectBadge={globalMode}
         />
       ))}
     </div>
@@ -945,6 +980,8 @@ export default function Sidebar({
   onOpenSessionWithProject,
   onNewSession,
   onNewTask,
+  tasksGlobalMode,
+  onSwitchTasksView,
   onDeleteSession,
   onDeleteSessions,
   onOpenProject,
@@ -991,6 +1028,10 @@ export default function Sidebar({
   onDeleteSession: (id: string) => void;
   /** 任务 Tab「＋ 新建任务」：打开任务向导弹窗（区别于项目 Tab 的新建会话） */
   onNewTask?: () => void;
+  /** Goals 全局视图（P3）：true=「全部任务」模式（sessions 由 App 切到全局列表） */
+  tasksGlobalMode?: boolean;
+  /** 切换任务 Tab 视图（true=全部 / false=本项目）；切换后 App 拉全局列表 */
+  onSwitchTasksView?: (global: boolean) => void;
   /** 批量删除会话（App 层调 api.deleteSessionsBatch 并同步页签/会话列表） */
   onDeleteSessions?: (ids: string[]) => void;
   onOpenProject: () => void;
@@ -1283,6 +1324,8 @@ export default function Sidebar({
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePinSession}
             onOpenDeliverable={onOpenDeliverable}
+            globalMode={tasksGlobalMode}
+            onSwitchView={onSwitchTasksView}
           />
         )}
 

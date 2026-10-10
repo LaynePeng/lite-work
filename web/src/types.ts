@@ -82,6 +82,8 @@ export interface SessionInfo {
   pinned?: boolean;
   /** 交付物指针（P3）：TODO 全部完成时聚合的根目录顶层文件快照（mtime 倒序） */
   deliverables?: { name: string; mtime: number }[];
+  /** 项目徽标（Goals 全局视图）：落盘目录名称 + 类型；个人区 kind=personal */
+  project?: { name: string; kind: "code" | "project" | "personal" };
   /** 本进程运行期的会话累计成本（跨重启无值）；美元 */
   cost_usd?: number | null;
   /** 是否有任务正在执行（TaskManager active_for_session） */

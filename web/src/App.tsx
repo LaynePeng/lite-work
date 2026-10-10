@@ -210,6 +210,20 @@ export default function App() {
   const [chatStates, setChatStates] = useState<Record<string, ChatSessionState>>({});
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Goals 全局视图（P3）：任务 Tab「全部」模式显示跨项目全部任务（含个人区）
+  const [globalTasks, setGlobalTasks] = useState<SessionInfo[]>([]);
+  const globalTasksRequestRef = useRef(0);
+
+  const refreshGlobalTasks = useCallback(async (): Promise<SessionInfo[]> => {
+    const requestId = ++globalTasksRequestRef.current;
+    try {
+      const next = await api.sessions(); // 无 workspace 参数 = 全部项目
+      if (requestId === globalTasksRequestRef.current) setGlobalTasks(next);
+      return next;
+    } catch {
+      return [];
+    }
+  }, []);
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
   const [providerMeta, setProviderMeta] = useState<LLMProviderMeta[]>([]);
@@ -1063,10 +1077,20 @@ export default function App() {
     [refreshSessions, selectSession, newChatTab, pushLog]
   );
 
+  // Goals 全局视图模式（P3）：任务 Tab「本项目|全部」切换；「全部」时任务卡
+  // 点击 = 热切换到该任务落盘的项目再进会话（复用 openSessionWithProject 管线）
+  const [tasksGlobalMode, setTasksGlobalMode] = useState(false);
+  const switchTasksView = useCallback(async (global: boolean) => {
+    setTasksGlobalMode(global);
+    if (global) await refreshGlobalTasks();
+  }, [refreshGlobalTasks]);
+
   // 双击会话：切到该会话关联的项目，再打开会话（便于接着原项目继续开发）
   const openSessionWithProject = useCallback(
     async (sid: string) => {
-      const info = sessions.find((s) => s.session_id === sid);
+      // 全局视图下目标会话可能在 globalTasks（本项目 sessions 之外）
+      const info = sessions.find((s) => s.session_id === sid)
+        ?? globalTasks.find((s) => s.session_id === sid);
       const targetWs = (info?.metadata?.workspace as string) || "";
       if (targetWs && status?.workspace !== targetWs) {
         try {
@@ -1087,7 +1111,7 @@ export default function App() {
       }
       await selectSession(sid);
     },
-    [sessions, status?.workspace, selectSession, closeStream, refreshSessions, pushLog, notifyElectronWorkspace]
+    [sessions, globalTasks, status?.workspace, selectSession, closeStream, refreshSessions, pushLog, notifyElectronWorkspace]
   );
 
   const deleteSession = useCallback(
@@ -3077,7 +3101,6 @@ export default function App() {
       {!sidebarCollapsed && (
       <ErrorBoundary name="侧边栏" compact>
       <Sidebar
-        sessions={sessions}
         activeSessionId={activeSessionId}
         workspace={status?.workspace ?? "未打开项目"}
         tab={sidebarTab}
@@ -3091,12 +3114,15 @@ export default function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
         onTabChange={changeSidebarTab}
-        onSelectSession={(id) => void selectSession(id)}
+        sessions={tasksGlobalMode ? globalTasks : sessions}
+        onSelectSession={(id) => { void (tasksGlobalMode ? openSessionWithProject(id) : selectSession(id)); }}
         onContinueSession={(id, title) => void continueSession(id, title)}
         onDeriveSession={(id, title) => void deriveSession(id, title)}
         onRenameSession={(id, name) => void renameSession(id, name)}
         onTogglePinSession={(id, pinned) => void togglePinSession(id, pinned)}
         onOpenDeliverable={(name) => void openFileTab(name)}
+        tasksGlobalMode={tasksGlobalMode}
+        onSwitchTasksView={(global) => void switchTasksView(global)}
         onOpenSessionWithProject={(id) => void openSessionWithProject(id)}
         onNewSession={requestNewChat}
         onNewTask={requestNewTask}
