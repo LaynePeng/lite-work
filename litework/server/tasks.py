@@ -237,6 +237,29 @@ class TaskHandle:
             except Exception:
                 logger.debug("[Task %s] 子 Agent 归档落盘失败", self.task_id, exc_info=True)
 
+        # 任务后反思（W10）：reflection_enabled 开启时，task:done 后基于轨迹
+        # 提炼可复用流程 → SKILL.md 草稿落个人区（fire-and-forget：反思失败
+        # 静默，绝不阻塞任务收尾与事件转发）
+        async def _run_reflection_after_done(payload: Any) -> None:
+            try:
+                from ..core.reflection import run_reflection
+                snap = self.app.session_store.load(self.kernel.session_id)
+                goal = str(((snap.metadata if snap else None) or {}).get("goal") or "")
+                await run_reflection(self.app, self.kernel.session_id,
+                                     goal=goal, task_id_hint=self.task_id)
+            except Exception:
+                logger.debug("[Task %s] 反思调度失败", self.task_id, exc_info=True)
+
+        def _schedule_reflection(payload: Any) -> None:
+            if bool(self.app.config.get("reflection_enabled", False)):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_run_reflection_after_done(payload))
+                except RuntimeError:
+                    pass  # 无事件循环（非常规调用路径）：跳过反思
+
+        self.kernel.events.on("task:done", _schedule_reflection)
+
         self.kernel.events.on("subagent:completed", _persist_subagent_completed)
         self.kernel.events.on("llm:stream", lambda p: _listener("llm:stream", p))
         for name in EVENT_FORWARD - {"llm:stream"}:

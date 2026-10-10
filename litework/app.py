@@ -107,6 +107,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 轨迹是低频需求的持久化数据，不应默认产生存储压力；需要时在设置页开启
     # （开启后新任务开始记录，已有的照常保留）
     "trajectory_enabled": False,
+    # 任务后反思（W10）：任务完成后基于轨迹提炼可复用流程，SKILL.md 草稿落
+    # 个人区 skill-drafts（用户审阅后手动采纳）。默认关闭——反思花 LLM 费用
+    "reflection_enabled": False,
     # 定价（每 M token，美元）：**最后一道回退**（官方源与 models.dev 都无数据时）。
     # 默认对齐内置默认供应商 DeepSeek —— deepseek-flash **峰值**价：缓存未命中输入
     # $0.3 / 输出 $1.2 / 缓存命中 $0.006（官方定价页，USD）。DeepSeek 分时计费由

@@ -11,6 +11,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+# 个人任务落盘区（Goals 全局视图）：单一来源 core/personal.py（core 反思模块
+# 也要用，避免 core→server 反向依赖）；re-export 保持既有引用（含测试）兼容。
+from ...core.personal import PERSONAL_WORKSPACE, ensure_personal_workspace  # noqa: F401
 from .context import ServerContext, _session_title
 
 
@@ -93,21 +96,6 @@ def _todo_progress(todos: list) -> Optional[Dict[str, Any]]:
         "current": current,
         "next": pending[:2],
     }
-
-
-#: 个人任务落盘区（Goals 全局视图）：跨平台 ~/lite-work/personal——可见目录
-#: （与隐藏的数据目录 ~/.lite-work 区分：日志/会话在数据目录，产物在可见目录）。
-#: macOS: /Users/<name>/lite-work/personal；Windows: %USERPROFILE%\lite-work\personal。
-#: 「个人」是默认落盘位置而非伪项目：发邮件/整理照片这类不隶属任何项目的任务
-#: 的产物落在这里，任务卡徽标显示 👤 个人。
-PERSONAL_WORKSPACE = os.path.join(
-    os.path.expanduser("~"), "lite-work", "personal")
-
-
-def ensure_personal_workspace() -> str:
-    """确保个人落盘区存在（惰性创建，幂等）。返回其绝对路径。"""
-    os.makedirs(PERSONAL_WORKSPACE, exist_ok=True)
-    return PERSONAL_WORKSPACE
 
 
 def _project_badge(workspace: str) -> Dict[str, Any]:
