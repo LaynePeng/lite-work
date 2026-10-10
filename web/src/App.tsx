@@ -1086,6 +1086,25 @@ export default function App() {
     if (global) await refreshGlobalTasks();
   }, [refreshGlobalTasks]);
 
+  // 会话 Tab 的「本项目|全部」——独立于任务 Tab 的开关键。
+  // 回归背景：此前侧栏 sessions 直接用 tasksGlobalMode 切数据源，任务 Tab 切过
+  // 「全部」后会话列表也被换成跨项目列表（进入项目却看到别的项目的会话）。
+  const [sessionsGlobalMode, setSessionsGlobalMode] = useState(false);
+  const switchSessionsView = useCallback(async (global: boolean) => {
+    setSessionsGlobalMode(global);
+    if (global) await refreshGlobalTasks();
+  }, [refreshGlobalTasks]);
+  // 进入/切换项目 → 会话视图回到「本项目」：带着上一个项目留下的「全部」视图
+  // 进新项目，会让人以为「进项目却看到别的项目的对话」（本轮回归的观感来源之一）。
+  useEffect(() => { setSessionsGlobalMode(false); }, [status?.workspace]);
+
+  /** 会话列表统一刷新：本项目列表必刷；任一 Tab 处于全局视图时同步全局列表
+   *  （否则在「全部」模式下删除/改名/置顶/派生后列表保持陈旧）。 */
+  const refreshSessionViews = useCallback(async () => {
+    await refreshSessions();
+    if (sessionsGlobalMode || tasksGlobalMode) await refreshGlobalTasks();
+  }, [refreshSessions, refreshGlobalTasks, sessionsGlobalMode, tasksGlobalMode]);
+
   // 双击会话：切到该会话关联的项目，再打开会话（便于接着原项目继续开发）
   const openSessionWithProject = useCallback(
     async (sid: string) => {
@@ -1131,12 +1150,12 @@ export default function App() {
           }
           return next;
         });
-        await refreshSessions();
+        await refreshSessionViews();
       } catch {
         /* ignore */
       }
     },
-    [activeTabId, refreshSessions, newChatTab]
+    [activeTabId, refreshSessionViews, newChatTab]
   );
 
   /** 批量删除会话：后端批量删除后同步页签（被删会话的页签一并关闭）与会话列表。 */
@@ -1157,12 +1176,12 @@ export default function App() {
           }
           return next;
         });
-        await refreshSessions();
+        await refreshSessionViews();
       } catch {
         /* ignore（与单删风格一致） */
       }
     },
-    [activeTabId, refreshSessions, newChatTab]
+    [activeTabId, refreshSessionViews, newChatTab]
   );
 
   const openProject = useCallback(async () => {
@@ -2894,31 +2913,31 @@ export default function App() {
             " 可直接下达新版需求，或用 /goal 调整目标。",
         }],
       });
-      await refreshSessions();
+      await refreshSessionViews();
     } catch (e) {
       pushLog(`✗ 派生失败: ${(e as Error).message}`);
     }
-  }, [selectSession, refreshSessions, patchChat, pushLog]);
+  }, [selectSession, refreshSessionViews, patchChat, pushLog]);
 
   /** 任务卡重命名（空串 = 清除自定义名，回退首条消息推导）。 */
   const renameSession = useCallback(async (sid: string, name: string) => {
     try {
       await api.patchSession(sid, { name });
-      await refreshSessions();
+      await refreshSessionViews();
     } catch (e) {
       pushLog(`✗ 重命名失败: ${(e as Error).message}`);
     }
-  }, [refreshSessions, pushLog]);
+  }, [refreshSessionViews, pushLog]);
 
   /** 任务卡置顶开关（排序：运行中 → pinned → 更新时间倒序）。 */
   const togglePinSession = useCallback(async (sid: string, pinned: boolean) => {
     try {
       await api.patchSession(sid, { pinned });
-      await refreshSessions();
+      await refreshSessionViews();
     } catch (e) {
       pushLog(`✗ 置顶失败: ${(e as Error).message}`);
     }
-  }, [refreshSessions, pushLog]);
+  }, [refreshSessionViews, pushLog]);
 
   const stop = useCallback(async () => {
     const sid = activeSessionId;
@@ -3144,8 +3163,11 @@ export default function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
         onTabChange={changeSidebarTab}
-        sessions={tasksGlobalMode ? globalTasks : sessions}
-        onSelectSession={(id) => { void (tasksGlobalMode ? openSessionWithProject(id) : selectSession(id)); }}
+        sessions={sessions}
+        globalSessions={globalTasks}
+        sessionsGlobalMode={sessionsGlobalMode}
+        onSwitchSessionsView={(global) => void switchSessionsView(global)}
+        onSelectSession={(id) => void selectSession(id)}
         onContinueSession={(id, title) => void continueSession(id, title)}
         onDeriveSession={(id, title) => void deriveSession(id, title)}
         onRenameSession={(id, name) => void renameSession(id, name)}

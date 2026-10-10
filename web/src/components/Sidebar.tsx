@@ -1054,6 +1054,9 @@ function TaskList({ sessions, activeSessionId, workspace, projectKind, projectNa
 
 export default function Sidebar({
   sessions,
+  globalSessions,
+  sessionsGlobalMode,
+  onSwitchSessionsView,
   activeSessionId,
   workspace,
   tab,
@@ -1095,6 +1098,12 @@ export default function Sidebar({
   onDirOpen,
 }: {
   sessions: SessionInfo[];
+  /** 跨项目全部会话（会话 Tab「全部」模式的数据源；含项目徽标字段） */
+  globalSessions?: SessionInfo[];
+  /** 会话 Tab 是否处于「全部」模式（独立于任务 Tab 的 globalMode） */
+  sessionsGlobalMode?: boolean;
+  /** 切换会话 Tab 视图（true=全部 / false=本项目）；App 层拉全局列表 */
+  onSwitchSessionsView?: (global: boolean) => void;
   activeSessionId: string | null;
   workspace: string;
   tab: SidebarTab;
@@ -1150,7 +1159,11 @@ export default function Sidebar({
   const projectName = workspace && workspace !== "未打开项目"
     ? baseName(workspace) || workspace
     : "";
-
+  // 会话 Tab 数据源：本项目（App 已按 workspace 严格过滤）或跨项目全部。
+  // 全局模式按最近更新倒序（跨项目列表必须可预期，否则像随机堆叠）。
+  const sessionList = sessionsGlobalMode
+    ? [...(globalSessions ?? [])].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+    : sessions;
   // 最近项目搜索（纯前端过滤：名称/路径子串，大小写不敏感）
   const [projectSearch, setProjectSearch] = useState("");
   const filteredProjects = projectSearch.trim()
@@ -1329,7 +1342,8 @@ export default function Sidebar({
             </div>
           ) : (
             <div className="sessions-list">
-              {/* 二级视图：项目内会话历史（打开项目后进入） */}
+              {/* 二级视图：项目内会话历史（打开项目后进入）。
+                  「本项目|全部」双视图：全部 = 跨项目会话（含项目徽标，点击热切换项目）。 */}
               <div className="project-context">
                 <button
                   className="btn-back-projects"
@@ -1338,9 +1352,19 @@ export default function Sidebar({
                 >
                   ← 项目列表
                 </button>
-                <div className="project-context-name" title={workspace}>
-                  {projectKind === "code" ? "💻" : "📁"} {projectName}
+                <div className="project-context-name" title={sessionsGlobalMode ? "跨项目全部会话" : workspace}>
+                  {sessionsGlobalMode
+                    ? `🌐 全部会话（${sessionList.length}）`
+                    : <>{projectKind === "code" ? "💻" : "📁"} {projectName}</>}
                 </div>
+                {onSwitchSessionsView && (
+                  <div className="tasks-view-toggle" title="会话按项目归属：本项目只显示当前项目的对话">
+                    <button className={!sessionsGlobalMode ? "active" : ""}
+                      onClick={() => onSwitchSessionsView(false)}>本项目</button>
+                    <button className={sessionsGlobalMode ? "active" : ""}
+                      onClick={() => onSwitchSessionsView(true)}>全部</button>
+                  </div>
+                )}
               </div>
               <button className="btn-new-session" onClick={onNewSession}>
                 ＋ 新建会话
@@ -1363,12 +1387,23 @@ export default function Sidebar({
                   </button>
                 </div>
               )}
-              {sessions.length === 0 && <div className="sidebar-empty">还没有会话</div>}
-              {sessions.map((s) => (
+              {sessionList.length === 0 && (
+                <div className="sidebar-empty">
+                  {sessionsGlobalMode ? "还没有任何项目的会话" : "还没有会话"}
+                  <div className="sidebar-empty-sub">
+                    {sessionsGlobalMode
+                      ? "各项目的对话都会出现在这里，点击自动切到该项目打开"
+                      : "在下方输入框发起对话，或从项目列表切换项目"}
+                  </div>
+                </div>
+              )}
+              {sessionList.map((s) => (
                 <div
                   key={s.session_id}
                   className={`session-item ${s.session_id === activeSessionId ? "active" : ""} ${sessionSelectMode && selectedSessions.has(s.session_id) ? "selected" : ""}`}
-                  onClick={sessionSelectMode ? () => toggleSessionSelected(s.session_id) : () => onSelectSession(s.session_id)}
+                  onClick={sessionSelectMode
+                    ? () => toggleSessionSelected(s.session_id)
+                    : () => { void (sessionsGlobalMode ? onOpenSessionWithProject(s.session_id) : onSelectSession(s.session_id)); }}
                   onDoubleClick={sessionSelectMode ? undefined : () => onOpenSessionWithProject(s.session_id)}
                 >
                   {sessionSelectMode && (
@@ -1379,6 +1414,18 @@ export default function Sidebar({
                       onChange={() => toggleSessionSelected(s.session_id)}
                       onClick={(e) => e.stopPropagation()}
                     />
+                  )}
+                  {sessionsGlobalMode && s.project && (
+                    <div className="task-project-badge" title={(s.metadata?.workspace as string) || ""}>
+                      {s.project.kind === "personal" ? (
+                        <span className="task-project-dot" style={{ background: "var(--accent)" }} />
+                      ) : (
+                        <span className="task-project-dot" style={{ background: projectDotColor((s.metadata?.workspace as string) || "") }} />
+                      )}
+                      <span className="task-project-name">
+                        {s.project.kind === "personal" ? "👤" : s.project.kind === "code" ? "💻" : "📁"} {s.project.name}
+                      </span>
+                    </div>
                   )}
                   <div className="session-title">{s.title}</div>
                   <div className="session-meta">
@@ -1412,7 +1459,7 @@ export default function Sidebar({
             projectKind={projectKind ?? "project"}
             projectName={projectName}
             onBackToProjects={() => { onBackToProjects(); onTabChange("sessions"); }}
-            onSelectSession={onSelectSession}
+            onSelectSession={tasksGlobalMode ? onOpenSessionWithProject : onSelectSession}
             onContinueSession={onContinueSession}
             onDeriveSession={onDeriveSession}
             onDeleteSession={onDeleteSession}

@@ -469,3 +469,93 @@ describe("Sidebar · 任务 Tab（Goals 视图）", () => {
     expect(onTabChange).toHaveBeenCalledWith("sessions");
   });
 });
+
+// ---------------------------------------------------------------- 会话 Tab：本项目 / 全部
+
+describe("Sidebar · 会话 Tab「本项目 / 全部」双视图", () => {
+  // 本项目会话 + 跨项目会话（含项目徽标字段）
+  const projectSessions = [
+    { session_id: "p1", title: "本项目会话", message_count: 2, updated_at: 100 },
+  ];
+  const globalSessions = [
+    { session_id: "p1", title: "本项目会话", message_count: 2, updated_at: 100,
+      project: { name: "ws", kind: "project" } },
+    { session_id: "g1", title: "别的项目会话", message_count: 9, updated_at: 200,
+      metadata: { workspace: "/tmp/other" },
+      project: { name: "other", kind: "code" } },
+  ];
+  const sessionProps = {
+    ...baseProps,
+    tab: "sessions" as const,
+    projectsView: "sessions" as const,
+  };
+
+  it("本项目模式：只显示当前项目会话，不出现别的项目会话与切换回调", async () => {
+    render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode={false} />);
+    expect(await screen.findByText("本项目会话")).toBeInTheDocument();
+    expect(screen.queryByText("别的项目会话")).toBeNull();
+    // 未提供 onSwitchSessionsView 时不渲染切换条（功能可关）
+    expect(screen.queryByText("全部")).toBeNull();
+  });
+
+  it("全部模式：显示跨项目会话 + 项目徽标 + 标题计数", async () => {
+    render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode
+      onSwitchSessionsView={() => {}} />);
+    expect(await screen.findByText("别的项目会话")).toBeInTheDocument();
+    expect(screen.getByText(/全部会话（2）/)).toBeInTheDocument();
+    // 项目徽标（区别于任务卡：会话卡也要能看出属于哪个项目）
+    expect(screen.getByText(/📁 ws/)).toBeInTheDocument();
+    expect(screen.getByText(/💻 other/)).toBeInTheDocument();
+  });
+
+  it("全部模式点击会话：走「切项目再打开」管线（onOpenSessionWithProject）", async () => {
+    const user = userEvent.setup();
+    const onSelectSession = vi.fn();
+    const onOpenSessionWithProject = vi.fn();
+    render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode
+      onSwitchSessionsView={() => {}}
+      onSelectSession={onSelectSession} onOpenSessionWithProject={onOpenSessionWithProject} />);
+    await user.click(await screen.findByText("别的项目会话"));
+    expect(onOpenSessionWithProject).toHaveBeenCalledWith("g1");
+    expect(onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("本项目模式点击会话：直接打开（不触发切项目）", async () => {
+    const user = userEvent.setup();
+    const onSelectSession = vi.fn();
+    const onOpenSessionWithProject = vi.fn();
+    render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode={false}
+      onSwitchSessionsView={() => {}}
+      onSelectSession={onSelectSession} onOpenSessionWithProject={onOpenSessionWithProject} />);
+    await user.click(await screen.findByText("本项目会话"));
+    expect(onSelectSession).toHaveBeenCalledWith("p1");
+  });
+
+  it("切换按钮回调：点「全部」/「本项目」各自带上正确的布尔值", async () => {
+    const user = userEvent.setup();
+    const onSwitchSessionsView = vi.fn();
+    const { unmount } = render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode={false}
+      onSwitchSessionsView={onSwitchSessionsView} />);
+    await user.click(await screen.findByText("全部"));
+    expect(onSwitchSessionsView).toHaveBeenCalledWith(true);
+    unmount();
+
+    const onSwitch2 = vi.fn();
+    render(<Sidebar {...sessionProps} sessions={projectSessions as never}
+      globalSessions={globalSessions as never} sessionsGlobalMode
+      onSwitchSessionsView={onSwitch2} />);
+    await user.click(await screen.findByText("本项目"));
+    expect(onSwitch2).toHaveBeenCalledWith(false);
+  });
+
+  it("全部模式空列表：给出跨项目空态文案（区别于本项目空态）", async () => {
+    render(<Sidebar {...sessionProps} sessions={[]}
+      globalSessions={[]} sessionsGlobalMode onSwitchSessionsView={() => {}} />);
+    expect(await screen.findByText("还没有任何项目的会话")).toBeInTheDocument();
+  });
+});
