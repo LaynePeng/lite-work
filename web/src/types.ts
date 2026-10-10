@@ -517,6 +517,10 @@ export interface SubAgentStatus {
   turns: number;
   changed_files: string[];
   summary: string;
+  /** 合作模式（orchestrate/pipeline/brainstorm/debate）；缺省=orchestrate（旧数据） */
+  mode?: string;
+  /** 嵌套深度（1=主 Agent 直接派生）；子 Agent 树按此缩进；缺省=1 */
+  depth?: number;
 }
 
 // Electron 注入的原生能力（浏览器模式下不存在）

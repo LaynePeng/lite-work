@@ -635,6 +635,82 @@ function TrajectoryDrawer({ sessionId, onClose }: { sessionId: string; onClose: 
   );
 }
 
+/** 子 Agent 树（P2 补齐）：主 Agent → 派生关系图，按嵌套深度缩进。
+ *  数据源 /api/sessions/{id}/agents（含跨重启恢复的 subagent_records 归档）。 */
+function SubagentTreeDrawer({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const [state, setState] = useState<{
+    loading: boolean;
+    agents: import("../types").SubAgentStatus[];
+    error: string;
+  }>({ loading: true, agents: [], error: "" });
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.sessionAgents(sessionId);
+        if (alive) setState({ loading: false, agents: r.agents, error: "" });
+      } catch (err) {
+        if (alive) setState({
+          loading: false, agents: [],
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return () => { alive = false; };
+  }, [sessionId]);
+
+  const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+    running: { label: "运行中", cls: "run" },
+    completed: { label: "完成", cls: "ok" },
+    errored: { label: "失败", cls: "err" },
+    closed: { label: "已关闭", cls: "dim" },
+  };
+
+  return (
+    <div className="traj-overlay" onClick={onClose}>
+      <div className="traj-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="traj-head">
+          <span>🌳 子 Agent 派生树</span>
+          <button className="traj-close" onClick={onClose}>✕</button>
+        </div>
+        {state.loading && <div className="traj-empty">加载中…</div>}
+        {!state.loading && state.error && <div className="traj-empty traj-err">✗ {state.error}</div>}
+        {!state.loading && !state.error && state.agents.length === 0 && (
+          <div className="traj-empty">
+            暂无子 Agent
+            <div className="traj-empty-sub">主 Agent 派生任务时在此显示派生树（含历史归档）</div>
+          </div>
+        )}
+        {!state.loading && !state.error && state.agents.length > 0 && (
+          <div className="satree">
+            <div className="satree-root">
+              <span className="satree-icon">🤖</span> 主 Agent
+            </div>
+            {state.agents.map((a) => {
+              const depth = Math.max(1, a.depth ?? 1);
+              const badge = STATUS_BADGE[a.status] ?? { label: a.status, cls: "dim" };
+              return (
+                <div key={a.agent_id} className="satree-node" style={{ paddingLeft: 12 * depth }}>
+                  <span className="satree-branch">{"└"}</span>
+                  <span className="satree-name" title={`${a.nickname}（${a.role}）`}>{a.nickname}</span>
+                  <span className={`satree-status ${badge.cls}`}>{badge.label}</span>
+                  <div className="satree-task" title={a.task}>{a.task}</div>
+                  {a.changed_files.length > 0 && (
+                    <div className="satree-files" title={a.changed_files.join("\n")}>
+                      {a.changed_files.length} 个改动文件
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** 任务卡（Goals 视图主体）：进度/当前步骤/最近活动/元信息/快捷操作。
  *  宽度纪律：280px 侧栏（--sidebar-w）内设计；标题/活动行 nowrap+ellipsis；
  *  步骤最多 3 行；完成态自动收敛。 */
@@ -651,6 +727,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
   onTogglePin?: (pinned: boolean) => void;
 }) {
   const [trajOpen, setTrajOpen] = useState(false);
+  const [treeOpen, setTreeOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const p = task.todo_progress;
@@ -725,6 +802,9 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
             {onRename && <button title="重命名"
               onClick={(e) => { e.stopPropagation(); setDraft(""); setRenaming(true); }}>✎</button>}
             <button title="执行轨迹（W7）" onClick={(e) => { e.stopPropagation(); setTrajOpen(true); }}>📈</button>
+            {!!task.subagent_count && (
+              <button title="子 Agent 派生树" onClick={(e) => { e.stopPropagation(); setTreeOpen(true); }}>🌳</button>
+            )}
             {!task.running && onContinue && (
               <button className="btn-continue-card" title="续任务：TODO 有未完成项，继续推进（等同聊天区「继续执行未完成的任务」）"
                 onClick={(e) => { e.stopPropagation(); onContinue(); }}>⏭ 续</button>
@@ -753,6 +833,7 @@ function TaskCard({ task, active, onSelect, onContinue, onDerive, onDelete, onRe
       )}
 
       {trajOpen && <TrajectoryDrawer sessionId={task.session_id} onClose={() => setTrajOpen(false)} />}
+      {treeOpen && <SubagentTreeDrawer sessionId={task.session_id} onClose={() => setTreeOpen(false)} />}
     </div>
   );
 }

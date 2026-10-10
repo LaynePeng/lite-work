@@ -446,6 +446,7 @@ class SubAgentRunner:
             "subagentId": sub_id,
             "nickname": nickname or sub_id,
             "mode": getattr(record, "mode", "orchestrate") if record is not None else "orchestrate",
+            "depth": getattr(record, "depth", 1) if record is not None else 1,
             # review gate 轻量版：改动文件清单随通知送达（看板「待审查」徽标数据源）
             "changed_files": list(record.changed_files) if record is not None else [],
             "callId": call_id,

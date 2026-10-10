@@ -174,6 +174,8 @@ class SubagentCompletedPayload(TypedDict):
     tokens_used: int
     turns: int
     summary: str
+    # 嵌套深度（1=主 Agent 直接派生；子 Agent 树视图按此缩进）
+    depth: int
     # 完成态："completed"（正常收敛）/ "errored"（LLM 失败、超时、步数耗尽等）。
     # error 为 errored 时的错误摘要（completed 时为 None），供前端置失败态。
     status: str

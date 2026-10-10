@@ -228,6 +228,7 @@ class TaskHandle:
                     "turns": payload.get("turns") or 0,
                     "summary": payload.get("summary") or "",
                     "status": "completed",
+                    "depth": int(payload.get("depth") or 1),
                 })
                 # 保留条数取配置（默认 20）；update_metadata 会合并到现有 metadata
                 keep = int(self.app.config.get("agent_persist_max", 20))

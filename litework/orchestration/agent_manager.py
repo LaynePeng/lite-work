@@ -262,6 +262,7 @@ class SessionAgentManager:
                     changed_files=[str(f) for f in (r.get("changed_files") or [])],
                     tokens=int(r.get("tokens") or 0),
                     turns=int(r.get("turns") or 0),
+                    depth=int(r.get("depth") or 1),
                     started_at=float(r.get("started_at") or 0) or time.time(),
                 )
             if self.agents:
@@ -463,6 +464,8 @@ class SessionAgentManager:
                 "tokens": r.tokens, "turns": r.turns,
                 "changed_files": r.changed_files,
                 "summary": (r.summary[:200] + "…") if len(r.summary) > 200 else r.summary,
+                "mode": r.mode,
+                "depth": r.depth,
             })
         return out
 

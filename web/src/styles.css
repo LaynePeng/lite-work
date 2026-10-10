@@ -1026,6 +1026,68 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   50% { opacity: 0.3; }
 }
 
+/* —— 子 Agent 派生树（任务卡 🌳 按钮） —— */
+.satree {
+  padding: 10px 14px;
+  font-size: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.satree-root {
+  font-weight: 600;
+  color: var(--text-0);
+  padding: 4px 0 6px;
+}
+
+.satree-node {
+  padding: 5px 0;
+  border-left: 1px solid var(--border);
+  margin-left: 6px;
+  padding-left: 14px;
+  position: relative;
+}
+
+.satree-branch {
+  position: absolute;
+  left: -1px;
+  top: 8px;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.satree-name {
+  font-weight: 600;
+  color: var(--text-0);
+  margin-right: 6px;
+}
+
+.satree-status {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.satree-status.run { background: var(--bg-3); color: var(--green); }
+.satree-status.ok { background: var(--bg-3); color: var(--green); }
+.satree-status.err { background: var(--bg-3); color: var(--red); }
+.satree-status.dim { background: var(--bg-3); color: var(--text-3); }
+
+.satree-task {
+  color: var(--text-2);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.satree-files {
+  color: var(--text-3);
+  font-size: 10.5px;
+  margin-top: 1px;
+}
+
 /* —— 轨迹抽屉（任务卡 📈 按钮；W7 透出） —— */
 .traj-overlay {
   position: fixed;
