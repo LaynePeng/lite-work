@@ -1,5 +1,5 @@
 // 内联 HTML 回复：```html 完整文档 → 沙箱 iframe；短片段/普通代码块保持既有行为。
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Markdown } from "./ChatView";
 
@@ -168,5 +168,197 @@ describe("Markdown 原生富内容块（chart / cards / 本地图片）", () => 
     expect(container.querySelector(".md-card")).not.toBeNull();
     expect(screen.getByText("看数据：")).toBeInTheDocument();
     expect(screen.getByText("再看卡片：")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------- 第二批富块形态
+
+describe("Markdown 富内容块（kpi / timeline / table / compare / board）", () => {
+  it("```kpi 围栏 → 指标卡（数值 + 涨跌色），文字照常渲染", () => {
+    const { container } = render(
+      <Markdown text={
+        "本月经营：\n\n```kpi\n" +
+        '{"title":"核心指标","items":[{"label":"营收","value":"¥1.24M","delta":"12.4%","trend":"up"},' +
+        '{"label":"流失率","value":"4.7%","delta":"0.8%","trend":"down","note":"环比"}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-kpi").length).toBe(2);
+    expect(container.querySelector(".md-kpi-value")?.textContent).toBe("¥1.24M");
+    expect(container.querySelector(".md-kpi-delta.up")?.textContent).toContain("12.4%");
+    expect(container.querySelector(".md-kpi-delta.down")).not.toBeNull();
+    expect(container.querySelector(".md-kpi-note")?.textContent).toBe("环比");
+    expect(screen.getByText("本月经营：")).toBeInTheDocument();
+  });
+
+  it("kpi 缺 label/value 的条目被丢弃；全空 → 回退代码块", () => {
+    const { container: c1 } = render(
+      <Markdown text={'```kpi\n{"items":[{"label":"只有标签"},{"label":"A","value":"1"}]}\n```'} />
+    );
+    expect(c1.querySelectorAll(".md-kpi").length).toBe(1);
+
+    const { container: c2 } = render(<Markdown text={'```kpi\n{"items":[{"label":"x"}]}\n```'} />);
+    expect(c2.querySelector(".md-kpi")).toBeNull();
+    expect(c2.querySelector("code")).not.toBeNull();
+  });
+
+  it("```timeline 围栏 → 时间线（时间、标题、说明、状态色）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```timeline\n{"items":[{"time":"09-22","title":"v1.10.7 发布","desc":"修复思考流","status":"done"},' +
+        '{"title":"插件优先级","status":"active"},{"title":"待排期"}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-tl-item").length).toBe(3);
+    expect(container.querySelector(".md-tl-dot.done")).not.toBeNull();
+    expect(container.querySelector(".md-tl-dot.active")).not.toBeNull();
+    expect(container.querySelector(".md-tl-time")?.textContent).toBe("09-22");
+    expect(container.querySelector(".md-tl-desc")?.textContent).toBe("修复思考流");
+    // 默认状态 pending（未声明 status）
+    expect(container.querySelectorAll(".md-tl-dot.pending").length).toBe(1);
+  });
+
+  it("```table 围栏 → 数据表；数值列右对齐（自动判定）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```table\n{"title":"方案对比","columns":["方案","月成本","风险"],' +
+        '"rows":[["A 自建","¥12,400","中"],["B 托管","¥8,900","低"]]}\n```'
+      } />
+    );
+    const ths = container.querySelectorAll(".md-table th");
+    expect(ths.length).toBe(3);
+    expect(ths[1].className).toContain("num");     // 月成本列自动判数值
+    expect(ths[0].className).not.toContain("num"); // 方案列不是
+    expect(container.querySelectorAll(".md-table tbody tr").length).toBe(2);
+  });
+
+  it("table 显式 numeric 覆盖自动判定；空 columns/rows → 回退代码块", () => {
+    const { container } = render(
+      <Markdown text={
+        '```table\n{"columns":["A","B"],"rows":[["x","1"]],"numeric":[0]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-table th")[0].className).toContain("num");
+
+    const { container: c2 } = render(<Markdown text={'```table\n{"columns":[],"rows":[]}\n```'} />);
+    expect(c2.querySelector(".md-table")).toBeNull();
+  });
+
+  it("```compare 围栏 → 左右对比（两侧标题与条目、tone 描边）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```compare\n{"left":{"title":"现状","items":["旧版压新版","需手动更新"],"tone":"bad"},' +
+        '"right":{"title":"改后","items":["版本感知","装完即用"],"tone":"good"}}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-cmp-side").length).toBe(2);
+    expect(container.querySelector(".md-cmp-side.bad .md-cmp-head")?.textContent).toBe("现状");
+    expect(container.querySelector(".md-cmp-side.good .md-cmp-head")?.textContent).toBe("改后");
+    expect(container.querySelectorAll(".md-cmp-list li").length).toBe(4);
+    expect(container.querySelector(".md-cmp-vs")?.textContent).toBe("⇄");
+  });
+
+  it("compare 缺一侧 → 回退代码块", () => {
+    const { container } = render(
+      <Markdown text={'```compare\n{"left":{"title":"只有左","items":["a"]}}\n```'} />
+    );
+    expect(container.querySelector(".md-cmp")).toBeNull();
+    expect(container.querySelector("code")).not.toBeNull();
+  });
+
+  it("```board 围栏 → 看板（分组列 + 卡片 + 计数 + 空列提示）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```board\n{"columns":[{"name":"待办","cards":[{"title":"写用例","tag":"P1"}]},' +
+        '{"name":"完成","cards":[{"title":"树杀","tone":"good"},{"title":"OCR","tone":"good"}]},' +
+        '{"name":"阻塞","cards":[]}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-board-col").length).toBe(3);
+    expect(container.querySelector(".md-board-count")?.textContent).toBe("1");
+    expect(container.querySelector(".md-board-card.good")).not.toBeNull();
+    expect(container.querySelector(".md-board-tag")?.textContent).toBe("P1");
+    expect(container.querySelector(".md-board-empty")).not.toBeNull();
+  });
+
+  it("```progress 围栏 → 进度条（色阶 + 自定义 display + note）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```progress\n{"title":"质量目标","items":[{"label":"代码覆盖率","value":82},' +
+        '{"label":"接口文档","value":54,"note":"目标 90%"},{"label":"告警治理","value":21,"display":"3/14"}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-progress").length).toBe(3);
+    // 色阶：≥80 绿 / 40-79 黄 / <40 红
+    expect(container.querySelector(".md-progress-fill.good")).not.toBeNull();
+    expect(container.querySelector(".md-progress-fill.warn")).not.toBeNull();
+    expect(container.querySelector(".md-progress-fill.bad")).not.toBeNull();
+    // 宽度按百分比写入
+    expect((container.querySelector(".md-progress-fill.good") as HTMLElement).style.width).toBe("82%");
+    // 缺省显示百分比；显式 display 优先
+    expect(container.querySelector(".md-progress-value.good")?.textContent).toBe("82%");
+    expect(container.querySelector(".md-progress-value.bad")?.textContent).toBe("3/14");
+    expect(container.querySelector(".md-progress-note")?.textContent).toBe("目标 90%");
+  });
+
+  it("progress 越界值 clamp 到 0-100；无 items → 回退代码块", () => {
+    const { container } = render(
+      <Markdown text={'```progress\n{"items":[{"label":"超范围","value":180},{"label":"负值","value":-20}]}\n```'} />
+    );
+    const fills = container.querySelectorAll(".md-progress-fill") as NodeListOf<HTMLElement>;
+    expect(fills[0].style.width).toBe("100%");
+    expect(fills[1].style.width).toBe("0%");
+
+    const { container: c2 } = render(<Markdown text={'```progress\n{"items":[]}\n```'} />);
+    expect(c2.querySelector(".md-progress")).toBeNull();
+    expect(c2.querySelector("code")).not.toBeNull();
+  });
+
+  it("新形态与文字混合分段（kpi + table + 前后说明）", () => {
+    const { container } = render(
+      <Markdown text={
+        "先看指标：\n\n```kpi\n{\"items\":[{\"label\":\"L\",\"value\":\"V\"}]}\n```\n\n" +
+        "再列明细：\n\n```table\n{\"columns\":[\"k\",\"v\"],\"rows\":[[\"a\",\"1\"]]}\n```"
+      } />
+    );
+    expect(container.querySelector(".md-kpi")).not.toBeNull();
+    expect(container.querySelector(".md-table")).not.toBeNull();
+    expect(screen.getByText("先看指标：")).toBeInTheDocument();
+    expect(screen.getByText("再列明细：")).toBeInTheDocument();
+  });
+});
+// ---------------------------------------------------------------- 代码块增强
+
+describe("Markdown 代码块增强（语言标签 / 复制 / 长代码折叠）", () => {
+  it("带语言的代码块显示语言标签与行数，并有复制按钮", () => {
+    const { container } = render(<Markdown text={"```ts\nconst a = 1;\nconst b = 2;\n```"} />);
+    expect(container.querySelector(".md-code-lang")?.textContent).toBe("ts");
+    expect(container.querySelector(".md-code-meta")?.textContent).toBe("2 行");
+    expect(container.querySelector(".md-code-copy")).not.toBeNull();
+    // 短代码不折叠
+    expect(container.querySelector(".md-code.collapsed")).toBeNull();
+    expect(container.querySelector(".md-code-fold")).toBeNull();
+  });
+
+  it("无语言标注回退为 text", () => {
+    const { container } = render(<Markdown text={"```\nplain\n```"} />);
+    expect(container.querySelector(".md-code-lang")?.textContent).toBe("text");
+  });
+
+  it("超过 24 行的长代码默认折叠并给出展开按钮，点击后展开", () => {
+    const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+    const { container } = render(<Markdown text={"```py\n" + long + "\n```"} />);
+    expect(container.querySelector(".md-code.collapsed")).not.toBeNull();
+    expect(container.querySelector(".md-code-meta")?.textContent).toBe("30 行");
+    const fold = container.querySelector(".md-code-fold") as HTMLButtonElement;
+    expect(fold.textContent).toContain("展开全部（30 行）");
+    fireEvent.click(fold);
+    expect(container.querySelector(".md-code.collapsed")).toBeNull();
+    expect((container.querySelector(".md-code-fold") as HTMLButtonElement).textContent).toBe("收起");
+  });
+
+  it("高亮后的代码文本可被复制（flattenText 从嵌套 span 树提取）", () => {
+    const { container } = render(<Markdown text={"```js\nconst x = 42;\n```"} />);
+    // 代码文本仍在 DOM 内（复制源即该文本）
+    expect(container.querySelector(".md-code pre")?.textContent).toContain("const x = 42;");
   });
 });

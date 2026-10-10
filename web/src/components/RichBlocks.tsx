@@ -62,9 +62,105 @@ export interface CardsSpec {
   items: CardItem[];
 }
 
+/** 指标卡：一行 3-4 个关键数字（可带环比涨跌）。汇报/复盘最常用。 */
+export interface KpiItem {
+  label: string;
+  value: string;
+  /** 环比/同比等变化文案；up=向好（绿）/ down=变差（红）/ flat=中性 */
+  delta?: string;
+  trend?: "up" | "down" | "flat";
+  /** 补充说明（口径、时间范围） */
+  note?: string;
+}
+
+export interface KpiSpec {
+  title?: string;
+  items: KpiItem[];
+}
+
+/** 时间线：带时间的进展/事件序列（发布节奏、事故复盘、里程碑）。 */
+export interface TimelineItem {
+  time?: string;
+  title: string;
+  desc?: string;
+  status?: "done" | "active" | "pending";
+}
+
+export interface TimelineSpec {
+  title?: string;
+  items: TimelineItem[];
+}
+
+/** 数据表：结构化多列对比（数值列右对齐）。 */
+export interface TableSpec {
+  title?: string;
+  columns: string[];
+  rows: string[][];
+  /** 数值列下标（右对齐 + 等宽数字）；缺省时按内容自动判定 */
+  numeric?: number[];
+}
+
+/** 左右对比：方案/版本/前后差异的并排对照（取舍场景）。 */
+export interface CompareSide {
+  title: string;
+  items: string[];
+  tone?: "good" | "bad" | "neutral";
+}
+
+export interface CompareSpec {
+  title?: string;
+  left: CompareSide;
+  right: CompareSide;
+}
+
+/** 看板：分组列（待办/进行中/完成），排期与分工场景。 */
+export interface BoardCard {
+  title: string;
+  desc?: string;
+  tag?: string;
+  tone?: "good" | "bad" | "neutral";
+}
+
+export interface BoardColumn {
+  name: string;
+  cards: BoardCard[];
+}
+
+export interface BoardSpec {
+  title?: string;
+  columns: BoardColumn[];
+}
+
+/** 进度条：多项目标完成度（OKR、体检项、覆盖率）。一眼看出短板。 */
+export interface ProgressItem {
+  label: string;
+  /** 完成百分比 0-100（越界自动 clamp） */
+  value: number;
+  /** 数值后缀文案，如「82%」「12/15」；缺省显示百分比 */
+  display?: string;
+  /** 补充说明（口径、目标值） */
+  note?: string;
+}
+
+export interface ProgressSpec {
+  title?: string;
+  items: ProgressItem[];
+}
+
 export type RichSegment =
   | { kind: "chart"; spec: ChartSpec }
-  | { kind: "cards"; spec: CardsSpec };
+  | { kind: "cards"; spec: CardsSpec }
+  | { kind: "kpi"; spec: KpiSpec }
+  | { kind: "timeline"; spec: TimelineSpec }
+  | { kind: "table"; spec: TableSpec }
+  | { kind: "compare"; spec: CompareSpec }
+  | { kind: "board"; spec: BoardSpec }
+  | { kind: "progress"; spec: ProgressSpec };
+
+/** 富块围栏语言（ChatView 分段正则与解析器共用一份，防两处漂移）。 */
+export const RICH_LANGS = [
+  "chart", "cards", "kpi", "timeline", "table", "compare", "board", "progress",
+] as const;
 
 function toNums(v: unknown): number[] {
   if (!Array.isArray(v)) return [];
@@ -74,11 +170,12 @@ function toNums(v: unknown): number[] {
   });
 }
 
-/** 解析 ```chart / ```cards 围栏内容；不可渲染（JSON 无效 / 形状不对）返回 null，
+/** 解析富内容围栏（```chart / ```cards / ```kpi / ```timeline / ```table /
+ *  ```compare / ```board）内容；不可渲染（JSON 无效 / 形状不对）返回 null，
  *  调用方保留为普通代码块。规格宽松：单系列可省略 series 直接 data。 */
 export function tryParseRichBlock(lang: string, raw: string): RichSegment | null {
   const l = lang.toLowerCase();
-  if (l !== "chart" && l !== "cards") return null;
+  if (!(RICH_LANGS as readonly string[]).includes(l)) return null;
   let o: unknown;
   try {
     o = JSON.parse(raw);
@@ -87,6 +184,138 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
   }
   if (!o || typeof o !== "object" || Array.isArray(o)) return null;
   const rec = o as Record<string, unknown>;
+
+  const title = typeof rec.title === "string" && rec.title.trim()
+    ? rec.title.trim().slice(0, 80) : undefined;
+  const str = (v: unknown, max: number): string | undefined =>
+    typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined;
+  const strList = (v: unknown, max: number, per = 200): string[] =>
+    (Array.isArray(v) ? v : [])
+      .filter((x): x is string => typeof x === "string" && !!x.trim())
+      .map((x) => x.trim().slice(0, per))
+      .slice(0, max);
+
+  if (l === "kpi") {
+    const items: KpiItem[] = (Array.isArray(rec.items) ? rec.items : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it): KpiItem => {
+        const tr = typeof it.trend === "string" ? it.trend.toLowerCase() : "";
+        const trend: KpiItem["trend"] =
+          tr === "up" || tr === "down" || tr === "flat" ? tr : undefined;
+        return {
+          label: str(it.label, 40) ?? "",
+          value: str(it.value, 30) ?? "",
+          delta: str(it.delta, 30),
+          trend,
+          note: str(it.note, 60),
+        };
+      })
+      .filter((it) => it.label && it.value)
+      .slice(0, 8);
+    if (!items.length) return null;
+    return { kind: "kpi", spec: { items, ...(title ? { title } : {}) } };
+  }
+
+  if (l === "timeline") {
+    const items: TimelineItem[] = (Array.isArray(rec.items) ? rec.items : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it): TimelineItem => {
+        const st = typeof it.status === "string" ? it.status.toLowerCase() : "";
+        const status: TimelineItem["status"] =
+          st === "done" || st === "active" || st === "pending" ? st : undefined;
+        return {
+          time: str(it.time, 30),
+          title: str(it.title, 80) ?? "",
+          desc: str(it.desc, 300),
+          status,
+        };
+      })
+      .filter((it) => it.title)
+      .slice(0, 40);
+    if (!items.length) return null;
+    return { kind: "timeline", spec: { items, ...(title ? { title } : {}) } };
+  }
+
+  if (l === "table") {
+    const columns = strList(rec.columns, 10, 40);
+    const rows = (Array.isArray(rec.rows) ? rec.rows : [])
+      .filter((r): r is unknown[] => Array.isArray(r))
+      .map((r) => r.slice(0, columns.length || 10)
+        .map((c) => (c === null || c === undefined ? "" : String(c).slice(0, 120))))
+      .slice(0, 100);
+    if (!columns.length || !rows.length) return null;
+    const numeric = Array.isArray(rec.numeric)
+      ? rec.numeric.filter((x): x is number => typeof x === "number" && x >= 0 && x < columns.length)
+      : [];
+    return {
+      kind: "table",
+      spec: { columns, rows, ...(numeric.length ? { numeric } : {}), ...(title ? { title } : {}) },
+    };
+  }
+
+  if (l === "compare") {
+    const side = (v: unknown): CompareSide | null => {
+      if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+      const s = v as Record<string, unknown>;
+      const t = str(s.title, 40);
+      const items = strList(s.items, 10);
+      if (!t || !items.length) return null;
+      const tn = typeof s.tone === "string" ? s.tone.toLowerCase() : "";
+      const tone: CompareSide["tone"] =
+        tn === "good" || tn === "bad" || tn === "neutral" ? tn : undefined;
+      return { title: t, items, tone };
+    };
+    const left = side(rec.left);
+    const right = side(rec.right);
+    if (!left || !right) return null;
+    return { kind: "compare", spec: { left, right, ...(title ? { title } : {}) } };
+  }
+
+  if (l === "board") {
+    const columns: BoardColumn[] = (Array.isArray(rec.columns) ? rec.columns : [])
+      .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+      .map((c) => {
+        const cards: BoardCard[] = (Array.isArray(c.cards) ? c.cards : [])
+          .filter((k): k is Record<string, unknown> => !!k && typeof k === "object")
+          .map((k): BoardCard => {
+            const tn = typeof k.tone === "string" ? k.tone.toLowerCase() : "";
+            const tone: BoardCard["tone"] =
+              tn === "good" || tn === "bad" || tn === "neutral" ? tn : undefined;
+            return {
+              title: str(k.title, 80) ?? "",
+              desc: str(k.desc, 200),
+              tag: str(k.tag, 20),
+              tone,
+            };
+          })
+          .filter((k) => k.title)
+          .slice(0, 30);
+        return { name: str(c.name, 30) ?? "", cards };
+      })
+      .filter((c) => c.name)
+      .slice(0, 6);
+    if (!columns.length) return null;
+    return { kind: "board", spec: { columns, ...(title ? { title } : {}) } };
+  }
+
+  if (l === "progress") {
+    const clamp = (n: number) => Math.max(0, Math.min(100, n));
+    const items: ProgressItem[] = (Array.isArray(rec.items) ? rec.items : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it): ProgressItem => {
+        const raw = typeof it.value === "number" ? it.value : Number(it.value);
+        return {
+          label: str(it.label, 60) ?? "",
+          value: Number.isFinite(raw) ? clamp(raw) : 0,
+          display: str(it.display, 20),
+          note: str(it.note, 60),
+        };
+      })
+      .filter((it) => it.label)
+      .slice(0, 20);
+    if (!items.length) return null;
+    return { kind: "progress", spec: { items, ...(title ? { title } : {}) } };
+  }
 
   if (l === "chart") {
     const t = typeof rec.type === "string" ? rec.type.toLowerCase().trim() : "";
@@ -505,6 +734,189 @@ export function CardsBlock({ spec }: { spec: CardsSpec }) {
                   </div>
                 )}
               </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 指标卡
+
+export function KpiBlock({ spec }: { spec: KpiSpec }) {
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-kpi-grid">
+        {spec.items.map((it, i) => (
+          <div className="md-kpi" key={i}>
+            <div className="md-kpi-label">{it.label}</div>
+            <div className="md-kpi-value">{it.value}</div>
+            {(it.delta || it.note) && (
+              <div className="md-kpi-foot">
+                {it.delta && (
+                  <span className={`md-kpi-delta ${it.trend ?? "flat"}`}>
+                    {it.trend === "up" ? "▲ " : it.trend === "down" ? "▼ " : ""}{it.delta}
+                  </span>
+                )}
+                {it.note && <span className="md-kpi-note">{it.note}</span>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 时间线
+
+export function TimelineBlock({ spec }: { spec: TimelineSpec }) {
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-tl">
+        {spec.items.map((it, i) => {
+          const st = it.status ?? "pending";
+          return (
+            <div className={`md-tl-item ${st}`} key={i}>
+              <span className={`md-tl-dot ${st}`} />
+              <div className="md-tl-body">
+                <div className="md-tl-head">
+                  <span className="md-tl-title">{it.title}</span>
+                  {it.time && <span className="md-tl-time">{it.time}</span>}
+                </div>
+                {it.desc && <div className="md-tl-desc">{it.desc}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 数据表
+
+/** 数值判定：纯数字 / 带千分位 / 货币 / 百分比（含正负号）→ 右对齐等宽。 */
+function looksNumeric(s: string): boolean {
+  return /^[-+]?[¥$€]?\s?\d[\d,.\s]*%?$/.test(s.trim()) && /\d/.test(s);
+}
+
+export function TableBlock({ spec }: { spec: TableSpec }) {
+  const numeric = new Set(
+    spec.numeric && spec.numeric.length
+      ? spec.numeric
+      // 未声明时按列内容自动判定（整列都是数值才算）
+      : spec.columns.map((_, ci) => ci).filter((ci) =>
+          spec.rows.every((r) => !r[ci] || looksNumeric(r[ci])) &&
+          spec.rows.some((r) => r[ci] && looksNumeric(r[ci]))),
+  );
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-table-wrap">
+        <table className="md-table">
+          <thead>
+            <tr>
+              {spec.columns.map((c, i) => (
+                <th key={i} className={numeric.has(i) ? "num" : ""}>{c}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {spec.rows.map((r, ri) => (
+              <tr key={ri}>
+                {spec.columns.map((_, ci) => (
+                  <td key={ci} className={numeric.has(ci) ? "num" : ""}>{r[ci] ?? ""}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 左右对比
+
+export function CompareBlock({ spec }: { spec: CompareSpec }) {
+  const side = (s: CompareSide, fallback: "bad" | "good") => (
+    <div className={`md-cmp-side ${s.tone ?? fallback}`}>
+      <div className="md-cmp-head">{s.title}</div>
+      <ul className="md-cmp-list">
+        {s.items.map((t, i) => <li key={i}>{t}</li>)}
+      </ul>
+    </div>
+  );
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-cmp">
+        {side(spec.left, "bad")}
+        <span className="md-cmp-vs">⇄</span>
+        {side(spec.right, "good")}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 看板
+
+export function BoardBlock({ spec }: { spec: BoardSpec }) {
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-board">
+        {spec.columns.map((col, ci) => (
+          <div className="md-board-col" key={ci}>
+            <div className="md-board-col-head">
+              {col.name}
+              <span className="md-board-count">{col.cards.length}</span>
+            </div>
+            {col.cards.map((k, ki) => (
+              <div className={`md-board-card ${k.tone ?? "neutral"}`} key={ki}>
+                <div className="md-board-card-title">{k.title}</div>
+                {k.desc && <div className="md-board-card-desc">{k.desc}</div>}
+                {k.tag && <span className="md-board-tag">{k.tag}</span>}
+              </div>
+            ))}
+            {col.cards.length === 0 && <div className="md-board-empty">（空）</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 进度条
+
+/** 进度色阶：<40 红（短板）/ 40-79 黄（进行中）/ ≥80 绿（健康）。 */
+function progressTone(v: number): "bad" | "warn" | "good" {
+  return v < 40 ? "bad" : v < 80 ? "warn" : "good";
+}
+
+export function ProgressBlock({ spec }: { spec: ProgressSpec }) {
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      <div className="md-progress-list">
+        {spec.items.map((it, i) => {
+          const tone = progressTone(it.value);
+          return (
+            <div className="md-progress" key={i}>
+              <div className="md-progress-head">
+                <span className="md-progress-label" title={it.label}>{it.label}</span>
+                <span className={`md-progress-value ${tone}`}>
+                  {it.display ?? `${Math.round(it.value)}%`}
+                </span>
+              </div>
+              <div className="md-progress-track">
+                <i className={`md-progress-fill ${tone}`} style={{ width: `${it.value}%` }} />
+              </div>
+              {it.note && <div className="md-progress-note">{it.note}</div>}
             </div>
           );
         })}

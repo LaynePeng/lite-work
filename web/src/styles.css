@@ -2844,6 +2844,74 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 12.5px;
   line-height: 1.55;
 }
+
+/* ── 代码块增强：语言标签 + 复制 + 长代码折叠 ── */
+.md-code {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 0.7em 0;
+  background: var(--bg-0);
+}
+.md-code .md-code-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 11px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.md-code .md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  text-transform: lowercase;
+}
+.md-code .md-code-meta {
+  font-size: 10px;
+  color: var(--text-2);
+}
+.md-code .md-code-copy,
+.md-code .md-code-fold {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.md-code .md-code-fold {
+  margin-left: 0;
+}
+.md-code .md-code-copy:hover,
+.md-code .md-code-fold:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.md-code pre {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+/* 长代码折叠：只显示前 14 行，底部渐隐提示还有内容 */
+.md-code.collapsed pre {
+  max-height: 260px;
+  overflow: hidden;
+  position: relative;
+}
+.md-code.collapsed pre::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  background: linear-gradient(transparent, var(--bg-0));
+  pointer-events: none;
+}
 .md blockquote {
   border-left: 3px solid var(--accent);
   padding-left: 12px;
@@ -8611,6 +8679,347 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
   white-space: nowrap;
+}
+
+/* ══ 原生富内容块（第二批）：kpi / timeline / table / compare / board ══ */
+.md-rich {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+
+.md-rich-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 9px;
+}
+
+/* ── 指标卡 ── */
+.md-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.md-kpi {
+  background: var(--bg-2);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-width: 0;
+}
+
+.md-kpi-label {
+  font-size: 10.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-kpi-value {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-0);
+  margin-top: 3px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.md-kpi-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+
+.md-kpi-delta {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.md-kpi-delta.up { color: var(--green); }
+.md-kpi-delta.down { color: var(--red); }
+.md-kpi-delta.flat { color: var(--text-2); }
+
+.md-kpi-note {
+  font-size: 10px;
+  color: var(--text-2);
+}
+
+/* ── 时间线 ── */
+.md-tl {
+  position: relative;
+  padding-left: 4px;
+}
+
+.md-tl-item {
+  position: relative;
+  padding: 0 0 12px 20px;
+}
+.md-tl-item:last-child {
+  padding-bottom: 0;
+}
+/* 竖线：最后一个节点不画（避免尾部悬空） */
+.md-tl-item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 12px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.md-tl-dot {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-2);
+  box-shadow: 0 0 0 2px var(--bg-1);
+}
+.md-tl-dot.done { background: var(--green); }
+.md-tl-dot.active { background: var(--accent); }
+.md-tl-dot.pending { background: var(--border); }
+
+.md-tl-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.md-tl-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.md-tl-time {
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.md-tl-desc {
+  font-size: 11.5px;
+  color: var(--text-1);
+  line-height: 1.55;
+  margin-top: 2px;
+}
+
+/* ── 数据表 ── */
+.md-table-wrap {
+  overflow-x: auto;
+}
+
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.md-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.md-table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--bg-2);
+  color: var(--text-1);
+  vertical-align: top;
+}
+
+.md-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.md-table .num {
+  text-align: right;
+  color: var(--text-0);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 左右对比 ── */
+.md-cmp {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.md-cmp-side {
+  background: var(--bg-2);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-width: 0;
+}
+.md-cmp-side.bad { border: 1px solid color-mix(in srgb, var(--red) 32%, transparent); }
+.md-cmp-side.good { border: 1px solid color-mix(in srgb, var(--green) 32%, transparent); }
+.md-cmp-side.neutral { border: 1px solid var(--border); }
+
+.md-cmp-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 6px;
+}
+.md-cmp-side.bad .md-cmp-head { color: var(--red); }
+.md-cmp-side.good .md-cmp-head { color: var(--green); }
+
+.md-cmp-list {
+  margin: 0;
+  padding-left: 15px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  line-height: 1.65;
+}
+
+.md-cmp-vs {
+  align-self: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* ── 看板 ── */
+.md-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.md-board-col {
+  background: var(--bg-2);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.md-board-col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+
+.md-board-count {
+  margin-left: auto;
+  font-size: 10px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.md-board-card {
+  background: var(--bg-3);
+  border-left: 2px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
+}
+.md-board-card.good { border-left-color: var(--green); }
+.md-board-card.bad { border-left-color: var(--red); }
+.md-board-card.neutral { border-left-color: var(--text-2); }
+
+.md-board-card-title {
+  font-size: 11.5px;
+  color: var(--text-0);
+  line-height: 1.45;
+}
+
+.md-board-card-desc {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+.md-board-tag {
+  display: inline-block;
+  font-size: 9.5px;
+  margin-top: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.md-board-empty {
+  font-size: 10.5px;
+  color: var(--text-2);
+  padding: 4px 2px;
+}
+/* ── 进度条 ── */
+.md-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.md-progress-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.md-progress-label {
+  font-size: 12px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-progress-value {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.md-progress-value.good { color: var(--green); }
+.md-progress-value.warn { color: var(--yellow); }
+.md-progress-value.bad { color: var(--red); }
+
+.md-progress-track {
+  height: 7px;
+  background: var(--bg-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.md-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.md-progress-fill.good { background: var(--green); }
+.md-progress-fill.warn { background: var(--yellow); }
+.md-progress-fill.bad { background: var(--red); }
+
+.md-progress-note {
+  font-size: 10px;
+  color: var(--text-2);
+  margin-top: 3px;
 }
 
 /* ── ask_user 多选（QuestionBar multiSelect） ── */

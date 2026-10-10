@@ -14,8 +14,15 @@ import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turns
 import { agentIconOf } from "../lib/agentMeta";
 import { api } from "../api";
 import {
+  BoardBlock,
   CardsBlock,
   ChartBlock,
+  CompareBlock,
+  KpiBlock,
+  ProgressBlock,
+  RICH_LANGS,
+  TableBlock,
+  TimelineBlock,
   rewriteLocalUrls,
   toFileUrl,
   tryParseRichBlock,
@@ -53,13 +60,14 @@ function ToolIcon({ name }: { name: string }) {
   return <span className="tool-icon">{emoji}</span>;
 }
 
-/** 展示型回复的分段：md / html / chart / cards（intelligent UI——Agent 输出
- *  「数据 + 组件类型」，前端原生渲染）。
+/** 展示型回复的分段：md / html / chart / cards / kpi / timeline / table /
+ *  compare / board / progress（intelligent UI——Agent 输出「数据 + 组件类型」，
+ *  前端原生渲染）。
  *  - 无围栏：整条消息就是完整 HTML 文档（<!DOCTYPE html> / <html 开头且
  *     </html> 结尾）→ 整条渲染；
  *  - ```html 围栏：内容含 HTML 标签即渲染——片段也行（浏览器对 srcDoc
  *     自动补全文档结构）。仅纯文本（无标签）保留为普通代码块；
- *  - ```chart / ```cards 围栏：JSON 可解析且形状合法 → 原生组件，
+ *  - 富块围栏（RICH_LANGS）：JSON 可解析且形状合法 → 原生组件，
  *    否则保留为普通代码块。 */
 type Segment = { kind: "md"; text: string } | { kind: "html"; html: string } | RichSegment;
 
@@ -74,7 +82,7 @@ function splitSegments(text: string): Segment[] {
   }
   const segs: Segment[] = [];
   let last = 0;
-  const re = /```(html|chart|cards)[ \t]*\r?\n?([\s\S]*?)```/gi;
+  const re = new RegExp("```(html|" + RICH_LANGS.join("|") + ")[ \\t]*\\r?\\n?([\\s\\S]*?)```", "gi");
   let m: RegExpExecArray | null;
   while ((m = re.exec(t)) !== null) {
     const lang = m[1].toLowerCase();
@@ -95,8 +103,71 @@ function splitSegments(text: string): Segment[] {
   return segs.length ? segs : [{ kind: "md", text: t }];
 }
 
-/** Markdown 渲染共享组件覆盖：链接（防窗口劫持）与图片（本地相对路径 rewrite）。 */
+/** 从 React 节点树提取纯文本（代码块复制用：高亮后是嵌套 span 树）。 */
+function flattenText(node: React.ReactNode): string {
+  if (node === null || node === undefined || node === false) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(flattenText).join("");
+  if (typeof node === "object" && "props" in node) {
+    return flattenText((node as { props?: { children?: React.ReactNode } }).props?.children);
+  }
+  return "";
+}
+
+/** 代码块增强：语言标签 + 一键复制 + 超长折叠（> 24 行默认收起，可展开）。
+ *  与 rehype-highlight 协作：children 仍是高亮后的元素，原样透传进 <pre>。 */
+function CodeBlock({ lang, code, children }: {
+  lang?: string;
+  code: string;
+  children?: React.ReactNode;
+}) {
+  const lines = useMemo(() => code.replace(/\n$/, "").split("\n").length, [code]);
+  const collapsible = lines > 24;
+  const [open, setOpen] = useState(!collapsible);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    const clip = navigator.clipboard;
+    if (!clip) return;
+    void clip.writeText(code).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    }).catch(() => { /* 无权限：忽略（用户可手动选择） */ });
+  };
+  return (
+    <div className={`md-code ${collapsible && !open ? "collapsed" : ""}`}>
+      <div className="md-code-bar">
+        <span className="md-code-lang">{lang || "text"}</span>
+        <span className="md-code-meta">{lines} 行</span>
+        <button className="md-code-copy" onClick={copy} title="复制代码">
+          {copied ? "已复制 ✓" : "复制"}
+        </button>
+        {collapsible && (
+          <button className="md-code-fold" onClick={() => setOpen((v) => !v)}
+            title={open ? "收起长代码" : `展开全部 ${lines} 行`}>
+            {open ? "收起" : `展开全部（${lines} 行）`}
+          </button>
+        )}
+      </div>
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
+/** Markdown 渲染共享组件覆盖：链接（防窗口劫持）、图片（本地路径 rewrite）、
+ *  代码块（语言标签/复制/长代码折叠）。 */
 const mdComponents: Components = {
+  // 代码块：react-markdown 把 ```lang 的 lang 放在 code 元素 className（language-xxx），
+  // 这里在 pre 层接管，统一包一层带工具栏的容器。
+  pre: ({ children }) => {
+    const el = Array.isArray(children) ? children[0] : children;
+    const props = (el && typeof el === "object" && "props" in el)
+      ? (el as { props?: { className?: string; children?: React.ReactNode } }).props
+      : undefined;
+    const cls = props?.className ?? "";
+    const m = /language-([\w+-]+)/.exec(cls);
+    const code = flattenText(props?.children);
+    return <CodeBlock lang={m?.[1]} code={code}>{children}</CodeBlock>;
+  },
   // 链接点击 = Electron 当前窗口导航 = 整个应用被外部页面替换。
   // 一律 preventDefault：http(s)/mailto 走 window.open（主进程
   // setWindowOpenHandler 转交系统默认浏览器），其余链接忽略。
@@ -146,6 +217,12 @@ export function Markdown({ text }: { text: string }) {
         if (s.kind === "html") return <HtmlPreview key={i} html={rewriteLocalUrls(s.html)} />;
         if (s.kind === "chart") return <ChartBlock key={i} spec={s.spec} />;
         if (s.kind === "cards") return <CardsBlock key={i} spec={s.spec} />;
+        if (s.kind === "kpi") return <KpiBlock key={i} spec={s.spec} />;
+        if (s.kind === "timeline") return <TimelineBlock key={i} spec={s.spec} />;
+        if (s.kind === "table") return <TableBlock key={i} spec={s.spec} />;
+        if (s.kind === "compare") return <CompareBlock key={i} spec={s.spec} />;
+        if (s.kind === "board") return <BoardBlock key={i} spec={s.spec} />;
+        if (s.kind === "progress") return <ProgressBlock key={i} spec={s.spec} />;
         return (
           <ReactMarkdown
             key={i}
