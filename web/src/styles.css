@@ -8405,6 +8405,214 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   word-break: break-all;
 }
 
+/* ── 原生富内容块：```chart（SVG 图表）与 ```cards（实体卡片） ── */
+.md-chart {
+  margin: 8px 0;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-1);
+  overflow-x: auto;
+}
+
+.md-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.md-chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.md-chart-unit {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.md-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.md-chart-svg text {
+  font-family: inherit;
+}
+
+.md-chart-flex {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.md-chart-pie {
+  width: 230px;
+  flex: 0 0 auto;
+}
+
+.md-chart-legend-list {
+  flex: 1 1 200px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.md-chart-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.md-chart-legend-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-chart-legend-val {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.md-chart-legend-pct {
+  color: var(--text-2);
+  font-size: 11px;
+  width: 44px;
+  text-align: right;
+}
+
+.md-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  justify-content: center;
+}
+
+.md-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.md-chart-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.md-block-error {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #f778ba;
+}
+
+.md-cards {
+  margin: 8px 0;
+}
+
+.md-cards-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 8px;
+}
+
+.md-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  gap: 10px;
+}
+
+.md-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.md-card-img {
+  aspect-ratio: 16 / 9;
+  background: var(--bg-3);
+}
+
+.md-card-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.md-card-body {
+  padding: 9px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.md-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  line-height: 1.35;
+}
+
+.md-card-title a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.md-card-title a:hover {
+  text-decoration: underline;
+}
+
+.md-card-price {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.md-card-desc {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.md-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.md-card-tag {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* ── ask_user 多选（QuestionBar multiSelect） ── */
 .question-options-multi {
   flex-wrap: wrap;

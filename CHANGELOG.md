@@ -14,6 +14,11 @@
 - 新增「中间产物与收尾清理」规则：回答问题不落盘；确需中间文件集中放临时子目录；任务结束删除自己产生的临时/中间文件（不碰用户既有文件），干净收尾；
 ### 修复（任务列表）
 - 完成态任务卡补「删除任务」✕（含确认弹窗）：此前删除按钮只渲染在未完成卡片，完成任务（含个人区）无法删除；
+### 新增（原生富内容块：```chart / ```cards 围栏）
+- **intelligent UI 第二步**：assistant 回复中的 ```chart 围栏（紧凑 JSON：bar/hbar/line/area/pie/radar，支持多系列/单位/标题，单系列可简写 data）与 ```cards 围栏（实体卡片：title/image/price/desc/tags/url）在聊天气泡内**原生渲染**——SVG 自绘图表 + 设计系统卡片样式，零新依赖，随文字流式出现，不再需要为图表手写 HTML 或生成图片文件；
+- 系统提示词「内容展示偏好」更新：优先 Markdown 表格 → ```chart → ```cards，```html 降级为独特版式（海报/原型）专用；补充本地图片引用规范（一律 workspace 相对路径）；
+### 修复（本地图片断链）
+- ```html 围栏（内联 HTML 预览）内的本地图片相对路径此前**完全断链**（iframe srcDoc 中相对路径无处解析）——现在 src/href（双/单引号）与 CSS url() 统一 rewrite 到 /api/files/raw；render_card 富卡片同样改用共享 rewrite（补齐单引号与 CSS url() 场景）；markdown 图片与 cards 的 image 字段统一走 toFileUrl；
 
 ## [1.10.7] — Goals 全局视图 + 个人区与批量授权 + 「规则」Tab + 反思草稿（W10）+ 富内容气泡
 

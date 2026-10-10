@@ -3,7 +3,7 @@
 //
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -13,6 +13,14 @@ import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem, WorktreeStatus } fr
 import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
 import { agentIconOf } from "../lib/agentMeta";
 import { api } from "../api";
+import {
+  CardsBlock,
+  ChartBlock,
+  rewriteLocalUrls,
+  toFileUrl,
+  tryParseRichBlock,
+  type RichSegment,
+} from "./RichBlocks";
 
 // ---------------------------------------------------------------- 渲染助手
 
@@ -45,27 +53,71 @@ function ToolIcon({ name }: { name: string }) {
   return <span className="tool-icon">{emoji}</span>;
 }
 
-/** 提取回复中可内联渲染的 HTML（展示型回复）。两条路径：
- *  1) 无围栏：整条消息就是完整 HTML 文档（<!DOCTYPE html> / <html 开头且
+/** 展示型回复的分段：md / html / chart / cards（intelligent UI——Agent 输出
+ *  「数据 + 组件类型」，前端原生渲染）。
+ *  - 无围栏：整条消息就是完整 HTML 文档（<!DOCTYPE html> / <html 开头且
  *     </html> 结尾）→ 整条渲染；
- *  2) ```html 围栏：内容含 HTML 标签即渲染——片段也行（浏览器对 srcDoc
- *     自动补全文档结构）。仅纯文本（无标签）保留为普通代码块。 */
-function extractInlineHtml(text: string): { html: string | null; rest: string } {
+ *  - ```html 围栏：内容含 HTML 标签即渲染——片段也行（浏览器对 srcDoc
+ *     自动补全文档结构）。仅纯文本（无标签）保留为普通代码块；
+ *  - ```chart / ```cards 围栏：JSON 可解析且形状合法 → 原生组件，
+ *    否则保留为普通代码块。 */
+type Segment = { kind: "md"; text: string } | { kind: "html"; html: string } | RichSegment;
+
+function splitSegments(text: string): Segment[] {
   const t = text ?? "";
   const trimmed = t.trim();
   if (
     /^<(!DOCTYPE\s+html|html[\s>])/i.test(trimmed) &&
     /<\/html>\s*$/i.test(trimmed)
   ) {
-    return { html: trimmed, rest: "" };
+    return [{ kind: "html", html: trimmed }];
   }
-  const m = /```html\s*\n?([\s\S]*?)```/i.exec(t);
-  if (!m) return { html: null, rest: t };
-  const raw = (m[1] ?? "").trim();
-  if (!/<[a-zA-Z]/.test(raw)) return { html: null, rest: t };
-  const rest = t.slice(0, m.index) + t.slice(m.index + m[0].length);
-  return { html: raw, rest };
+  const segs: Segment[] = [];
+  let last = 0;
+  const re = /```(html|chart|cards)[ \t]*\r?\n?([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const lang = m[1].toLowerCase();
+    const raw = (m[2] ?? "").trim();
+    let seg: Segment | null = null;
+    if (lang === "html") {
+      if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
+    } else {
+      seg = tryParseRichBlock(lang, raw);
+    }
+    if (seg) {
+      if (m.index > last) segs.push({ kind: "md", text: t.slice(last, m.index) });
+      segs.push(seg);
+      last = m.index + m[0].length;
+    }
+  }
+  if (last < t.length) segs.push({ kind: "md", text: t.slice(last) });
+  return segs.length ? segs : [{ kind: "md", text: t }];
 }
+
+/** Markdown 渲染共享组件覆盖：链接（防窗口劫持）与图片（本地相对路径 rewrite）。 */
+const mdComponents: Components = {
+  // 链接点击 = Electron 当前窗口导航 = 整个应用被外部页面替换。
+  // 一律 preventDefault：http(s)/mailto 走 window.open（主进程
+  // setWindowOpenHandler 转交系统默认浏览器），其余链接忽略。
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        const h = href ?? "";
+        if (/^(https?:|mailto:)/i.test(h)) window.open(h, "_blank");
+      }}
+      title={href}
+    >
+      {children}
+    </a>
+  ),
+  // 图片：远程 URL 原样；workspace 相对路径 rewrite 到 /api/files/raw
+  // （复用后端越界检查与鉴权）——assistant 引用本地图片（技能产物、
+  // 截图、图表导出）不再断链。
+  img: ({ src, alt }) => <img src={toFileUrl(src ?? "")} alt={alt ?? ""} loading="lazy" />,
+};
 
 /** 沙箱 iframe 渲染 Agent 回复中的 HTML（sandbox 无 allow-scripts，同 render_card 安全模型）。 */
 function HtmlPreview({ html }: { html: string }) {
@@ -87,80 +139,24 @@ function HtmlPreview({ html }: { html: string }) {
 }
 
 export function Markdown({ text }: { text: string }) {
-  const { html, rest } = extractInlineHtml(text);
-  if (html) {
-    return (
-      <div className="md">
-        <HtmlPreview html={html} />
-        {rest && rest.trim() && (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkBreaks]}
-            rehypePlugins={[rehypeHighlight]}
-            components={{
-              a: ({ href, children }) => (
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    const h = href ?? "";
-                    if (/^(https?:|mailto:)/i.test(h)) window.open(h, "_blank");
-                  }}
-                  title={href}
-                >
-                  {children}
-                </a>
-              ),
-              img: ({ src, alt }) => {
-                const s = src ?? "";
-                const resolved = /^(https?:|data:|\/api\/)/i.test(s)
-                  ? s
-                  : `/api/files/raw?path=${encodeURIComponent(s)}`;
-                return <img src={resolved} alt={alt ?? ""} loading="lazy" />;
-              },
-            }}
-          >
-            {rest}
-          </ReactMarkdown>
-        )}
-      </div>
-    );
-  }
+  const segs = useMemo(() => splitSegments(text), [text]);
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{
-          // 链接点击 = Electron 当前窗口导航 = 整个应用被外部页面替换。
-          // 一律 preventDefault：http(s)/mailto 走 window.open（主进程
-          // setWindowOpenHandler 转交系统默认浏览器），其余链接忽略。
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              onClick={(e) => {
-                e.preventDefault();
-                const h = href ?? "";
-                if (/^(https?:|mailto:)/i.test(h)) window.open(h, "_blank");
-              }}
-              title={href}
-            >
-              {children}
-            </a>
-          ),
-          // 图片：远程 URL 原样；workspace 相对路径 rewrite 到 /api/files/raw
-          // （复用后端越界检查与鉴权）——assistant 引用本地图片（技能产物、
-          // 截图、图表导出）不再断链。
-          img: ({ src, alt }) => {
-            const s = src ?? "";
-            const resolved = /^(https?:|data:|\/api\/)/i.test(s)
-              ? s
-              : `/api/files/raw?path=${encodeURIComponent(s)}`;
-            return <img src={resolved} alt={alt ?? ""} loading="lazy" />;
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      {segs.map((s, i) => {
+        if (s.kind === "html") return <HtmlPreview key={i} html={rewriteLocalUrls(s.html)} />;
+        if (s.kind === "chart") return <ChartBlock key={i} spec={s.spec} />;
+        if (s.kind === "cards") return <CardsBlock key={i} spec={s.spec} />;
+        return (
+          <ReactMarkdown
+            key={i}
+            remarkPlugins={[remarkGfm, remarkBreaks]}
+            rehypePlugins={[rehypeHighlight]}
+            components={mdComponents}
+          >
+            {s.text}
+          </ReactMarkdown>
+        );
+      })}
     </div>
   );
 }
@@ -213,14 +209,8 @@ function RichCard({ sessionId, card }: { sessionId: string; card: ToolCardInfo }
         const meta = /<!--\s*litework-card:[^>]*-->/.exec(r.html)?.[0] ?? "";
         const h = /height=(\d+)/.exec(meta)?.[1];
         if (h) setHeight(parseInt(h, 10) || 0);
-        // 相对路径 rewrite：src/href 的非 http(s)/data/# 值 → /api/files/raw
-        const rewritten = r.html.replace(
-          /(src|href)\s*=\s*"([^"]*)"/gi,
-          (full, attr: string, val: string) => {
-            if (/^(https?:|data:|#|\/api\/|mailto:)/i.test(val)) return full;
-            return `${attr}="/api/files/raw?path=${encodeURIComponent(val)}"`;
-          },
-        );
+        // 相对路径 rewrite：src/href（双/单引号）与 CSS url() → /api/files/raw
+        const rewritten = rewriteLocalUrls(r.html);
         setHtml(rewritten);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
