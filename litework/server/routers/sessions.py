@@ -750,4 +750,48 @@ def create_router(ctx: ServerContext) -> APIRouter:
             "trajectories": list_session_trajectories(app.config_dir, session_id),
             "enabled": bool(app.config.get("trajectory_enabled", False)),
         }
+
+    @router.delete("/api/trajectories/{session_id}/{task_id}")
+    async def delete_trajectory(session_id: str, task_id: str, request: Request):
+        """删除已保存的轨迹（W7）：task_id=all 清空该会话全部轨迹。
+
+        运行中的轨迹不可删（writer 仍持有文件句柄，删了会重建造成混乱）——
+        返回 409 提示先停任务。文件不存在不报错（幂等删除）。
+        """
+        ctx.check_auth(request)
+        import re as _re
+        _SAFE_ID = _re.compile(r"^[\w\-.]+$")
+        if not _SAFE_ID.match(session_id) or (
+                task_id != "all" and not _SAFE_ID.match(task_id)):
+            raise HTTPException(status_code=400, detail="session_id / task_id 含非法字符")
+        # 运行中任务的轨迹不可删：TaskManager 有活跃句柄即拒绝
+        if tasks.active_for_session(session_id) is not None:
+            raise HTTPException(status_code=409, detail="任务运行中，轨迹仍被写入——请先停止任务再删除")
+
+        from pathlib import Path as _Path
+        base = _Path(app.config_dir) / "trajectories" / session_id
+        if task_id == "all":
+            if not base.is_dir():
+                return {"ok": True, "deleted": 0}
+            count = 0
+            for f in base.glob("*.jsonl"):
+                try:
+                    f.unlink()
+                    count += 1
+                except OSError:
+                    continue
+            # 目录空了顺手移除（失败无碍）
+            try:
+                base.rmdir()
+            except OSError:
+                pass
+            return {"ok": True, "deleted": count}
+        target = base / f"{task_id}.jsonl"
+        if target.is_file():
+            try:
+                target.unlink()
+                return {"ok": True, "deleted": 1}
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
+        return {"ok": True, "deleted": 0}
     return router

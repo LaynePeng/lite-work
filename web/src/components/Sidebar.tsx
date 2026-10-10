@@ -592,6 +592,23 @@ function TrajectoryDrawer({ sessionId, onClose }: { sessionId: string; onClose: 
       <div className="traj-drawer" onClick={(e) => e.stopPropagation()}>
         <div className="traj-head">
           <span>📈 执行轨迹（W7）</span>
+          {state.trajectories.length > 0 && (
+            <button
+              className="traj-del-all"
+              title={`删除本会话全部 ${state.trajectories.length} 条轨迹`}
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (!window.confirm(`删除本会话全部 ${state.trajectories.length} 条轨迹？此操作不可恢复。`)) return;
+                try {
+                  const r = await api.deleteTrajectory(sessionId, "all");
+                  await load();
+                  if (r.deleted === 0) window.alert("没有可删除的轨迹（可能任务仍在运行）");
+                } catch (err) {
+                  window.alert(`删除失败: ${err instanceof Error ? err.message : err}`);
+                }
+              }}
+            >🗑 全部删除</button>
+          )}
           <button className="traj-close" onClick={onClose}>✕</button>
         </div>
         {state.loading && <div className="traj-empty">加载中…</div>}

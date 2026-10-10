@@ -333,7 +333,8 @@ export default function App() {
 
   // 布局边界拖拽：侧边栏 / 右侧工具面板宽度（双击分隔条重置回默认并清除持久值）
   const sidebarResize = useResizable({
-    axis: "col", initial: 300, min: 200,
+    // 默认 320：任务 Tab（Goals 视图）的信息密度高，右侧还要留细滚动条位置
+    axis: "col", initial: 320, min: 220,
     max: () => Math.min(520, Math.floor(window.innerWidth * 0.45)),
     persist: sidebarPersist,
     hydrated: { ready: prefsReady, value: prefsRef.current.sidebar ?? null },
@@ -2791,13 +2792,27 @@ export default function App() {
   const startTaskFromWizard = useCallback(async (cfg: NewTaskConfig) => {
     setNewTaskOpen(false);
     try {
-      // 落盘位置（Goals 全局视图）：个人/自定义目录 = 会话 workspace 显式绑定，
-      // 不热切换当前项目（任务照跑，产物落别处；任务卡全局视图按此归属显示）
+      // 落盘位置（Goals 全局视图）：个人/自定义目录 = **先热切换工作区再启动**——
+      // 任务执行以 app.workspace 为准（/api/chat），只写 metadata.workspace 会让
+      // Agent 仍在旧项目里跑、产物落旧项目根目录（「落盘位置」沦为装饰）。
+      // 切换与「点跨项目卡=切项目进会话」同一模型：你开始在哪里工作，就在哪里。
       let taskWs: string | undefined;
       if (cfg.workspaceMode === "personal") {
         taskWs = (await api.personalWorkspace().catch(() => null))?.path;
       } else if (cfg.workspaceMode === "custom" && cfg.customWorkspace) {
         taskWs = cfg.customWorkspace;
+      }
+      if (taskWs && taskWs !== status?.workspace) {
+        const res = await api.setWorkspace(taskWs);
+        if (res.ok) {
+          setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
+          notifyElectronWorkspace(res.workspace);
+          pushLog(`📂 已切换到落盘位置: ${res.workspace}`);
+          closeStream();
+          setChatStates({});
+          chatStatesRef.current = {};
+          await refreshSessions(res.workspace);
+        }
       }
       const { session_id } = await api.createSession(undefined, taskWs);
       patchChat(session_id, { ...EMPTY_CHAT, messages: [] });
@@ -2848,7 +2863,8 @@ export default function App() {
     } catch (e) {
       pushLog(`✗ 新建任务失败: ${(e as Error).message}`);
     }
-  }, [api, openSessionTab, patchChat, refreshSessions, selectSession, pushLog]);
+  }, [api, openSessionTab, patchChat, refreshSessions, selectSession, pushLog,
+      status?.workspace, setStatus, notifyElectronWorkspace, closeStream, setChatStates]);
 
   // 任务卡「⏭ 续」：进入该会话并自动续推（复用 AUTO_CONTINUE 同款 prompt 与发送管线）。
   const continueSession = useCallback(async (sid: string, title?: string) => {

@@ -394,6 +394,11 @@ export const api = {
       count: number;
       findings: { kind: string; [k: string]: unknown }[];
     }>(`/api/trajectories/${encodeURIComponent(sessionId)}?task_id=${encodeURIComponent(taskId)}&offset=${offset}&limit=${limit}`),
+  /** 删除已保存轨迹：taskId=all 清空该会话全部；运行中任务返回 409。 */
+  deleteTrajectory: (sessionId: string, taskId: string) =>
+    req<{ ok: boolean; deleted: number }>(
+      `/api/trajectories/${encodeURIComponent(sessionId)}/${encodeURIComponent(taskId)}`,
+      { method: "DELETE" }),
 
   // ------------------------------------------------------------ 办公场景：文件上传 / 素材列表 / 文件下载（AGI 通用入口）
 

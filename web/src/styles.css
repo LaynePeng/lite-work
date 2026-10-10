@@ -346,7 +346,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 /* ============================== 侧边栏 ============================== */
 
 .sidebar {
-  width: var(--sidebar-w, 280px);
+  width: var(--sidebar-w, 320px);
   flex-shrink: 0;
   background: var(--bg-1);
   border-right: 1px solid var(--border);
@@ -766,7 +766,14 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
    步骤最多 3 行；完成态卡自动收敛为两三行。 */
 
 .tasks-list {
-  padding: 2px 2px 12px;
+  /* 任务 Tab 在 sidebar-body--panel（overflow:hidden + flex column）里：
+     自身承担滚动——超过一屏的任务列表可滚，不再被整体裁掉 */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 12px 2px;
+  /* 滚动条贴右缘不遮内容；细条样式与整体一致 */
+  scrollbar-width: thin;
 }
 
 .task-card {
@@ -1080,7 +1087,10 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .rules-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* sidebar-body--panel（flex column + overflow hidden）里 height:100% 不可靠
+     （父无显式高度）——用 flex 撑满 + min-height:0 让内部 editor 正确收缩 */
+  flex: 1;
+  min-height: 0;
   padding: 8px;
   gap: 8px;
 }
@@ -1388,6 +1398,23 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 
 .traj-close:hover { color: var(--text-0); background: var(--bg-3); }
+
+/* 轨迹删除（全部）：红色系危险操作提示 */
+.traj-del-all {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.traj-del-all:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
 
 .traj-empty {
   padding: 32px 16px;

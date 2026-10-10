@@ -775,3 +775,41 @@ async def test_rules_endpoints_global_and_project(live_client, tmp_path, monkeyp
     # 还原模块级 HOME 影响（reload 过）
     monkeypatch.undo()
     importlib.reload(sp_mod)
+
+
+async def test_trajectory_delete(live_client):
+    """DELETE /api/trajectories/{sid}/{task_id}：单条删除 + all 清空 +
+    非法 id 400 + 不存在幂等。"""
+    from pathlib import Path
+
+    c, app, _ = live_client
+    sid = f"session_trajdel_{uuid.uuid4().hex[:6]}"
+    base = Path(app.config_dir) / "trajectories" / sid
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "task-a.jsonl").write_text('{"type":"header"}\n', encoding="utf-8")
+    (base / "task-b.jsonl").write_text('{"type":"header"}\n', encoding="utf-8")
+
+    # 列表可见
+    r = await c.get(f"/api/trajectories/{sid}")
+    assert len(r.json()["trajectories"]) == 2
+
+    # 单条删除
+    r = await c.delete(f"/api/trajectories/{sid}/task-a")
+    assert r.status_code == 200 and r.json()["deleted"] == 1
+    r = await c.get(f"/api/trajectories/{sid}")
+    assert [t["task_id"] for t in r.json()["trajectories"]] == ["task-b"]
+
+    # 不存在 → 幂等 deleted=0
+    r = await c.delete(f"/api/trajectories/{sid}/task-a")
+    assert r.status_code == 200 and r.json()["deleted"] == 0
+
+    # all 清空（目录随之移除）
+    r = await c.delete(f"/api/trajectories/{sid}/all")
+    assert r.json()["deleted"] == 1
+    r = await c.get(f"/api/trajectories/{sid}")
+    assert r.json()["trajectories"] == []
+    assert not base.exists()
+
+    # 非法 id（路径注入）→ 被拒（路由层 405 或端点校验 400，注入均未得逞）
+    r = await c.delete(f"/api/trajectories/{sid}/..%2Fescape")
+    assert r.status_code in (400, 404, 405)
