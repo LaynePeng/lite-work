@@ -81,6 +81,7 @@
 - 系统提示词「内容展示偏好」更新：优先 Markdown 表格 → ```chart → ```cards，```html 降级为独特版式（海报/原型）专用；补充本地图片引用规范（一律 workspace 相对路径）；
 ### 修复（本地图片断链）
 - ```html 围栏（内联 HTML 预览）内的本地图片相对路径此前**完全断链**（iframe srcDoc 中相对路径无处解析）——现在 src/href（双/单引号）与 CSS url() 统一 rewrite 到 /api/files/raw；render_card 富卡片同样改用共享 rewrite（补齐单引号与 CSS url() 场景）；markdown 图片与 cards 的 image 字段统一走 toFileUrl；
+- **中文/空格路径的图片被二次编码 → 后端 404 断图（回归）**：react-markdown 在把 markdown 图片地址交给 `img` 组件前已做 URI 归一化（`中间产物/img/a.jpg` → `%E4%B8%AD%E9%97%B4…`），`toFileUrl` 再 `encodeURIComponent` 一次得到 `%25E4%25B8%25AD…`，后端解码后拿到**字面量** `%E4%B8%AD%E9%97%B4…` → 文件不存在。典型现象是**同一条回复里 ```cards 的图片正常、`![](相对路径)` 的图片全断**（cards 的 `image` 走 JSON 原始字符串、未经 mdast 归一化，只编码一次）。现在统一「先解码回原始路径 → 只编码一次」，HTML 片段 rewrite 同样处理；解码失败（文件名含裸 `%`，如 `折扣100%.png`）原样保留；新增 7 条回归用例（中文/空格/已编码/非法转义/远程 URL/cards/html 围栏）；
 ### 修复（推理模型思考流泄漏 + DSML 工具调用救援）
 - OpenAI 兼容 / Anthropic 适配器此前把思考增量（`reasoning_content`/`reasoning`/`thinking`、`thinking_delta`）与正文混入同一 content——推理模型（deepseek v4.x 经中转网关实测）的 CoT 直接混进 assistant 消息，污染聊天界面、落盘历史与回传上下文。现在思考流只做流式转发（UI 实时可见，最终消息只留正文）；正文全空且无工具调用时保留旧兜底（思考文本充当正文），有工具调用时保持空正文；
 - deepseek v4.x 经 OpenAI 兼容中转偶发把工具调用以原生 DSML 标记（`<｜DSML｜ calls>`，全角竖线为其特殊 token）写进 content 通道而非结构化 tool_calls——原文泄漏到界面、工具不执行、任务中断。适配器现将其解析成 ToolCall 并从展示文本剔除（`string="false"` 按 JSON 字面量、`string="true"` 按字面字符串），格式不认识时原样返回（fail-open，不改变既有行为）；

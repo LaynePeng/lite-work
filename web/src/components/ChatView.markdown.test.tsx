@@ -129,6 +129,67 @@ describe("Markdown 原生富内容块（chart / cards / 本地图片）", () => 
     expect(img.getAttribute("src")).toBe("https://cdn.x.com/a.png");
   });
 
+  it("markdown 图片：中文路径只编码一次（此前二次编码 → 后端 404 断图）", () => {
+    const { container } = render(
+      <Markdown text={"![整体](中间产物/img/sp-main.jpg)"} />
+    );
+    const img = container.querySelector("img") as HTMLImageElement;
+    // react-markdown 已把非 ASCII 归一化为 %XX；toFileUrl 必须解码后**只编码一次**
+    expect(img.getAttribute("src")).toBe(
+      "/api/files/raw?path=%E4%B8%AD%E9%97%B4%E4%BA%A7%E7%89%A9%2Fimg%2Fsp-main.jpg"
+    );
+    expect(img.getAttribute("src")).not.toContain("%25");
+  });
+
+  it("markdown 图片：含空格的路径同样只编码一次", () => {
+    // CommonMark：目标含空格必须用 <> 包裹
+    const { container } = render(<Markdown text={"![a](<outputs/my chart.png>)"} />);
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/api/files/raw?path=outputs%2Fmy%20chart.png");
+  });
+
+  it("已百分号编码的图片地址不会二次编码（幂等）", () => {
+    const { container } = render(
+      <Markdown text={"![a](outputs/my%20chart.png)"} />
+    );
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/api/files/raw?path=outputs%2Fmy%20chart.png");
+  });
+
+  it("非法转义（裸 % 文件名）原样保留，不抛异常", () => {
+    const { container } = render(<Markdown text={"![a](outputs/折扣100%.png)"} />);
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/api/files/raw?path=outputs%2F%E6%8A%98%E6%89%A3100%25.png");
+  });
+
+  it("markdown 图片：远程 URL / /api 前缀保持原样", () => {
+    const { container } = render(
+      <Markdown text={"![a](https://cdn.x.com/a.png)\n\n![b](/api/files/raw?path=x.png)"} />
+    );
+    const imgs = container.querySelectorAll("img");
+    expect(imgs[0].getAttribute("src")).toBe("https://cdn.x.com/a.png");
+    expect(imgs[1].getAttribute("src")).toBe("/api/files/raw?path=x.png");
+  });
+
+  it("cards 里的中文图片路径同样只编码一次", () => {
+    const { container } = render(
+      <Markdown text={'```cards\n{"items":[{"title":"X","image":"中间产物/img/a.jpg"}]}\n```'} />
+    );
+    const img = container.querySelector(".md-card img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe(
+      "/api/files/raw?path=%E4%B8%AD%E9%97%B4%E4%BA%A7%E7%89%A9%2Fimg%2Fa.jpg"
+    );
+  });
+
+  it("```html 围栏内已编码的相对路径不二次编码", () => {
+    const { container } = render(
+      <Markdown text={'```html\n<div><img src="outputs/my%20chart.png"></div>\n```'} />
+    );
+    const srcdoc = container.querySelector("iframe.md-html-iframe")!.getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain("/api/files/raw?path=outputs%2Fmy%20chart.png");
+    expect(srcdoc).not.toContain("%25");
+  });
+
   it("```html 围栏内 <img> 相对路径 rewrite 到 /api/files/raw（修复断链）", () => {
     const { container } = render(
       <Markdown text={'```html\n<div><img src="outputs/pic.png"></div>\n```'} />

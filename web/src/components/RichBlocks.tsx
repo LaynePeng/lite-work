@@ -13,9 +13,34 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------- 本地资源 URL
 
-/** 本地相对路径 → /api/files/raw（http(s)/data//api/ 原样）。 */
+/** URL 形态的相对路径 → 原始文件路径。
+ *
+ *  卡片/markdown/HTML 里的 src 语义上都是 **URL**：`%20` 代表空格，中文等
+ *  非 ASCII 字符也应写作 %XX。但 Agent 给出的通常是**未编码的原始路径**，
+ *  而 react-markdown（mdast-util-to-hast 的 normalizeUri）在交给 img 组件前
+ *  已把非 ASCII 与空格编码过一遍——所以这里先解码回原始路径，再由调用方
+ *  统一编码一次，避免「中文/空格路径被二次编码」。
+ *
+ *  解码失败（含裸 `%` 等非法转义，如 `折扣100%.png`）原样返回，不改变既有行为。 */
+function decodeUrlPath(p: string): string {
+  if (!p.includes("%")) return p;
+  try {
+    return decodeURIComponent(p);
+  } catch {
+    return p;
+  }
+}
+
+/** 本地相对路径 → /api/files/raw（http(s)/data//api/ 原样）。
+ *
+ *  注意输入可能是**已被 URI 归一化**的 URL（markdown 图片地址必经过这一步）：
+ *  若直接 encodeURIComponent，`中间产物/img/a.jpg` 会变成
+ *  `%25E4%25B8%25AD…`，后端解码后拿到字面量 `%E4%B8%AD…` → 404 断图。
+ *  故统一走 decodeUrlPath 归一为「原始路径 → 编码一次」。 */
 export function toFileUrl(p: string): string {
-  return /^(https?:|data:|\/api\/)/i.test(p) ? p : `/api/files/raw?path=${encodeURIComponent(p)}`;
+  const raw = (p ?? "").trim();
+  if (!raw || /^(https?:|data:|\/api\/)/i.test(raw)) return raw;
+  return `/api/files/raw?path=${encodeURIComponent(decodeUrlPath(raw))}`;
 }
 
 /** HTML 串内 src/href（双/单引号）与 CSS url() 的相对路径 rewrite。
@@ -26,12 +51,12 @@ export function rewriteLocalUrls(html: string): string {
     (full: string, attr: string, dq?: string, sq?: string) => {
       const val = dq !== undefined ? dq : sq;
       if (val === undefined || val === "" || /^(https?:|data:|#|mailto:|\/api\/)/i.test(val)) return full;
-      return `${attr}="/api/files/raw?path=${encodeURIComponent(val)}"`;
+      return `${attr}="/api/files/raw?path=${encodeURIComponent(decodeUrlPath(val))}"`;
     },
   );
   out = out.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (full: string, _q: string, val: string) => {
     if (!val || /^(https?:|data:|\/api\/|#)/i.test(val)) return full;
-    return `url("/api/files/raw?path=${encodeURIComponent(val)}")`;
+    return `url("/api/files/raw?path=${encodeURIComponent(decodeUrlPath(val))}")`;
   });
   return out;
 }
