@@ -20,7 +20,11 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ..core.agent_loop import AgentLoop
-from ..core.system_prompt import FINAL_REPORT_REQUIREMENT, SystemPromptBuilder
+from ..core.system_prompt import (
+    CONTENT_DISPLAY_PREFERENCE,
+    FINAL_REPORT_REQUIREMENT,
+    SystemPromptBuilder,
+)
 from ..core.types import ToolDefinition, header_context
 
 logger = logging.getLogger("litework.orchestration")
@@ -214,7 +218,8 @@ class SubAgentRunner:
             sub_kernel.ctx.messages = list(initial_messages)
 
         system = (
-            f"{FINAL_REPORT_REQUIREMENT}\n\n{base_prompt}\n\n[你的具体任务]\n{task_description}\n\n"
+            f"{FINAL_REPORT_REQUIREMENT}\n\n{CONTENT_DISPLAY_PREFERENCE}\n\n"
+            f"{base_prompt}\n\n[你的具体任务]\n{task_description}\n\n"
             f"工作目录: {agent_ws}\n"
             # _git_info 是同步子进程调用（各 3s 超时）：丢线程池防冻事件循环
             f"{await asyncio.to_thread(SystemPromptBuilder._git_info, agent_ws)}"

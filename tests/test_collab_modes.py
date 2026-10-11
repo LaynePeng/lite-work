@@ -343,3 +343,39 @@ async def test_subagent_approval_forwarded_as_native_event(tmp_path):
     gate.pending[received[0]["id"]].set_result(True)
     result = await asyncio.wait_for(task, timeout=15)
     assert result and result.get("summary") == "子任务完成"
+
+
+async def test_sub_agent_system_prompt_includes_display_preference(tmp_path):
+    """子 Agent 的 system prompt 必须带「内容展示偏好」——否则协作模式下
+    子 Agent 产出永远是纯文本，富内容形态（```kpi / ```interactive 等）
+    在子 Agent 回复里从不出现（多 Agent 场景的 intelligent UI 缺口）。
+    """
+    import asyncio
+
+    from litework.core.system_prompt import CONTENT_DISPLAY_PREFERENCE
+    from litework.orchestration.sub_agent import SubAgentRunner
+
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+
+    captured: dict = {}
+
+    class MockLLM:
+        async def chat_stream(self, messages, tools, events=None):
+            # 首轮即可拿到 system（messages[0]）
+            if not captured:
+                captured["system"] = messages[0].content or ""
+            return "调研完成", [], None
+
+    app._mock_adapter = MockLLM()
+    runner = SubAgentRunner(app)
+    result = await asyncio.wait_for(
+        runner.run_task("调研一下", role="explorer"), timeout=20)
+    assert result
+
+    system = captured.get("system", "")
+    assert system, "未捕获到子 Agent 的 system prompt"
+    # 完整偏好段注入（不只是交付要求）
+    assert "内容展示偏好" in system
+    assert "```kpi" in system and "```interactive" in system
+    assert CONTENT_DISPLAY_PREFERENCE[:40] in system
