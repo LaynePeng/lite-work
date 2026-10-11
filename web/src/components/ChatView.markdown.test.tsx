@@ -397,6 +397,43 @@ describe("Markdown 交互式图解（```interactive 分块点击切换）", () =
     expect(container.querySelector("script")).toBeNull();
   });
 
+  it("组合（interactive × diagram）：part 带 shapes 的块显示聚焦视图，无 shapes 的块纯文字", () => {
+    const combo =
+      '```interactive\n{"title":"自行车各系统","canvas":{"w":470,"h":190},"parts":[' +
+      '{"name":"传动","desc":"把脚踏力传到后轮","shapes":[' +
+      '{"t":"circle","x":218,"y":95,"r":26},{"t":"line","x1":218,"y1":95,"x2":240,"y2":117}]},' +
+      '{"name":"概述","desc":"纯文字块（无 shapes）"}]}\n```';
+    const { container } = render(<Markdown text={combo} />);
+    const tabs = container.querySelectorAll(".md-ix-part");
+    expect(tabs.length).toBe(2);
+    // 首块（传动）带 shapes → 聚焦 SVG 出现，viewBox 用 canvas
+    let svg = container.querySelector(".md-diagram-svg");
+    expect(svg).not.toBeNull();
+    expect(svg!.getAttribute("viewBox")).toBe("0 0 470 190");
+    expect(container.querySelectorAll(".md-diagram-svg circle").length).toBe(1);
+    expect(container.querySelectorAll(".md-diagram-svg line").length).toBe(1);
+    // 切到无 shapes 的块 → 聚焦 SVG 消失（纯文字）
+    fireEvent.click(tabs[1]);
+    expect(container.querySelector(".md-diagram-svg")).toBeNull();
+    expect(container.querySelector(".md-ix-detail-name")?.textContent).toBe("概述");
+    // 切回带 shapes 的块 → SVG 回来
+    fireEvent.click(tabs[0]);
+    expect(container.querySelector(".md-diagram-svg")).not.toBeNull();
+  });
+
+  it("组合：shapes 里的非白名单原语被清洗（同 diagram 安全规则）", () => {
+    const combo =
+      '```interactive\n{"parts":[{"name":"A","desc":"d","shapes":[' +
+      '{"t":"text","content":"x"},{"t":"path","d":"M1 1 <script>onload=</script>"}]}]}\n```';
+    const { container } = render(<Markdown text={combo} />);
+    // text 丢弃；path 保留但 d 已清洗
+    const path = container.querySelector(".md-diagram-svg path");
+    expect(path).not.toBeNull();
+    expect(path!.getAttribute("d")).not.toContain("<");
+    expect(path!.getAttribute("d")).not.toContain("onload");
+    expect(container.querySelector(".md-diagram-svg text")).toBeNull();
+  });
+
   it("缺 name/desc 的分块被丢弃；全空 → 回退代码块", () => {
     const { container: c1 } = render(
       <Markdown text={'```interactive\n{"parts":[{"name":"只有名字"},{"name":"A","desc":"说明"}]}\n```'} />
@@ -450,5 +487,92 @@ describe("Markdown 流式渐进渲染（未闭合围栏随生成逐步出现）"
       <Markdown text={"预览：\n\n```html\n<div><b>hi</b></div>"} streaming />
     );
     expect(container.querySelector("iframe.md-html-iframe")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- 图形图解
+describe("Markdown 图形图解（```diagram 结构化 SVG + 部件点击高亮）", () => {
+  const SPEC =
+    '```diagram\n{"title":"7 速自行车","canvas":{"w":470,"h":300},"parts":[' +
+    '{"name":"车轮","desc":"承载与滚动的核心","shapes":[' +
+    '{"t":"circle","x":110,"y":195,"r":72},{"t":"circle","x":110,"y":195,"r":7}]},' +
+    '{"name":"车架","desc":"整车的骨架","shapes":[' +
+    '{"t":"polyline","pts":[[110,195],[218,208],[192,108],[110,195]]}]}]}\n```';
+
+  it("渲染分色 SVG（白名单原语）+ 标签 + 默认选中首个部件", () => {
+    const { container } = render(<Markdown text={SPEC} />);
+    expect(container.querySelector(".md-diagram-svg")).not.toBeNull();
+    // 两个部件各成一个 <g>；首个 hot、其余 dim（点击高亮语义）
+    const groups = container.querySelectorAll(".md-diagram-part");
+    expect(groups.length).toBe(2);
+    expect(groups[0].getAttribute("class")).toContain("hot");
+    expect(groups[1].getAttribute("class")).toContain("dim");
+    // 白名单原语：circle × 2 + polyline × 1
+    expect(groups[0].querySelectorAll("circle").length).toBe(2);
+    expect(groups[1].querySelectorAll("polyline").length).toBe(1);
+    // viewBox 来自 canvas
+    expect(container.querySelector(".md-diagram-svg")?.getAttribute("viewBox")).toBe("0 0 470 300");
+    // 说明区显示首个部件
+    expect(container.querySelector(".md-ix-detail-name")?.textContent).toBe("车轮");
+  });
+
+  it("点击第二个部件：高亮切换 + 说明切换（无脚本执行）", () => {
+    const { container } = render(<Markdown text={SPEC} />);
+    const groups = container.querySelectorAll(".md-diagram-part");
+    fireEvent.click(groups[1]);
+    expect(groups[1].getAttribute("class")).toContain("hot");
+    expect(groups[0].getAttribute("class")).toContain("dim");
+    expect(container.querySelector(".md-ix-detail-name")?.textContent).toBe("车架");
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+  it("非白名单原语被丢弃（不渲染 polygon/text）；坐标越界 clamp", () => {
+    const { container } = render(
+      <Markdown text={
+        '```diagram\n{"canvas":{"w":400,"h":300},"parts":[{"name":"A","desc":"d","shapes":[' +
+        '{"t":"polygon","points":"1,2 3,4"},' +
+        '{"t":"circle","x":99999,"y":-99999,"r":50},' +
+        '{"t":"text","content":"恶意文本"}]}]}\n```'
+      } />
+    );
+    const groups = container.querySelectorAll(".md-diagram-part");
+    // polygon / text 不在白名单 → 丢弃；circle 保留但坐标被 clamp
+    expect(groups.length).toBe(1);
+    expect(groups[0].querySelectorAll("polygon").length).toBe(0);
+    expect(groups[0].querySelectorAll("text").length).toBe(0);
+    const c = groups[0].querySelector("circle");
+    expect(c).not.toBeNull();
+    expect(Number(c!.getAttribute("cx"))).toBeLessThanOrEqual(450); // 400+50
+    expect(Number(c!.getAttribute("cy"))).toBeGreaterThanOrEqual(-50);
+  });
+
+  it("path d 清洗：剥离尖括号/花括号/事件属性注入尝试", () => {
+    const { container } = render(
+      <Markdown text={
+        '```diagram\n{"parts":[{"name":"A","desc":"d","shapes":[' +
+        '{"t":"path","d":"M 10 10 L 20 20 <script>onload=javascript:alert(1)</script>"}]}]}\n```'
+      } />
+    );
+    const d = container.querySelector(".md-diagram-part path")?.getAttribute("d") ?? "";
+    expect(d).toContain("M 10 10");
+    expect(d).not.toContain("<");
+    expect(d).not.toContain("javascript:");
+    expect(d).not.toContain("onload");
+  });
+
+  it("无有效原语的部件被丢弃；全部无效 → 回退代码块", () => {
+    const { container } = render(
+      <Markdown text={
+        '```diagram\n{"parts":[{"name":"空","desc":"无形状","shapes":[]},' +
+        '{"name":"B","desc":"ok","shapes":[{"t":"circle","x":1,"y":1,"r":2}]}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-diagram-part").length).toBe(1);
+
+    const { container: c2 } = render(
+      <Markdown text={'```diagram\n{"parts":[{"name":"空","desc":"无","shapes":[]}]}\n```'} />
+    );
+    expect(c2.querySelector(".md-diagram-svg")).toBeNull();
+    expect(c2.querySelector("code")).not.toBeNull();
   });
 });

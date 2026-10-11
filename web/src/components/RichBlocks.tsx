@@ -151,7 +151,10 @@ export interface ProgressSpec {
 }
 
 /** 交互式图解：分块 + 点击切换说明（GPT Intelligent UI 的「可交互图解」）。
- *  纯前端 state 切换，无脚本执行——沙箱安全模型不变。 */
+ *  纯前端 state 切换，无脚本执行——沙箱安全模型不变。
+ *  组合能力（interactive × diagram）：part 可带可选 shapes（diagram 同款
+ *  白名单原语）——选中该块时详情区上方渲染该块的聚焦示意图；无 shapes
+ *  的块照旧纯文字，两种可混用。 */
 export interface InteractivePart {
   /** 分块名（显示在可点击标签上），如「Frame」「车轮」 */
   name: string;
@@ -159,6 +162,8 @@ export interface InteractivePart {
   desc: string;
   /** 数值/规格补充，如「700c」「11-32T」 */
   meta?: string;
+  /** 该分块的聚焦示意图（可选；diagram 同款白名单原语，单块单色渲染） */
+  shapes?: DiagramShape[];
 }
 
 export interface InteractiveSpec {
@@ -169,6 +174,39 @@ export interface InteractiveSpec {
   parts: InteractivePart[];
   /** 是否显示分块序号（结构拆解类默认可读性更好） */
   numbered?: boolean;
+  /** 分块聚焦视图的画布（仅当有 part 带 shapes 时使用；缺省 470×190） */
+  canvas?: { w: number; h: number };
+}
+/** 图形图解（```diagram）：模型输出结构化图形数据（原语 + 部件分组），
+ *  前端渲染成原生 SVG——对齐 GPT Intelligent UI 的图形化拆解（自行车/
+ *  网络分层/发动机），任意主题现场生成，无需预制图库。
+ *  原语白名单：circle / rect / line / polyline / path / ellipse；无脚本、
+ *  无 text（文字排版交给标签与说明区，避免模型乱排字）。 */
+export type DiagramShape =
+  | { t: "circle"; x: number; y: number; r: number }
+  | { t: "rect"; x: number; y: number; w: number; h: number; rx?: number }
+  | { t: "line"; x1: number; y1: number; x2: number; y2: number }
+  | { t: "ellipse"; x: number; y: number; rx: number; ry: number }
+  | { t: "polyline"; pts: [number, number][] }
+  | { t: "path"; d: string };
+
+export interface DiagramPart {
+  /** 部件名（标签 + 说明标题） */
+  name: string;
+  /** 该部件的图形原语（同组同色、点击整组高亮） */
+  shapes: DiagramShape[];
+  /** 说明（点击后展示） */
+  desc: string;
+  /** 规格补充（标签与说明区显示） */
+  meta?: string;
+}
+
+export interface DiagramSpec {
+  title?: string;
+  summary?: string;
+  /** 画布宽高（viewBox；缺省 470×300） */
+  canvas?: { w: number; h: number };
+  parts: DiagramPart[];
 }
 
 export type RichSegment =
@@ -180,12 +218,13 @@ export type RichSegment =
   | { kind: "compare"; spec: CompareSpec }
   | { kind: "board"; spec: BoardSpec }
   | { kind: "progress"; spec: ProgressSpec }
-  | { kind: "interactive"; spec: InteractiveSpec };
+  | { kind: "interactive"; spec: InteractiveSpec }
+  | { kind: "diagram"; spec: DiagramSpec };
 
 /** 富块围栏语言（ChatView 分段正则与解析器共用一份，防两处漂移）。 */
 export const RICH_LANGS = [
   "chart", "cards", "kpi", "timeline", "table", "compare", "board", "progress",
-  "interactive",
+  "interactive", "diagram",
 ] as const;
 
 function toNums(v: unknown): number[] {
@@ -194,6 +233,74 @@ function toNums(v: unknown): number[] {
     const n = typeof x === "number" ? x : Number(x);
     return Number.isFinite(n) ? n : 0;
   });
+}
+
+// ---------------------------------------------------------------- 图形原语解析（共享）
+
+/** diagram / interactive(part.shapes) 共用的白名单原语解析 + 数值安全化。
+ *  坐标越界 clamp、非法原语丢弃、path d 清洗（<>/{}/javascript:/on*=）。
+ *  返回清洗后的原语数组（可能为空 → 调用方决定降级语义）。 */
+function parseDiagramShapes(raw: unknown, canvas: { w: number; h: number }): DiagramShape[] {
+  const num = (v: unknown): number | null => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const nOr0 = (v: unknown) => num(v) ?? 0;
+  const cx = canvas.w, cy = canvas.h;
+  const parseShape = (s: Record<string, unknown>): DiagramShape | null => {
+    const t = typeof s.t === "string" ? s.t.toLowerCase() : "";
+    if (t === "circle") {
+      return { t: "circle", x: clamp(nOr0(s.x), -50, cx + 50), y: clamp(nOr0(s.y), -50, cy + 50),
+               r: clamp(nOr0(s.r), 0, 800) };
+    }
+    if (t === "rect") {
+      return { t: "rect", x: clamp(nOr0(s.x), -50, cx), y: clamp(nOr0(s.y), -50, cy),
+               w: clamp(nOr0(s.w), 0, cx + 100), h: clamp(nOr0(s.h), 0, cy + 100),
+               ...(num(s.rx) !== null ? { rx: clamp(nOr0(s.rx), 0, 60) } : {}) };
+    }
+    if (t === "line") {
+      return { t: "line", x1: clamp(nOr0(s.x1), -50, cx + 50), y1: clamp(nOr0(s.y1), -50, cy + 50),
+               x2: clamp(nOr0(s.x2), -50, cx + 50), y2: clamp(nOr0(s.y2), -50, cy + 50) };
+    }
+    if (t === "ellipse") {
+      return { t: "ellipse", x: clamp(nOr0(s.x), -50, cx + 50), y: clamp(nOr0(s.y), -50, cy + 50),
+               rx: clamp(nOr0(s.rx), 0, 800), ry: clamp(nOr0(s.ry), 0, 800) };
+    }
+    if (t === "polyline" && Array.isArray(s.pts)) {
+      const pts = s.pts
+        .filter((p): p is unknown[] => Array.isArray(p) && p.length >= 2)
+        .map((p) => [clamp(nOr0(p[0]), -50, cx + 50), clamp(nOr0(p[1]), -50, cy + 50)] as [number, number])
+        .slice(0, 40);
+      if (pts.length < 2) return null;
+      return { t: "polyline", pts };
+    }
+    if (t === "path" && typeof s.d === "string") {
+      const d = s.d.replace(/[<>{}]|javascript:|on\w+=/gi, "").slice(0, 600);
+      if (!d.trim()) return null;
+      return { t: "path", d };
+    }
+    return null;
+  };
+  return (Array.isArray(raw) ? raw : [])
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
+    .map(parseShape)
+    .filter((s): s is DiagramShape => s !== null)
+    .slice(0, 24);
+}
+
+/** canvas 尺寸解析（diagram / interactive 共用）：clamp 200-1200 × 150-800。 */
+function parseCanvas(rec: Record<string, unknown>, defW: number, defH: number): { w: number; h: number } {
+  const num = (v: unknown) => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const c = rec.canvas as Record<string, unknown> | undefined;
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  return {
+    w: clamp(Math.round(num(c?.w) ?? defW), 200, 1200),
+    h: clamp(Math.round(num(c?.h) ?? defH), 150, 800),
+  };
 }
 
 /** 解析富内容围栏（```chart / ```cards / ```kpi / ```timeline / ```table /
@@ -344,13 +451,19 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
   }
 
   if (l === "interactive") {
+    // 组合能力：part 可带 shapes（diagram 白名单原语）→ 聚焦视图 + 说明
+    const iCanvas = parseCanvas(rec, 470, 190);
     const parts: InteractivePart[] = (Array.isArray(rec.parts) ? rec.parts : [])
       .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
-      .map((it): InteractivePart => ({
-        name: str(it.name, 40) ?? "",
-        desc: str(it.desc, 1200) ?? "",
-        meta: str(it.meta, 40),
-      }))
+      .map((it): InteractivePart => {
+        const shapes = parseDiagramShapes(it.shapes, iCanvas);
+        return {
+          name: str(it.name, 40) ?? "",
+          desc: str(it.desc, 1200) ?? "",
+          meta: str(it.meta, 40),
+          ...(shapes.length ? { shapes } : {}),
+        };
+      })
       .filter((it) => it.name && it.desc)
       .slice(0, 12);
     if (!parts.length) return null;
@@ -359,9 +472,34 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
     const summary = str(rec.summary, 200);
     if (summary) spec.summary = summary;
     if (rec.numbered === true) spec.numbered = true;
+    if (parts.some((p) => p.shapes?.length)) spec.canvas = iCanvas;
     return { kind: "interactive", spec };
   }
 
+  if (l === "diagram") {
+    // 原语白名单解析 + 数值安全化（有限数、画布内 clamp）。
+    // 坐标越界 / 原语非法不致命：clamp 或丢弃该原语；整组无有效原语 → 部件降级。
+    const canvas = parseCanvas(rec, 470, 300);
+    const parts: DiagramPart[] = (Array.isArray(rec.parts) ? rec.parts : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it) => {
+        const shapes = parseDiagramShapes(it.shapes, canvas);
+        return {
+          name: str(it.name, 40) ?? "",
+          desc: str(it.desc, 1200) ?? "",
+          meta: str(it.meta, 40),
+          shapes,
+        };
+      })
+      .filter((it) => it.name && it.desc && it.shapes.length > 0)
+      .slice(0, 10);
+    if (!parts.length) return null;
+    const spec: DiagramSpec = { parts, canvas };
+    if (title) spec.title = title;
+    const summary = str(rec.summary, 200);
+    if (summary) spec.summary = summary;
+    return { kind: "diagram", spec };
+  }
   if (l === "chart") {
     const t = typeof rec.type === "string" ? rec.type.toLowerCase().trim() : "";
     let type: ChartSpec["type"] = "bar";
@@ -943,6 +1081,77 @@ function progressTone(v: number): "bad" | "warn" | "good" {
   return v < 40 ? "bad" : v < 80 ? "warn" : "good";
 }
 
+// ---------------------------------------------------------------- 图形图解
+
+/** 图形图解渲染：部件分色 SVG + 点击高亮（其余变暗）+ 说明区。
+ *  安全线：只渲染白名单原语（解析器已 clamp 坐标 / 清洗 path d），
+ *  不插入任何用户文本进 SVG 属性，无脚本。 */
+const DIAGRAM_COLORS = ["#4f8cff", "#3fb950", "#d29922", "#f778ba", "#39c5cf", "#ff7b72", "#d2a8ff", "#e3b341"];
+
+function renderShape(s: DiagramShape, color: string, key: number) {
+  const common = { key, fill: "none", stroke: color, strokeWidth: 3.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (s.t) {
+    case "circle": return <circle {...common} cx={s.x} cy={s.y} r={s.r} />;
+    case "ellipse": return <ellipse {...common} cx={s.x} cy={s.y} rx={s.rx} ry={s.ry} />;
+    case "rect": return <rect {...common} x={s.x} y={s.y} width={s.w} height={s.h} rx={s.rx} />;
+    case "line": return <line {...common} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} />;
+    case "polyline": return <polyline {...common} points={s.pts.map((p) => p.join(",")).join(" ")} />;
+    case "path": return <path {...common} d={s.d} />;
+  }
+}
+
+export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
+  const [active, setActive] = useState(0);
+  const parts = spec.parts;
+  const cur = parts[Math.min(active, parts.length - 1)];
+  const canvas = spec.canvas ?? { w: 470, h: 300 };
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      {spec.summary && <div className="md-ix-summary">{spec.summary}</div>}
+      <div className="md-ix-parts" role="tablist" aria-label="图解分块">
+        {parts.map((p, i) => (
+          <button
+            key={i}
+            type="button"
+            role="tab"
+            aria-selected={i === active}
+            className={`md-ix-part ${i === active ? "active" : ""}`}
+            onClick={() => setActive(i)}
+          >
+            <span className="md-diagram-dot" style={{ background: DIAGRAM_COLORS[i % DIAGRAM_COLORS.length] }} />
+            <span className="md-ix-name">{p.name}</span>
+            {p.meta && <span className="md-ix-meta">{p.meta}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="md-diagram-svg-wrap">
+        <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
+          {parts.map((p, i) => (
+            <g
+              key={i}
+              className={`md-diagram-part ${i === active ? "hot" : "dim"}`}
+              onClick={() => setActive(i)}
+              role="button"
+              aria-label={p.name}
+            >
+              {p.shapes.map((s, si) => renderShape(s, DIAGRAM_COLORS[i % DIAGRAM_COLORS.length], si))}
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="md-ix-detail" role="tabpanel">
+        <div className="md-ix-detail-head">
+          <span className="md-diagram-dot" style={{ background: DIAGRAM_COLORS[Math.min(active, parts.length - 1) % DIAGRAM_COLORS.length] }} />
+          <span className="md-ix-detail-name">{cur.name}</span>
+          {cur.meta && <span className="md-ix-meta">{cur.meta}</span>}
+        </div>
+        <div className="md-ix-desc">{cur.desc}</div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- 交互式图解
 
 /** 交互式图解：分块标签（可点击）+ 当前分块说明。
@@ -952,6 +1161,7 @@ export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
   const [active, setActive] = useState(0);
   const parts = spec.parts;
   const cur = parts[Math.min(active, parts.length - 1)];
+  const canvas = spec.canvas ?? { w: 470, h: 190 };
   return (
     <div className="md-rich">
       {spec.title && <div className="md-rich-title">{spec.title}</div>}
@@ -973,6 +1183,15 @@ export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
           </button>
         ))}
       </div>
+      {/* 分块聚焦视图（interactive × diagram 组合）：选中块带 shapes 时渲染
+          该块的示意图（单块单色，纯展示无点击语义） */}
+      {cur.shapes && cur.shapes.length > 0 && (
+        <div className="md-diagram-svg-wrap">
+          <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
+            {cur.shapes.map((s, si) => renderShape(s, "var(--accent)", si))}
+          </svg>
+        </div>
+      )}
       <div className="md-ix-detail" role="tabpanel">
         <div className="md-ix-detail-head">
           {spec.numbered && <span className="md-ix-no">{Math.min(active, parts.length - 1) + 1}</span>}

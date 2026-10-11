@@ -18,6 +18,7 @@ import {
   CardsBlock,
   ChartBlock,
   CompareBlock,
+  DiagramBlock,
   InteractiveBlock,
   KpiBlock,
   ProgressBlock,
@@ -285,6 +286,7 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
         if (s.kind === "board") return <BoardBlock key={i} spec={s.spec} />;
         if (s.kind === "progress") return <ProgressBlock key={i} spec={s.spec} />;
         if (s.kind === "interactive") return <InteractiveBlock key={i} spec={s.spec} />;
+        if (s.kind === "diagram") return <DiagramBlock key={i} spec={s.spec} />;
         return (
           <ReactMarkdown
             key={i}

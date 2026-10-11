@@ -9120,6 +9120,45 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ── 图形图解（```diagram：部件分色 SVG + 点击高亮） ── */
+.md-diagram-svg-wrap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-0);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.md-diagram-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.md-diagram-part {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+/* 未选中部件压暗，选中部件全亮 + 轻微增粗 */
+.md-diagram-part.dim {
+  opacity: 0.18;
+}
+
+.md-diagram-part.hot {
+  opacity: 1;
+}
+
+/* 标签/说明区的部件色点（与 SVG 部件同色） */
+.md-diagram-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
 /* ── ask_user 多选（QuestionBar multiSelect） ── */
 .question-options-multi {
   flex-wrap: wrap;
