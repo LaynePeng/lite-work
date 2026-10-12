@@ -139,6 +139,40 @@ CONTENT_DISPLAY_PREFERENCE = """### 内容展示偏好（必须遵守）
   - 每部件 1-8 个原语（含 label）；画完自查：部件在画布内、比例协调、
     label 不互相重叠。
   简单结构（无空间关系）仍用 interactive；有实体结构/空间组成的才用 diagram。
+- **```mermaid 围栏（Mermaid 图，画图首选）**：输出 Mermaid DSL 文本，前端
+  自动布局渲染——**流程图/时序图/状态图/架构图一律用它**（LLM 语料里
+  Mermaid 高频，生成可靠；自动布局永不歪）：
+  ```
+  ```mermaid
+  sequenceDiagram
+    participant C as 客户端
+    participant S as 服务器
+    C->>S: ClientHello（随机数+加密套件）
+    S-->>C: 证书 + ServerHello
+    C->>C: 验证证书链
+    C->>S: ECDHE 公钥
+    ```
+  ```
+  适用：流程（graph TD/LR）、时序（sequenceDiagram，握手/调用链首选）、
+  状态机（stateDiagram-v2）、甘特（gantt）、类图。语法错会降级为代码块，
+  写完自查一遍分号/箭头。
+- **```layout 围栏（语义布局图）**：只输出**节点+边**的语义结构，坐标由
+  前端布局算法自动计算（你不用排坐标——那是最容易画歪的环节）：
+  ```layout
+  {"title": "Git 对象模型", "dir": "TB",
+   "nodes": [
+     {"id": "commit", "label": "commit", "group": "历史", "level": 0},
+     {"id": "tree", "label": "tree", "group": "快照", "level": 1},
+     {"id": "blob", "label": "blob", "group": "快照", "level": 2}],
+   "edges": [
+     {"from": "commit", "to": "tree", "label": "根目录"},
+     {"from": "tree", "to": "blob", "label": "文件"}]}
+  ```
+  适用：**关系拓扑**（谁连谁、层次分组）——系统组成、依赖关系、对象模型。
+  level 缺省按边自动推导拓扑深度；group 同色聚簇；hover 节点高亮邻边。
+- 三种图的选择：**流程/时序/状态 → mermaid**；**关系拓扑/系统组成 →
+  layout**；**有真实空间比例的结构**（自行车、发动机、网络分层那样
+  各部件有物理位置关系）→ diagram。拿不准时优先 mermaid。
 - 富块围栏是**流式渐进渲染**的：边生成边出现，不必等整段回答写完。因此
   可以放心在回答开头就给出图表/图解，让用户先看到结论。
 - **```html 围栏**：仅当确有独特版式需求（海报、页面原型、自定义排版）时

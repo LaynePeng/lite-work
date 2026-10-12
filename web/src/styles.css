@@ -1083,6 +1083,55 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--red);
 }
 
+/* —— Mermaid 图（```mermaid 围栏；DSL → SVG） —— */
+.md-mermaid-wrap {
+  padding: 8px 4px;
+}
+
+.md-mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.md-mermaid-fallback {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin: 6px 0;
+  background: var(--bg-1);
+}
+
+.md-mermaid-err {
+  font-size: 11px;
+  color: var(--yellow);
+  margin-bottom: 6px;
+}
+
+.md-mermaid-fallback pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--text-2);
+  margin: 0;
+}
+
+/* —— 语义布局图（```layout 围栏） —— */
+.md-layout-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 4px 2px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.md-layout-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* —— 「规则」Tab（设计文档 §6：dots custom rules 思路） —— */
 .rules-panel {
   display: flex;

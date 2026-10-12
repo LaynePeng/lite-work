@@ -1,5 +1,5 @@
 // 内联 HTML 回复：```html 完整文档 → 沙箱 iframe；短片段/普通代码块保持既有行为。
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Markdown } from "./ChatView";
 
@@ -598,3 +598,56 @@ describe("Markdown 图形图解（```diagram 结构化 SVG + 部件点击高亮�
     expect(c2.querySelector("code")).not.toBeNull();
   });
 });
+  it("layout 围栏：语义布局图渲染节点盒/边/图例，坐标由算法计算", () => {
+    const spec =
+      '```layout\n{"title":"Git 对象模型","nodes":[' +
+      '{"id":"commit","label":"commit","group":"历史"},' +
+      '{"id":"tree","label":"tree","group":"快照"},' +
+      '{"id":"blob","label":"blob","group":"快照"}],' +
+      '"edges":[{"from":"commit","to":"tree","label":"根"},{"from":"tree","to":"blob"}]}\n```';
+    const { container } = render(<Markdown text={spec} />);
+    // 标题 + SVG + 三个节点盒（rect）+ 两条折线（polyline）+ 图例（两组）
+    expect(container.querySelector(".md-rich-title")?.textContent).toBe("Git 对象模型");
+    const svg = container.querySelector(".md-diagram-svg");
+    expect(svg).not.toBeNull();
+    const rects = container.querySelectorAll(".md-diagram-svg g rect");
+    expect(rects.length).toBe(3);
+    const polys = container.querySelectorAll(".md-diagram-svg polyline");
+    expect(polys.length).toBe(2);
+    // 节点 label 文本
+    const texts = [...container.querySelectorAll(".md-diagram-svg text")].map((t) => t.textContent);
+    expect(texts).toContain("commit");
+    expect(texts).toContain("tree");
+    // 边 label
+    expect(texts).toContain("根");
+    // 图例：两组（历史/快照）
+    expect(container.querySelectorAll(".md-layout-legend-item").length).toBe(2);
+  });
+
+  it("layout：level 缺省时按边推导拓扑深度（commit→tree→blob 三层）", () => {
+    const spec =
+      '```layout\n{"nodes":[' +
+      '{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"}],' +
+      '"edges":[{"from":"a","to":"b"},{"from":"b","to":"c"}]}\n```';
+    const { container } = render(<Markdown text={spec} />);
+    const rects = [...container.querySelectorAll(".md-diagram-svg g rect")] as SVGRectElement[];
+    expect(rects.length).toBe(3);
+    // TB 布局：a 的 y 应最小（第 0 层），c 最大——拓扑深度推导生效
+    const ys = rects.map((r) => parseFloat(r.getAttribute("y") ?? "0"));
+    const aIdx = 0;
+    expect(ys[aIdx]).toBeLessThan(ys[1]);
+    expect(ys[1]).toBeLessThan(ys[2]);
+  });
+
+  it("mermaid 围栏：渲染组件挂载（异步出图，先出 loading 态）", async () => {
+    const code = "graph TD\nA-->B";
+    const { container } = render(<Markdown text={"```mermaid\n" + code + "\n```"} />);
+    // 异步渲染：初始要么 loading 要么已出 SVG（vitest 环境 jsdom 下 mermaid
+    // 可能渲染失败走降级——断言三态之一，不猜时序）
+    await waitFor(() => {
+      const hasSvg = container.querySelector(".md-mermaid-svg svg") !== null;
+      const hasFallback = container.querySelector(".md-mermaid-fallback") !== null;
+      const hasLoading = container.querySelector(".rich-card-loading") !== null;
+      expect(hasSvg || hasFallback || hasLoading).toBe(true);
+    });
+  });

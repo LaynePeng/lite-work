@@ -21,6 +21,8 @@ import {
   DiagramBlock,
   InteractiveBlock,
   KpiBlock,
+  LayoutBlock,
+  MermaidBlock,
   ProgressBlock,
   RICH_LANGS,
   TableBlock,
@@ -74,7 +76,12 @@ function ToolIcon({ name }: { name: string }) {
  *  - streaming=true（流式渐进渲染）：末尾**未闭合**的围栏也尝试解析，
  *    让图表/卡片/图解随生成逐步出现，不必等整段回答收尾（对齐 GPT
  *    Intelligent UI 的流式编译器行为）。 */
-type Segment = { kind: "md"; text: string } | { kind: "html"; html: string } | RichSegment;
+/** mermaid 段：DSL 文本（非 JSON）——mermaid.render 现场渲染成 SVG。 */
+type Segment =
+  | { kind: "md"; text: string }
+  | { kind: "html"; html: string }
+  | { kind: "mermaid"; code: string }
+  | RichSegment;
 
 /** 流式期未闭合围栏的「半截 JSON」容错：补齐被截断的括号/引号后重试解析。
  *  仅在 streaming 模式启用——完整消息里的坏 JSON 仍回退代码块（不猜测）。 */
@@ -115,7 +122,7 @@ function splitSegments(text: string, streaming = false): Segment[] {
   }
   const segs: Segment[] = [];
   let last = 0;
-  const langs = "html|" + RICH_LANGS.join("|");
+  const langs = "html|mermaid|" + RICH_LANGS.join("|");
   const closed = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*?)```", "gi");
   // 流式期：末尾未闭合围栏（直到字符串结尾都没有收尾 ```）
   const open = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*)$", "i");
@@ -126,6 +133,9 @@ function splitSegments(text: string, streaming = false): Segment[] {
     let seg: Segment | null = null;
     if (lang === "html") {
       if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
+    } else if (lang === "mermaid") {
+      // DSL 非 JSON：非空即成段（语法错的降级在 MermaidBlock 内处理）
+      if (raw) seg = { kind: "mermaid", code: raw };
     } else {
       seg = tryParseRichBlock(lang, raw);
     }
@@ -146,6 +156,9 @@ function splitSegments(text: string, streaming = false): Segment[] {
       let seg: Segment | null = null;
       if (lang === "html") {
         if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
+      } else if (lang === "mermaid") {
+        // 流式期 DSL 半截也能先渲染（mermaid 失败自动降级，下一轮刷新）
+        if (raw) seg = { kind: "mermaid", code: raw };
       } else if (raw.startsWith("{")) {
         seg = tryParseRichBlock(lang, raw);
         if (!seg) {
@@ -287,6 +300,8 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
         if (s.kind === "progress") return <ProgressBlock key={i} spec={s.spec} />;
         if (s.kind === "interactive") return <InteractiveBlock key={i} spec={s.spec} />;
         if (s.kind === "diagram") return <DiagramBlock key={i} spec={s.spec} />;
+        if (s.kind === "layout") return <LayoutBlock key={i} spec={s.spec} />;
+        if (s.kind === "mermaid") return <MermaidBlock key={i} code={s.code} />;
         return (
           <ReactMarkdown
             key={i}

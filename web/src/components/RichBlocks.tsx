@@ -9,7 +9,7 @@
 // 相对路径统一 rewrite 到 /api/files/raw（复用后端越界检查与鉴权），
 // 修复 iframe / 卡片内相对路径断链。
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------- 本地资源 URL
 
@@ -211,6 +211,36 @@ export interface DiagramSpec {
   parts: DiagramPart[];
 }
 
+/** 语义布局图（```layout）：模型只输出「节点 + 边 + 层级」的语义结构，
+ *  前端跑分层布局算法算坐标——LLM 不手排坐标（它最不擅长的事），
+ *  只负责「谁连谁、怎么分组」。布局：同 level 横排等距、层间等高、
+ *  group 同色聚簇。渲染复用 diagram 的原语层（label + 低饱和填充）。 */
+export interface LayoutNode {
+  id: string;
+  label: string;
+  /** 层级（0 起，同层横排；缺省按拓扑深度推导） */
+  level?: number;
+  /** 分组名（同组同色聚簇；缺省独立成组） */
+  group?: string;
+  meta?: string;
+}
+
+export interface LayoutEdge {
+  from: string;
+  to: string;
+  /** 连线标注（可选，短词） */
+  label?: string;
+}
+
+export interface LayoutSpec {
+  title?: string;
+  summary?: string;
+  /** 布局方向：TB（自上而下，默认）/ LR（从左到右） */
+  dir?: "TB" | "LR";
+  nodes: LayoutNode[];
+  edges: LayoutEdge[];
+}
+
 export type RichSegment =
   | { kind: "chart"; spec: ChartSpec }
   | { kind: "cards"; spec: CardsSpec }
@@ -221,12 +251,14 @@ export type RichSegment =
   | { kind: "board"; spec: BoardSpec }
   | { kind: "progress"; spec: ProgressSpec }
   | { kind: "interactive"; spec: InteractiveSpec }
-  | { kind: "diagram"; spec: DiagramSpec };
+  | { kind: "diagram"; spec: DiagramSpec }
+  | { kind: "layout"; spec: LayoutSpec };
 
-/** 富块围栏语言（ChatView 分段正则与解析器共用一份，防两处漂移）。 */
+/** 富块围栏语言（ChatView 分段正则与解析器共用一份，防两处漂移）。
+ *  mermaid 不在此列——它是 DSL 非 JSON，ChatView 单独分段。 */
 export const RICH_LANGS = [
   "chart", "cards", "kpi", "timeline", "table", "compare", "board", "progress",
-  "interactive", "diagram",
+  "interactive", "diagram", "layout",
 ] as const;
 
 function toNums(v: unknown): number[] {
@@ -516,6 +548,45 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
     const summary = str(rec.summary, 200);
     if (summary) spec.summary = summary;
     return { kind: "diagram", spec };
+  }
+
+  if (l === "layout") {
+    // 语义布局图：模型只给 nodes/edges（语义），坐标由前端布局算法算——
+    // 从源头消灭「LLM 手排坐标画歪」的问题。
+    const nodes: LayoutNode[] = (Array.isArray(rec.nodes) ? rec.nodes : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it) => {
+        const id = str(it.id, 40);
+        const label = str(it.label, 24) ?? id ?? "";
+        const lv = typeof it.level === "number" && Number.isFinite(it.level)
+          ? Math.max(0, Math.min(12, Math.floor(it.level))) : undefined;
+        return {
+          id: id ?? label,
+          label,
+          ...(lv !== undefined ? { level: lv } : {}),
+          ...(str(it.group, 40) ? { group: str(it.group, 40) } : {}),
+          ...(str(it.meta, 40) ? { meta: str(it.meta, 40) } : {}),
+        };
+      })
+      .filter((it) => it.id)
+      .slice(0, 40);
+    if (nodes.length < 2) return null;
+    const ids = new Set(nodes.map((n) => n.id));
+    const edges: LayoutEdge[] = (Array.isArray(rec.edges) ? rec.edges : [])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      .map((it) => ({
+        from: str(it.from, 40) ?? "",
+        to: str(it.to, 40) ?? "",
+        ...(str(it.label, 16) ? { label: str(it.label, 16) } : {}),
+      }))
+      .filter((it) => ids.has(it.from) && ids.has(it.to) && it.from !== it.to)
+      .slice(0, 60);
+    const spec: LayoutSpec = { nodes, edges };
+    if (title) spec.title = title;
+    const summary = str(rec.summary, 200);
+    if (summary) spec.summary = summary;
+    if (rec.dir === "LR") spec.dir = "LR";
+    return { kind: "layout", spec };
   }
   if (l === "chart") {
     const t = typeof rec.type === "string" ? rec.type.toLowerCase().trim() : "";
@@ -1270,6 +1341,298 @@ export function ProgressBlock({ spec }: { spec: ProgressSpec }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 语义布局图（```layout）
+
+/** 分层布局算法：语义结构 → 坐标（LLM 不手排坐标的兑现处）。
+ *
+ * 规则：
+ * - level 显式优先；缺省按 edges 拓扑深度推导（无入边 = 0 层，环按出现序兜底）；
+ * - 同层横排等距（LR 模式则纵排），层间距固定；组内相邻聚簇（同 group 排一起）；
+ * - 节点盒尺寸按 label 长度估算（中文 13px/字，宽 90-220 clamp）；
+ * - 边画为折线（同层内垂直、跨层走层间隙），label 放中点。
+ * 返回 { nodes: {id,label,x,y,w,h,color}, edges: 折线点集, canvas }。
+ */
+export function computeLayout(spec: LayoutSpec): {
+  nodes: (LayoutNode & { x: number; y: number; w: number; h: number; colorIdx: number })[];
+  edges: { pts: [number, number][]; label?: string; from: string; to: string }[];
+  canvas: { w: number; h: number };
+} {
+  const dir = spec.dir ?? "TB";
+  const nodes = spec.nodes;
+
+  // 1. 层级：显式优先，缺省拓扑深度（Kahn 式；剩余节点按出现序续层）
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const levelOf = new Map<string, number>();
+  nodes.forEach((n) => { if (n.level !== undefined) levelOf.set(n.id, n.level); });
+  const inDeg = new Map<string, number>(nodes.map((n) => [n.id, 0]));
+  const out: Map<string, string[]> = new Map(nodes.map((n) => [n.id, []]));
+  spec.edges.forEach((e) => {
+    if (levelOf.has(e.from) && levelOf.has(e.to)) return; // 两端都显式定层，边不参与推导
+    inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1);
+    out.get(e.from)?.push(e.to);
+  });
+  const queue = nodes.filter((n) => !levelOf.has(n.id) && (inDeg.get(n.id) ?? 0) === 0).map((n) => n.id);
+  queue.forEach((id) => levelOf.set(id, 0));
+  let qi = 0;
+  while (qi < queue.length) {
+    const id = queue[qi++];
+    const lv = levelOf.get(id) ?? 0;
+    out.get(id)?.forEach((next) => {
+      if (levelOf.has(next) && levelOf.get(next)! > lv) return;
+      levelOf.set(next, Math.max(levelOf.get(next) ?? 0, lv + 1));
+      const d = (inDeg.get(next) ?? 1) - 1;
+      inDeg.set(next, d);
+      if (d === 0 && !levelOf.has(next)) queue.push(next);
+    });
+  }
+  // 环/孤岛兜底：未定层的按出现序给当前最大层 +1
+  let maxLv = Math.max(0, ...[...levelOf.values()]);
+  nodes.forEach((n) => { if (!levelOf.has(n.id)) levelOf.set(n.id, ++maxLv); });
+
+  // 2. 分层 + 组内聚簇排序（同层内按 group 聚在一起）
+  const levels = new Map<number, LayoutNode[]>();
+  nodes.forEach((n) => {
+    const lv = levelOf.get(n.id) ?? 0;
+    if (!levels.has(lv)) levels.set(lv, []);
+    levels.get(lv)!.push(n);
+  });
+  const groupIdx = new Map<string, number>();
+  let groupSeq = 0;
+  nodes.forEach((n) => {
+    const g = n.group ?? n.id;
+    if (!groupIdx.has(g)) groupIdx.set(g, groupSeq++);
+  });
+  [...levels.keys()].sort((a, b) => a - b).forEach((lv) => {
+    levels.get(lv)!.sort((a, b) =>
+      (groupIdx.get(a.group ?? a.id) ?? 0) - (groupIdx.get(b.group ?? b.id) ?? 0));
+  });
+
+  // 3. 盒尺寸（按 label 长度）
+  const boxOf = (n: LayoutNode) => {
+    const chars = Math.max(2, n.label.length);
+    const w = Math.min(220, Math.max(88, chars * 15 + 28));
+    return { w, h: 44 };
+  };
+
+  // 4. 坐标：层间距 74，同层间距 26；画布按内容自适应
+  const LAYER_GAP = 74, SIBLING_GAP = 26, PAD = 24;
+  const rows = [...levels.keys()].sort((a, b) => a - b).map((lv) => levels.get(lv)!);
+  const rowWidths = rows.map((row) => row.reduce((s, n) => s + boxOf(n).w, 0) + SIBLING_GAP * (row.length - 1));
+  const maxRowW = Math.max(120, ...rowWidths);
+  const canvasW = maxRowW + PAD * 2;
+  const canvasH = rows.length * 44 + (rows.length - 1) * LAYER_GAP + PAD * 2;
+
+  const placed = new Map<string, { x: number; y: number; w: number; h: number }>();
+  rows.forEach((row, ri) => {
+    const rowW = rowWidths[ri];
+    let cur = (canvasW - rowW) / 2;
+    row.forEach((n) => {
+      const { w, h } = boxOf(n);
+      if (dir === "TB") placed.set(n.id, { x: cur, y: PAD + ri * (44 + LAYER_GAP), w, h });
+      else placed.set(n.id, { x: PAD + ri * (44 + LAYER_GAP), y: cur, w, h }); // LR：层→列
+      cur += w + SIBLING_GAP;
+    });
+  });
+
+  // 5. 边折线：TB 从下边中点 → 层间隙水平 → 上边中点（跨多层走两侧绕行简化为直折线）
+  const edges = spec.edges.map((e) => {
+    const a = placed.get(e.from)!;
+    const b = placed.get(e.to)!;
+    let pts: [number, number][];
+    if (dir === "TB") {
+      const ax = a.x + a.w / 2, bx = b.x + b.w / 2;
+      const midY = (a.y + a.h + b.y) / 2;
+      if (b.y >= a.y + a.h) {
+        pts = [[ax, a.y + a.h], [ax, midY], [bx, midY], [bx, b.y]];
+      } else {
+        // 同层/回边：绕右侧
+        const rx = Math.max(a.x + a.w, b.x + b.w) + 18;
+        pts = [[ax, a.y + a.h], [ax, midY], [rx, midY], [rx, b.y + b.h / 2], [b.x + b.w, b.y + b.h / 2]];
+      }
+    } else {
+      const ay = a.y + a.h / 2, by = b.y + b.h / 2;
+      const midX = (a.x + a.w + b.x) / 2;
+      if (b.x >= a.x + a.w) {
+        pts = [[a.x + a.w, ay], [midX, ay], [midX, by], [b.x, by]];
+      } else {
+        const ry = Math.max(a.y + a.h, b.y + b.h) + 18;
+        pts = [[a.x + a.w, ay], [midX, ay], [midX, ry], [b.x + b.w / 2, ry], [b.x + b.w / 2, b.y + b.h]];
+      }
+    }
+    return { pts, from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}) };
+  });
+
+  return {
+    nodes: nodes.map((n) => ({
+      ...n, ...placed.get(n.id)!,
+      colorIdx: (groupIdx.get(n.group ?? n.id) ?? 0) % DIAGRAM_COLORS.length,
+    })),
+    edges,
+    canvas: { w: Math.max(canvasW, dir === "TB" ? canvasW : canvasH), h: dir === "TB" ? canvasH : canvasW },
+  };
+}
+
+export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
+  const [hover, setHover] = useState<string | null>(null);
+  const { nodes, edges, canvas } = useMemo(() => computeLayout(spec), [spec]);
+  const node = (id: string) => nodes.find((n) => n.id === id);
+  return (
+    <div className="md-rich">
+      {spec.title && <div className="md-rich-title">{spec.title}</div>}
+      {spec.summary && <div className="md-ix-summary">{spec.summary}</div>}
+      <div className="md-diagram-svg-wrap">
+        <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
+          {/* 边（先画在下层） */}
+          {edges.map((e, i) => {
+            const dimmed = hover !== null && hover !== e.from && hover !== e.to;
+            return (
+              <g key={`e${i}`} opacity={dimmed ? 0.25 : 0.9}>
+                <polyline
+                  points={e.pts.map((p) => p.join(",")).join(" ")}
+                  fill="none"
+                  stroke="var(--text-2, #6e7a8c)"
+                  strokeWidth={1.6}
+                  strokeLinejoin="round"
+                />
+                {/* 终点小箭头：最后一段方向 */}
+                {(() => {
+                  const n = e.pts.length;
+                  if (n < 2) return null;
+                  const [x1, y1] = e.pts[n - 2];
+                  const [x2, y2] = e.pts[n - 1];
+                  const ang = Math.atan2(y2 - y1, x2 - x1);
+                  const s = 6;
+                  const p1 = `${x2 - s * Math.cos(ang - 0.45)},${y2 - s * Math.sin(ang - 0.45)}`;
+                  const p2 = `${x2 - s * Math.cos(ang + 0.45)},${y2 - s * Math.sin(ang + 0.45)}`;
+                  return <polygon points={`${x2},${y2} ${p1} ${p2}`} fill="var(--text-2, #6e7a8c)" />;
+                })()}
+                {e.label && (
+                  <text
+                    x={(e.pts[0][0] + e.pts[e.pts.length - 1][0]) / 2}
+                    y={(e.pts[0][1] + e.pts[e.pts.length - 1][1]) / 2 - 4}
+                    textAnchor="middle" fontSize={10.5} fill="var(--text-2, #6e7a8c)"
+                    style={{ pointerEvents: "none" }}
+                  >{e.label}</text>
+                )}
+              </g>
+            );
+          })}
+          {/* 节点盒 */}
+          {nodes.map((n, i) => {
+            const color = DIAGRAM_COLORS[n.colorIdx];
+            const dimmed = hover !== null && hover !== n.id;
+            return (
+              <g
+                key={n.id + i}
+                opacity={dimmed ? 0.35 : 1}
+                onMouseEnter={() => setHover(n.id)}
+                onMouseLeave={() => setHover(null)}
+              >
+                <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={10}
+                  fill={softFill(color)} stroke={color} strokeWidth={dimmed ? 1.5 : 2.4} />
+                <text x={n.x + n.w / 2} y={n.y + n.h / 2} textAnchor="middle" dominantBaseline="middle"
+                  fontSize={13} fontWeight={600} fill="var(--text-0, #e6edf3)"
+                  style={{ pointerEvents: "none" }}>{n.label}</text>
+                {n.meta && (
+                  <text x={n.x + n.w / 2} y={n.y + n.h - 8} textAnchor="middle"
+                    fontSize={9.5} fill="var(--text-2, #6e7a8c)"
+                    style={{ pointerEvents: "none" }}>{n.meta}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {/* 图例（分组色） */}
+      {(() => {
+        const groups = [...new Set(nodes.map((n) => n.group).filter(Boolean))] as string[];
+        if (groups.length < 2) return null;
+        return (
+          <div className="md-layout-legend">
+            {groups.map((g, i) => (
+              <span key={g} className="md-layout-legend-item">
+                <span className="md-diagram-dot" style={{ background: DIAGRAM_COLORS[(groupSeqOf(nodes, g)) % DIAGRAM_COLORS.length] }} />
+                {g}
+              </span>
+            ))}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function groupSeqOf(nodes: { group?: string }[], group: string): number {
+  const seen = new Set<string>();
+  for (const n of nodes) {
+    const g = n.group ?? "";
+    if (g && !seen.has(g)) {
+      seen.add(g);
+      if (g === group) return seen.size - 1;
+    }
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------- Mermaid 图（```mermaid）
+
+/** Mermaid 渲染（strict 安全级：禁 HTML/脚本）。
+ *  异步渲染 + 失败降级：DSL 语法错 → 显示原文本代码块（用户还能看清内容）。
+ *  懒初始化：首个 mermaid 块出现才 import（约 2MB，不该进主 bundle）。 */
+let mermaidInit: Promise<typeof import("mermaid").default> | null = null;
+function ensureMermaid() {
+  if (!mermaidInit) {
+    mermaidInit = import("mermaid").then((mod) => {
+      mod.default.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "dark",
+        fontFamily: "inherit",
+        flowchart: { curve: "basis", useMaxWidth: true },
+        sequence: { useMaxWidth: true },
+      });
+      return mod.default;
+    });
+  }
+  return mermaidInit;
+}
+
+export function MermaidBlock({ code }: { code: string }) {
+  const [svg, setSvg] = useState<string>("");
+  const [error, setError] = useState("");
+  const idRef = useRef(`mmd-${Math.random().toString(36).slice(2, 9)}`);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const mermaid = await ensureMermaid();
+        const { svg: out } = await mermaid.render(idRef.current, code);
+        if (alive) { setSvg(out); setError(""); }
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { alive = false; };
+  }, [code]);
+
+  if (error) {
+    return (
+      <div className="md-mermaid-fallback">
+        <div className="md-mermaid-err">⚠ Mermaid 渲染失败（{error.slice(0, 120)}），源码如下：</div>
+        <pre>{code}</pre>
+      </div>
+    );
+  }
+  return (
+    <div className="md-rich md-mermaid-wrap">
+      {svg
+        ? <div className="md-mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+        : <div className="rich-card-loading">🎨 图形生成中…</div>}
     </div>
   );
 }
