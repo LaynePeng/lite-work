@@ -122,7 +122,8 @@ def _api_get(client, url: str, token: str) -> Dict:
 def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
                   expected_size: Optional[int], retries: int,
                   on_bytes: Optional[Callable[[int], None]] = None,
-                  control: Optional[InstallControl] = None) -> None:
+                  control: Optional[InstallControl] = None,
+                  httpx_kwargs: Optional[Dict[str, Any]] = None) -> None:
     """下载单个文件到 dest，支持断点续传（`.part` 累积 + Range）。
 
     - 目标已完整（大小匹配）→ 直接跳过；
@@ -141,7 +142,8 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
         try:
             if control is not None:
                 control.checkpoint()
-            _resume_download(url, part, expected_size, on_bytes, control=control)
+            _resume_download(url, part, expected_size, on_bytes, control=control,
+                             httpx_kwargs=httpx_kwargs)
             if os.path.isfile(part):
                 os.replace(part, dest)
             elif not os.path.isfile(dest):
@@ -160,7 +162,8 @@ def _download_one(owner: str, repo: str, commit: str, path: str, dest: str,
 
 def _resume_download(url: str, part: str, expected_size: Optional[int],
                      on_bytes: Optional[Callable[[int], None]] = None,
-                     control: Optional[InstallControl] = None) -> None:
+                     control: Optional[InstallControl] = None,
+                     httpx_kwargs: Optional[Dict[str, Any]] = None) -> None:
     import httpx
 
     offset = os.path.getsize(part) if os.path.isfile(part) else 0
@@ -171,7 +174,8 @@ def _resume_download(url: str, part: str, expected_size: Optional[int],
     headers = {"User-Agent": "lite-work-agent", "Accept-Encoding": "identity"}
     if offset > 0:
         headers["Range"] = f"bytes={offset}-"
-    with httpx.Client(timeout=_timeout(), follow_redirects=True, headers=headers) as client:
+    with httpx.Client(timeout=_timeout(), follow_redirects=True, headers=headers,
+                      **(httpx_kwargs or {})) as client:
         with client.stream("GET", url) as resp:
             if resp.status_code == 416:
                 return  # 请求区间越界：视为已下载完
@@ -252,7 +256,8 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
                   *, retries: int = 4, max_workers: int = 8,
                   max_files: Optional[int] = None,
                   on_progress: Optional[Callable[[int, int], None]] = None,
-                  control: Optional[InstallControl] = None) -> str:
+                  control: Optional[InstallControl] = None,
+                  httpx_kwargs: Optional[Dict[str, Any]] = None) -> str:
     """把仓库子目录抓到缓存，返回缓存中该子目录的本地路径。
 
     真正「可续」：文件级缓存 + 单文件 Range 续传，跨重试/重启不重复下载。
@@ -278,7 +283,9 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
     if ctrl is not None:
         ctrl.checkpoint()
     token = _token()
-    with httpx.Client(timeout=_timeout(), follow_redirects=True) as client:
+    # market 出网参数（代理/证书校验/trust_env）由调用方注入（app 层统一配置）
+    with httpx.Client(timeout=_timeout(), follow_redirects=True,
+                      **(httpx_kwargs or {})) as client:
         commit = _api_get(client, f"{_API_BASE}/repos/{owner}/{repo}/commits/{ref or 'HEAD'}", token).get("sha", "")
         if not commit:
             raise ValueError(f"无法解析 {owner}/{repo}@{ref} 的 commit")
@@ -333,7 +340,7 @@ def fetch_subpath(cache_root: str, owner: str, repo: str, ref: str, subpath: str
             entry.get("size") is None or os.path.getsize(dest) == int(entry.get("size"))
         )
         _download_one(owner, repo, commit, entry["path"], dest, entry.get("size"), retries,
-                      on_bytes=tracker.add_bytes, control=ctrl)
+                      on_bytes=tracker.add_bytes, control=ctrl, httpx_kwargs=httpx_kwargs)
         if entry.get("mode") == "100755":
             try:
                 os.chmod(dest, 0o755)

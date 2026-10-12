@@ -271,6 +271,22 @@ def proxy_for(config: Dict[str, Any], scope: str) -> Optional[str]:
     return url
 
 
+def market_httpx_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
+    """market 域（GitHub 下载：插件/技能/清单）的统一 httpx 参数。
+
+    一次收口三个维度，散落的下载函数（plugin_loader / skills / gh_fetch）
+    不再各自漏配：
+    - mounts：scope=market 的代理 + bypass 分流（未启用则缺省，不传 key）；
+    - trust_env=False：隔离 shell 环境代理；
+    - verify：跟随 ssl_verify 配置。
+    """
+    kwargs: Dict[str, Any] = {"trust_env": False, "verify": ssl_verify_for(config)}
+    mounts = proxy_mounts(config, "market")
+    if mounts:
+        kwargs["mounts"] = mounts
+    return kwargs
+
+
 def proxy_mounts(config: Dict[str, Any], scope: str) -> Optional[Dict[str, Any]]:
     """httpx 场景的 bypass 分流（Bug 修复：bypass 此前只在 env 注入生效，
     LLM/webfetch/meta 的 httpx client 整体走代理，直连列表形同虚设）。

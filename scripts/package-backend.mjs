@@ -222,6 +222,9 @@ const specArgs = [
   "--collect-all", "pyee",
   "--collect-all", "greenlet",
   "--collect-all", "curl_cffi",
+  # truststore：系统证书注入（代理 MITM 根证书场景；PyInstaller 不会自动
+  # 收集它——之前打包产物里缺失，运行时静默回退 certifi，测试连接报证书错）
+  "--collect-all", "truststore",
   "--hidden-import", "uvicorn.logging",
   "--hidden-import", "uvicorn.loops",
   "--hidden-import", "uvicorn.loops.auto",

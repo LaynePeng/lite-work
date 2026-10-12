@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "httpx>=0.27",
+    # 系统证书注入（Windows/macOS 钥匙串；代理 MITM 根证书场景必需）
+    "truststore>=0.9",
     "python-multipart>=0.0.9",
     "tree-sitter>=0.24",
     "tree-sitter-typescript>=0.23",

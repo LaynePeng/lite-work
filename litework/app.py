@@ -45,7 +45,8 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .core.metrics import ToolMetrics
-from .core.proxy import proxy_env, proxy_for, proxy_mounts, ssl_verify_for
+from .core.proxy import (market_httpx_kwargs, proxy_env, proxy_for,
+                         proxy_mounts, ssl_verify_for)
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
@@ -1424,7 +1425,10 @@ class AgentApp:
     def skills_import(self, source: str, scope: str = "workspace", name: Optional[str] = None,
                       overwrite: bool = False) -> List[Dict[str, Any]]:
         from .tools.skills import SkillsTools
-        return SkillsTools(self.workspace).import_skill(source, scope, name, overwrite)
+        # GitHub 下载走 market 出网参数（代理分流 + trust_env + TLS 校验）
+        return SkillsTools(self.workspace,
+                           httpx_kwargs=market_httpx_kwargs(self.config)).import_skill(
+            source, scope, name, overwrite)
 
     def skills_import_zip(self, data: bytes, scope: str = "workspace", name: Optional[str] = None,
                           overwrite: bool = False) -> List[Dict[str, Any]]:
@@ -1778,7 +1782,7 @@ class AgentApp:
         from .tools.plugin_loader import import_source
 
         results = import_source(self.config_dir, source, name=name, overwrite=overwrite,
-                                version=version, proxy_mounts=proxy_mounts(self.config, "market"))
+                                version=version, httpx_kwargs=market_httpx_kwargs(self.config))
         self._invalidate_plugin_cache()
         return results
 

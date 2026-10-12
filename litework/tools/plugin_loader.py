@@ -756,15 +756,15 @@ def _attach_permission_diff(config_dir: str, results: List[Dict[str, Any]]) -> N
 
 def import_source(config_dir: str, source: str, name: Optional[str] = None,
                   overwrite: bool = False, version: Optional[str] = None,
-                  proxy_mounts: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                  httpx_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """从本地目录 / zip 文件 / GitHub URL 导入插件，并在 installed.json 记录元信息。
 
-    proxy_mounts：GitHub 下载的出网分流（config["proxy"] scope=market）。
+    httpx_kwargs：GitHub 下载的出网参数（market_httpx_kwargs 统一构造）。
     """
     source = (source or "").strip()
     if source.startswith(("http://", "https://")):
         results = _import_from_github(config_dir, source, name, overwrite,
-                                       proxy_mounts=proxy_mounts)
+                                       httpx_kwargs=httpx_kwargs)
     else:
         p = Path(source).expanduser()
         if not p.exists():
@@ -791,10 +791,11 @@ def import_source(config_dir: str, source: str, name: Optional[str] = None,
 
 def _import_from_github(config_dir: str, url: str, name: Optional[str],
                         overwrite: bool = False,
-                        proxy_mounts: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                        httpx_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """从 GitHub 仓库导入插件（zipball 下载），支持子目录（tree/{branch}/{dir}）。
 
-    proxy_mounts：出网分流（config["proxy"] 的 scope=market；None = 直连）。
+    httpx_kwargs：出网参数（market_httpx_kwargs：代理分流 + trust_env +
+    TLS 校验；None = 默认直连+校验）。
     """
     import io as _io
     import httpx
@@ -826,6 +827,7 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
             cached = fetch_subpath(
                 default_cache_root(config_dir), owner, repo, branch or "HEAD", subpath,
                 on_progress=lambda d, t: logger.info("[PluginLoader] 可续传下载 %s: %d/%d", subpath, d, t),
+                httpx_kwargs=httpx_kwargs,
             )
             cached_path = Path(cached)
             entries: List[Path] = (
@@ -848,9 +850,9 @@ def _import_from_github(config_dir: str, url: str, name: Optional[str],
     # read 给足下载余量（zipball 可能较大），connect 快速失败避免慢网长时间挂起
     timeout = httpx.Timeout(connect=8.0, read=120.0, write=10.0, pool=8.0)
     try:
-        # trust_env=False：代理唯一事实源是 config["proxy"]（scope=market）
+        # market 出网参数统一注入（代理分流 + trust_env + TLS 校验）
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers,
-                          mounts=proxy_mounts, trust_env=False) as client:
+                          **(httpx_kwargs or {"trust_env": False})) as client:
             if subpath:
                 meta = client.get(api).json()
                 branch = meta.get("default_branch") or "main"

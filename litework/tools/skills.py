@@ -352,8 +352,11 @@ def invalidate_skills_cache() -> None:
 
 
 class SkillsTools:
-    def __init__(self, workspace: Optional[str]) -> None:
+    def __init__(self, workspace: Optional[str],
+                 httpx_kwargs: Optional[Dict[str, Any]] = None) -> None:
         self.workspace = Path(workspace).resolve() if workspace else None
+        # market 出网参数（market_httpx_kwargs：代理分流 + trust_env + TLS 校验）
+        self.httpx_kwargs = httpx_kwargs
         self.roots: List[Dict[str, Any]] = []
         # 内置技能根：提前计算，用于跳过工作区中与内置重合的只读路径
         builtin = _builtin_skills_dir()
@@ -895,6 +898,7 @@ class SkillsTools:
                 cached = fetch_subpath(
                     default_cache_root(), owner, repo, ref, subpath,
                     on_progress=lambda d, t: logger.info("[Skills] 可续传下载 %s: %d/%d", subpath, d, t),
+                    httpx_kwargs=self.httpx_kwargs,
                 )
                 candidates = self._find_skill_dirs(Path(cached))
                 if candidates:
@@ -922,7 +926,9 @@ class SkillsTools:
         api = f"https://api.github.com/repos/{owner}/{repo}"
         timeout = httpx.Timeout(connect=8.0, read=120.0, write=10.0, pool=8.0)
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            # market 出网参数统一注入（代理分流 + trust_env + TLS 校验）
+            with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers,
+                              **(self.httpx_kwargs or {"trust_env": False})) as client:
                 if branch:
                     ref_resp = client.get(f"{api}/git/ref/heads/{branch}")
                     if ref_resp.status_code != 200:

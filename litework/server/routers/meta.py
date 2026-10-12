@@ -181,15 +181,26 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import time as _time
         import httpx as _httpx
-        from ...core.proxy import normalize_proxy_url
+        from ...core.proxy import ensure_system_ca, normalize_proxy_url, ssl_verify_for
 
         url = normalize_proxy_url(payload.url or "")
         if not url:
             return {"ok": False, "text": "代理地址格式无法识别"}
+        # 测试环境必须与真实流量一致，否则测试结果误导真实可用性：
+        # ① 系统证书注入（truststore：MITM 代理根证书在系统钥匙串里——
+        #    业务适配器已注入，测试不注入会「测试失败但实际能连」）；
+        # ② ssl_verify 跟随用户配置（关了校验的测试也不校验）
+        ensure_system_ca()
+        verify = ssl_verify_for(app.config)
+        if not verify:
+            import logging
+            logging.getLogger("litework.proxy").warning(
+                "[Proxy] 测试连接在 ssl_verify=false 下进行（证书未校验）")
         start = _time.monotonic()
         try:
             # trust_env=False：只测用户填的代理，不受 shell 环境变量干扰
-            resp = await _httpx.AsyncClient(proxy=url, timeout=8.0, trust_env=False).get(
+            resp = await _httpx.AsyncClient(proxy=url, timeout=8.0, trust_env=False,
+                                            verify=verify).get(
                 "https://api.github.com", headers={"User-Agent": "lite-work-proxy-test"})
             ms = int((_time.monotonic() - start) * 1000)
             if resp.status_code < 400:
