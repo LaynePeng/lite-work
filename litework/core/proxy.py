@@ -29,7 +29,9 @@ proxy 例外表，用 Mounts 思路过重；轻量实现：命中 bypass 的场�
 from __future__ import annotations
 
 import logging
+import os
 import re
+import sys
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -37,6 +39,101 @@ logger = logging.getLogger("litework.proxy")
 
 #: 全部出网 scope（配置校验 + 设置页分组展示用）
 PROXY_SCOPES = ("llm", "webfetch", "meta", "market", "mcp", "shell")
+
+#: 系统代理检测缓存（进程内一次；scutil/注册表读取不必每次）
+_system_proxy_cache: Optional[Dict[str, str]] = None
+
+
+def detect_system_proxy(refresh: bool = False) -> Dict[str, str]:
+    """检测系统级代理设置（用户「让已有代理直接显示，控制范围即可」）。
+
+    优先级（返回第一个可用的）：
+    - macOS：scutil --proxy（系统偏好设置的代理；HTTPS 优先于 HTTP）；
+    - Windows：注册表 Internet Settings（ProxyEnable/ProxyServer）；
+    - 通用兜底：HTTP_PROXY/HTTPS_PROXY 环境变量。
+
+    返回 {"url": 归一化代理地址, "source": "macos|windows|env"} 或 {}。
+    """
+    global _system_proxy_cache
+    if _system_proxy_cache is not None and not refresh:
+        return _system_proxy_cache
+    result: Dict[str, str] = {}
+    try:
+        if sys.platform == "darwin":
+            import subprocess
+            r = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3)
+            conf: Dict[str, str] = {}
+            for line in r.stdout.splitlines():
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    conf[k.strip()] = v.strip()
+            # HTTPS 代理优先（多数流量是 https）
+            if conf.get("HTTPSEnable") == "1" and conf.get("HTTPSProxy"):
+                result = {"url": f"http://{conf['HTTPSProxy']}:{conf.get('HTTPSPort', '443')}", "source": "macos"}
+            elif conf.get("HTTPEnable") == "1" and conf.get("HTTPProxy"):
+                result = {"url": f"http://{conf['HTTPProxy']}:{conf.get('HTTPPort', '80')}", "source": "macos"}
+        elif sys.platform == "win32":
+            import winreg  # type: ignore[import-not-found]
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+            enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            if enable:
+                server, _ = winreg.QueryValueEx(key, "ProxyServer")
+                server = str(server)
+                if "=" in server:  # "http=...;https=..." 形式取 https
+                    parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
+                    server = parts.get("https") or parts.get("http") or server.split(";")[0]
+                if not server.startswith("http"):
+                    server = f"http://{server}"
+                result = {"url": server, "source": "windows"}
+        else:
+            # Linux/其他：环境变量
+            env_url = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or \
+                os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
+            if env_url:
+                result = {"url": env_url, "source": "env"}
+    except Exception:
+        logger.debug("[Proxy] 系统代理检测失败", exc_info=True)
+    if result:
+        normalized = normalize_proxy_url(result["url"])
+        if normalized:
+            result["url"] = normalized
+        else:
+            result = {}
+    _system_proxy_cache = result
+    return result
+
+
+def ssl_verify_for(config: Dict[str, Any]) -> bool:
+    """TLS 证书校验开关（config["proxy"]["ssl_verify"]，默认 True）。
+
+    False = 关闭校验（企业 MITM 代理/自签证书场景）。调用方需在 False 时
+    记 WARNING 日志（安全权衡交给用户，但要让用户看得见）。
+    """
+    pc = proxy_config(config)
+    v = pc.get("ssl_verify")
+    return True if v is None else bool(v)
+
+
+_truststore_injected = False
+
+
+def ensure_system_ca() -> None:
+    """把系统证书注入 Python ssl（truststore；Windows/macOS/Linux 全覆盖）。
+
+    幂等：进程内只注入一次。MITM 代理（企业环境常见）的根证书装在系统
+    钥匙串/证书管理器里，Python 默认只读 certifi——不注入会握手失败。
+    """
+    global _truststore_injected
+    if _truststore_injected:
+        return
+    _truststore_injected = True
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        logger.info("[Proxy] 系统证书已注入 ssl（truststore）")
+    except Exception:
+        logger.debug("[Proxy] truststore 不可用，沿用 certifi 默认证书", exc_info=True)
 
 #: scope 的中文说明（设置页透出用）
 SCOPE_LABELS = {
@@ -48,7 +145,17 @@ SCOPE_LABELS = {
     "shell": "Agent 执行的命令",
 }
 
-_SCHEME_RE = re.compile(r"^(https?|socks5)://", re.IGNORECASE)
+#: 代理 scheme 白名单：http(s) / socks5 / socks5h（curl 变体，归一到 socks5）
+#: / socks4 —— 大小写不敏感；socks 系需要 httpx[socks]（socksio），
+#: 运行时缺依赖由 proxy_for 探测退回直连
+_SCHEME_RE = re.compile(r"^(https?|socks[45]h?)://", re.IGNORECASE)
+
+
+def _norm_scheme(scheme: str) -> str:
+    """scheme 归一：小写；socks5h（curl 变体）→ socks5（httpx 代理模式
+    下语义等价——代理端解析域名本就是 proxy 模式的默认行为）。"""
+    s = scheme.lower()
+    return "socks5" if s == "socks5h" else s
 
 
 def normalize_proxy_url(raw: str) -> Optional[str]:
@@ -64,15 +171,25 @@ def normalize_proxy_url(raw: str) -> Optional[str]:
     s = (raw or "").strip()
     if not s:
         return None
-    from urllib.parse import quote
+    from urllib.parse import quote, unquote
 
     def _enc_cred(cred: str) -> str:
-        """user:pass 段安全编码：只编码 URL 保留字符，字母数字与常见符号保留。
-        分隔 user 与 pass 的第一个冒号保留（userinfo 语法位），其余全编。"""
+        """user:pass 段安全编码（幂等）：先 unquote 一次再 quote——
+
+        - 用户填原始字符（pass#word）→ unquote 无变化 → 编码一次 → %23；
+        - 用户已按建议填 %23（或归一化结果被二次传入）→ unquote 还原成 # →
+          再编码回 %23——**无论输入形态，输出恒一致**（幂等）。
+          这修复双重编码 bug：normalize 在前后端链路被多次调用，每次都把
+          % 再编成 %25，httpx 解码一层后密码仍是 %23 ≠ 真实密码 → 认证失败。
+        - 分隔 user 与 pass 的第一个冒号保留（userinfo 语法位）。
+        """
+        def _one(seg: str) -> str:
+            return quote(unquote(seg), safe=".-_~!$&()*+,;=")
+
         user, sep, pw = cred.partition(":")
         if not sep:
-            return quote(cred, safe=".-_~!$&'()*+,;=")
-        return f"{quote(user, safe='.-_~!$&()*+,;=')}:{quote(pw, safe='.-_~!$&()*+,;=')}"
+            return _one(cred)
+        return f"{_one(user)}:{_one(pw)}"
 
     # 已带协议：先按「第一个 @」手工拆凭据段（URL 解析会按 # 截断密码，
     # 如 http://user:pass#word@host 的 password 只剩 pass——必须拿原始段编码），
@@ -90,11 +207,11 @@ def normalize_proxy_url(raw: str) -> Optional[str]:
             hp = urlparse(f"http://{host_seg}")
             if not hp.hostname:
                 return None
-            return f"{scheme_part.lower()}://{_enc_cred(raw_cred_seg)}@{hp.netloc}"
+            return f"{_norm_scheme(scheme_part)}://{_enc_cred(raw_cred_seg)}@{hp.netloc}"
         p = urlparse(s)
         if not p.hostname:
             return None
-        return f"{p.scheme.lower()}://{p.netloc}"
+        return f"{_norm_scheme(p.scheme)}://{p.netloc}"
     # 无协议：可能是 user:pass@host:port 或 host:port，也可能是
     # user:pass@https://host:port（协议被写在 @ 之后）
     if "@" in s:
@@ -107,7 +224,7 @@ def normalize_proxy_url(raw: str) -> Optional[str]:
             p = urlparse(rest)
             if not p.hostname:
                 return None
-            return f"{p.scheme.lower()}://{_enc_cred(cred)}@{p.netloc}"
+            return f"{_norm_scheme(p.scheme)}://{_enc_cred(cred)}@{p.netloc}"
         if rest and not rest.startswith("/") and re.match(r"^[\w.\-]+:\d+$", rest):
             return f"http://{_enc_cred(cred)}@{rest}"
         return None
@@ -141,12 +258,15 @@ def proxy_for(config: Dict[str, Any], scope: str) -> Optional[str]:
     if not url:
         return None
     scheme = urlparse(url).scheme.lower()
-    if scheme == "socks5":
-        # socks5 需要 httpx[socks]（socksio）。探测一次，缺依赖退回直连。
+    if scheme.startswith("socks"):
+        # socks 系需要 httpx[socks]（socksio）。探测一次，缺依赖退回直连。
+        # socks4 httpx 原生不支持（只支持 socks5）——同样退直连并说明。
         try:
             import socksio  # noqa: F401
+            if scheme == "socks4":
+                raise ImportError("httpx 仅支持 socks5")
         except ImportError:
-            logger.warning("[Proxy] socks5 需要 socksio 依赖（pip install httpx[socks]），该 scope 退回直连: %s", scope)
+            logger.warning("[Proxy] %s 代理不可用（需 socks5 + socksio 依赖），该 scope 退回直连: %s", scheme, scope)
             return None
     return url
 

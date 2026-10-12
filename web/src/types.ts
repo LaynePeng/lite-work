@@ -260,6 +260,8 @@ export interface AppConfig {
     url: string;
     scope: string[];
     bypass: string[];
+    /** TLS 证书校验（默认 true；false = 关闭，仅自签/MITM 环境用） */
+    ssl_verify?: boolean;
   };
   /** 完成证据门禁：off 不评估 | advisory（默认）只记录不打断 | enforced 未通过不收尾 */
   completion_gate?: "off" | "advisory" | "enforced";

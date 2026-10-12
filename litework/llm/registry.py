@@ -228,6 +228,8 @@ class LLMRegistry:
         # httpx mounts 形态：all://=代理 / bypass host=直连；None = 全直连。
         # 变更时废弃缓存适配器，下一个 get_adapter 用新配置重建）
         self.proxy_mounts: Optional[Dict[str, Any]] = None
+        # TLS 证书校验（config["proxy"]["ssl_verify"]，默认 True）
+        self.ssl_verify: bool = True
         # 模型元数据服务（models.dev 同步 + 内置静态表兜底）
         self.meta_service = None
         if config_dir:
@@ -259,14 +261,19 @@ class LLMRegistry:
 
     # ------------------------------------------------------------ 配置
 
-    def set_meta_proxy(self, url: Optional[str]) -> None:
+    def set_meta_proxy(self, url: Optional[str], ssl_verify: Optional[bool] = None) -> None:
         """models.dev 元数据拉取代理（scope=meta，与 LLM API 代理独立）。"""
         if self.meta_service is not None:
             self.meta_service.proxy_url = url
+            if ssl_verify is not None:
+                self.meta_service.ssl_verify = ssl_verify
 
-    def set_proxy(self, mounts: Optional[Dict[str, Any]]) -> None:
-        """设置 LLM API 出网分流（httpx mounts）；变更时废弃缓存适配器
-        （连接含旧代理设置，不废弃会继续用旧代理/旧直连）。"""
+    def set_proxy(self, mounts: Optional[Dict[str, Any]],
+                  ssl_verify: Optional[bool] = None) -> None:
+        """设置 LLM API 出网分流（httpx mounts）+ TLS 校验；变更时废弃缓存
+        适配器（连接含旧代理设置，不废弃会继续用旧代理/旧直连）。"""
+        if ssl_verify is not None:
+            self.ssl_verify = ssl_verify
         if mounts == self.proxy_mounts:
             return
         self.proxy_mounts = mounts
@@ -438,6 +445,7 @@ class LLMRegistry:
             custom_headers=settings.get("custom_headers") or {},
             reasoning_effort=str(settings.get("reasoning_effort", "") or ""),
             proxy_mounts=self.proxy_mounts,
+            ssl_verify=self.ssl_verify,
         )
         if meta["kind"] == "anthropic":
             return AnthropicAdapter(**common)

@@ -282,6 +282,8 @@ export default function SettingsModal({
   const [proxySaved, setProxySaved] = useState(false);
   const [proxyTesting, setProxyTesting] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [proxySslVerify, setProxySslVerify] = useState(true);
+  const [systemProxy, setSystemProxy] = useState<{ url: string; source: string } | null>(null);
 
   // Skills 管理（独立于 LLM/MCP 配置，操作即时生效）
   // 各区块"加载失败"可见状态（原实现静默 catch → 页面空白且无提示）
@@ -716,6 +718,16 @@ export default function SettingsModal({
           ? c.proxy.scope.filter((s: unknown): s is string => typeof s === "string")
           : ["llm", "webfetch"]);
         setProxyBypass(Array.isArray(c.proxy.bypass) ? c.proxy.bypass.join(", ") : "");
+        setProxySslVerify(c.proxy.ssl_verify !== false);
+      }
+      // 系统代理检测（未保存过代理时预填显示——「已有代理直接显示，控制范围即可」）
+      if (!c.proxy || !c.proxy.url) {
+        api.detectProxy().then((d) => {
+          if (d && d.url) {
+            setSystemProxy(d);
+            setProxyUrl(d.url);
+          }
+        }).catch(() => {});
       }
       if (typeof c.tool_timeout === "number" && c.tool_timeout > 0) setToolTimeout(c.tool_timeout);
       if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
@@ -1341,14 +1353,22 @@ export default function SettingsModal({
   const normalizeProxy = useCallback((raw: string): string | null => {
     const s = raw.trim();
     if (!s) return null;
-    // user:pass 段安全编码：分隔 username/password 的第一个冒号保留（userinfo
-    // 语法位），其余全部 percent-encode（# @ / 等 URL 保留字符都会破坏解析）
+    // user:pass 段安全编码（幂等）：先 decodeURIComponent 一次再 encode——
+    // 用户填 #（原始）或 %23（已编码）输出恒一致；与后端 proxy.py 同规则。
+    // 分隔 username/password 的第一个冒号保留（userinfo 语法位）。
     const encCred = (cred: string): string => {
+      const one = (seg: string): string => {
+        try {
+          return encodeURIComponent(decodeURIComponent(seg));
+        } catch {
+          return encodeURIComponent(seg); // 非法编码序列（孤立的 %）：按原始编码
+        }
+      };
       const i = cred.indexOf(":");
-      if (i < 0) return encodeURIComponent(cred);
-      return `${encodeURIComponent(cred.slice(0, i))}:${encodeURIComponent(cred.slice(i + 1))}`;
+      if (i < 0) return one(cred);
+      return `${one(cred.slice(0, i))}:${one(cred.slice(i + 1))}`;
     };
-    if (/^(https?|socks5):\/\//i.test(s)) {
+    if (/^(https?|socks[45]h?):\/\//i.test(s)) {
       // 手工拆凭据（最后 1 个 @ 是 userinfo/host 边界）：URL 解析会按 # 截断
       // 密码（如 http://user:pass#word@host 的 password 只剩 pass），不能依赖
       const schemeEnd = s.indexOf("://") + 3;
@@ -1371,7 +1391,7 @@ export default function SettingsModal({
       const at = s.indexOf("@");
       const cred = s.slice(0, at);
       const rest = s.slice(at + 1).trim();
-      if (/^(https?|socks5):\/\//i.test(rest)) {
+      if (/^(https?|socks[45]h?):\/\//i.test(rest)) {
         // 凭据在前、协议在后：重排 + 编码
         try {
           const u = new URL(rest);
@@ -1407,6 +1427,7 @@ export default function SettingsModal({
           url: url ?? proxyUrl.trim(),
           scope: proxyScopes,
           bypass: proxyBypass.split(/[,，\s]+/).map((h) => h.trim()).filter(Boolean),
+          ssl_verify: proxySslVerify,
         },
       });
       setProxySaved(true);
@@ -1415,7 +1436,7 @@ export default function SettingsModal({
     } catch (err) {
       window.alert(`保存失败: ${(err as Error).message}`);
     }
-  }, [proxyEnabled, proxyUrl, proxyScopes, proxyBypass, normalizeProxy, onSaved]);
+  }, [proxyEnabled, proxyUrl, proxyScopes, proxyBypass, proxySslVerify, normalizeProxy, onSaved]);
 
   // 保存 triggers 匹配模式
   const saveTriggerMode = useCallback(async () => {
@@ -2706,6 +2727,13 @@ export default function SettingsModal({
                 <code>http(s)://user:pass@host:port</code>、<code>socks5://…</code>、
                 <code>user:pass@host:port</code>、<code>user:pass@https://host:port</code>（凭据在前也识别）。
               </p>
+              {systemProxy && (
+                <p className="mcp-hint">
+                  🖥 检测到系统代理（{systemProxy.source === "macos" ? "macOS 系统设置"
+                    : systemProxy.source === "windows" ? "Windows 系统设置" : "环境变量"}）：
+                  <code>{systemProxy.url}</code> 已预填——勾选启用并选择哪些流量走它即可。
+                </p>
+              )}
               <label className="settings-check" title="关闭后所有流量直连">
                 <input
                   type="checkbox" checked={proxyEnabled}
@@ -2761,6 +2789,21 @@ export default function SettingsModal({
                   spellCheck={false}
                 />
               </div>
+              <label
+                className={`settings-check ${proxySslVerify ? "" : "warn"}`}
+                title={proxySslVerify
+                  ? "系统证书已自动加载（Windows/macOS 钥匙串与证书管理器）；MITM 代理的根证书也能被识别"
+                  : "关闭后连接可被中间人窃听/篡改——仅建议在受信内网/自签证书环境使用"}
+              >
+                <input
+                  type="checkbox" checked={proxySslVerify}
+                  onChange={(e) => setProxySslVerify(e.target.checked)}
+                />
+                TLS 证书校验
+                {!proxySslVerify && (
+                  <span className="proxy-verify-warn">⚠ 已关闭——存在中间人风险（连接可被窃听/篡改），仅限受信内网或自签证书环境</span>
+                )}
+              </label>
               <div className="proxy-actions">
                 <button
                   className="btn-test-proxy"

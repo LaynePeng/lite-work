@@ -120,6 +120,8 @@ class ModelMetaService:
         self.last_error: str = ""
         # models.dev 出网代理（app 层按 config["proxy"] 的 scope=meta 注入）
         self.proxy_url: Optional[str] = proxy_url or None
+        # TLS 校验（config["proxy"]["ssl_verify"]）
+        self.ssl_verify: bool = True
 
     # ------------------------------------------------------------ 加载/刷新
 
@@ -175,7 +177,9 @@ class ModelMetaService:
         try:
             import httpx
 
-            resp = httpx.get(MODELS_DEV_URL, timeout=10, proxy=self.proxy_url)
+            # trust_env=False：代理唯一事实源是 config["proxy"]（scope=meta）
+            resp = httpx.get(MODELS_DEV_URL, timeout=10, proxy=self.proxy_url,
+                             trust_env=False, verify=self.ssl_verify)
             if resp.status_code != 200:
                 self.last_error = f"models.dev 返回 HTTP {resp.status_code}"
                 logger.warning("[ModelMeta] models.dev 返回 HTTP %s", resp.status_code)

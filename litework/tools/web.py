@@ -141,6 +141,7 @@ class WebFetchTools:
         cache_dir: Optional[str] = None,
         cache_ttl: float = CACHE_TTL,
         proxy_mounts: Optional[Dict[str, Any]] = None,
+        ssl_verify: bool = True,
     ) -> None:
         self._profile_turn = random.randrange(len(BROWSER_PROFILES))
         self._client_factory = client_factory or self._default_client_factory
@@ -149,17 +150,22 @@ class WebFetchTools:
         # webfetch 出网分流（httpx mounts：all://=代理 / bypass host=直连）；
         # 自定义 client_factory 场景忽略（工厂自担）
         self._proxy_mounts = proxy_mounts
+        # TLS 校验（config["proxy"]["ssl_verify"]）
+        self._ssl_verify = ssl_verify
 
     def _default_client_factory(self) -> httpx.AsyncClient:
         """轮换浏览器指纹创建客户端：批量抓取时各请求指纹不同，
         降低单指纹被风控的概率。"""
         profile = BROWSER_PROFILES[self._profile_turn % len(BROWSER_PROFILES)]
         self._profile_turn += 1
+        # trust_env=False：代理唯一事实源是 config["proxy"]（scope=webfetch）
         return httpx.AsyncClient(
             follow_redirects=True,
             timeout=TIMEOUT,
             headers=dict(profile),
             mounts=self._proxy_mounts,
+            trust_env=False,
+            verify=self._ssl_verify,
         )
     # ------------------------------------------------------------ 工具定义
 

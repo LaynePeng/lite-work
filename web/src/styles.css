@@ -1210,6 +1210,16 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .proxy-test-result.ok { color: var(--green); }
 .proxy-test-result.bad { color: var(--red); }
 
+.settings-check.warn {
+  color: var(--yellow);
+}
+
+.proxy-verify-warn {
+  font-size: 10.5px;
+  color: var(--yellow);
+  margin-left: 6px;
+}
+
 /* —— 「规则」Tab（设计文档 §6：dots custom rules 思路） —— */
 .rules-panel {
   display: flex;

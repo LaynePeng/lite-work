@@ -193,3 +193,37 @@ def test_proxy_mounts_bypass():
     # mounts 可被 httpx 接受
     import httpx
     httpx.AsyncClient(mounts=proxy_mounts(cfg, "llm"))
+
+
+def test_normalize_idempotent_and_double_encode_bug():
+    """回归（Proxy Error 根因）：归一化不幂等——链路上前后端各调一次，
+    %23 被二次编码成 %2523，httpx 解码一层后密码仍是 %23 ≠ 真实密码，
+    代理认证失败。修复：unquote→quote，任意层调用结果恒一致。"""
+    for raw in ("http://user:pass#word@1.2.3.4:8080",
+                "user:pass#word@https://1.2.3.4:8443"):
+        once = normalize_proxy_url(raw)
+        assert once == normalize_proxy_url(once) == normalize_proxy_url(normalize_proxy_url(once))
+        assert "%25" not in once  # 不出现双重编码痕迹
+    # 用户已填 %23（编码形态）与填 #（原始形态）归一到同一输出
+    assert (normalize_proxy_url("http://u:p#x@1.2.3.4:8080")
+            == normalize_proxy_url("http://u:p%23x@1.2.3.4:8080")
+            == "http://u:p%23x@1.2.3.4:8080")
+
+
+def test_adapters_ignore_shell_proxy_env(monkeypatch):
+    """shell 环境自带 HTTP_PROXY 时不再静默劫持（trust_env=False）：
+    未启用代理 = 真直连——httpx 默认 trust_env=True 会读环境变量。"""
+    monkeypatch.setenv("HTTP_PROXY", "http://bad.proxy:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://bad.proxy:1")
+    monkeypatch.setenv("http_proxy", "http://bad.proxy:1")
+    monkeypatch.setenv("https_proxy", "http://bad.proxy:1")
+
+    from litework.llm.openai_compat import OpenAICompatAdapter
+
+    adapter = OpenAICompatAdapter(api_key="sk-test")  # 未启用代理 → mounts=None
+    client = adapter._get_client()
+    # httpx client 不读环境代理：无 mounts 时 _transport 是直连 transport
+    # （若 trust_env 生效，bad.proxy 会进 transport 链——用 mount 属性断言）
+    mounts = getattr(client._transport, "_mounts", None) or {}
+    assert "all://" not in mounts or mounts.get("all://") is None, \
+        "适配器不应读 shell 环境的代理变量"

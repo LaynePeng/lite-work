@@ -45,7 +45,7 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .core.metrics import ToolMetrics
-from .core.proxy import proxy_env, proxy_for, proxy_mounts
+from .core.proxy import proxy_env, proxy_for, proxy_mounts, ssl_verify_for
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
@@ -484,15 +484,25 @@ class AgentApp:
           （每次新内核新实例），无需在此处理；
         - mcp/shell：子进程 env 注入，MCP 启动 / execute_command 时实时读。
         """
-        from .core.proxy import proxy_env, proxy_for, proxy_mounts
+        from .core.proxy import (ensure_system_ca, proxy_env, proxy_for,
+                                 proxy_mounts, ssl_verify_for)
         try:
-            self.llm_registry.set_proxy(proxy_mounts(self.config, "llm"))
-            self.llm_registry.set_meta_proxy(proxy_for(self.config, "meta"))
+            # 系统证书注入（truststore：Windows/macOS 钥匙串/证书管理器里的
+            # 根证书——企业 MITM 代理场景必须；幂等，一次进程一次）
+            ensure_system_ca()
+            verify = ssl_verify_for(self.config)
+            self.llm_registry.set_proxy(proxy_mounts(self.config, "llm"),
+                                        ssl_verify=verify)
+            self.llm_registry.set_meta_proxy(proxy_for(self.config, "meta"),
+                                             ssl_verify=verify)
             # MCP：子进程 env 注入（下个 server 启动生效）
             self.mcp_manager.proxy_env = proxy_env(self.config, "mcp")
             # Shell：缓存实例带旧代理 env，清缓存让下个内核用新配置重建
             #（进行中任务的旧实例不受影响，任务级 env 已定）
             self._shell_plugins.clear()
+            if not verify:
+                logger.warning("[Proxy] ssl_verify=false：TLS 证书校验已全局关闭"
+                               "（llm/webfetch/meta/market）——存在中间人风险")
         except Exception:
             logger.debug("[App] 代理配置同步失败", exc_info=True)
 
@@ -1200,6 +1210,7 @@ class AgentApp:
             WebFetchPlugin(
                 cache_dir=os.path.join(self.config_dir, "webfetch_cache"),
                 proxy_mounts=proxy_mounts(self.config, "webfetch"),
+                ssl_verify=ssl_verify_for(self.config),
             ),
             OfficePlugin(ws),
             OcrPlugin(ws),
@@ -1766,7 +1777,8 @@ class AgentApp:
         """安装/更新插件，记录版本与来源。"""
         from .tools.plugin_loader import import_source
 
-        results = import_source(self.config_dir, source, name=name, overwrite=overwrite, version=version)
+        results = import_source(self.config_dir, source, name=name, overwrite=overwrite,
+                                version=version, proxy_mounts=proxy_mounts(self.config, "market"))
         self._invalidate_plugin_cache()
         return results
 

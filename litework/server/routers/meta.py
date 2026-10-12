@@ -109,6 +109,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 # 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：前端读回后应用；跨 origin 稳定
                 # （桌面端 Core 端口随机，localStorage 按 origin 隔离会读不回）
                 "ui_prefs",
+                # 出网代理（分流）：设置页「网络与代理」回显
+                "proxy",
             )
         }
 
@@ -158,6 +160,17 @@ def create_router(ctx: ServerContext) -> APIRouter:
         app.save_config(payload.updates)
         return {"ok": True}
 
+    @router.get("/api/proxy/detect")
+    async def detect_proxy(request: Request):
+        """检测系统级代理（macOS scutil / Windows 注册表 / 环境变量）。
+
+        设置页打开时调用：检测到系统代理 → 地址栏预填显示，用户只需
+        勾选哪些流量走它（「让已有代理直接显示，控制范围即可」）。
+        """
+        ctx.check_auth(request)
+        from ...core.proxy import detect_system_proxy
+        return detect_system_proxy()
+
     @router.post("/api/proxy/test")
     async def test_proxy(payload: ProxyTestRequest, request: Request):
         """代理连通性测试：经指定代理 GET api.github.com，回显延迟/失败原因。
@@ -175,14 +188,27 @@ def create_router(ctx: ServerContext) -> APIRouter:
             return {"ok": False, "text": "代理地址格式无法识别"}
         start = _time.monotonic()
         try:
-            resp = await _httpx.AsyncClient(proxy=url, timeout=8.0).get(
+            # trust_env=False：只测用户填的代理，不受 shell 环境变量干扰
+            resp = await _httpx.AsyncClient(proxy=url, timeout=8.0, trust_env=False).get(
                 "https://api.github.com", headers={"User-Agent": "lite-work-proxy-test"})
             ms = int((_time.monotonic() - start) * 1000)
             if resp.status_code < 400:
                 return {"ok": True, "text": f"连通（HTTP {resp.status_code} · {ms}ms）"}
             return {"ok": False, "text": f"代理可达但目标返回 HTTP {resp.status_code}（{ms}ms）"}
         except Exception as exc:  # noqa: BLE001 - 测试端点：任何失败都要回显人话
-            return {"ok": False, "text": f"连接失败：{type(exc).__name__}"}
+            # 按异常类型给人话提示：用户可自行判断是协议填错还是地址不通
+            name = type(exc).__name__
+            hints = {
+                "ConnectTimeout": "连接超时（地址/端口不通，或防火墙拦截）",
+                "ConnectError": "无法建立连接（检查地址与端口）",
+                "TLSSError": "TLS 握手失败（https 代理协议不匹配？试着把 https:// 换成 http://）",
+                "ProxyError": "代理拒绝连接（认证失败——检查用户名密码；或代理不接受此协议）",
+                "ReadTimeout": "代理响应超时（能连上但很慢）",
+            }
+            hint = hints.get(name) or ("TLS 握手失败（https 代理协议不匹配？试着把 https:// 换成 http://）"
+                                       if "TLS" in name or "tls" in str(exc).lower()
+                                       else f"{name}")
+            return {"ok": False, "text": f"连接失败：{hint}"}
 
     # ------------------------------------------------------------ 模型元数据
 

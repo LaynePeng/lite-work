@@ -110,6 +110,8 @@ async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Pro
 export const api = {
   status: () => req<ServerStatus>("/api/status"),
   config: () => req<AppConfig>("/api/config"),
+  /** 检测系统级代理（macOS scutil / Windows 注册表 / env；设置页预填用）。 */
+  detectProxy: () => req<{ url: string; source: string }>("/api/proxy/detect"),
   /** 代理连通性测试（设置页「网络与代理」）：经指定代理访问 api.github.com。 */
   testProxy: (url: string) =>
     req<{ ok: boolean; text: string }>("/api/proxy/test", {

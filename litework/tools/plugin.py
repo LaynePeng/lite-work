@@ -206,9 +206,10 @@ class WebFetchPlugin(ToolPlugin):
     description = "Web 抓取：webfetch/webfetch_batch 联网获取信息"
 
     def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600,
-                 proxy_mounts: Optional[Dict[str, Any]] = None) -> None:
+                 proxy_mounts: Optional[Dict[str, Any]] = None,
+                 ssl_verify: bool = True) -> None:
         self._tools = WebFetchTools(cache_dir=cache_dir, cache_ttl=cache_ttl,
-                                     proxy_mounts=proxy_mounts)
+                                     proxy_mounts=proxy_mounts, ssl_verify=ssl_verify)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()

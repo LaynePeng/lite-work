@@ -50,6 +50,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         reasoning_effort: str = "",
         idle_timeout: float = 120.0,
         proxy_mounts: Optional[Dict[str, Any]] = None,
+        ssl_verify: bool = True,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -62,6 +63,13 @@ class AnthropicAdapter(BaseLLMAdapter):
         # LLM API 出网分流（httpx mounts：all://=代理 / bypass host=直连）；
         # None = 全直连
         self.proxy_mounts = proxy_mounts
+        # TLS 校验（config["proxy"]["ssl_verify"]；False 时日志持续可见警告）
+        self.ssl_verify = ssl_verify
+        if not ssl_verify:
+            import logging
+            logging.getLogger("litework.llm").warning(
+                "[Proxy] TLS 证书校验已关闭（ssl_verify=false）——"
+                "连接可被中间人窃听/篡改，仅建议在受信内网/自签证书环境使用")
         # 流式空闲看门狗：连续 N 秒未收到任何 chunk 视为连接卡死，中止并抛可重试错误
         self.idle_timeout = max(30.0, float(idle_timeout))
         # 自定义请求头：清洗后叠加在默认头之上（可覆盖 x-api-key / anthropic-version）
@@ -75,9 +83,13 @@ class AnthropicAdapter(BaseLLMAdapter):
         if self._client is None:
             # read=None：流式响应中"块间静默"属正常现象（扩展思考可能长时间无输出），
             # 不能用固定 read timeout 掐断；卡死连接由 AgentLoop 的 llm_timeout + 重试兜底。
+            # trust_env=False：代理唯一事实源是 config["proxy"]——shell 环境
+            # 里的 HTTP_PROXY 不再静默劫持（未启用代理 = 真直连）
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout, read=None),
                 mounts=self.proxy_mounts,
+                trust_env=False,
+                verify=self.ssl_verify,
             )
         return self._client
 
