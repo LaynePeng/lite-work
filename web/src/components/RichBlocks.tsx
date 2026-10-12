@@ -180,15 +180,17 @@ export interface InteractiveSpec {
 /** 图形图解（```diagram）：模型输出结构化图形数据（原语 + 部件分组），
  *  前端渲染成原生 SVG——对齐 GPT Intelligent UI 的图形化拆解（自行车/
  *  网络分层/发动机），任意主题现场生成，无需预制图库。
- *  原语白名单：circle / rect / line / polyline / path / ellipse；无脚本、
- *  无 text（文字排版交给标签与说明区，避免模型乱排字）。 */
+ *  原语白名单：circle / rect / line / polyline / path / ellipse / label。
+ *  label 为图内文字标签（纯文本、限长限次——模型手排坐标的排版能力有限，
+ *  长文仍交给下方说明区；短标签是图的「名字」，对齐 GPT 图内命名形态）。 */
 export type DiagramShape =
   | { t: "circle"; x: number; y: number; r: number }
   | { t: "rect"; x: number; y: number; w: number; h: number; rx?: number }
   | { t: "line"; x1: number; y1: number; x2: number; y2: number }
   | { t: "ellipse"; x: number; y: number; rx: number; ry: number }
   | { t: "polyline"; pts: [number, number][] }
-  | { t: "path"; d: string };
+  | { t: "path"; d: string }
+  | { t: "label"; x: number; y: number; text: string; size?: number; anchor?: "start" | "middle" | "end" };
 
 export interface DiagramPart {
   /** 部件名（标签 + 说明标题） */
@@ -279,6 +281,21 @@ function parseDiagramShapes(raw: unknown, canvas: { w: number; h: number }): Dia
       const d = s.d.replace(/[<>{}]|javascript:|on\w+=/gi, "").slice(0, 600);
       if (!d.trim()) return null;
       return { t: "path", d };
+    }
+    if (t === "label" && typeof s.text === "string") {
+      // 图内标签：纯文本、单条限长（长文交给说明区）。
+      // 清洗两步：①整段剥掉类标签/事件/协议片段；②残余按白名单字符截留
+      // （字母/数字/中文/常用标点空格），React text 节点本就转义，这里是
+      // 内容卫生而非安全兜底。
+      const sanitized = s.text
+        .replace(/<\/?[a-z][^>]*>|javascript:|on\w+=/gi, "")
+        .slice(0, 24)
+        .replace(/[^\w\u4e00-\u9fff .·:：()（）\-—/，、?!！%+]/g, "")
+        .trim();
+      if (!sanitized) return null;
+      const anchor = s.anchor === "start" || s.anchor === "end" ? s.anchor : "middle";
+      const size = clamp(nOr0(s.size), 9, 22);
+      return { t: "label", x: clamp(nOr0(s.x), -50, cx + 50), y: clamp(nOr0(s.y), -50, cy + 50), text: sanitized, size, anchor };
     }
     return null;
   };
@@ -1088,15 +1105,39 @@ function progressTone(v: number): "bad" | "warn" | "good" {
  *  不插入任何用户文本进 SVG 属性，无脚本。 */
 const DIAGRAM_COLORS = ["#4f8cff", "#3fb950", "#d29922", "#f778ba", "#39c5cf", "#ff7b72", "#d2a8ff", "#e3b341"];
 
+/** hex 主题色 → 低饱和填充色（同色 12% 透明度叠在暗底上≈浅色底纹）。 */
+function softFill(color: string): string {
+  return `${color}1f`; // 8 位 hex：末两位 ≈12% alpha
+}
+
 function renderShape(s: DiagramShape, color: string, key: number) {
-  const common = { key, fill: "none", stroke: color, strokeWidth: 3.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  // 面图形（圆/椭圆/矩形）用低饱和填充 + 描边——从「线框」升级为「填充卡」，
+  // 视觉层次更接近 GPT 的图解（形状实底、连线细）；线类保持细描边。
+  const common = { key, stroke: color, strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const soft = softFill(color);
   switch (s.t) {
-    case "circle": return <circle {...common} cx={s.x} cy={s.y} r={s.r} />;
-    case "ellipse": return <ellipse {...common} cx={s.x} cy={s.y} rx={s.rx} ry={s.ry} />;
-    case "rect": return <rect {...common} x={s.x} y={s.y} width={s.w} height={s.h} rx={s.rx} />;
-    case "line": return <line {...common} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} />;
-    case "polyline": return <polyline {...common} points={s.pts.map((p) => p.join(",")).join(" ")} />;
-    case "path": return <path {...common} d={s.d} />;
+    case "circle": return <circle {...common} fill={soft} cx={s.x} cy={s.y} r={s.r} />;
+    case "ellipse": return <ellipse {...common} fill={soft} cx={s.x} cy={s.y} rx={s.rx} ry={s.ry} />;
+    case "rect": return <rect {...common} fill={soft} x={s.x} y={s.y} width={s.w} height={s.h} rx={s.rx ?? 10} />;
+    case "line": return <line {...{ ...common, fill: "none" }} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} />;
+    case "polyline": return <polyline {...{ ...common, fill: "none" }} points={s.pts.map((p) => p.join(",")).join(" ")} />;
+    case "path": return <path {...{ ...common, fill: "none" }} d={s.d} />;
+    case "label":
+      return (
+        <text
+          key={key}
+          x={s.x}
+          y={s.y}
+          fill="var(--text-0, #e6edf3)"
+          fontSize={s.size ?? 13}
+          fontWeight={600}
+          textAnchor={s.anchor ?? "middle"}
+          dominantBaseline="middle"
+          style={{ pointerEvents: "none", userSelect: "none" }}
+        >
+          {s.text}
+        </text>
+      );
   }
 }
 

@@ -421,6 +421,28 @@ describe("Markdown 交互式图解（```interactive 分块点击切换）", () =
     expect(container.querySelector(".md-diagram-svg")).not.toBeNull();
   });
 
+  it("diagram：label 原语渲染图内文字标签，面图形带低饱和填充", () => {
+    const spec =
+      '```diagram\n{"title":"模型图","canvas":{"w":400,"h":200},"parts":[' +
+      '{"name":"引擎","desc":"核心","shapes":[' +
+      '{"t":"rect","x":150,"y":60,"w":100,"h":50},' +
+      '{"t":"label","x":200,"y":85,"text":"引擎"},' +
+      '{"t":"label","x":20,"y":30,"text":"<script>alert(1)</script>超长" }]}]}\n```';
+    const { container } = render(<Markdown text={spec} />);
+    const svg = container.querySelector(".md-diagram-svg");
+    expect(svg).not.toBeNull();
+    const texts = container.querySelectorAll(".md-diagram-svg text");
+    expect(texts.length).toBe(2);
+    // 正常 label 渲染
+    expect(texts[0].textContent).toBe("引擎");
+    // XSS 清洗：script 标签被剥，长度截断
+    expect(texts[1].textContent).not.toContain("script");
+    // rect 低饱和填充（非 none）
+    const rect = container.querySelector(".md-diagram-svg rect");
+    expect(rect?.getAttribute("fill")).not.toBe("none");
+    expect(rect?.getAttribute("fill")).toMatch(/^#[0-9a-f]{8}$/i);
+  });
+
   it("组合：shapes 里的非白名单原语被清洗（同 diagram 安全规则）", () => {
     const combo =
       '```interactive\n{"parts":[{"name":"A","desc":"d","shapes":[' +
