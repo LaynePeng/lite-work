@@ -45,7 +45,7 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .core.metrics import ToolMetrics
-from .core.proxy import proxy_env, proxy_for
+from .core.proxy import proxy_env, proxy_for, proxy_mounts
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
@@ -484,9 +484,9 @@ class AgentApp:
           （每次新内核新实例），无需在此处理；
         - mcp/shell：子进程 env 注入，MCP 启动 / execute_command 时实时读。
         """
-        from .core.proxy import proxy_env, proxy_for
+        from .core.proxy import proxy_env, proxy_for, proxy_mounts
         try:
-            self.llm_registry.set_proxy(proxy_for(self.config, "llm"))
+            self.llm_registry.set_proxy(proxy_mounts(self.config, "llm"))
             self.llm_registry.set_meta_proxy(proxy_for(self.config, "meta"))
             # MCP：子进程 env 注入（下个 server 启动生效）
             self.mcp_manager.proxy_env = proxy_env(self.config, "mcp")
@@ -1199,7 +1199,7 @@ class AgentApp:
             ReviewPlugin(ws),
             WebFetchPlugin(
                 cache_dir=os.path.join(self.config_dir, "webfetch_cache"),
-                proxy_url=proxy_for(self.config, "webfetch") or "",
+                proxy_mounts=proxy_mounts(self.config, "webfetch"),
             ),
             OfficePlugin(ws),
             OcrPlugin(ws),

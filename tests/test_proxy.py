@@ -34,7 +34,8 @@ async def live_client(tmp_path):
 def test_normalize_standard_formats():
     """标准格式原样（scheme 归一小写）。"""
     assert normalize_proxy_url("http://user:pass@1.2.3.4:8080") == "http://user:pass@1.2.3.4:8080"
-    assert normalize_proxy_url("HTTP://user:pass@1.2.3.4:8080") == "HTTP://user:pass@1.2.3.4:8080"
+    # scheme 统一小写（httpx 要求；凭据与 host 不动）
+    assert normalize_proxy_url("HTTP://user:pass@1.2.3.4:8080") == "http://user:pass@1.2.3.4:8080"
     assert normalize_proxy_url("https://user:pass@proxy.corp.com:8443") == "https://user:pass@proxy.corp.com:8443"
     assert normalize_proxy_url("socks5://u:p@127.0.0.1:1080") == "socks5://u:p@127.0.0.1:1080"
 
@@ -111,32 +112,35 @@ def test_proxy_env_user_format_normalized():
 
 
 async def test_app_save_config_syncs_proxy(tmp_path):
-    """端到端：save_config({"proxy": ...}) → llm_registry 代理即时热生效。"""
+    """端到端：save_config({"proxy": ...}) → llm_registry 代理即时热生效（mounts 分流）。"""
     from litework.app import AgentApp
 
     app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
     app.refresh_model_meta = lambda: False
-    assert app.llm_registry.proxy_url is None
+    assert app.llm_registry.proxy_mounts is None
 
     app.save_config({"proxy": {
         "enabled": True,
         "url": "user:pass@https://1.2.3.4:8443",
         "scope": ["llm", "meta"],
-        "bypass": [],
+        "bypass": ["internal.corp"],
     }})
-    # llm scope 命中：URL 已归一化（凭据在前 → 标准顺序）
-    assert app.llm_registry.proxy_url == "https://user:pass@1.2.3.4:8443"
-    # meta scope 命中：meta_service 同步
+    # llm scope 命中：mounts 分流（all://=代理 + bypass host 直连），URL 已归一化
+    assert app.llm_registry.proxy_mounts == {
+        "all://": "https://user:pass@1.2.3.4:8443",
+        "all://internal.corp": None,
+    }
+    # meta scope 命中：meta_service 同步（单 URL 形式）
     assert app.llm_registry.meta_service.proxy_url == "https://user:pass@1.2.3.4:8443"
 
-    # 适配器重建链路：build_adapter 构造的适配器带 proxy_url
+    # 适配器重建链路：build_adapter 构造的适配器带 mounts
     app.llm_registry.providers["deepseek"]["api_key"] = "sk-test"
     adapter = app.llm_registry.build_adapter("deepseek")
-    assert adapter.proxy_url == "https://user:pass@1.2.3.4:8443"
+    assert adapter.proxy_mounts == app.llm_registry.proxy_mounts
 
-    # 关闭代理 → set_proxy(None)，缓存适配器废弃
+    # 关闭代理 → mounts=None，缓存适配器废弃
     app.save_config({"proxy": {"enabled": False, "url": "", "scope": [], "bypass": []}})
-    assert app.llm_registry.proxy_url is None
+    assert app.llm_registry.proxy_mounts is None
 
 
 async def test_proxy_test_endpoint_invalid_url(live_client):
@@ -146,3 +150,46 @@ async def test_proxy_test_endpoint_invalid_url(live_client):
     assert r.status_code == 200
     assert r.json()["ok"] is False
     assert "格式" in r.json()["text"]
+
+
+def test_normalize_special_chars_in_password():
+    """密码含 # @ / : 等特殊字符：percent-encode（# 是 fragment 分隔符，
+    不编码 httpx 解析成 host=user/port=pass 直接 Invalid port）。"""
+    r = normalize_proxy_url("http://user:pass#word@1.2.3.4:8080")
+    assert r == "http://user:pass%23word@1.2.3.4:8080"
+    r = normalize_proxy_url("user:pass#word@https://1.2.3.4:8443")
+    assert r == "https://user:pass%23word@1.2.3.4:8443"
+    # 密码带 @（按最后一个 @ 拆 userinfo/host）
+    r = normalize_proxy_url("user:p@a:ss@1.2.3.4:8080")
+    assert r == "http://user:p%40a%3Ass@1.2.3.4:8080"
+    # 密码带 /
+    r = normalize_proxy_url("http://user:p/ss@1.2.3.4:8080")
+    assert r == "http://user:p%2Fss@1.2.3.4:8080"
+    # 中文密码
+    r = normalize_proxy_url("user:密码@1.2.3.4:8080")
+    assert r == "http://user:%E5%AF%86%E7%A0%81@1.2.3.4:8080"
+    # 编码结果必须能被 httpx 接受
+    import httpx
+    httpx.Client(proxy=normalize_proxy_url("http://u:p#x@1.2.3.4:8080"))
+
+
+def test_proxy_mounts_bypass():
+    """httpx 场景 bypass 分流：bypass host → mounts 显式直连（None）。
+    此前 bug：bypass 只在 env 注入生效，LLM/webfetch 的 httpx client
+    整体走代理，直连列表形同虚设。"""
+    from litework.core.proxy import proxy_mounts
+
+    cfg = {"proxy": {"enabled": True, "url": "http://1.2.3.4:8080",
+                     "scope": ["llm"], "bypass": ["internal.corp", "*.example.com"]}}
+    m = proxy_mounts(cfg, "llm")
+    assert m == {"all://": "http://1.2.3.4:8080",
+                 "all://internal.corp": None,
+                 "all://example.com": None}
+    # 无 bypass → None（调用方不传 mounts）
+    cfg2 = {"proxy": {"enabled": True, "url": "http://1.2.3.4:8080", "scope": ["llm"]}}
+    assert proxy_mounts(cfg2, "llm") is None
+    # 未启用 → None
+    assert proxy_mounts({"proxy": {"enabled": False}}, "llm") is None
+    # mounts 可被 httpx 接受
+    import httpx
+    httpx.AsyncClient(mounts=proxy_mounts(cfg, "llm"))

@@ -1335,11 +1335,31 @@ export default function SettingsModal({
 
   // —— 网络与代理 ——
   /** 前端轻量归一化（与 core/proxy.py 同规则）：常见写法 → 标准代理 URL。
-   *  识别失败返回 null（红框提示，不让用户保存一个坏地址）。 */
+   *  识别失败返回 null（黄框提示，不让用户保存一个坏地址）。
+   *  凭据特殊字符（# @ : 等密码常见字符）percent-encode——# 是 URL fragment
+   *  分隔符，不编码 httpx 会拆成 host=user/port=pass 直接不可用。 */
   const normalizeProxy = useCallback((raw: string): string | null => {
     const s = raw.trim();
     if (!s) return null;
+    // user:pass 段安全编码：分隔 username/password 的第一个冒号保留（userinfo
+    // 语法位），其余全部 percent-encode（# @ / 等 URL 保留字符都会破坏解析）
+    const encCred = (cred: string): string => {
+      const i = cred.indexOf(":");
+      if (i < 0) return encodeURIComponent(cred);
+      return `${encodeURIComponent(cred.slice(0, i))}:${encodeURIComponent(cred.slice(i + 1))}`;
+    };
     if (/^(https?|socks5):\/\//i.test(s)) {
+      // 手工拆凭据（最后 1 个 @ 是 userinfo/host 边界）：URL 解析会按 # 截断
+      // 密码（如 http://user:pass#word@host 的 password 只剩 pass），不能依赖
+      const schemeEnd = s.indexOf("://") + 3;
+      const afterScheme = s.slice(schemeEnd);
+      const at = afterScheme.lastIndexOf("@");
+      if (at > 0) {
+        const rawCred = afterScheme.slice(0, at);
+        const hostSeg = afterScheme.slice(at + 1).replace(/[/#?].*$/, "");
+        if (!/^[\w.\-]+(:\d+)?$/.test(hostSeg)) return null;
+        return `${s.slice(0, schemeEnd)}${encCred(rawCred)}@${hostSeg}`;
+      }
       try {
         const u = new URL(s);
         return u.hostname ? s : null;
@@ -1348,17 +1368,20 @@ export default function SettingsModal({
       }
     }
     if (s.includes("@")) {
-      const [cred, rest] = s.split("@");
+      const at = s.indexOf("@");
+      const cred = s.slice(0, at);
+      const rest = s.slice(at + 1).trim();
       if (/^(https?|socks5):\/\//i.test(rest)) {
-        // 凭据在前、协议在后：重排
+        // 凭据在前、协议在后：重排 + 编码
         try {
           const u = new URL(rest);
-          return u.hostname ? `${u.protocol}//${cred}@${u.host}` : null;
+          if (!u.hostname) return null;
+          return `${u.protocol}//${encCred(cred)}@${u.host}`;
         } catch {
           return null;
         }
       }
-      if (/^[\w.\-]+:\d+$/.test(rest)) return `http://${cred}@${rest}`;
+      if (/^[\w.\-]+:\d+$/.test(rest)) return `http://${encCred(cred)}@${rest}`;
       return null;
     }
     if (/^[\w.\-]+:\d+$/.test(s)) return `http://${s}`;

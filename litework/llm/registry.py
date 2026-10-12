@@ -224,9 +224,10 @@ class LLMRegistry:
         }
         self.active = "deepseek"
         self._adapter: Optional[BaseLLMAdapter] = None
-        # LLM API 出网代理（app 层从 config["proxy"] 解析 scope=llm 后注入；
-        # 变更时废弃缓存适配器，下一个 get_adapter 用新代理重建）
-        self.proxy_url: Optional[str] = None
+        # LLM API 出网分流（app 层从 config["proxy"] 解析 scope=llm 后注入；
+        # httpx mounts 形态：all://=代理 / bypass host=直连；None = 全直连。
+        # 变更时废弃缓存适配器，下一个 get_adapter 用新配置重建）
+        self.proxy_mounts: Optional[Dict[str, Any]] = None
         # 模型元数据服务（models.dev 同步 + 内置静态表兜底）
         self.meta_service = None
         if config_dir:
@@ -263,11 +264,12 @@ class LLMRegistry:
         if self.meta_service is not None:
             self.meta_service.proxy_url = url
 
-    def set_proxy(self, url: Optional[str]) -> None:
-        """设置 LLM API 出网代理；变更时废弃缓存适配器（连接含旧代理设置）。"""
-        if url == self.proxy_url:
+    def set_proxy(self, mounts: Optional[Dict[str, Any]]) -> None:
+        """设置 LLM API 出网分流（httpx mounts）；变更时废弃缓存适配器
+        （连接含旧代理设置，不废弃会继续用旧代理/旧直连）。"""
+        if mounts == self.proxy_mounts:
             return
-        self.proxy_url = url
+        self.proxy_mounts = mounts
         if self._adapter is not None:
             try:
                 import asyncio
@@ -435,7 +437,7 @@ class LLMRegistry:
             enable_cache=bool(settings.get("enable_cache", True)),
             custom_headers=settings.get("custom_headers") or {},
             reasoning_effort=str(settings.get("reasoning_effort", "") or ""),
-            proxy_url=self.proxy_url or "",
+            proxy_mounts=self.proxy_mounts,
         )
         if meta["kind"] == "anthropic":
             return AnthropicAdapter(**common)

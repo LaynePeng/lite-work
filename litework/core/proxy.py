@@ -56,31 +56,60 @@ def normalize_proxy_url(raw: str) -> Optional[str]:
 
     支持格式见模块 docstring。凭据在前（user:pass@https://host）的写法
     会被重排为标准 scheme://user:pass@host。
+
+    凭据特殊字符（# @ : / 等密码常见字符）统一 percent-encode——# 是
+    URL fragment 分隔符，不编码会被 httpx 拆成 host=user/port=pass 直接
+    不可用（Invalid port）。
     """
     s = (raw or "").strip()
     if not s:
         return None
-    # 已带协议：只做小写归一 + 校验 host
+    from urllib.parse import quote
+
+    def _enc_cred(cred: str) -> str:
+        """user:pass 段安全编码：只编码 URL 保留字符，字母数字与常见符号保留。
+        分隔 user 与 pass 的第一个冒号保留（userinfo 语法位），其余全编。"""
+        user, sep, pw = cred.partition(":")
+        if not sep:
+            return quote(cred, safe=".-_~!$&'()*+,;=")
+        return f"{quote(user, safe='.-_~!$&()*+,;=')}:{quote(pw, safe='.-_~!$&()*+,;=')}"
+
+    # 已带协议：先按「第一个 @」手工拆凭据段（URL 解析会按 # 截断密码，
+    # 如 http://user:pass#word@host 的 password 只剩 pass——必须拿原始段编码），
+    # 再校验 host（无凭据部分交给 urlparse 解析）
     if _SCHEME_RE.match(s):
+        # 拆法：scheme://cred@host——cred 从 :// 后到第一个 @（编码前原样；
+        # 不走 URL 解析取凭据，那会把 # 后当 fragment 截断密码）
+        scheme_part, sep_scheme, after_scheme = s.partition("://")
+        if sep_scheme and "@" in after_scheme:
+            # 最后一个 @ 才是 userinfo/host 边界（URL 规范：userinfo 里的 @ 必须编码）
+            raw_cred_seg, sep, host_seg = after_scheme.rpartition("@")
+            if not sep or not host_seg:
+                return None
+            # host 校验（凭据已拆走；尾随 path/fragment 由 urlparse 剥离）
+            hp = urlparse(f"http://{host_seg}")
+            if not hp.hostname:
+                return None
+            return f"{scheme_part.lower()}://{_enc_cred(raw_cred_seg)}@{hp.netloc}"
         p = urlparse(s)
         if not p.hostname:
             return None
-        # https 代理对 httpx 是合法 scheme；socks5 需要额外依赖，保留原样
-        # 由 proxy_for 在运行时探测可用性
-        return s
+        return f"{p.scheme.lower()}://{p.netloc}"
     # 无协议：可能是 user:pass@host:port 或 host:port，也可能是
     # user:pass@https://host:port（协议被写在 @ 之后）
     if "@" in s:
-        cred, _, rest = s.partition("@")
+        # 最后一个 @ 才是凭据/host 边界（密码里裸写 @ 的场景按规范本该编码，
+        # 但 rpartition 至少让 host 部分总是对的）
+        cred, _, rest = s.rpartition("@")
         rest = rest.strip()
         if _SCHEME_RE.match(rest):
-            # 凭据在前、协议在后：重排
+            # 凭据在前、协议在后：重排 + 编码
             p = urlparse(rest)
             if not p.hostname:
                 return None
-            return f"{p.scheme.lower()}://{cred}@{p.netloc}"
-        if rest and not rest.startswith("/"):
-            return f"http://{cred}@{rest}"
+            return f"{p.scheme.lower()}://{_enc_cred(cred)}@{p.netloc}"
+        if rest and not rest.startswith("/") and re.match(r"^[\w.\-]+:\d+$", rest):
+            return f"http://{_enc_cred(cred)}@{rest}"
         return None
     # 纯 host:port
     if re.match(r"^[\w.\-]+:\d+$", s):
@@ -120,6 +149,35 @@ def proxy_for(config: Dict[str, Any], scope: str) -> Optional[str]:
             logger.warning("[Proxy] socks5 需要 socksio 依赖（pip install httpx[socks]），该 scope 退回直连: %s", scope)
             return None
     return url
+
+
+def proxy_mounts(config: Dict[str, Any], scope: str) -> Optional[Dict[str, Any]]:
+    """httpx 场景的 bypass 分流（Bug 修复：bypass 此前只在 env 注入生效，
+    LLM/webfetch/meta 的 httpx client 整体走代理，直连列表形同虚设）。
+
+    返回 httpx 的 mounts 参数（官方按 scheme://host 路由的机制）：
+      - bypass 命中的 host → 显式 None（直连）
+      - 其余全部流量（all://）→ 代理
+    未启用代理 / scope 未勾选 → None（调用方不传 mounts，行为不变）。
+    """
+    url = proxy_for(config, scope)
+    if not url:
+        return None
+    bypass = proxy_config(config).get("bypass")
+    if not isinstance(bypass, list):
+        return None
+    mounts: Dict[str, Any] = {"all://": url}
+    for h in bypass:
+        host = str(h).strip()
+        if not host:
+            continue
+        # 支持 user 写通配（*.example.com）与裸域名两种形式：
+        # httpx mounts 的 key 是 scheme://host 通配模式
+        if host.startswith("*."):
+            mounts[f"all://{host[2:]}"] = None
+        else:
+            mounts[f"all://{host}"] = None
+    return mounts
 
 
 def proxy_env(config: Dict[str, Any], scope: str) -> Dict[str, str]:

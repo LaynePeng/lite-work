@@ -49,7 +49,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         custom_headers: Optional[Dict[str, str]] = None,
         reasoning_effort: str = "",
         idle_timeout: float = 120.0,
-        proxy_url: str = "",
+        proxy_mounts: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -59,8 +59,9 @@ class AnthropicAdapter(BaseLLMAdapter):
         self.max_tokens = max_tokens
         self.provider_id = provider_id
         self.enable_cache = enable_cache
-        # LLM API 出网代理（空串 = 直连；httpx proxy=None 同义）
-        self.proxy_url = proxy_url or None
+        # LLM API 出网分流（httpx mounts：all://=代理 / bypass host=直连）；
+        # None = 全直连
+        self.proxy_mounts = proxy_mounts
         # 流式空闲看门狗：连续 N 秒未收到任何 chunk 视为连接卡死，中止并抛可重试错误
         self.idle_timeout = max(30.0, float(idle_timeout))
         # 自定义请求头：清洗后叠加在默认头之上（可覆盖 x-api-key / anthropic-version）
@@ -76,7 +77,7 @@ class AnthropicAdapter(BaseLLMAdapter):
             # 不能用固定 read timeout 掐断；卡死连接由 AgentLoop 的 llm_timeout + 重试兜底。
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout, read=None),
-                proxy=self.proxy_url,
+                mounts=self.proxy_mounts,
             )
         return self._client
 
