@@ -110,7 +110,7 @@ def _to_index(data: Dict[str, dict]) -> Dict[str, dict]:
 
 
 class ModelMetaService:
-    def __init__(self, cache_path: Optional[str] = None) -> None:
+    def __init__(self, cache_path: Optional[str] = None, proxy_url: str = "") -> None:
         self.cache_path = cache_path
         self._index: Optional[Dict[str, dict]] = None
         # 模型名 → 官方厂商条目的回退索引（懒构建，cache 重载时置空重建）
@@ -118,6 +118,8 @@ class ModelMetaService:
         # 最近一次联网同步的失败原因（成功时清空）：sync_pricing 透传给前端，
         # 「同步失败」不允许只报 ok=false 不报原因（用户无从判断是网络还是接口）
         self.last_error: str = ""
+        # models.dev 出网代理（app 层按 config["proxy"] 的 scope=meta 注入）
+        self.proxy_url: Optional[str] = proxy_url or None
 
     # ------------------------------------------------------------ 加载/刷新
 
@@ -173,7 +175,7 @@ class ModelMetaService:
         try:
             import httpx
 
-            resp = httpx.get(MODELS_DEV_URL, timeout=10)
+            resp = httpx.get(MODELS_DEV_URL, timeout=10, proxy=self.proxy_url)
             if resp.status_code != 200:
                 self.last_error = f"models.dev 返回 HTTP {resp.status_code}"
                 logger.warning("[ModelMeta] models.dev 返回 HTTP %s", resp.status_code)

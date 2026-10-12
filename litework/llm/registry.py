@@ -224,6 +224,9 @@ class LLMRegistry:
         }
         self.active = "deepseek"
         self._adapter: Optional[BaseLLMAdapter] = None
+        # LLM API 出网代理（app 层从 config["proxy"] 解析 scope=llm 后注入；
+        # 变更时废弃缓存适配器，下一个 get_adapter 用新代理重建）
+        self.proxy_url: Optional[str] = None
         # 模型元数据服务（models.dev 同步 + 内置静态表兜底）
         self.meta_service = None
         if config_dir:
@@ -254,6 +257,28 @@ class LLMRegistry:
                 self.providers[pid]["api_key"] = val
 
     # ------------------------------------------------------------ 配置
+
+    def set_meta_proxy(self, url: Optional[str]) -> None:
+        """models.dev 元数据拉取代理（scope=meta，与 LLM API 代理独立）。"""
+        if self.meta_service is not None:
+            self.meta_service.proxy_url = url
+
+    def set_proxy(self, url: Optional[str]) -> None:
+        """设置 LLM API 出网代理；变更时废弃缓存适配器（连接含旧代理设置）。"""
+        if url == self.proxy_url:
+            return
+        self.proxy_url = url
+        if self._adapter is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._adapter.close())
+                else:
+                    loop.run_until_complete(self._adapter.close())
+            except Exception:
+                pass  # 关闭失败无碍：旧 client 会被 GC 回收
+            self._adapter = None
 
     def apply_config(self, config: Dict[str, Any]) -> None:
         if config.get("active"):
@@ -410,6 +435,7 @@ class LLMRegistry:
             enable_cache=bool(settings.get("enable_cache", True)),
             custom_headers=settings.get("custom_headers") or {},
             reasoning_effort=str(settings.get("reasoning_effort", "") or ""),
+            proxy_url=self.proxy_url or "",
         )
         if meta["kind"] == "anthropic":
             return AnthropicAdapter(**common)

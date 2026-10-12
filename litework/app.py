@@ -45,6 +45,7 @@ from .tools.plugin import (
     WebFetchPlugin,
 )
 from .core.metrics import ToolMetrics
+from .core.proxy import proxy_env, proxy_for
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 
@@ -108,6 +109,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 轨迹是低频需求的持久化数据，不应默认产生存储压力；需要时在设置页开启
     # （开启后新任务开始记录，已有的照常保留）
     "trajectory_enabled": False,
+    # 出网代理（分流）：enabled + url（归一化见 core/proxy.py）+ scope 列表
+    #（llm/webfetch/meta/market/mcp/shell 六类出网面分别开关）+ bypass（直连 host）
+    "proxy": {"enabled": False, "url": "", "scope": ["llm", "webfetch"], "bypass": []},
     # 任务后反思（W10）：任务完成后基于轨迹提炼可复用流程，SKILL.md 草稿落
     # 个人区 skill-drafts（用户审阅后手动采纳）。默认关闭——反思花 LLM 费用
     "reflection_enabled": False,
@@ -405,6 +409,8 @@ class AgentApp:
                 if isinstance(agents_cfg, dict):
                     self.agent_registry.load_config(agents_cfg)
                 logger.info("[App] 配置文件已加载: %s", self.config_path)
+                # 代理配置启动生效（llm/meta；webfetch 随内核构造；mcp/shell 实时 env）
+                self._sync_proxy_settings()
                 # 迁移结果落盘，避免每次启动重复迁移。必须在 apply_config 之后调用：
                 # _persist_config 会用注册表状态重写 llm 段，过早调用会把用户真实
                 # API Key 覆盖成注册表默认值。
@@ -467,6 +473,28 @@ class AgentApp:
         """
         self.config.update({k: v for k, v in updates.items() if v is not None})
         self._write_config_merged()
+        # 代理配置热生效（llm/meta 即时；webfetch 下个任务内核；mcp/shell 实时 env）
+        self._sync_proxy_settings()
+
+    def _sync_proxy_settings(self) -> None:
+        """代理配置生效点：把 config["proxy"] 分发到各出网面。
+
+        - llm/meta：llm_registry（适配器代理 / models.dev 拉取代理）；
+        - webfetch/market：插件实例在 build_registry 时按当前 config 构造
+          （每次新内核新实例），无需在此处理；
+        - mcp/shell：子进程 env 注入，MCP 启动 / execute_command 时实时读。
+        """
+        from .core.proxy import proxy_env, proxy_for
+        try:
+            self.llm_registry.set_proxy(proxy_for(self.config, "llm"))
+            self.llm_registry.set_meta_proxy(proxy_for(self.config, "meta"))
+            # MCP：子进程 env 注入（下个 server 启动生效）
+            self.mcp_manager.proxy_env = proxy_env(self.config, "mcp")
+            # Shell：缓存实例带旧代理 env，清缓存让下个内核用新配置重建
+            #（进行中任务的旧实例不受影响，任务级 env 已定）
+            self._shell_plugins.clear()
+        except Exception:
+            logger.debug("[App] 代理配置同步失败", exc_info=True)
 
     def _write_config_merged(self) -> None:
         """落盘：**先把磁盘上的现存内容合并回来**（内存优先），再写。
@@ -1157,7 +1185,8 @@ class AgentApp:
         # 重用会破坏隔离；但注册表始终共享，后台任务跨工作区可查。
         shell = self._shell_plugins.get(ws) if workspace_override is None else None
         if shell is None:
-            shell = ShellPlugin(ws, timeout_seconds=shell_timeout, registry=self._bg_registry)
+            shell = ShellPlugin(ws, timeout_seconds=shell_timeout, registry=self._bg_registry,
+                                proxy_env=proxy_env(self.config, "shell"))
             if workspace_override is None:
                 self._shell_plugins[ws] = shell
         plugins: List[Plugin] = [
@@ -1168,7 +1197,10 @@ class AgentApp:
             shell,
             GitPlugin(ws),
             ReviewPlugin(ws),
-            WebFetchPlugin(cache_dir=os.path.join(self.config_dir, "webfetch_cache")),
+            WebFetchPlugin(
+                cache_dir=os.path.join(self.config_dir, "webfetch_cache"),
+                proxy_url=proxy_for(self.config, "webfetch") or "",
+            ),
             OfficePlugin(ws),
             OcrPlugin(ws),
             PlanSavePlugin(self),

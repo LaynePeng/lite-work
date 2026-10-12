@@ -140,11 +140,15 @@ class WebFetchTools:
         client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
         cache_dir: Optional[str] = None,
         cache_ttl: float = CACHE_TTL,
+        proxy_url: str = "",
     ) -> None:
         self._profile_turn = random.randrange(len(BROWSER_PROFILES))
         self._client_factory = client_factory or self._default_client_factory
         self._cache_dir = cache_dir
         self._cache_ttl = cache_ttl
+        # webfetch 出网代理（app 层按 config["proxy"] 的 scope=webfetch 注入；
+        # 空串 = 直连）。自定义 client_factory 场景忽略（工厂自担）
+        self._proxy_url = proxy_url or None
 
     def _default_client_factory(self) -> httpx.AsyncClient:
         """轮换浏览器指纹创建客户端：批量抓取时各请求指纹不同，
@@ -155,6 +159,7 @@ class WebFetchTools:
             follow_redirects=True,
             timeout=TIMEOUT,
             headers=dict(profile),
+            proxy=self._proxy_url,
         )
     # ------------------------------------------------------------ 工具定义
 

@@ -19,6 +19,10 @@ class MCPManager:
         self.routes: Dict[str, tuple[MCPClient, str]] = {}
         self.tool_defs: Dict[str, Dict[str, Any]] = {}
         self.start_errors: Dict[str, str] = {}
+        # MCP 子进程代理 env（app 层按 config["proxy"] 的 scope=mcp 注入；
+        # None = 未启用。启动 server 时 merge 进子进程 env（用户在 mcp_servers
+        # 配置里的 env 优先，代理不覆盖用户显式设置）
+        self.proxy_env: Dict[str, str] = {}
 
     def status(self) -> Dict[str, Any]:
         """配置与运行状态（供设置界面展示）。"""
@@ -57,7 +61,10 @@ class MCPManager:
             command = config.get("command")
             if not command:
                 continue
-            env = {**os.environ, **{str(k): str(v) for k, v in (config.get("env") or {}).items()}}
+            # 代理注入顺序：os.environ → 代理 env（scope=mcp）→ 用户 env
+            #（用户的显式配置永远最高优先，代理不覆盖）
+            env = {**os.environ, **self.proxy_env,
+                   **{str(k): str(v) for k, v in (config.get("env") or {}).items()}}
             client = MCPClient(server_name, command, config.get("args") or [], env)
             try:
                 await client.start()

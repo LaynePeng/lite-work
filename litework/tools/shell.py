@@ -162,12 +162,16 @@ class ShellTools:
         timeout_seconds: float = 60.0,
         max_output: int = 200_000,
         registry: Optional[BackgroundRegistry] = None,
+        proxy_env: Optional[Dict[str, str]] = None,
     ) -> None:
         self.workspace = os.path.abspath(workspace)
         self.timeout_seconds = timeout_seconds
         self.max_output = max_output
         # 注册表可由调用方注入共享（app 级）；缺省自建（单实例/测试场景）
         self._registry = registry or BackgroundRegistry()
+        # 子进程代理 env（scope=shell；execute_command 的 npm/pip/curl 等
+        # 出网命令经此走代理；None = 未启用代理）
+        self.proxy_env = proxy_env or {}
 
     def get_tools(self) -> List[ToolDefinition]:
         return [
@@ -220,8 +224,10 @@ class ShellTools:
             if re.search(pattern, command, re.IGNORECASE):
                 return f"[Security Blocked]: 命令命中高危模式 /{pattern}/ 被 Harness 拒绝。"
 
-        # 剥离敏感环境变量，防止 API Key 泄漏给子进程
+        # 剥离敏感环境变量，防止 API Key 泄漏给子进程；
+        # 再叠加代理 env（scope=shell：npm/pip/curl 等出网命令走代理）
         clean_env = {k: v for k, v in os.environ.items() if k not in SENSITIVE_ENV_VARS}
+        clean_env.update(self.proxy_env)
 
         if background:
             return await self._start_background(command, timeout, clean_env)

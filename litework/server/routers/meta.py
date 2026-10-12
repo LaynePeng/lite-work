@@ -123,6 +123,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         "ui_prefs", "mcp_servers", "skill_trigger_mode", "parallel_tool_calls",
         "pricing", "pricing_overrides", "pricing_check_ttl_days",
         "max_zip_size_mb", "auto_approve", "approval_timeout",
+        # 出网代理（分流：llm/webfetch/meta/market/mcp/shell）
+        "proxy",
         # 插件配置（任意插件名的顶层键——savePluginConfig 的合法通道）
         # 由 app.save_config 内部处理，此处不逐一列举
     })

@@ -142,10 +142,12 @@ class ShellPlugin(ToolPlugin):
     description = "受限终端：执行命令"
 
     def __init__(self, workspace: str, timeout_seconds: float = 60.0,
-                 registry: Optional[BackgroundRegistry] = None) -> None:
+                 registry: Optional[BackgroundRegistry] = None,
+                 proxy_env: Optional[Dict[str, str]] = None) -> None:
         # registry：app 级共享的后台命令注册表（任务归属与工作区解耦，
         # 切换项目后旧 task_id 仍可查询/终止）；缺省自建（单实例场景）
-        self._tools = ShellTools(workspace, timeout_seconds=timeout_seconds, registry=registry)
+        self._tools = ShellTools(workspace, timeout_seconds=timeout_seconds,
+                                 registry=registry, proxy_env=proxy_env)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()
@@ -203,8 +205,10 @@ class WebFetchPlugin(ToolPlugin):
     version = "1.0.0"
     description = "Web 抓取：webfetch/webfetch_batch 联网获取信息"
 
-    def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600) -> None:
-        self._tools = WebFetchTools(cache_dir=cache_dir, cache_ttl=cache_ttl)
+    def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600,
+                 proxy_url: str = "") -> None:
+        self._tools = WebFetchTools(cache_dir=cache_dir, cache_ttl=cache_ttl,
+                                     proxy_url=proxy_url)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()

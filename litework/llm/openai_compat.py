@@ -109,11 +109,14 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         custom_headers: Optional[Dict[str, str]] = None,
         reasoning_effort: str = "",
         idle_timeout: float = 120.0,
+        proxy_url: str = "",
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        # LLM API 出网代理（空串 = 直连；httpx proxy=None 同义）
+        self.proxy_url = proxy_url or None
         # 流式空闲看门狗：连续 N 秒未收到任何 chunk 视为连接卡死，
         # 中止并抛可重试错误（由 AgentLoop 的 llm:retry 事件给 UI 可见反馈），
         # 避免旧行为「静默挂起 300s×(retries+1)」让用户干等十分钟。
@@ -133,7 +136,8 @@ class OpenAICompatAdapter(BaseLLMAdapter):
             # read=None：流式响应中"块间静默"属正常现象（推理模型首 token 前可能长时间思考），
             # 不能用固定 read timeout 掐断；卡死连接由 AgentLoop 的 llm_timeout + 重试兜底。
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout, read=None)
+                timeout=httpx.Timeout(self.timeout, read=None),
+                proxy=self.proxy_url,
             )
         return self._client
 
