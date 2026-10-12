@@ -559,3 +559,55 @@ describe("Sidebar · 会话 Tab「本项目 / 全部」双视图", () => {
     expect(await screen.findByText("还没有任何项目的会话")).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------- 任务 Tab：本项目 / 全部（数据源切换回归）
+
+describe("Sidebar · 任务 Tab「本项目 / 全部」双视图", () => {
+  const projectTasks = [
+    { session_id: "t1", title: "本项目任务", message_count: 2, updated_at: 100,
+      todo_progress: { total: 4, done: 1, current: "写方案", next: [] } },
+  ];
+  const globalTasks = [
+    { session_id: "t1", title: "本项目任务", message_count: 2, updated_at: 100,
+      todo_progress: { total: 4, done: 1, current: "写方案", next: [] },
+      project: { name: "ws", kind: "project" } },
+    { session_id: "t9", title: "别的项目任务", message_count: 9, updated_at: 200,
+      metadata: { workspace: "/tmp/other" },
+      todo_progress: { total: 2, done: 2, current: "", next: [] },
+      project: { name: "other", kind: "code" } },
+  ];
+  const taskTabProps = {
+    ...baseProps,
+    tab: "tasks" as const,
+    projectsView: "sessions" as const,
+  };
+
+  it("全部模式：列表切到跨项目数据源（globalTasks），而非停留在本项目列表", async () => {
+    // 回归：此前 tasksGlobalMode 只切了头部标题/按钮，TaskList 的 sessions
+    // 数据源漏切，点「全部」卡片列表不变
+    render(<Sidebar {...taskTabProps} sessions={projectTasks as never}
+      globalSessions={globalTasks as never} tasksGlobalMode
+      onSwitchTasksView={() => {}} />);
+    expect(await screen.findByText("别的项目任务")).toBeInTheDocument();
+    expect(screen.getByText("本项目任务")).toBeInTheDocument();
+    expect(screen.getByText("🌐 全部任务")).toBeInTheDocument();
+  });
+
+  it("本项目模式：只显示本项目任务", async () => {
+    render(<Sidebar {...taskTabProps} sessions={projectTasks as never}
+      globalSessions={globalTasks as never} tasksGlobalMode={false}
+      onSwitchTasksView={() => {}} />);
+    expect(await screen.findByText("本项目任务")).toBeInTheDocument();
+    expect(screen.queryByText("别的项目任务")).toBeNull();
+  });
+
+  it("点「全部」按钮触发 onSwitchTasksView(true)", async () => {
+    const user = userEvent.setup();
+    const onSwitchTasksView = vi.fn();
+    render(<Sidebar {...taskTabProps} sessions={projectTasks as never}
+      globalSessions={globalTasks as never} tasksGlobalMode={false}
+      onSwitchTasksView={onSwitchTasksView} />);
+    await user.click(screen.getByRole("button", { name: "全部" }));
+    expect(onSwitchTasksView).toHaveBeenCalledWith(true);
+  });
+});

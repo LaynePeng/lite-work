@@ -1453,7 +1453,7 @@ export default function Sidebar({
             分支渲染，点击无可见效果（此前是「点击无效」的 bug）。 */}
         {tab === "tasks" && (
           <TaskList
-            sessions={sessions}
+            sessions={tasksGlobalMode ? (globalSessions ?? []) : sessions}
             activeSessionId={activeSessionId}
             workspace={workspace}
             projectKind={projectKind ?? "project"}
