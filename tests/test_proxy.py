@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""出网代理（core/proxy.py）：URL 归一化普适性 + scope 分流 + env 注入。"""
+"""出网代理（core/proxy.py）：URL 归一化普适性 + scope 分流 + env 注入 + 测试端点。"""
 from __future__ import annotations
+
+import pytest
 
 from litework.core.proxy import (
     PROXY_SCOPES,
@@ -11,6 +13,20 @@ from litework.core.proxy import (
     proxy_env,
     proxy_for,
 )
+
+
+@pytest.fixture
+async def live_client(tmp_path):
+    """与 test_server.py 同款：真实 uvicorn + httpx 客户端（端点测试用）。"""
+    from litework.app import AgentApp
+    from litework.server.app import create_app
+    from tests.conftest import live_server
+
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+    fast_app = create_app(app, token=None)
+    async with live_server(fast_app) as (client, server):
+        yield client, app, server
 
 
 # ---------------------------------------------------------------- URL 归一化
@@ -121,3 +137,12 @@ async def test_app_save_config_syncs_proxy(tmp_path):
     # 关闭代理 → set_proxy(None)，缓存适配器废弃
     app.save_config({"proxy": {"enabled": False, "url": "", "scope": [], "bypass": []}})
     assert app.llm_registry.proxy_url is None
+
+
+async def test_proxy_test_endpoint_invalid_url(live_client):
+    """POST /api/proxy/test：垃圾地址 → ok=false 人话回显（不抛异常）。"""
+    c, _, _ = live_client
+    r = await c.post("/api/proxy/test", json={"url": "垃圾地址"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "格式" in r.json()["text"]

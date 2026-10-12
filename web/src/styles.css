@@ -1132,6 +1132,84 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   gap: 4px;
 }
 
+/* —— 网络与代理（设置页·综合） —— */
+.proxy-url-row,
+.proxy-bypass-row {
+  display: flex;
+  margin: 8px 0 4px;
+}
+
+.proxy-url-input,
+.proxy-bypass-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+.proxy-url-input.invalid {
+  border-color: var(--yellow);
+}
+
+.proxy-recognize {
+  font-size: 11px;
+  margin: 2px 0 6px;
+}
+
+.proxy-recognize.ok { color: var(--green); }
+.proxy-recognize.bad { color: var(--yellow); }
+
+.proxy-scopes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  margin: 6px 0;
+}
+
+.proxy-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.btn-test-proxy,
+.btn-save-proxy {
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-test-proxy {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+}
+
+.btn-test-proxy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-save-proxy {
+  margin-left: auto;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+}
+
+.proxy-test-result {
+  font-size: 11.5px;
+}
+
+.proxy-test-result.ok { color: var(--green); }
+.proxy-test-result.bad { color: var(--red); }
+
 /* —— 「规则」Tab（设计文档 §6：dots custom rules 思路） —— */
 .rules-panel {
   display: flex;

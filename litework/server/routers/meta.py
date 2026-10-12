@@ -21,6 +21,11 @@ class ConfigUpdateRequest(BaseModel):
     updates: Dict[str, Any]
 
 
+class ProxyTestRequest(BaseModel):
+    """代理连通性测试：前端输入框里的（已归一化）代理地址。"""
+    url: str = ""
+
+
 class SyncRequest(BaseModel):
     """手动同步的数据源：models_dev 或定价插件声明的官方源（deepseek/kimi…）。"""
     source: str = "models_dev"
@@ -152,6 +157,32 @@ def create_router(ctx: ServerContext) -> APIRouter:
             )
         app.save_config(payload.updates)
         return {"ok": True}
+
+    @router.post("/api/proxy/test")
+    async def test_proxy(payload: ProxyTestRequest, request: Request):
+        """代理连通性测试：经指定代理 GET api.github.com，回显延迟/失败原因。
+
+        不写配置——测试的是「用户输入框里的地址」（前端归一化后传入），
+        与是否已保存无关。
+        """
+        ctx.check_auth(request)
+        import time as _time
+        import httpx as _httpx
+        from ...core.proxy import normalize_proxy_url
+
+        url = normalize_proxy_url(payload.url or "")
+        if not url:
+            return {"ok": False, "text": "代理地址格式无法识别"}
+        start = _time.monotonic()
+        try:
+            resp = await _httpx.AsyncClient(proxy=url, timeout=8.0).get(
+                "https://api.github.com", headers={"User-Agent": "lite-work-proxy-test"})
+            ms = int((_time.monotonic() - start) * 1000)
+            if resp.status_code < 400:
+                return {"ok": True, "text": f"连通（HTTP {resp.status_code} · {ms}ms）"}
+            return {"ok": False, "text": f"代理可达但目标返回 HTTP {resp.status_code}（{ms}ms）"}
+        except Exception as exc:  # noqa: BLE001 - 测试端点：任何失败都要回显人话
+            return {"ok": False, "text": f"连接失败：{type(exc).__name__}"}
 
     # ------------------------------------------------------------ 模型元数据
 

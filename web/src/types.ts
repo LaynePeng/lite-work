@@ -254,6 +254,13 @@ export interface AppConfig {
   tool_metrics?: boolean;
   /** Agent 轨迹（W7）：持久化执行轨迹 JSONL（~/.lite-work/trajectories/），供复盘/评测/审计 */
   trajectory_enabled?: boolean;
+  /** 出网代理（分流）：scope ∈ llm/webfetch/meta/market/mcp/shell */
+  proxy?: {
+    enabled: boolean;
+    url: string;
+    scope: string[];
+    bypass: string[];
+  };
   /** 完成证据门禁：off 不评估 | advisory（默认）只记录不打断 | enforced 未通过不收尾 */
   completion_gate?: "off" | "advisory" | "enforced";
   /** enforced 模式下「再给一轮补证据」的最大次数（防死循环） */

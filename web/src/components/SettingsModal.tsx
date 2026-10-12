@@ -274,6 +274,15 @@ export default function SettingsModal({
   const [triggerMode, setTriggerMode] = useState<"substring" | "advanced">("substring");
   const [triggerModeSaved, setTriggerModeSaved] = useState(false);
 
+  // —— 网络与代理（出网分流；core/proxy.py 同款归一化的前端轻量版）——
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxyScopes, setProxyScopes] = useState<string[]>(["llm", "webfetch"]);
+  const [proxyBypass, setProxyBypass] = useState("");
+  const [proxySaved, setProxySaved] = useState(false);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+
   // Skills 管理（独立于 LLM/MCP 配置，操作即时生效）
   // 各区块"加载失败"可见状态（原实现静默 catch → 页面空白且无提示）
   const [llmLoadError, setLlmLoadError] = useState<string>("");
@@ -698,6 +707,15 @@ export default function SettingsModal({
       }
       if (c.skill_trigger_mode === "substring" || c.skill_trigger_mode === "advanced") {
         setTriggerMode(c.skill_trigger_mode);
+      }
+      // 网络与代理（出网分流）
+      if (c.proxy && typeof c.proxy === "object") {
+        setProxyEnabled(!!c.proxy.enabled);
+        setProxyUrl(typeof c.proxy.url === "string" ? c.proxy.url : "");
+        setProxyScopes(Array.isArray(c.proxy.scope)
+          ? c.proxy.scope.filter((s: unknown): s is string => typeof s === "string")
+          : ["llm", "webfetch"]);
+        setProxyBypass(Array.isArray(c.proxy.bypass) ? c.proxy.bypass.join(", ") : "");
       }
       if (typeof c.tool_timeout === "number" && c.tool_timeout > 0) setToolTimeout(c.tool_timeout);
       if (typeof c.llm_timeout === "number" && c.llm_timeout > 0) setLlmTimeout(c.llm_timeout);
@@ -1314,6 +1332,67 @@ export default function SettingsModal({
       window.alert(`保存失败: ${(err as Error).message}`);
     }
   }, [pricingTtlDays, onSaved]);
+
+  // —— 网络与代理 ——
+  /** 前端轻量归一化（与 core/proxy.py 同规则）：常见写法 → 标准代理 URL。
+   *  识别失败返回 null（红框提示，不让用户保存一个坏地址）。 */
+  const normalizeProxy = useCallback((raw: string): string | null => {
+    const s = raw.trim();
+    if (!s) return null;
+    if (/^(https?|socks5):\/\//i.test(s)) {
+      try {
+        const u = new URL(s);
+        return u.hostname ? s : null;
+      } catch {
+        return null;
+      }
+    }
+    if (s.includes("@")) {
+      const [cred, rest] = s.split("@");
+      if (/^(https?|socks5):\/\//i.test(rest)) {
+        // 凭据在前、协议在后：重排
+        try {
+          const u = new URL(rest);
+          return u.hostname ? `${u.protocol}//${cred}@${u.host}` : null;
+        } catch {
+          return null;
+        }
+      }
+      if (/^[\w.\-]+:\d+$/.test(rest)) return `http://${cred}@${rest}`;
+      return null;
+    }
+    if (/^[\w.\-]+:\d+$/.test(s)) return `http://${s}`;
+    return null;
+  }, []);
+
+  /** 代理地址识别回显：绿=已识别（显示归一化结果）/ 黄=格式无法识别 */
+  const proxyRecognized = useMemo(
+    () => (proxyUrl.trim() ? normalizeProxy(proxyUrl) : null),
+    [proxyUrl, normalizeProxy],
+  );
+
+  const saveProxy = useCallback(async () => {
+    const url = normalizeProxy(proxyUrl);
+    if (proxyEnabled && !url) {
+      window.alert("代理地址格式无法识别，请检查（支持 http(s)://、socks5://、user:pass@host:port 等写法）");
+      return;
+    }
+    try {
+      await api.updateConfig({
+        proxy: {
+          enabled: proxyEnabled,
+          url: url ?? proxyUrl.trim(),
+          scope: proxyScopes,
+          bypass: proxyBypass.split(/[,，\s]+/).map((h) => h.trim()).filter(Boolean),
+        },
+      });
+      setProxySaved(true);
+      setTimeout(() => setProxySaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [proxyEnabled, proxyUrl, proxyScopes, proxyBypass, normalizeProxy, onSaved]);
 
   // 保存 triggers 匹配模式
   const saveTriggerMode = useCallback(async () => {
@@ -2594,6 +2673,106 @@ export default function SettingsModal({
             </div>
             <div className={`settings-section settings-tabpanel ${activeTab === "general" ? "active" : ""}`}>
               <h3>综合设置</h3>
+
+              {/* —— 网络与代理（出网分流）—— */}
+              <div className="mcp-section-head">
+                <span>网络与代理</span>
+              </div>
+              <p className="mcp-hint">
+                六类出网流量可分别选择是否走代理。地址支持多种写法：
+                <code>http(s)://user:pass@host:port</code>、<code>socks5://…</code>、
+                <code>user:pass@host:port</code>、<code>user:pass@https://host:port</code>（凭据在前也识别）。
+              </p>
+              <label className="settings-check" title="关闭后所有流量直连">
+                <input
+                  type="checkbox" checked={proxyEnabled}
+                  onChange={(e) => setProxyEnabled(e.target.checked)}
+                />
+                <b>启用代理</b>
+              </label>
+              <div className="proxy-url-row">
+                <input
+                  className={`proxy-url-input ${proxyUrl.trim() && !proxyRecognized ? "invalid" : ""}`}
+                  value={proxyUrl}
+                  onChange={(e) => { setProxyUrl(e.target.value); setProxyTestResult(null); }}
+                  placeholder="例如 user:pass@https://1.2.3.4:8443 或 http://1.2.3.4:8080"
+                  spellCheck={false}
+                />
+              </div>
+              {proxyUrl.trim() && (
+                <div className={`proxy-recognize ${proxyRecognized ? "ok" : "bad"}`}>
+                  {proxyRecognized
+                    ? `✓ 已识别：${proxyRecognized.replace(/\/\/.*@/, "//***@")}`
+                    : "⚠ 格式无法识别——支持 http(s)://、socks5://、user:pass@host:port 等写法"}
+                </div>
+              )}
+              <div className="proxy-scopes">
+                {[
+                  ["llm", "LLM API 调用"],
+                  ["webfetch", "Agent 联网工具"],
+                  ["meta", "models.dev 元数据"],
+                  ["market", "插件/技能市场"],
+                  ["mcp", "MCP 子进程"],
+                  ["shell", "Agent 执行的命令"],
+                ].map(([key, label]) => (
+                  <label key={key} className="settings-check" title={
+                    key === "mcp" || key === "shell"
+                      ? "以 HTTP_PROXY/HTTPS_PROXY 环境变量注入子进程；内网地址请加进直连列表"
+                      : undefined
+                  }>
+                    <input
+                      type="checkbox" checked={proxyScopes.includes(key)}
+                      onChange={(e) => setProxyScopes((prev) =>
+                        e.target.checked ? [...prev, key] : prev.filter((k) => k !== key))}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div className="proxy-bypass-row">
+                <input
+                  className="proxy-bypass-input"
+                  value={proxyBypass}
+                  onChange={(e) => setProxyBypass(e.target.value)}
+                  placeholder="直连列表（不走代理的地址，逗号分隔）：internal.corp, localhost"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="proxy-actions">
+                <button
+                  className="btn-test-proxy"
+                  disabled={!proxyRecognized || proxyTesting}
+                  title="经此代理访问 api.github.com 验证连通性（无需先保存）"
+                  onClick={async () => {
+                    if (!proxyRecognized) return;
+                    setProxyTesting(true);
+                    setProxyTestResult(null);
+                    try {
+                      const r = await api.testProxy(proxyRecognized);
+                      setProxyTestResult(r);
+                    } catch (err) {
+                      setProxyTestResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
+                    } finally {
+                      setProxyTesting(false);
+                    }
+                  }}
+                >
+                  {proxyTesting ? "测试中…" : "测试连接"}
+                </button>
+                {proxyTestResult && (
+                  <span className={`proxy-test-result ${proxyTestResult.ok ? "ok" : "bad"}`}>
+                    {proxyTestResult.ok ? "✓" : "✗"} {proxyTestResult.text}
+                  </span>
+                )}
+                <button className="btn-save-proxy" onClick={() => void saveProxy()}>
+                  保存{proxySaved ? " ✓" : ""}
+                </button>
+              </div>
+              <p className="mcp-hint">
+                生效时机：LLM / 元数据<b>即时</b>；联网工具与命令自<b>下个任务</b>起；
+                MCP 自<b>下次启动服务器</b>起。
+              </p>
+
               <div className="mcp-section-head">
                 <span>模型元数据与定价</span>
               </div>
