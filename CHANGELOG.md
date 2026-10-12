@@ -4,6 +4,24 @@
 
 ## [1.10.8] — 画图方案升级（mermaid + layout）+ 网络代理分流 + 会话跨项目视图 + 富块扩展
 
+### 修复（代理）
+- **代理密码含 `#` `@` `/` 等特殊字符不可用**：`#` 是 URL fragment 分隔符，未编码会被解析成
+  host=user/port=pass（Invalid port）——凭据段统一 percent-encode，且**幂等**（已编码值再保存
+  不叠加编码，前后端同规则）；
+- **直连列表（bypass）对 httpx 流量不生效**：此前只在子进程 env 注入时转 NO_PROXY，LLM/webfetch/
+  models.dev 整体走代理，内网地址填直连也没用——改用 httpx mounts 按 host 分流（值是 transport
+  实例），market 域（插件/技能/GitHub 下载）同步收口（`market_httpx_kwargs`）；
+- **webfetch 走代理后崩溃**（`'str' object has no attribute '__aenter__'`）：httpx 的 mounts
+  不做 URL→transport 转换，传字符串会被当 transport 使用——改为构造 Async/HTTPTransport 实例；
+- **测试连接与真实流量环境不一致**：`/api/proxy/test` 补齐系统证书注入与 ssl_verify 跟随配置
+  （此前会「测试失败但实际能连」）；
+- **打包版系统证书注入从未生效**：主 backend 未收集 truststore（运行时静默回退 certifi）——
+  依赖显式声明 + PyInstaller `--collect-all truststore`；
+- 代理增强：**系统代理检测预填**（macOS scutil / Windows 注册表 / 环境变量，打开设置页即显示
+  「检测到系统代理…勾选范围即可」）；**TLS 校验开关**（`ssl_verify`，关闭时 UI 黄字警告 +
+  每次使用记日志）；socks5h/socks4 变体识别；全部出网 client `trust_env=False`（不被 shell
+  环境代理静默劫持）。
+
 ### 新增（网络与代理：出网分流）
 - **六类出网流量可分别走代理**：`config["proxy"]`（enabled + url + scope 列表 + bypass 直连列表）——
   `llm`（全部供应商适配器，即时热生效）/ `webfetch`（Agent 联网工具）/ `meta`（models.dev 元数据）/
