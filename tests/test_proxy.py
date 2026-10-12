@@ -125,18 +125,20 @@ async def test_app_save_config_syncs_proxy(tmp_path):
         "scope": ["llm", "meta"],
         "bypass": ["internal.corp"],
     }})
-    # llm scope 命中：mounts 分流（all://=代理 + bypass host 直连），URL 已归一化
-    assert app.llm_registry.proxy_mounts == {
-        "all://": "https://user:pass@1.2.3.4:8443",
-        "all://internal.corp": None,
-    }
+    # llm scope 命中：mounts 分流（all://=代理 + bypass host 直连）
+    # 值是 transport 实例（httpx mounts 要求；传 URL 字符串会 AttributeError）
+    import httpx as _hx
+    mounts = app.llm_registry.proxy_mounts
+    assert set(mounts.keys()) == {"all://", "all://internal.corp"}
+    assert isinstance(mounts["all://"], _hx.AsyncHTTPTransport)
+    assert isinstance(mounts["all://internal.corp"], _hx.AsyncHTTPTransport)
     # meta scope 命中：meta_service 同步（单 URL 形式）
     assert app.llm_registry.meta_service.proxy_url == "https://user:pass@1.2.3.4:8443"
 
     # 适配器重建链路：build_adapter 构造的适配器带 mounts
     app.llm_registry.providers["deepseek"]["api_key"] = "sk-test"
     adapter = app.llm_registry.build_adapter("deepseek")
-    assert adapter.proxy_mounts == app.llm_registry.proxy_mounts
+    assert adapter.proxy_mounts is app.llm_registry.proxy_mounts
 
     # 关闭代理 → mounts=None，缓存适配器废弃
     app.save_config({"proxy": {"enabled": False, "url": "", "scope": [], "bypass": []}})
@@ -182,18 +184,19 @@ def test_proxy_mounts_bypass():
     cfg = {"proxy": {"enabled": True, "url": "http://1.2.3.4:8080",
                      "scope": ["llm"], "bypass": ["internal.corp", "*.example.com"]}}
     m = proxy_mounts(cfg, "llm")
-    assert m == {"all://": "http://1.2.3.4:8080",
-                 "all://internal.corp": None,
-                 "all://example.com": None}
+    assert set(m.keys()) == {"all://", "all://internal.corp", "all://example.com"}
+    import httpx as _hx
+    assert all(isinstance(v, _hx.AsyncHTTPTransport) for v in m.values())
+    assert all(isinstance(v, _hx.HTTPTransport) for v in proxy_mounts(cfg, "llm", async_client=False).values())
     # 无 bypass → None（调用方不传 mounts）
     cfg2 = {"proxy": {"enabled": True, "url": "http://1.2.3.4:8080", "scope": ["llm"]}}
-    assert proxy_mounts(cfg2, "llm") is None
+    # 无 bypass：仍返回代理 mounts（只是没有直连例外）
+    assert set(proxy_mounts(cfg2, "llm").keys()) == {"all://"}
     # 未启用 → None
     assert proxy_mounts({"proxy": {"enabled": False}}, "llm") is None
     # mounts 可被 httpx 接受
     import httpx
     httpx.AsyncClient(mounts=proxy_mounts(cfg, "llm"))
-
 
 def test_normalize_idempotent_and_double_encode_bug():
     """回归（Proxy Error 根因）：归一化不幂等——链路上前后端各调一次，

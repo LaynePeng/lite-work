@@ -281,38 +281,39 @@ def market_httpx_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
     - verify：跟随 ssl_verify 配置。
     """
     kwargs: Dict[str, Any] = {"trust_env": False, "verify": ssl_verify_for(config)}
-    mounts = proxy_mounts(config, "market")
+    mounts = proxy_mounts(config, "market", async_client=False)
     if mounts:
         kwargs["mounts"] = mounts
     return kwargs
 
 
-def proxy_mounts(config: Dict[str, Any], scope: str) -> Optional[Dict[str, Any]]:
-    """httpx 场景的 bypass 分流（Bug 修复：bypass 此前只在 env 注入生效，
-    LLM/webfetch/meta 的 httpx client 整体走代理，直连列表形同虚设）。
+def proxy_mounts(config: Dict[str, Any], scope: str,
+                 async_client: bool = True) -> Optional[Dict[str, Any]]:
+    """httpx mounts（bypass 分流）：值是 transport 实例，不是 URL 字符串。
 
-    返回 httpx 的 mounts 参数（官方按 scheme://host 路由的机制）：
-      - bypass 命中的 host → 显式 None（直连）
-      - 其余全部流量（all://）→ 代理
-    未启用代理 / scope 未勾选 → None（调用方不传 mounts，行为不变）。
+    httpx 的 mounts 不做 URL→transport 转换——传字符串会得到
+    「'str' object has no attribute '__aenter__'」。这里按 async/sync 建对应
+    transport：bypass host 用直连 transport，其余走代理 transport。
+    未启用代理 / scope 未勾选 → None（调用方不传 mounts）。
     """
     url = proxy_for(config, scope)
     if not url:
         return None
+    import httpx
+
+    def _transport(proxy: Optional[str]):
+        if async_client:
+            return httpx.AsyncHTTPTransport(proxy=proxy) if proxy else httpx.AsyncHTTPTransport()
+        return httpx.HTTPTransport(proxy=proxy) if proxy else httpx.HTTPTransport()
+
+    mounts: Dict[str, Any] = {"all://": _transport(url)}
     bypass = proxy_config(config).get("bypass")
-    if not isinstance(bypass, list):
-        return None
-    mounts: Dict[str, Any] = {"all://": url}
-    for h in bypass:
-        host = str(h).strip()
-        if not host:
-            continue
-        # 支持 user 写通配（*.example.com）与裸域名两种形式：
-        # httpx mounts 的 key 是 scheme://host 通配模式
-        if host.startswith("*."):
-            mounts[f"all://{host[2:]}"] = None
-        else:
-            mounts[f"all://{host}"] = None
+    if isinstance(bypass, list):
+        for h in bypass:
+            host = str(h).strip()
+            if not host:
+                continue
+            mounts[f"all://{host[2:] if host.startswith('*.') else host}"] = _transport(None)
     return mounts
 
 
