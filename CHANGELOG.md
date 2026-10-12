@@ -2,7 +2,37 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [1.10.8] — 画图方案升级（mermaid + layout）+ 网络代理分流 + 会话跨项目视图 + 富块扩展
+
+### 新增（网络与代理：出网分流）
+- **六类出网流量可分别走代理**：`config["proxy"]`（enabled + url + scope 列表 + bypass 直连列表）——
+  `llm`（全部供应商适配器，即时热生效）/ `webfetch`（Agent 联网工具）/ `meta`（models.dev 元数据）/
+  `market`（插件技能市场）/ `mcp`（MCP 子进程，HTTP_PROXY env 注入）/ `shell`（Agent 执行的命令，
+  npm/pip/curl 等经 NO_PROXY 感知的 env 走代理）；保存即热生效（LLM/元数据即时、联网工具下个任务、
+  MCP 下次启动）；
+- **代理地址归一化普适**（`core/proxy.py`）：`http(s)://user:pass@host:port`、`socks5://…`（缺
+  socksio 自动退直连）、`user:pass@host:port`、`host:port`、以及**凭据在前协议在后**的
+  `user:pass@https://host:port`（常见手写习惯，重排为标准顺序）全部识别；垃圾输入拒绝不猜；
+- **设置页「网络与代理」**（综合设置内）：地址框**实时识别回显**（绿色显示归一化结果、凭据脱敏），
+  六个 scope 勾选（默认 LLM + 联网工具），直连列表，**测试连接按钮**（经代理访问 api.github.com
+  回显延迟/失败原因，无需先保存）；`POST /api/proxy/test` 端点。
+
+### 新增（画图方案升级：mermaid + layout）
+- **```mermaid 围栏（流程/时序/状态图首选）**：Agent 输出 Mermaid DSL，前端自动布局渲染（mermaid@12
+  动态 import 不进主包，securityLevel=strict 禁脚本，暗色主题）——流程图/时序图/状态机/甘特图
+  自动排版永不歪；语法错自动降级为源码代码块；
+- **```layout 围栏（语义布局图）**：模型只输出「节点 + 边 + 层级」语义结构，**坐标由前端分层布局
+  算法计算**（level 缺省按边拓扑深度推导、同层等距、组内聚簇同色、边折线+箭头+标注、hover 节点
+  高亮邻边、TB/LR 双向、分组图例）——从源头消灭「LLM 手排坐标画歪」；
+- 系统提示：三种图分工——流程/时序/状态 → mermaid；关系拓扑/系统组成 → layout；真实空间比例
+  结构 → diagram。
+
+### 新增（diagram 图内命名 + 视觉升级）
+- **label 原语**：diagram/interactive 的 shapes 支持 `{t:"label",x,y,text}` 图内文字标签（此前图形
+  无名字只有色块，用户看不懂哪个是哪个）——系统提示要求每部件必带 label；文本清洗两步
+  （剥标签片段 + 字符白名单）；
+- 面图形（rect/circle/ellipse）自动低饱和同色填充（线框 → 填充卡片），rect 默认圆角。
+
 ### 修复（会话列表跨项目泄漏——回归）
 - **进入项目后侧栏会显示别的项目的会话**：根因是侧栏会话列表直接用**任务 Tab 的全局开关**切数据源
   （`sessions={tasksGlobalMode ? globalTasks : sessions}`）——在任务 Tab 切过「全部」后，会话 Tab
