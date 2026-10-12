@@ -81,7 +81,7 @@ def test_fetch_subpath_raises_too_many_files(monkeypatch, tmp_path):
     # 阈值内不抛（进入下载阶段由 _download_one mock 兜住）
     calls = []
 
-    def fake_download(owner, repo, commit, path, dest, expected_size, retries, on_bytes=None, control=None):
+    def fake_download(owner, repo, commit, path, dest, expected_size, retries, on_bytes=None, control=None, httpx_kwargs=None):
         calls.append(path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w", encoding="utf-8") as f:
@@ -134,7 +134,7 @@ def test_cached_files_not_double_counted(monkeypatch, tmp_path):
     downloads = []
     done = []
 
-    def fake_download(owner, repo, commit, path, dest, expected_size, retries, on_bytes=None, control=None):
+    def fake_download(owner, repo, commit, path, dest, expected_size, retries, on_bytes=None, control=None, httpx_kwargs=None):
         # 模拟真实 _download_one 的缓存命中行为：大小匹配时跳过早返回
         if os.path.isfile(dest) and (expected_size is None or os.path.getsize(dest) == expected_size):
             return

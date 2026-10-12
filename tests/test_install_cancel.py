@@ -161,7 +161,7 @@ def test_fetch_subpath_cancel_deletes_cache(monkeypatch, tmp_path):
     barrier = threading.Barrier(2)  # 每个文件 worker 到齐后再统一触发取消
 
     def fake_download(owner, repo, commit, path, dest, expected_size, retries,
-                      on_bytes=None, control=None):
+                      on_bytes=None, control=None, httpx_kwargs=None):
         assert control is not None, "worker 应显式收到 control"
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest + ".part", "wb") as f:
@@ -189,7 +189,7 @@ def test_fetch_subpath_pause_resume(monkeypatch, tmp_path):
     downloaded: list[str] = []
 
     def fake_download(owner, repo, commit, path, dest, expected_size, retries,
-                      on_bytes=None, control=None):
+                      on_bytes=None, control=None, httpx_kwargs=None):
         control.checkpoint()  # 每个文件一个检查点：暂停时阻塞在此
         downloaded.append(path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
