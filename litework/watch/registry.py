@@ -178,6 +178,33 @@ class CommandWatch(WatchSource):
         return ProbeResult(snapshot=text, summary=f"{cmd} → {text.splitlines()[0][:80] if text.strip() else '（无输出）'}")
 
 
+def _tail_text(path: str, max_bytes: int = 2000) -> str:
+    """读文件尾部若干字节的文本，用于给 Agent 提供「变了什么」的线索。
+
+    刻意保守：遇到二进制内容（含 NUL 字节）或解码失败就返回空串——
+    prompt 里塞乱码比没有线索更糟（既费 token 又可能误导模型）。
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            raw = f.read(max_bytes)
+    except OSError:
+        return ""
+    if b"\x00" in raw:
+        return ""          # 二进制（如图片/产物），不给线索
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = raw.decode("utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            return ""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines[-20:])
+
+
 class FileWatch(WatchSource):
     """内置：盯文件/目录（存在性、大小、mtime；目录则列出条目）。
 
@@ -209,7 +236,17 @@ class FileWatch(WatchSource):
                 )
             st = os.stat(path)
             fp = f"{st.st_size}|{int(st.st_mtime)}"
-            return ProbeResult(snapshot=fp, summary=f"{raw}：{st.st_size} 字节，mtime {int(st.st_mtime)}")
+            # 变化线索：给 Agent「变了什么」，而不只是「变了」。
+            # 文本类文件取尾部若干行（日志/产物的变化通常在末尾），
+            # 二进制或读取失败则不提供——prompt 里的线索宁可缺失也不塞乱码。
+            hint = _tail_text(path, max_bytes=2000)
+            res = ProbeResult(
+                snapshot=fp,
+                summary=f"{raw}：{st.st_size} 字节，mtime {int(st.st_mtime)}",
+            )
+            if hint:
+                res.changed_hint = f"{raw} 当前尾部内容：\n{hint}"
+            return res
         except OSError as exc:
             return ProbeResult(ok=False, error=f"读取失败: {exc}")
 

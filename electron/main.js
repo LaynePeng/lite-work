@@ -8,7 +8,7 @@
 //
 // 注意：这里没有调用 app.requestSingleInstanceLock()。每次从系统启动应用都会
 // 创建独立的 Electron 进程与本地 Core，可分别绑定不同项目。
-const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain, Tray } = require("electron");
+const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain, Tray, nativeImage } = require("electron");
 const { spawn } = require("child_process");
 const pty = require("node-pty");
 const fs = require("fs");
@@ -808,16 +808,39 @@ function createTray() {
       + "将降级为「关窗即退出」以免应用驻留却无法唤回");
     return false;
   }
+  // Windows：用 nativeImage 而不是直接传路径——路径含空格/非 ASCII/中文用户名
+  // 时，直接传字符串更容易失败；nativeImage 还能显式控制尺寸。
+  // 尺寸按平台托盘逻辑尺寸设定（macOS 菜单栏 22pt / Windows 16px），
+  // 让 Electron 按系统 DPR 自行取用，避免高 DPI 下拉伸发虚。
+  let img;
   try {
-    tray = new Tray(iconPath);
+    img = nativeImage.createFromPath(iconPath);
+  } catch (err) {
+    writeLog("warn", "托盘图标读取异常:", err.message);
+    return false;
+  }
+  if (img.isEmpty()) {
+    writeLog("warn", `托盘图标无法解码: ${iconPath}（将降级为「关窗即退出」）`);
+    return false;
+  }
+  const logical = process.platform === "darwin" ? 22 : 16;
+  try {
+    tray = new Tray(img.resize({ width: logical, height: logical, quality: "best" }));
   } catch (err) {
     writeLog("warn", "创建托盘失败:", err.message);
     tray = null;
     return false;
   }
-  // macOS：单色字形作为模板图标，系统按明暗主题自动反色
+  // macOS：单色字形作为模板图标，系统按菜单栏明暗自动反色
   if (process.platform === "darwin") {
-    try { tray.setIgnoreDoubleClickEvents?.(true); } catch { /* 旧版本无此 API */ }
+    try {
+      tray.setIgnoreDoubleClickEvents?.(true);
+    } catch { /* 旧版本无此 API */ }
+    try {
+      const tpl = img.resize({ width: logical, height: logical });
+      tpl.setTemplateImage(true);
+      tray.setImage(tpl);
+    } catch { /* 模板图设置失败不影响可用性 */ }
   }
   refreshTrayText();
   tray.setContextMenu(Menu.buildFromTemplate([

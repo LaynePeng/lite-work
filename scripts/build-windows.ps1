@@ -105,10 +105,17 @@ if (-not (Test-Path web\node_modules)) {
 Invoke-Step "Build frontend (npm run build:web)" {
     npm run build:web
 }
-# 托盘图标：必须先生成，electron-builder 的 files 只含 electron/**，
-# 缺这个 PNG 会让「托盘常驻」在打包版静默失效（Tray 找不到图标）。
+# 图标：托盘 PNG + 应用 .ico 都必须先生成。
+#   - 托盘 PNG：electron-builder 的 files 只含 electron/**，缺它会让
+#     「托盘常驻」在打包版静默失效（Tray 找不到图标）；
+#   - 应用 .ico：win.icon 指向 release/resources/app-icon.ico，缺它会退回
+#     默认 Electron 图标（用户看到「不是我装的那个应用」）。此前 win.icon
+#     指向 .svg，而 electron-builder 的 Windows 图标不支持 SVG。
 Invoke-Step "Generate tray icon" {
     node scripts/generate-tray-icon.mjs
+}
+Invoke-Step "Generate app icons (.ico / .png)" {
+    node scripts/generate-icon-all.mjs
 }
 
 # ------------------------------------------------------------ Backend binary

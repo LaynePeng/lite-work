@@ -578,6 +578,97 @@ def test_watch_with_async_start_failure_still_reports_error(tmp_path):
     assert rec.status == "error"
 
 
+# ---------------------------------------------------------------- 端到端修复的回归
+
+
+def test_workspace_falls_back_to_app_workspace(tmp_path):
+    """计划未记录 workspace 时必须回退到应用当前工作区。
+
+    回归：此前直接把 sched.workspace（可能为空串）交给探针，FileWatch 会
+    `os.path.join("", rel)` → 相对路径解析到**进程 CWD**，用户看到的现象是
+    「盯梢一直说没变化」——因为它在盯一个无关目录。
+    """
+    watched = tmp_path / "deploy.log"
+    watched.write_text("build #1\n", encoding="utf-8")
+    store = ScheduleStore(str(tmp_path / "s.json"))
+    store.load()
+    # 刻意不设 workspace（模拟手改 schedules.json / 旧数据）
+    store.upsert(Schedule(id="sch_w", enabled=True, source="file",
+                          probe_config={"path": "deploy.log"}, prompt="x"))
+    fired: list = []
+
+    async def launcher(_sched, prompt):
+        fired.append(prompt)
+        return "t1"
+
+    sch = WatchScheduler(store, WatchSourceRegistry(),
+                         lease=TriggerLease(str(tmp_path / "l")),
+                         start_task=launcher,
+                         resolve_workspace=lambda: str(tmp_path))
+    rec = asyncio.run(sch.fire(store.get("sch_w")))
+    # 若退回进程 CWD，deploy.log 不存在 → MISSING（仍算首次 changed），
+    # 但绝不能因为「找不到文件」而在第二次也报 changed
+    assert rec.status == "changed"
+    rec2 = asyncio.run(sch.fire(store.get("sch_w")))
+    assert rec2.status == "unchanged", "回退失败：相对路径没解析到工作区"
+
+    # 内容真变了 → 必须能检出（这正是回退生效的证据）
+    watched.write_text("build #1\nbuild #2 FAILED\n", encoding="utf-8")
+    rec3 = asyncio.run(sch.fire(store.get("sch_w")))
+    assert rec3.status == "changed"
+
+
+def test_workspace_fallback_empty_logs_and_returns_empty(tmp_path):
+    """没有可回退的工作区时不抛异常（仅记警告）。"""
+    store = ScheduleStore(str(tmp_path / "s.json"))
+    store.load()
+    store.upsert(Schedule(id="sch_nw", enabled=True, source="file",
+                          probe_config={"path": "x.log"}, prompt="x"))
+    sch = WatchScheduler(store, WatchSourceRegistry(), lease=TriggerLease(str(tmp_path / "l")),
+                         start_task=lambda s, p: "t")
+    assert sch._workspace_for(store.get("sch_nw")) == ""
+
+
+def test_file_probe_gives_changed_hint_with_tail(tmp_path):
+    """文件探针要给出「变了什么」，而不只是「变了」。
+
+    回归：FileWatch 的文件分支此前不设置 changed_hint，Agent 收到 prompt
+    只知道「有变化」，不知道变化内容——盯梢的意义就丢了一半。
+    """
+    from litework.watch.registry import FileWatch, ProbeContext
+
+    f = tmp_path / "app.log"
+    f.write_text("line1\nline2\n", encoding="utf-8")
+    res = asyncio.run(FileWatch().probe({"path": "app.log"}, ProbeContext(workspace=str(tmp_path))))
+    assert res.ok
+    assert "line2" in res.changed_hint
+    assert "app.log" in res.changed_hint
+
+
+def test_file_probe_skips_binary_hint(tmp_path):
+    """二进制文件不给线索：prompt 里塞乱码比没有线索更糟。"""
+    from litework.watch.registry import FileWatch, ProbeContext
+
+    b = tmp_path / "blob.bin"
+    b.write_bytes(b"\x00\x01\x02\xff\xfe")
+    res = asyncio.run(FileWatch().probe({"path": "blob.bin"}, ProbeContext(workspace=str(tmp_path))))
+    assert res.ok                     # 大小/mtime 仍可用于比对
+    assert res.changed_hint == ""     # 但不给乱码线索
+
+
+def test_file_probe_hint_truncates_large_file(tmp_path):
+    """大文件只取尾部有限内容（控制 token 开销）。"""
+    from litework.watch.registry import FileWatch, ProbeContext
+
+    f = tmp_path / "big.log"
+    f.write_text("\n".join(f"line{i}" for i in range(5000)), encoding="utf-8")
+    res = asyncio.run(FileWatch().probe({"path": "big.log"}, ProbeContext(workspace=str(tmp_path))))
+    assert res.ok
+    assert "line4999" in res.changed_hint      # 尾部可见
+    assert "line0" not in res.changed_hint     # 头部被截掉
+    assert len(res.changed_hint) < 3000        # 有上限
+
+
 # ---------------------------------------------------------------- 无人值守权限档
 
 

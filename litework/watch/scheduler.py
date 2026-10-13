@@ -204,6 +204,7 @@ class WatchScheduler:
         notify: Optional[Callable[[Dict[str, Any]], Any]] = None,
         config: Optional[Dict[str, Any]] = None,
         tick_seconds: float = TICK_SECONDS,
+        resolve_workspace: Optional[Callable[[], str]] = None,
     ) -> None:
         self.store = store
         self.registry = registry
@@ -212,6 +213,10 @@ class WatchScheduler:
         self.notify = notify
         self.config = config or {}
         self.tick_seconds = tick_seconds
+        #: 计划没带 workspace 时的回退（取应用当前工作区）。
+        #: 不能退回进程 CWD——那会让相对路径的探针**静默盯错目录**
+        #: （手改 schedules.json 或旧数据缺 workspace 时就会这样）。
+        self.resolve_workspace = resolve_workspace
         #: 下一次到期缓存：schedule_id → 时间戳（避免每 tick 重算 cron）
         self._next: Dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
@@ -358,7 +363,7 @@ class WatchScheduler:
             return RunRecord(status="error", detail=f"未找到盯梢源 {sched.source!r}")
         ctx = ProbeContext(
             schedule_id=sched.id,
-            workspace=sched.workspace,
+            workspace=self._workspace_for(sched),
             call_tool=self._make_tool_caller(sched),
             config=self.config,
         )
@@ -382,6 +387,30 @@ class WatchScheduler:
         run_rec = await self._fire_task(sched, catch_up=False, prompt_override=prompt)
         run_rec.status = "changed" if run_rec.status == "ok" else run_rec.status
         return run_rec
+
+    def _workspace_for(self, sched: Schedule) -> str:
+        """计划的工作区：优先计划自带，为空则回退应用当前工作区。
+
+        绝不静默退回进程 CWD：探针里的相对路径会解析到「启动 backend 时所在的
+        目录」，用户看到的现象是「盯梢一直说没变化」——因为它在盯一个无关目录。
+        回退时记一条警告，便于排查手改过的计划文件。
+        """
+        if sched.workspace:
+            return sched.workspace
+        fallback = ""
+        if callable(self.resolve_workspace):
+            try:
+                fallback = self.resolve_workspace() or ""
+            except Exception:  # noqa: BLE001 - 解析失败不该让调度中断
+                logger.warning("[Watch] 解析回退工作区失败", exc_info=True)
+        if fallback:
+            logger.warning(
+                "[Watch] 计划 %s 未记录工作区，已回退到当前工作区 %s（建议重新保存该计划）",
+                sched.id, fallback)
+        else:
+            logger.warning("[Watch] 计划 %s 既无工作区也无可回退工作区，"
+                           "相对路径探针可能盯错目录", sched.id)
+        return fallback
 
     def _set_hash(self, schedule_id: str, fp: str) -> None:
         sched = self.store.get(schedule_id)

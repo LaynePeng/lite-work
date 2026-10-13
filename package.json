@@ -58,7 +58,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "scripts/app-icon.svg"
+      "icon": "release/resources/app-icon.ico"
     },
     "nsis": {
       "oneClick": false,

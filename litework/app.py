@@ -374,6 +374,9 @@ class AgentApp:
             start_task=start_task,
             notify=_notify,
             config=self.config,
+            # 计划未记录 workspace 时回退到当前工作区（绝不退回进程 CWD，
+            # 否则相对路径探针会静默盯错目录）
+            resolve_workspace=lambda: self.workspace or "",
         )
         await self._watch_scheduler.start()
         try:
