@@ -442,6 +442,54 @@ ipcMain.handle("show-in-folder", async (event, relPath) => {
   }
 });
 
+// 富块导出：「另存为」对话框 + 写入用户选定的路径（一次 IPC 完成）。
+// 刻意不拆成「返回路径 → 渲染进程再写」——那等于把任意文件写权限交给渲染进程。
+// 路径只能来自用户在原生对话框里的选择。
+ipcMain.handle("save-file", async (event, options) => {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    if (typeof opts.base64 !== "string") return { ok: false, error: "缺少内容" };
+    const defaultName = typeof opts.defaultName === "string" && opts.defaultName
+      ? path.basename(opts.defaultName)
+      : "export";
+    const filters = Array.isArray(opts.filters) ? opts.filters : [];
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(owner, {
+      title: typeof opts.title === "string" && opts.title ? opts.title : "导出文件",
+      defaultPath: defaultName,
+      filters: filters.length ? filters : undefined,
+    });
+    if (result.canceled || !result.filePath) return { ok: false, error: "cancelled" };
+    await fs.promises.writeFile(result.filePath, Buffer.from(opts.base64, "base64"));
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// 富块导出：把文件写进工作区（用于「导出到项目」——图可直接被 docx_create 引用）
+// data 传 base64（二进制安全，PNG 必需）。越界防护同 open-file。
+ipcMain.handle("write-workspace-file", async (event, relPath, base64) => {
+  try {
+    if (typeof relPath !== "string" || !relPath) return { ok: false, error: "缺少路径" };
+    if (typeof base64 !== "string") return { ok: false, error: "缺少内容" };
+    const instance = localInstances.get(event.sender.id);
+    if (!instance?.workspace) return { ok: false, error: "未打开项目" };
+    const abs = path.resolve(instance.workspace, relPath);
+    const wsAbs = path.resolve(instance.workspace);
+    const lowerAbs = abs.toLowerCase();
+    const lowerWs = wsAbs.toLowerCase() + path.sep;
+    if (lowerAbs !== wsAbs.toLowerCase() && !lowerAbs.startsWith(lowerWs)) {
+      return { ok: false, error: "路径越界：仅支持写入工作区内的路径" };
+    }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, Buffer.from(base64, "base64"));
+    return { ok: true, path: relPath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 async function createLocalWindow(workspace = null) {
   const loadingUrl = `file://${path.join(__dirname, "loading.html")}`;
   const window = createWindow(loadingUrl);

@@ -8718,6 +8718,37 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex: 0 0 auto;
 }
 
+/* 热力图：矩阵 + 发散色阶图例（相关矩阵用） */
+.md-chart-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.md-chart-heat {
+  max-width: 560px;
+}
+
+.md-chart-heat-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.md-chart-heat-scale span {
+  display: inline-block;
+  width: 20px;
+  height: 10px;
+  border-radius: 3px;
+}
+.md-chart-heat-scale span + span {
+  margin-left: 8px;
+}
+
 .md-block-error {
   padding: 10px 12px;
   font-size: 12px;
@@ -9296,6 +9327,193 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   flex: none;
 }
 
+/* ══ 富内容块导出（```chart / ```table 的 ⇩ 菜单） ══ */
+.md-chart,
+.md-rich {
+  position: relative;
+}
+
+.md-export {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+}
+
+.md-export-btn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  color: var(--text-1);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+/* 平时隐藏，悬停富块 / 键盘聚焦时才出现（不干扰阅读） */
+.md-chart:hover .md-export-btn,
+.md-rich:hover .md-export-btn,
+.md-export-btn:focus-visible,
+.md-export-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.md-export-btn:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border-color: var(--accent);
+}
+.md-export-btn:active {
+  transform: scale(0.94);
+}
+.md-export-btn:disabled {
+  cursor: default;
+  color: var(--text-2);
+}
+/* 导出结果短提示（复用同一按钮位，不弹窗、不占版面） */
+.md-export-btn:not(:disabled) {
+  max-width: 150px;
+  width: auto;
+  min-width: 24px;
+  padding: 0 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-export-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  min-width: 196px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.md-export-group {
+  font-size: 10px;
+  color: var(--text-2);
+  padding: 5px 8px 3px;
+  letter-spacing: 0.03em;
+}
+.md-export-group:not(:first-child) {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.md-export-menu button {
+  text-align: left;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.md-export-menu button:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+
+/* ══ 富内容块视觉打磨（对齐 OpenIntelligentUI 设计系统：入场交错 / 微交互 / 语义色） ══ */
+/* 入场：块级淡入上浮。React 按 key 复用节点，故仅在块首次挂载时播放一次，
+   流式追加不会反复重播。
+   用 fill-mode: backwards（而非 both）：延时期间取 from（透明），动画结束后
+   把 transform 归还给基础样式——否则 both 会永久锁定 transform: none，
+   把卡片 hover 抬升 / 按下回弹全部吃掉。 */
+@keyframes rb-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.md-rich,
+.md-chart {
+  animation: rb-enter 0.4s ease-out backwards;
+}
+
+/* 子项交错（60ms 步进；第 6 项起统一收口，长列表不做逐条延迟） */
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > * {
+  animation: rb-enter 0.36s ease-out backwards;
+}
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(1) { animation-delay: 0s; }
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(2) { animation-delay: 0.06s; }
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(3) { animation-delay: 0.12s; }
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(4) { animation-delay: 0.18s; }
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(5) { animation-delay: 0.24s; }
+:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(n+6) { animation-delay: 0.3s; }
+
+/* 微交互：卡片悬停轻微抬升 + 强调描边，按下回弹（参考 button:active scale(.98)） */
+.md-card,
+.md-board-card,
+.md-kpi {
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.md-card:hover,
+.md-board-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.md-card:hover {
+  transform: translateY(-2px);
+}
+
+.md-card:active,
+.md-board-card:active,
+.md-ix-part:active {
+  transform: scale(0.98);
+}
+
+.md-board-col {
+  transition: background 0.16s ease;
+  border: 1px solid transparent;
+}
+.md-board-col:hover {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+
+/* 语义色 chip：涨跌从「纯文字色」升级为「同色底 + 同色字」胶囊 */
+.md-kpi-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* 数据表：斑马纹 + 行悬停，长表更易横向跟读 */
+.md-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--text-0) 3%, transparent);
+}
+.md-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 /* ── ask_user 多选（QuestionBar multiSelect） ── */
 .question-options-multi {
   flex-wrap: wrap;
@@ -9321,4 +9539,18 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .btn-submit-picked {
   align-self: flex-end;
+}
+
+/* ── 无障碍：尊重系统「减少动态效果」（弱机 / 前庭敏感用户） ──
+   全库统一下手，覆盖 .md-rich 入场交错、流式闪烁、脉冲指示等所有装饰性动画。
+   参考 OpenIntelligentUI design-system 的等价降级。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -550,6 +550,15 @@ export interface LiteWorkBridge {
   openFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
   /** 在系统文件管理器中定位（高亮显示）工作区内的文件 */
   showInFolder: (path: string) => Promise<{ ok: boolean; error?: string }>;
+  /** 富块导出：「另存为」对话框 + 写入（base64；路径只来自用户原生选择） */
+  saveFile?: (options: {
+    defaultName?: string;
+    title?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+    base64: string;
+  }) => Promise<{ ok: boolean; path?: string; error?: string }>;
+  /** 富块导出：把 base64 内容写进工作区文件（导出到项目用） */
+  writeWorkspaceFile?: (relPath: string, base64: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   /** 渲染进程通过 HTTP 切换工作区成功后，同步 Electron 主进程的窗口 workspace（终端 cwd 依赖它） */
   workspaceChanged: (workspace: string) => void;
   terminalStart: (cols?: number, rows?: number) => Promise<{ ok: boolean; error?: string }>;

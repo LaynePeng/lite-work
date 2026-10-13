@@ -11,6 +11,251 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  blobToBase64, buildCsv, buildExportHtml, downloadBlob, escapeHtml,
+  exportBaseName, safeFileName, svgToPngBlob, textToBlob, type ExportTable,
+} from "../lib/richExport";
+
+// ---------------------------------------------------------------- 导出按钮
+
+/** 中间产物目录（与后端 _ensure_output_dir 的「中间产物/<subdir>/」约定一致）。 */
+const DERIVED_DIR = "中间产物/exports";
+
+interface ExportItem {
+  /** 菜单标签 */
+  label: string;
+  /** 文件后缀（用于补全「另存为」默认名） */
+  ext: string;
+  /** 生成待写入内容（异步，PNG 需先栅格化） */
+  make: () => Promise<{ blob: Blob; name: string }>;
+  /** 下载对话框的类型过滤器 */
+  filter: { name: string; extensions: string[] };
+}
+
+/** 富块导出菜单。两种去向：
+ *  - 「下载」：走原生「另存为」（Electron 桥）或浏览器下载（降级）；
+ *  - 「导出到项目」：写进 `中间产物/exports/`——这条路径是**给 Agent 用的**，
+ *    导出的图可直接被 docx_create / pptx_create 的 Markdown 图片语法引用。
+ *
+ *  宿主块在**点击时**通过父节点解析（不是渲染期传 ref：首渲染 ref 尚为 null，
+ *  会把 null 闭包进 make()）；按钮平时隐藏、悬停富块才出现，不干扰阅读。 */
+function ExportMenu({ build }: { build: (host: HTMLElement) => ExportItem[] }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // 点击外部收起菜单（含键盘 Esc）
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const flash = (msg: string) => {
+    setNote(msg);
+    window.setTimeout(() => setNote(""), 2600);
+  };
+
+  /** 把 blob 交给用户保存（桌面走原生对话框写入；浏览器直接下载）。 */
+  const saveBlob = async (blob: Blob, filename: string): Promise<string> => {
+    const bridge = window.liteWork;
+    if (bridge?.saveFile) {
+      const base64 = await blobToBase64(blob);
+      const r = await bridge.saveFile({ defaultName: filename, base64, title: "导出文件", filters: [] });
+      if (!r.ok) return r.error === "cancelled" ? "" : `导出失败：${r.error ?? "未知错误"}`;
+      return "已导出";
+    }
+    downloadBlob(blob, filename); // Web 版（浏览器）降级
+    return "已导出";
+  };
+
+  /** 宿主富块根节点 = 菜单的父元素（菜单固定作为块的首个子元素渲染）。 */
+  const hostOf = (): HTMLElement | null => boxRef.current?.parentElement ?? null;
+
+  const run = async (pick: (items: ExportItem[], host: HTMLElement) => ExportItem, toProject: boolean) => {
+    setOpen(false);
+    const host = hostOf();
+    if (!host) return;
+    const it = pick(build(host), host);
+    if (!it) return;
+    const bridge = window.liteWork;
+    if (toProject && !bridge?.writeWorkspaceFile) { flash("导出到项目仅桌面应用可用"); return; }
+    setBusy(true);
+    try {
+      const { blob, name } = await it.make();
+      if (!toProject) {
+        const msg = await saveBlob(blob, name);
+        if (msg) flash(msg);
+        return;
+      }
+      const base64 = await blobToBase64(blob);
+      const rel = `${DERIVED_DIR}/${safeFileName(name, `export.${it.ext}`)}`;
+      const r = await bridge!.writeWorkspaceFile!(rel, base64);
+      if (!r.ok) { flash(`导出失败：${r.error ?? "未知错误"}`); return; }
+      flash(`已导出到 ${rel}`);
+      // 说明：把引用语法复制到剪贴板，粘贴进 docx_create 的 Markdown 图片语法即可用
+      try { await navigator.clipboard.writeText(`![图表](${rel})`); } catch { /* 无剪贴板权限：忽略 */ }
+    } catch (err) {
+      flash(`导出失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="md-export" ref={boxRef}>
+      <button
+        type="button"
+        className="md-export-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy}
+        title="导出"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      >
+        {busy ? "…" : note || "⇩"}
+      </button>
+      {open && (
+        <div className="md-export-menu" role="menu">
+          <div className="md-export-group">下载</div>
+          {build(hostOf() ?? document.body).map((it) => (
+            <button key={it.label} type="button" role="menuitem"
+              onClick={() => void run((items) => items.find((x) => x.label === it.label)!, false)}>
+              {it.label}
+            </button>
+          ))}
+          <div className="md-export-group">导出到项目（供 Agent 引用）</div>
+          {build(hostOf() ?? document.body).map((it) => (
+            <button key={`ws-${it.label}`} type="button" role="menuitem"
+              onClick={() => void run((items) => items.find((x) => x.label === it.label)!, true)}>
+              {it.label} → 中间产物
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 图表可导出的三种格式（PNG / SVG / 自足 HTML）。`wrap` 用于就地取 SVG。 */
+function chartExportItems(spec: ChartSpec, wrap: HTMLElement | null): ExportItem[] {
+  const base = exportBaseName(spec.title, "chart");
+  const table: ExportTable | undefined =
+    spec.labels.length && spec.series.some((s) => s.data.length)
+      ? {
+          columns: ["", ...spec.series.map((s, i) => s.name ?? `系列 ${i + 1}`)],
+          rows: spec.labels.map((lb, i) => [lb, ...spec.series.map((s) => String(s.data[i] ?? ""))]),
+          numeric: spec.series.map((_, i) => i + 1),
+        }
+      : undefined;
+  const html = (): Blob =>
+    textToBlob(buildExportHtml({ title: spec.title, wrap: wrap!, table, filename: base }), "text/html;charset=utf-8");
+  return [
+    {
+      label: "PNG 图片", ext: "png", filter: { name: "PNG 图片", extensions: ["png"] },
+      make: async () => ({ blob: await svgToPngBlob(wrap!), name: `${base}.png` }),
+    },
+    {
+      label: "独立 HTML（可交互）", ext: "html", filter: { name: "网页", extensions: ["html"] },
+      make: async () => ({ blob: html(), name: `${base}.html` }),
+    },
+  ];
+}
+
+/** 表格可导出的两种格式（CSV / TSV）。 */
+function tableExportItems(spec: TableSpec): ExportItem[] {
+  const base = exportBaseName(spec.title, "table");
+  const data: ExportTable = { columns: spec.columns, rows: spec.rows };
+  return [
+    {
+      label: "CSV（Excel 可直接打开）", ext: "csv", filter: { name: "CSV", extensions: ["csv"] },
+      make: async () => ({ blob: textToBlob(buildCsv(data), "text/csv;charset=utf-8"), name: `${base}.csv` }),
+    },
+    {
+      label: "HTML 表格", ext: "html", filter: { name: "网页", extensions: ["html"] },
+      make: async () => ({
+        blob: textToBlob(
+          buildTableHtml(spec),
+          "text/html;charset=utf-8",
+        ),
+        name: `${base}.html`,
+      }),
+    },
+  ];
+}
+
+/** 表格 → 自足 HTML（无 SVG，故不走 buildExportHtml）。 */
+function buildTableHtml(spec: TableSpec): string {
+  const title = escapeHtml(spec.title || "数据表");
+  const head = spec.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+  const body = spec.rows
+    .map((r) => `<tr>${spec.columns.map((_, ci) => {
+      const num = spec.numeric?.includes(ci) ?? false;
+      return `<td${num ? ' class="num"' : ""}>${escapeHtml(r[ci] ?? "")}</td>`;
+    }).join("")}</tr>`)
+    .join("\n");
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 30px 26px 46px; background: #0d1117; color: #e6edf3;
+  font-family: -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+h1 { font-size: 17px; font-weight: 600; margin: 0 0 14px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-size: 12px; font-weight: 500; color: #6e7a8c;
+  padding: 9px 12px; border-bottom: 1px solid #262e3f; white-space: nowrap;
+}
+td { padding: 8px 12px; color: #a8b3c0; border-bottom: 1px solid #1c2330; }
+tr:nth-child(even) td { background: rgba(230, 237, 243, .03); }
+tr:last-child td { border-bottom: 0; }
+td.num {
+  text-align: right; color: #e6edf3; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.btn {
+  font: inherit; font-size: 12.5px; padding: 6px 14px; cursor: pointer;
+  border: 1px solid #262e3f; border-radius: 8px; background: #1c2330; color: #a8b3c0;
+  margin-bottom: 14px;
+}
+.btn:hover { background: #21283a; color: #e6edf3; }
+@media print {
+  body { background: #fff; color: #000; padding: 0; }
+  th { color: #555; } td { color: #222; border-color: #ddd; }
+  tr:nth-child(even) td { background: #f7f7f7; }
+  .btn { display: none; }
+}
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+<button class="btn" type="button" onclick="window.print()">打印 / 存 PDF</button>
+<table>
+<thead><tr>${head}</tr></thead>
+<tbody>
+${body}
+</tbody>
+</table>
+</body>
+</html>`;
+}
+
 // ---------------------------------------------------------------- 本地资源 URL
 
 /** URL 形态的相对路径 → 原始文件路径。
@@ -66,14 +311,66 @@ export function rewriteLocalUrls(html: string): string {
 export interface ChartSeries {
   name?: string;
   data: number[];
+  /** combo（双轴组合图）：该系列走右轴。 */
+  axis?: "left" | "right";
 }
 
+/** 散点图数据点。`y` 是 x 的函数，故 y 可以为负。 */
+export interface ScatterPoint {
+  x: number;
+  y: number;
+}
+
+export interface BoxStat {
+  label: string;
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  /** 离群值（绘制为单独的点）。 */
+  outliers?: number[];
+}
+
+/** 瀑布图条目：`total` 为小计柱（从 0 起，不断层），否则为增量柱。 */
+export interface WaterfallItem {
+  label: string;
+  value: number;
+  total?: boolean;
+}
+
+export interface HeatmapSpec {
+  /** 矩阵值（行数 × 列数）。 */
+  values: number[][];
+  xLabels?: string[];
+  yLabels?: string[];
+  /** 色阶：`sequential` 单色深浅（默认，适合绝对值）；`diverging` 红-灰-绿（适合相关性 -1..1）。 */
+  mode?: "sequential" | "diverging";
+  min?: number;
+  max?: number;
+}
+
+export type ChartType =
+  | "bar" | "hbar" | "line" | "area" | "pie" | "radar"
+  // 专业统计图
+  | "scatter" | "boxplot" | "histogram" | "heatmap" | "combo" | "waterfall" | "stacked" | "stacked-area";
+
 export interface ChartSpec {
-  type: "bar" | "hbar" | "line" | "area" | "pie" | "radar";
+  type: ChartType;
   title?: string;
   unit?: string;
   labels: string[];
   series: ChartSeries[];
+  /** scatter：每系列一组点（与 series 平行，index 对齐）。 */
+  points?: ScatterPoint[][];
+  /** scatter：是否绘制最小二乘趋势线（默认 true；点数 < 3 时自动跳过）。 */
+  trend?: boolean;
+  /** boxplot：每系列一组五数概括。 */
+  boxStats?: BoxStat[][];
+  /** heatmap：矩阵数据（独立于 labels/series）。 */
+  heatmap?: HeatmapSpec;
+  /** waterfall：增量/小计条目（独立于 labels/series）。 */
+  items?: WaterfallItem[];
 }
 
 export interface CardItem {
@@ -615,15 +912,89 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
   }
   if (l === "chart") {
     const t = typeof rec.type === "string" ? rec.type.toLowerCase().trim() : "";
-    let type: ChartSpec["type"] = "bar";
-    if (t === "line" || t === "area" || t === "pie" || t === "radar" || t === "bar") type = t;
-    else if (t === "hbar" || t === "horizontal" || t === "horizontal-bar" || t === "horizontal_bar") type = "hbar";
+    // 基础图 + 专业统计图类型白名单（未识别的 type 一律降级为 bar，保持宽容）。
+    const KNOWN: ChartType[] = [
+      "bar", "hbar", "line", "area", "pie", "radar",
+      "scatter", "boxplot", "histogram", "heatmap", "combo", "waterfall", "stacked", "stacked-area",
+    ];
+    const ALIAS: Record<string, ChartType> = {
+      "horizontal": "hbar", "horizontal-bar": "hbar", "horizontal_bar": "hbar",
+      "scatterplot": "scatter", "bubble": "scatter",
+      "box": "boxplot", "box-plot": "boxplot", "box_plot": "boxplot", "candlestick": "boxplot",
+      "hist": "histogram", "distribution": "histogram",
+      "heat-map": "heatmap", "heat_map": "heatmap", "matrix": "heatmap", "correlation": "heatmap", "corr": "heatmap",
+      "dual": "combo", "dual-axis": "combo", "combo-chart": "combo", "mixed": "combo",
+      "water-fall": "waterfall", "funnel": "waterfall",
+      "stack": "stacked", "stacked-bar": "stacked", "stacked_column": "stacked",
+      "stacked-area": "stacked-area", "stackarea": "stacked-area", "area-stacked": "stacked-area",
+    };
+    let type: ChartType = KNOWN.includes(t as ChartType) ? (t as ChartType)
+      : ALIAS[t] ?? "bar";
+
+    // 结构型图型（数据形状与 labels+series 不同）各自解析，避免走通用路径。
+    if (type === "heatmap") {
+      const hv = rec.heatmap && typeof rec.heatmap === "object" ? rec.heatmap as Record<string, unknown> : rec;
+      const rawVals = Array.isArray(hv.values) ? hv.values : [];
+      const values = rawVals
+        .filter((r): r is unknown[] => Array.isArray(r))
+        .map((r) => toNums(r))
+        .filter((r) => r.length > 0)
+        .slice(0, 20);
+      const w = Math.max(0, ...values.map((r) => r.length));
+      if (!values.length || w === 0) return null;
+      for (const r of values) while (r.length < w) r.push(0);
+      const strs = (v: unknown, n: number) =>
+        Array.isArray(v)
+          ? v.filter((x): x is string | number => typeof x === "string" || typeof x === "number")
+              .map((x) => String(x).slice(0, 24)).slice(0, n)
+          : [];
+      const hm: HeatmapSpec = { values };
+      const xl = strs(hv.xLabels, w);
+      const yl = strs(hv.yLabels, values.length);
+      if (xl.length) hm.xLabels = xl;
+      if (yl.length) hm.yLabels = yl;
+      if (hv.mode === "diverging" || hv.mode === "sequential") hm.mode = hv.mode;
+      if (Number.isFinite(Number(hv.min))) hm.min = Number(hv.min);
+      if (Number.isFinite(Number(hv.max))) hm.max = Number(hv.max);
+      const spec: ChartSpec = { type, labels: [], series: [], heatmap: hm };
+      if (typeof rec.title === "string" && rec.title.trim()) spec.title = rec.title.trim().slice(0, 80);
+      if (typeof rec.unit === "string" && rec.unit.trim()) spec.unit = rec.unit.trim().slice(0, 12);
+      return { kind: "chart", spec };
+    }
+
+    if (type === "waterfall") {
+      const src = Array.isArray(rec.items) ? rec.items
+        : Array.isArray(rec.steps) ? rec.steps
+        : Array.isArray(rec.series) && rec.series[0] && typeof rec.series[0] === "object"
+          ? (rec.series[0] as Record<string, unknown>).data as unknown[]
+          : [];
+      const items: WaterfallItem[] = (Array.isArray(src) ? src : [])
+        .map((it) => {
+          if (typeof it === "number") return { label: "", value: it };
+          if (!it || typeof it !== "object") return null;
+          const r = it as Record<string, unknown>;
+          const value = Number(r.value ?? r.delta ?? r.amount);
+          if (!Number.isFinite(value)) return null;
+          const label = typeof r.label === "string" ? r.label.trim().slice(0, 40)
+            : typeof r.name === "string" ? r.name.trim().slice(0, 40) : "";
+          const total = r.total === true || r.kind === "total" || r.type === "total";
+          return { label, value, ...(total ? { total: true } : {}) };
+        })
+        .filter((x): x is WaterfallItem => x !== null)
+        .slice(0, 24);
+      if (items.length < 2) return null;
+      const spec: ChartSpec = { type, labels: [], series: [], items };
+      if (typeof rec.title === "string" && rec.title.trim()) spec.title = rec.title.trim().slice(0, 80);
+      if (typeof rec.unit === "string" && rec.unit.trim()) spec.unit = rec.unit.trim().slice(0, 12);
+      return { kind: "chart", spec };
+    }
 
     const series: ChartSeries[] = (Array.isArray(rec.series) ? rec.series : [])
       .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
       .map((s) => ({
         name: typeof s.name === "string" && s.name.trim() ? s.name.trim() : undefined,
         data: toNums(s.data),
+        ...(s.axis === "right" ? { axis: "right" as const } : {}),
       }))
       .filter((s) => s.data.length > 0);
     if (!series.length) {
@@ -635,13 +1006,89 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
         });
       }
     }
-    if (!series.length) return null;
+
+    // scatter：点集优先，其次才用 labels+data 合成点（x 取 labels 或序号）。
+    let points: ScatterPoint[][] | undefined;
+    if (type === "scatter") {
+      const rawPts = rec.points ?? rec.data;
+      // 形态判定：[[x,y],…]（扁平对 = 单系列）vs [[[x,y],…],…]（嵌套 = 多系列）
+      // vs [{x,y},…]（对象）。靠首元素判定，避免把扁平对误当多系列。
+      const isPair = (el: unknown) =>
+        Array.isArray(el) && el.length >= 2 && typeof el[0] === "number" && typeof el[1] === "number";
+      let groups: unknown[][] = [];
+      if (Array.isArray(rawPts) && rawPts.length) {
+        if (isPair(rawPts[0])) groups = [rawPts];
+        else if (Array.isArray(rawPts[0])) groups = rawPts as unknown[][];
+        else if (rawPts[0] && typeof rawPts[0] === "object") groups = [rawPts];
+        else groups = [rawPts];
+      }
+      const parsed = groups.map((g) => (Array.isArray(g) ? g : [])
+        .map((pt) => {
+          if (Array.isArray(pt)) {
+            const x = Number(pt[0]), y = Number(pt[1]);
+            return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+          }
+          if (pt && typeof pt === "object") {
+            const r = pt as Record<string, unknown>;
+            const x = Number(r.x), y = Number(r.y ?? r.value);
+            return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+          }
+          return null;
+        })
+        .filter((p): p is ScatterPoint => p !== null)
+        .slice(0, 2000))
+        .filter((g) => g.length > 0);
+      if (parsed.length) {
+        points = parsed;
+        if (!series.length) {
+          series.push(...parsed.map(() => ({ name: undefined, data: [] as number[] })));
+        }
+      }
+    }
+
+    // boxplot：五数概括（每系列一组）。
+    let boxStats: BoxStat[][] | undefined;
+    if (type === "boxplot") {
+      const raw = rec.boxStats ?? rec.boxes ?? rec.groups ?? rec.stats;
+      const groups: unknown[][] = Array.isArray(raw) && raw.length && Array.isArray(raw[0])
+        ? (raw as unknown[][])
+        : (Array.isArray(raw) ? [raw] : []);
+      const num = (v: unknown) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      boxStats = groups.map((g) => (Array.isArray(g) ? g : [])
+        .map((it) => {
+          if (!it || typeof it !== "object") return null;
+          const r = it as Record<string, unknown>;
+          const min = num(r.min), q1 = num(r.q1), median = num(r.median ?? r.med), q3 = num(r.q3), max = num(r.max);
+          if (min === null || q1 === null || median === null || q3 === null || max === null) return null;
+          const label = typeof r.label === "string" ? r.label.trim().slice(0, 30)
+            : typeof r.name === "string" ? r.name.trim().slice(0, 30) : "";
+          const outliers = toNums(r.outliers).slice(0, 60);
+          return { label, min, q1, median, q3, max, ...(outliers.length ? { outliers } : {}) };
+        })
+        .filter((b): b is BoxStat => b !== null)
+        .slice(0, 20))
+        .filter((g) => g.length > 0);
+      if (!boxStats.length) boxStats = undefined;
+    }
+
+    // 各图型的必要条件：结构型看自己的字段，其余必须有 series。
+    if (type === "scatter") { if (!points) return null; }
+    else if (type === "boxplot") { if (!boxStats) return null; }
+    else if (!series.length) return null;
 
     let labels: string[] | null = null;
     if (Array.isArray(rec.labels)) {
       labels = rec.labels.map((x) => (typeof x === "string" || typeof x === "number") ? String(x) : "");
     }
-    if (!labels || !labels.length) labels = series[0].data.map((_, i) => String(i + 1));
+    if (!labels || !labels.length) {
+      const len = type === "scatter" ? Math.max(0, ...(points ?? []).map((g) => g.length))
+        : type === "boxplot" ? Math.max(0, ...(boxStats ?? []).map((g) => g.length))
+        : series[0]?.data.length ?? 0;
+      labels = Array.from({ length: len }, (_, i) => String(i + 1));
+    }
     const n = Math.max(labels.length, ...series.map((s) => s.data.length));
     while (labels.length < n) labels.push(String(labels.length + 1));
     for (const s of series) while (s.data.length < n) s.data.push(0);
@@ -651,6 +1098,9 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
       labels: labels.slice(0, 60),
       series: series.slice(0, 8).map((s) => ({ ...s, data: s.data.slice(0, 60) })),
     };
+    if (points) spec.points = points.slice(0, 8);
+    if (type === "scatter" && rec.trend === false) spec.trend = false;
+    if (boxStats) spec.boxStats = boxStats.slice(0, 8);
     if (typeof rec.title === "string" && rec.title.trim()) spec.title = rec.title.trim().slice(0, 80);
     if (typeof rec.unit === "string" && rec.unit.trim()) spec.unit = rec.unit.trim().slice(0, 12);
     return { kind: "chart", spec };
@@ -680,9 +1130,14 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
 // ---------------------------------------------------------------- 图表渲染（SVG 自绘）
 
 const PALETTE = ["#4f8cff", "#8b5cf6", "#3fb950", "#e3b341", "#f778ba", "#39c5cf", "#ff7b72", "#d2a8ff"];
-const C_GRID = "#30363d";
-const C_DIM = "#8b949e";
-const C_MAIN = "#e6edf3";
+// 图表内的「结构性」颜色走主题变量（而非硬编码 hex）：网格/刻度/正文随主题
+// 自动适配，与 OpenIntelligentUI design-system 的做法一致；PALETTE 作为
+// 数据系列色板保留字面量（需要彼此可区分的稳定色相）。
+const C_GRID = "var(--border, #262e3f)";
+const C_DIM = "var(--text-2, #6e7a8c)";
+const C_MAIN = "var(--text-0, #e6edf3)";
+/** 分片/节点的背景描边色（与气泡底色一致，用于切开相邻扇形与数据点）。 */
+const C_SURFACE = "var(--bg-1, #161b22)";
 
 function fmtNum(n: number): string {
   const abs = Math.abs(n);
@@ -708,6 +1163,40 @@ function niceMax(v: number): number {
 
 function seriesMax(spec: ChartSpec): number {
   return niceMax(Math.max(0, ...spec.series.flatMap((s) => s.data)));
+}
+
+/** 数据点悬停提示：系列名 · 标签：值 单位。作为 <title> 内容提供原生 tooltip。 */
+function seriesTip(spec: ChartSpec, s: ChartSeries, i: number): string {
+  const label = spec.labels[i] ?? String(i + 1);
+  const val = fmtNum(s.data[i] ?? 0);
+  const unit = spec.unit ? ` ${spec.unit}` : "";
+  const name = s.name ? `${s.name} · ` : "";
+  return `${name}${label}：${val}${unit}`;
+}
+
+/** 图表的可访问名称（role=img 需要，否则读屏只念得出「图形」）。
+ *  标题缺失时退化为「图表」；附单位与系列名，信息量足够定位。 */
+function chartAria(spec: ChartSpec): string {
+  const base = spec.title ?? "图表";
+  const unit = spec.unit ? `，单位 ${spec.unit}` : "";
+  const names = spec.series.map((s) => s.name).filter(Boolean);
+  return names.length ? `${base}${unit}，系列：${names.join("、")}` : `${base}${unit}`;
+}
+
+/** SVG 图表根元素：统一 viewBox / role=img / aria-label。
+ *  SVG 内每个数据图形另挂 <title> 子元素提供悬停原生 tooltip（对齐
+ *  OpenIntelligentUI 的图表交互，且不需要任何图表库依赖）。 */
+function ChartSvg({ vb, cls = "md-chart-svg", spec, children }: {
+  vb: string;
+  cls?: string;
+  spec: ChartSpec;
+  children: React.ReactNode;
+}) {
+  return (
+    <svg viewBox={vb} className={cls} role="img" aria-label={chartAria(spec)}>
+      {children}
+    </svg>
+  );
 }
 
 function YGrid({ max, plotH, y0, padL, w }: { max: number; plotH: number; y0: number; padL: number; w: number }) {
@@ -739,7 +1228,7 @@ function BarChart({ spec }: { spec: ChartSpec }) {
   const showVals = n <= 10 && ns === 1;
   const blockW = ns * barW + (ns - 1) * 3;
   return (
-    <svg viewBox={`0 0 ${W} ${padT + plotH + padB}`} className="md-chart-svg" role="img">
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
       <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
       {spec.labels.map((lb, i) => (
         <text
@@ -760,7 +1249,9 @@ function BarChart({ spec }: { spec: ChartSpec }) {
           const y = y0 - h;
           return (
             <g key={`${si}-${i}`}>
-              <rect x={x} y={y} width={barW} height={h} rx={2} fill={PALETTE[si % PALETTE.length]} />
+              <rect x={x} y={y} width={barW} height={h} rx={2} fill={PALETTE[si % PALETTE.length]}>
+                <title>{seriesTip(spec, s, i)}</title>
+              </rect>
               {showVals && v > 0 && (
                 <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize={9.5} fill={C_DIM}>{fmtNum(v)}</text>
               )}
@@ -768,7 +1259,7 @@ function BarChart({ spec }: { spec: ChartSpec }) {
           );
         }),
       )}
-    </svg>
+    </ChartSvg>
   );
 }
 
@@ -782,7 +1273,7 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
   const max = seriesMax(spec);
   const bh = Math.max(6, Math.min(16, rowH - 6));
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="md-chart-svg" role="img">
+    <ChartSvg vb={`0 0 ${W} ${H}`} spec={spec}>
       {spec.labels.map((lb, i) => (
         <text
           key={i}
@@ -801,7 +1292,9 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
           const y = padT + i * rowH * ns + si * rowH + (rowH - bh) / 2;
           return (
             <g key={`${si}-${i}`}>
-              <rect x={padL} y={y} width={w} height={bh} rx={2} fill={PALETTE[si % PALETTE.length]} />
+              <rect x={padL} y={y} width={w} height={bh} rx={2} fill={PALETTE[si % PALETTE.length]}>
+                <title>{seriesTip(spec, s, i)}</title>
+              </rect>
               {v > 0 && (
                 <text x={padL + w + 6} y={y + bh / 2 + 3.5} fontSize={9.5} fill={C_DIM}>{fmtNum(v)}</text>
               )}
@@ -809,7 +1302,7 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
           );
         }),
       )}
-    </svg>
+    </ChartSvg>
   );
 }
 
@@ -824,7 +1317,7 @@ function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
   const step = n > 24 ? 3 : n > 12 ? 2 : 1;
   const showDots = n <= 40;
   return (
-    <svg viewBox={`0 0 ${W} ${padT + plotH + padB}`} className="md-chart-svg" role="img">
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
       <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
       {spec.labels.map((lb, i) =>
         i % step !== 0 ? null : (
@@ -851,11 +1344,15 @@ function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
             )}
             <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             {showDots &&
-              s.data.map((v, i) => <circle key={i} cx={xOf(i)} cy={yOf(v)} r={2.6} fill={color} stroke="#161b22" strokeWidth={1} />)}
+              s.data.map((v, i) => (
+                <circle key={i} cx={xOf(i)} cy={yOf(v)} r={2.6} fill={color} stroke={C_SURFACE} strokeWidth={1}>
+                  <title>{seriesTip(spec, s, i)}</title>
+                </circle>
+              ))}
           </g>
         );
       })}
-    </svg>
+    </ChartSvg>
   );
 }
 
@@ -889,10 +1386,12 @@ function PieChart({ spec }: { spec: ChartSpec }) {
   });
   return (
     <div className="md-chart-flex">
-      <svg viewBox="0 0 260 260" className="md-chart-svg md-chart-pie" role="img">
+      <ChartSvg vb="0 0 260 260" cls="md-chart-svg md-chart-pie" spec={spec}>
         {slices.map((sl, i) => (
           <g key={i}>
-            <path d={sl.d} fill={sl.color} stroke="#161b22" strokeWidth={1.5} />
+            <path d={sl.d} fill={sl.color} stroke={C_SURFACE} strokeWidth={1.5}>
+              <title>{`${sl.label}：${fmtNum(sl.value)}${spec.unit ? ` ${spec.unit}` : ""}（${sl.pct.toFixed(1)}%）`}</title>
+            </path>
             {sl.showPct && (
               <text x={sl.lx} y={sl.ly + 3.5} textAnchor="middle" fontSize={10.5} fill={C_MAIN} fontWeight={600}>
                 {Math.round(sl.pct)}%
@@ -902,7 +1401,7 @@ function PieChart({ spec }: { spec: ChartSpec }) {
         ))}
         <text x={cx} y={cy - 2} textAnchor="middle" fontSize={13} fill={C_MAIN} fontWeight={700}>{fmtNum(total)}</text>
         <text x={cx} y={cy + 14} textAnchor="middle" fontSize={9.5} fill={C_DIM}>总计</text>
-      </svg>
+      </ChartSvg>
       <div className="md-chart-legend-list">
         {slices.map((sl, i) => (
           <div key={i} className="md-chart-legend-row">
@@ -926,7 +1425,7 @@ function RadarChart({ spec }: { spec: ChartSpec }) {
   const pt = (i: number, r: number) => `${cx + r * Math.cos(ang(i))},${cy + r * Math.sin(ang(i))}`;
   const ring = (f: number) => Array.from({ length: n }, (_, i) => pt(i, R * f)).join(" ");
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="md-chart-svg md-chart-radar" role="img">
+    <ChartSvg vb={`0 0 ${size} ${size}`} cls="md-chart-svg md-chart-radar" spec={spec}>
       {[0.25, 0.5, 0.75, 1].map((f, i) => (
         <polygon key={i} points={ring(f)} fill="none" stroke={C_GRID} strokeWidth={1} />
       ))}
@@ -955,17 +1454,528 @@ function RadarChart({ spec }: { spec: ChartSpec }) {
             />
             {s.data.map((v, i) => {
               const r = (Math.max(0, v) / max) * R;
-              return <circle key={i} cx={cx + r * Math.cos(ang(i))} cy={cy + r * Math.sin(ang(i))} r={2.6} fill={color} />;
+              return (
+                <circle key={i} cx={cx + r * Math.cos(ang(i))} cy={cy + r * Math.sin(ang(i))} r={2.6} fill={color}>
+                  <title>{seriesTip(spec, s, i)}</title>
+                </circle>
+              );
             })}
           </g>
         );
       })}
-    </svg>
+    </ChartSvg>
+  );
+}
+
+// ---------------------------------------------------------------- 专业统计图
+
+/** 最小二乘线性回归：返回斜率、截距与决定系数 R²（用于散点趋势线）。 */
+function linreg(pts: ScatterPoint[]): { k: number; b: number; r2: number } | null {
+  const n = pts.length;
+  if (n < 3) return null;
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; }
+  const mx = sx / n, my = sy / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (const p of pts) {
+    const dx = p.x - mx, dy = p.y - my;
+    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+  }
+  if (sxx === 0) return null;
+  const k = sxy / sxx;
+  const b = my - k * mx;
+  const r2 = syy === 0 ? 1 : (sxy * sxy) / (sxx * syy);
+  return { k, b, r2 };
+}
+
+/** 把一列数值自动分箱成直方图（Freedman–Diaconis 规则，退回 Sturges，钳制 3..30 箱）。 */
+function histogramBins(values: number[]): { centers: number[]; counts: number[]; w: number; lo: number; hi: number } {
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const span = hi - lo || 1;
+  let k = Math.ceil(Math.sqrt(values.length)); // Sturges 近似
+  if (values.length >= 4) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const q = (p: number) => {
+      const i = (sorted.length - 1) * p, f = Math.floor(i);
+      return sorted[f] + (sorted[Math.min(f + 1, sorted.length - 1)] - sorted[f]) * (i - f);
+    };
+    const iqr = q(0.75) - q(0.25);
+    if (iqr > 0) k = Math.ceil(span / (2 * iqr * Math.pow(values.length, -1 / 3)));
+  }
+  k = Math.max(3, Math.min(30, k || 5));
+  const w = span / k;
+  const counts = new Array(k).fill(0);
+  for (const v of values) {
+    const bi = Math.min(k - 1, Math.max(0, Math.floor((v - lo) / w)));
+    counts[bi]++;
+  }
+  const centers = counts.map((_, i) => lo + w * (i + 0.5));
+  return { centers, counts, w, lo, hi };
+}
+
+/** 散点图：多点 + 每系列最小二乘趋势线（含 R²）。 */
+function ScatterChart({ spec }: { spec: ChartSpec }) {
+  const groups = (spec.points ?? []).filter((g) => g.length > 0);
+  const ys = groups.flatMap((g) => g.map((p) => p.y));
+  const xs = groups.flatMap((g) => g.map((p) => p.x));
+  let xlo = Math.min(...xs), xhi = Math.max(...xs);
+  let ylo = Math.min(...ys, 0), yhi = Math.max(...ys, 0);
+  if (xlo === xhi) { xlo -= 1; xhi += 1; }
+  if (ylo === yhi) { ylo -= 1; yhi += 1; }
+  const W = 640, padL = 54, padR = 16, padT = 18, plotH = 240, padB = 44;
+  const plotW = W - padL - padR;
+  const y0 = padT + plotH;
+  const X = (v: number) => padL + ((v - xlo) / (xhi - xlo)) * plotW;
+  const Y = (v: number) => y0 - ((v - ylo) / (yhi - ylo)) * plotH;
+  const showTrend = spec.trend !== false;
+  const fits = showTrend ? groups.map((g) => linreg(g)) : [];
+  return (
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+      {[0, 1, 2, 3, 4].map((i) => {
+        const v = ylo + ((yhi - ylo) * i) / 4;
+        const y = Y(v);
+        return (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+          </g>
+        );
+      })}
+      {groups.map((g, gi) => {
+        const color = PALETTE[gi % PALETTE.length];
+        const fit = fits[gi];
+        return (
+          <g key={gi}>
+            {fit && (
+              <line
+                x1={X(xlo)} y1={Y(fit.k * xlo + fit.b)}
+                x2={X(xhi)} y2={Y(fit.k * xhi + fit.b)}
+                stroke={color} strokeWidth={2} strokeDasharray="6 4" opacity={0.75}
+              >
+                <title>{`趋势线 y=${fmtNum(fit.k)}x+${fmtNum(fit.b)}，R²=${fit.r2.toFixed(3)}`}</title>
+              </line>
+            )}
+            {g.map((p, i) => (
+              <circle key={i} cx={X(p.x)} cy={Y(p.y)} r={3} fill={color} fillOpacity={0.72} stroke={color} strokeWidth={0.8}>
+                <title>{seriesPointTip(spec, spec.series[gi]?.name, p.x, p.y)}</title>
+              </circle>
+            ))}
+          </g>
+        );
+      })}
+      {[0, 1, 2, 3, 4].map((i) => {
+        const v = xlo + ((xhi - xlo) * i) / 4;
+        return <text key={i} x={X(v)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>;
+      })}
+    </ChartSvg>
+  );
+}
+
+/** 散点提示：系列 · (x, y)。 */
+function seriesPointTip(spec: ChartSpec, name: string | undefined, x: number, y: number): string {
+  const u = spec.unit ? ` ${spec.unit}` : "";
+  return `${name ? `${name} · ` : ""}(${fmtNum(x)}, ${fmtNum(y)}${u})`;
+}
+
+/** 箱线图：五数概括（须 + 箱 + 中位线）+ 离群点。 */
+function BoxplotChart({ spec }: { spec: ChartSpec }) {
+  const groups = (spec.boxStats ?? []).filter((g) => g.length > 0);
+  const all: number[] = groups.flatMap((g) => g.flatMap((b) => [b.min, b.max, ...(b.outliers ?? [])]));
+  let lo = Math.min(...all), hi = Math.max(...all);
+  const pad = (hi - lo || 1) * 0.08;
+  lo -= pad; hi += pad;
+  const W = 640, padL = 54, padR = 16, padT = 18, plotH = 240, padB = 44;
+  const plotW = W - padL - padR;
+  const y0 = padT + plotH;
+  const Y = (v: number) => y0 - ((v - lo) / (hi - lo)) * plotH;
+  // 单系列时并排多组箱盒；多系列时按组内 index 对齐。
+  const total = Math.max(...groups.map((g) => g.length));
+  const slot = plotW / Math.max(1, total);
+  const boxW = Math.max(14, Math.min(52, (slot * 0.6) / groups.length));
+  return (
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+      {[0, 1, 2, 3, 4].map((i) => {
+        const v = lo + ((hi - lo) * i) / 4;
+        const y = Y(v);
+        return (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+          </g>
+        );
+      })}
+      {groups.map((g, gi) => {
+        const color = PALETTE[gi % PALETTE.length];
+        return (
+          <g key={gi}>
+            {g.map((b, i) => {
+              const cx = padL + slot * (i + 0.5) + (gi - (groups.length - 1) / 2) * (boxW + 3);
+              const yMin = Y(b.min), yMax = Y(b.max), yQ1 = Y(b.q1), yQ3 = Y(b.q3), yMed = Y(b.median);
+              return (
+                <g key={i}>
+                  <line x1={cx} x2={cx} y1={yMax} y2={yQ3} stroke={color} strokeWidth={1.5} />
+                  <line x1={cx} x2={cx} y1={yQ1} y2={yMin} stroke={color} strokeWidth={1.5} />
+                  <line x1={cx - boxW / 3} x2={cx + boxW / 3} y1={yMax} y2={yMax} stroke={color} strokeWidth={1.5} />
+                  <line x1={cx - boxW / 3} x2={cx + boxW / 3} y1={yMin} y2={yMin} stroke={color} strokeWidth={1.5} />
+                  <rect
+                    x={cx - boxW / 2} y={yQ3} width={boxW} height={Math.max(1, yQ1 - yQ3)}
+                    rx={3} fill={softFill(color)} stroke={color} strokeWidth={1.6}
+                  >
+                    <title>{`${b.label || `组 ${i + 1}`}：中位 ${fmtNum(b.median)}（${fmtNum(b.q1)}~${fmtNum(b.q3)}，极值 ${fmtNum(b.min)}~${fmtNum(b.max)}）`}</title>
+                  </rect>
+                  <line x1={cx - boxW / 2} x2={cx + boxW / 2} y1={yMed} y2={yMed} stroke={color} strokeWidth={2.4} />
+                  {(b.outliers ?? []).map((o, oi) => (
+                    <circle key={oi} cx={cx} cy={Y(o)} r={2.6} fill="none" stroke={color} strokeWidth={1.3}>
+                      <title>{`离群值 ${fmtNum(o)}`}</title>
+                    </circle>
+                  ))}
+                </g>
+              );
+            })}
+          </g>
+        );
+      })}
+      {Array.from({ length: total }, (_, i) => {
+        const cx = padL + slot * (i + 0.5);
+        const lbl = (groups[0]?.[i]?.label) || spec.labels[i] || String(i + 1);
+        return <text key={i} x={cx} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{trunc(lbl, 8)}</text>;
+      })}
+    </ChartSvg>
+  );
+}
+
+/** 直方图：对 series[0] 的取值自动分箱（FD 规则）并画频数柱。 */
+function HistogramChart({ spec }: { spec: ChartSpec }) {
+  const values = spec.series[0]?.data ?? [];
+  if (!values.length) return <div className="md-block-error">⚠ 直方图缺少数值</div>;
+  const { centers, counts, w, lo } = histogramBins(values);
+  const max = niceMax(Math.max(...counts));
+  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+  const w0 = W - padR;
+  const y0 = padT + plotH;
+  const binW = ((w0 - padL) / centers.length) * 0.92;
+  const X = (i: number) => padL + ((w0 - padL) * (i + 0.5)) / centers.length;
+  return (
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w0} />
+      {counts.map((c, i) => {
+        const h = (c / max) * plotH;
+        return (
+          <rect key={i} x={X(i) - binW / 2} y={y0 - h} width={binW} height={Math.max(c > 0 ? 1 : 0, h)}
+            rx={2} fill={PALETTE[0]} fillOpacity={0.85}>
+            <title>{`${fmtNum(lo + w * i)}~${fmtNum(lo + w * (i + 1))}：${c} 个`}</title>
+          </rect>
+        );
+      })}
+      {centers.map((_, i) =>
+        i % Math.ceil(centers.length / 8) === 0 ? (
+          <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={9.5} fill={C_DIM}>
+            {fmtNum(lo + w * i)}
+          </text>
+        ) : null,
+      )}
+    </ChartSvg>
+  );
+}
+
+/** 热力图色阶：顺序=靛蓝深浅；发散=红-中性-绿（相关性 -1..1 用）。 */
+function heatColor(t: number, mode: "sequential" | "diverging"): string {
+  const c = Math.max(0, Math.min(1, t));
+  const lerp = (a: number[], b: number[], u: number) => [
+    Math.round(a[0] + (b[0] - a[0]) * u),
+    Math.round(a[1] + (b[1] - a[1]) * u),
+    Math.round(a[2] + (b[2] - a[2]) * u),
+  ];
+  if (mode === "diverging") {
+    // #f85149(红 -1) → #2a3242(中性 0) → #3fb950(绿 +1)
+    const RED = [248, 81, 73], MID = [42, 50, 66], GREEN = [63, 185, 80];
+    const [r, g, b] = c <= 0.5 ? lerp(RED, MID, c * 2) : lerp(MID, GREEN, (c - 0.5) * 2);
+    return `rgb(${r},${g},${b})`;
+  }
+  // 靛蓝顺序色阶：#1c2330 → #8b5cf6
+  const [r, g, b] = lerp([28, 35, 48], [139, 92, 246], c);
+  return `rgb(${r},${g},${b})`;
+}
+
+/** 热力图：矩阵单元格 + 数值标注 + 行列标签（label/color 走 inline style，
+ *  React 不接受 SVG 的 rgb() 直接内联属性色，故统一用 style）。 */
+function HeatmapChart({ spec }: { spec: ChartSpec }) {
+  const hm = spec.heatmap;
+  if (!hm || !hm.values.length) return <div className="md-block-error">⚠ 热力图缺少数据</div>;
+  const rows = hm.values.length, cols = Math.max(...hm.values.map((r) => r.length));
+  const flat = hm.values.flat();
+  const dataMin = hm.min ?? Math.min(...flat);
+  const dataMax = hm.max ?? Math.max(...flat);
+  const span = dataMax - dataMin || 1;
+  const cell = Math.max(20, Math.min(48, Math.floor(420 / Math.max(cols, rows))));
+  const padL = hm.yLabels ? 74 : 8;
+  const padT = hm.xLabels ? 22 : 8;
+  const W = padL + cols * cell + 8, H = padT + rows * cell + 8;
+  return (
+    <div className="md-chart-heatmap">
+      <ChartSvg vb={`0 0 ${W} ${H}`} cls="md-chart-svg md-chart-heat" spec={spec}>
+        {hm.values.map((row, ri) => (
+          <g key={ri}>
+            {row.map((v, ci) => {
+              const t = hm.mode === "diverging"
+                ? (v - dataMin) / span
+                : (v - dataMin) / span;
+              const dark = t > 0.55;
+              return (
+                <g key={ci}>
+                  <rect
+                    x={padL + ci * cell} y={padT + ri * cell}
+                    width={cell - 1.5} height={cell - 1.5} rx={3}
+                    style={{ fill: heatColor(t, hm.mode ?? "sequential") }}
+                  >
+                    <title>{`${hm.yLabels?.[ri] ?? `行 ${ri + 1}`} × ${hm.xLabels?.[ci] ?? `列 ${ci + 1}`}：${fmtNum(v)}`}</title>
+                  </rect>
+                  {cell >= 30 && (
+                    <text
+                      x={padL + ci * cell + cell / 2} y={padT + ri * cell + cell / 2 + 3.5}
+                      textAnchor="middle" fontSize={10.5} fontWeight={600}
+                      style={{ fill: dark ? "#fff" : "var(--text-0, #e6edf3)", pointerEvents: "none" }}
+                    >{fmtNum(v)}</text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        ))}
+        {hm.xLabels && hm.xLabels.map((lb, ci) => (
+          <text key={ci} x={padL + ci * cell + cell / 2} y={padT - 7} textAnchor="middle" fontSize={10} fill={C_DIM}>
+            {trunc(lb, Math.max(4, Math.floor(cell / 7)))}
+          </text>
+        ))}
+        {hm.yLabels && hm.yLabels.map((lb, ri) => (
+          <text key={ri} x={padL - 7} y={padT + ri * cell + cell / 2 + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>
+            {trunc(lb, 10)}
+          </text>
+        ))}
+      </ChartSvg>
+      {hm.mode === "diverging" && (
+        <div className="md-chart-heat-scale">
+          <span style={{ background: heatColor(0, "diverging") }} />{fmtNum(dataMin)}
+          <span style={{ background: heatColor(0.5, "diverging") }} />{fmtNum((dataMin + dataMax) / 2)}
+          <span style={{ background: heatColor(1, "diverging") }} />{fmtNum(dataMax)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 双轴组合图：axis=right 的系列画折线（右轴），其余画柱（左轴）。 */
+function ComboChart({ spec }: { spec: ChartSpec }) {
+  const bars = spec.series.filter((s) => s.axis !== "right");
+  const lines = spec.series.filter((s) => s.axis === "right");
+  const n = spec.labels.length;
+  const leftMax = niceMax(Math.max(0, ...bars.flatMap((s) => s.data)));
+  const lineVals = lines.flatMap((s) => s.data);
+  const rLo = Math.min(0, ...lineVals), rHi = Math.max(...lineVals, 1);
+  const W = 640, padL = 52, padR = 56, padT = 16, plotH = 230, padB = 44;
+  const w = W - padR;
+  const y0 = padT + plotH;
+  const groupW = (w - padL) / n;
+  const barW = Math.max(4, Math.min(40, (groupW * 0.6) / Math.max(1, bars.length)));
+  const blockW = bars.length * barW + (bars.length - 1) * 3;
+  const RY = (v: number) => y0 - ((v - rLo) / (rHi - rLo)) * plotH;
+  const showLegend = bars.length > 0 && lines.length > 0;
+  return (
+    <>
+      <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+        <YGrid max={leftMax} plotH={plotH} y0={y0} padL={padL} w={w} />
+        {spec.labels.map((lb, i) => (
+          <text key={i} x={padL + i * groupW + groupW / 2} y={y0 + 16}
+            textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={10} fill={C_DIM}>
+            {trunc(lb, 10)}
+          </text>
+        ))}
+        {bars.map((s, si) =>
+          s.data.map((v, i) => {
+            const h = Math.max(v > 0 ? 2 : 0, (Math.max(0, v) / leftMax) * plotH);
+            const x = padL + i * groupW + groupW / 2 - blockW / 2 + si * (barW + 3);
+            return (
+              <rect key={`${si}-${i}`} x={x} y={y0 - h} width={barW} height={h} rx={2} fill={PALETTE[si % PALETTE.length]}>
+                <title>{seriesTip(spec, s, i)}</title>
+              </rect>
+            );
+          }),
+        )}
+        {lines.map((s, si) => {
+          const color = PALETTE[(bars.length + si) % PALETTE.length];
+          const pts = s.data.map((v, i) => `${padL + i * groupW + groupW / 2},${RY(v)}`).join(" ");
+          return (
+            <g key={si}>
+              <polyline points={pts} fill="none" stroke={color} strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
+              {s.data.map((v, i) => (
+                <circle key={i} cx={padL + i * groupW + groupW / 2} cy={RY(v)} r={3} fill={color} stroke={C_SURFACE} strokeWidth={1}>
+                  <title>{seriesTip(spec, s, i)}</title>
+                </circle>
+              ))}
+            </g>
+          );
+        })}
+      </ChartSvg>
+      {showLegend && (
+        <div className="md-chart-legend">
+          {bars.map((s, i) => (
+            <span key={`b${i}`} className="md-chart-legend-item">
+              <span className="md-chart-dot" style={{ background: PALETTE[i % PALETTE.length] }} />
+              {s.name ?? `系列 ${i + 1}`}（左轴）
+            </span>
+          ))}
+          {lines.map((s, i) => (
+            <span key={`l${i}`} className="md-chart-legend-item">
+              <span className="md-chart-dot" style={{ background: PALETTE[(bars.length + i) % PALETTE.length] }} />
+              {s.name ?? `系列 ${bars.length + i + 1}`}（右轴）
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** 瀑布图：增量柱悬空连接，total 柱从 0 起。 */
+function WaterfallChart({ spec }: { spec: ChartSpec }) {
+  const items = spec.items ?? [];
+  // 计算每根柱的起止高度：total 归零重算，增量在上一个累计值上叠加。
+  let acc = 0;
+  const bars = items.map((it) => {
+    if (it.total) {
+      const from = 0, to = acc;
+      return { label: it.label, from, to, delta: it.value, total: true };
+    }
+    const from = acc;
+    acc += it.value;
+    return { label: it.label, from, to: acc, delta: it.value, total: false };
+  });
+  const allVals = bars.flatMap((b) => [b.from, b.to]);
+  const hi = niceMax(Math.max(0, ...allVals));
+  const lo = Math.min(0, ...allVals);
+  const W = 640, padL = 54, padR = 14, padT = 16, plotH = 230, padB = 46;
+  const plotW = W - padL - padR;
+  const span = hi - lo || 1;
+  const y0 = padT + plotH;
+  const Y = (v: number) => y0 - ((v - lo) / span) * plotH;
+  const slot = plotW / bars.length;
+  const barW = Math.max(10, Math.min(46, slot * 0.62));
+  return (
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+      {[0, 1, 2, 3, 4].map((i) => {
+        const v = lo + (span * i) / 4;
+        const y = Y(v);
+        return (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+          </g>
+        );
+      })}
+      <line x1={padL} x2={W - padR} y1={Y(0)} y2={Y(0)} stroke={C_DIM} strokeWidth={1.2} />
+      {bars.map((b, i) => {
+        const cx = padL + slot * (i + 0.5);
+        const y1 = Y(b.from), y2 = Y(b.to);
+        const top = Math.min(y1, y2), h = Math.max(2, Math.abs(y2 - y1));
+        const color = b.total ? "#8b5cf6" : b.delta >= 0 ? "#3fb950" : "#f85149";
+        return (
+          <g key={i}>
+            <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={2} fill={color} fillOpacity={b.total ? 0.95 : 0.85}>
+              <title>{`${b.label || `步骤 ${i + 1}`}：${b.delta >= 0 && !b.total ? "+" : ""}${fmtNum(b.delta)}${spec.unit ? ` ${spec.unit}` : ""}`}</title>
+            </rect>
+            <text x={cx} y={b.delta >= 0 ? top - 4 : top + h + 11} textAnchor="middle" fontSize={9.5} fill={C_DIM}>
+              {b.total ? fmtNum(b.to) : `${b.delta >= 0 ? "+" : ""}${fmtNum(b.delta)}`}
+            </text>
+            {i < bars.length - 1 && (
+              <line x1={cx + barW / 2} x2={padL + slot * (i + 1.5) - barW / 2} y1={Y(b.to)} y2={Y(b.to)}
+                stroke={C_DIM} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+            )}
+            <text x={cx} y={y0 + 17} textAnchor="middle" fontSize={9.5} fill={C_DIM}>{trunc(b.label, 8)}</text>
+          </g>
+        );
+      })}
+    </ChartSvg>
+  );
+}
+
+/** 堆叠柱 / 堆叠面积：按系列逐层累加（第一个系列在最底部）。 */
+function StackedChart({ spec, areaMode }: { spec: ChartSpec; areaMode?: boolean }) {
+  const n = spec.labels.length;
+  const ns = spec.series.length;
+  const totals = Array.from({ length: n }, (_, i) => spec.series.reduce((a, s) => a + Math.max(0, s.data[i] ?? 0), 0));
+  const max = niceMax(Math.max(0, ...totals));
+  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+  const w = W - padR;
+  const y0 = padT + plotH;
+  const X = (i: number) => n <= 1 ? padL + (w - padL) / 2 : padL + ((w - padL) * i) / (n - 1);
+  const Y = (v: number) => y0 - (Math.max(0, v) / max) * plotH;
+  if (areaMode) {
+    // 逐系列累加基线，画堆叠面积（band 由下往上）。
+    const lower = new Array(n).fill(0);
+    const bands = spec.series.map((s, si) => {
+      const upper = s.data.map((v, i) => lower[i] + Math.max(0, v));
+      const poly = [
+        ...s.data.map((_, i) => `${X(i)},${Y(upper[i])}`),
+        ...[...s.data.keys()].reverse().map((i) => `${X(i)},${Y(lower[i])}`),
+      ].join(" ");
+      s.data.forEach((v, i) => { lower[i] = upper[i]; });
+      return { pts: poly, color: PALETTE[si % PALETTE.length], name: s.name };
+    });
+    return (
+      <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+        <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
+        {bands.map((b, i) => (
+          <polygon key={i} points={b.pts} fill={b.color} fillOpacity={0.7} stroke={b.color} strokeWidth={1}>
+            <title>{b.name ?? `系列 ${i + 1}`}</title>
+          </polygon>
+        ))}
+        {spec.labels.map((lb, i) =>
+          i % Math.ceil(n / 10) === 0 ? (
+            <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{trunc(lb, 10)}</text>
+          ) : null,
+        )}
+      </ChartSvg>
+    );
+  }
+  const groupW = (w - padL) / n;
+  const barW = Math.max(6, Math.min(48, groupW * 0.62));
+  return (
+    <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
+      {spec.labels.map((lb, i) => (
+        <text key={i} x={padL + i * groupW + groupW / 2} y={y0 + 16}
+          textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={10} fill={C_DIM}>
+          {trunc(lb, 10)}
+        </text>
+      ))}
+      {spec.labels.map((_, i) => {
+        let acc = 0;
+        const cx = padL + i * groupW + groupW / 2;
+        return (
+          <g key={i}>
+            {spec.series.map((s, si) => {
+              const v = Math.max(0, s.data[i] ?? 0);
+              const h = (v / max) * plotH;
+              const y = Y(acc + v);
+              acc += v;
+              return (
+                <rect key={si} x={cx - barW / 2} y={y} width={barW} height={Math.max(0, h)} rx={si === ns - 1 ? 2 : 0}
+                  fill={PALETTE[si % PALETTE.length]}>
+                  <title>{seriesTip(spec, s, i)}</title>
+                </rect>
+              );
+            })}
+          </g>
+        );
+      })}
+    </ChartSvg>
   );
 }
 
 export function ChartBlock({ spec }: { spec: ChartSpec }) {
   const multi = spec.series.length > 1 && spec.type !== "pie";
+  const isHeat = spec.type === "heatmap";
+  const isCombo = spec.type === "combo";
   return (
     <div className="md-chart">
       {(spec.title || spec.unit) && (
@@ -974,13 +1984,22 @@ export function ChartBlock({ spec }: { spec: ChartSpec }) {
           {spec.unit && <span className="md-chart-unit">单位：{spec.unit}</span>}
         </div>
       )}
+      <ExportMenu build={(host) => chartExportItems(spec, host)} />
       {spec.type === "hbar" ? <HBarChart spec={spec} />
         : spec.type === "line" ? <LineChart spec={spec} />
         : spec.type === "area" ? <LineChart spec={spec} area />
         : spec.type === "pie" ? <PieChart spec={spec} />
         : spec.type === "radar" ? <RadarChart spec={spec} />
+        : spec.type === "scatter" ? <ScatterChart spec={spec} />
+        : spec.type === "boxplot" ? <BoxplotChart spec={spec} />
+        : spec.type === "histogram" ? <HistogramChart spec={spec} />
+        : spec.type === "heatmap" ? <HeatmapChart spec={spec} />
+        : spec.type === "combo" ? <ComboChart spec={spec} />
+        : spec.type === "waterfall" ? <WaterfallChart spec={spec} />
+        : spec.type === "stacked" ? <StackedChart spec={spec} />
+        : spec.type === "stacked-area" ? <StackedChart spec={spec} areaMode />
         : <BarChart spec={spec} />}
-      {multi && (
+      {multi && !isCombo && !isHeat && (
         <div className="md-chart-legend">
           {spec.series.map((s, i) => (
             <span key={i} className="md-chart-legend-item">
@@ -1111,6 +2130,7 @@ export function TableBlock({ spec }: { spec: TableSpec }) {
   );
   return (
     <div className="md-rich">
+      <ExportMenu build={() => tableExportItems(spec)} />
       {spec.title && <div className="md-rich-title">{spec.title}</div>}
       <div className="md-table-wrap">
         <table className="md-table">
@@ -1209,15 +2229,17 @@ function softFill(color: string): string {
 function renderShape(s: DiagramShape, color: string, key: number) {
   // 面图形（圆/椭圆/矩形）用低饱和填充 + 描边——从「线框」升级为「填充卡」，
   // 视觉层次更接近 GPT 的图解（形状实底、连线细）；线类保持细描边。
-  const common = { key, stroke: color, strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  // key 必须显式传给每个元素：塞进 spread 的 props 会触发 React 的
+  // 「key is being spread」警告。
+  const common = { stroke: color, strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   const soft = softFill(color);
   switch (s.t) {
-    case "circle": return <circle {...common} fill={soft} cx={s.x} cy={s.y} r={s.r} />;
-    case "ellipse": return <ellipse {...common} fill={soft} cx={s.x} cy={s.y} rx={s.rx} ry={s.ry} />;
-    case "rect": return <rect {...common} fill={soft} x={s.x} y={s.y} width={s.w} height={s.h} rx={s.rx ?? 10} />;
-    case "line": return <line {...{ ...common, fill: "none" }} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} />;
-    case "polyline": return <polyline {...{ ...common, fill: "none" }} points={s.pts.map((p) => p.join(",")).join(" ")} />;
-    case "path": return <path {...{ ...common, fill: "none" }} d={s.d} />;
+    case "circle": return <circle key={key} {...common} fill={soft} cx={s.x} cy={s.y} r={s.r} />;
+    case "ellipse": return <ellipse key={key} {...common} fill={soft} cx={s.x} cy={s.y} rx={s.rx} ry={s.ry} />;
+    case "rect": return <rect key={key} {...common} fill={soft} x={s.x} y={s.y} width={s.w} height={s.h} rx={s.rx ?? 10} />;
+    case "line": return <line key={key} {...{ ...common, fill: "none" }} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} />;
+    case "polyline": return <polyline key={key} {...{ ...common, fill: "none" }} points={s.pts.map((p) => p.join(",")).join(" ")} />;
+    case "path": return <path key={key} {...{ ...common, fill: "none" }} d={s.d} />;
     case "label":
       return (
         <text
@@ -1263,15 +2285,16 @@ export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
         ))}
       </div>
       <div className="md-diagram-svg-wrap">
-        <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
+        <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img" aria-label={spec.title ?? "图解"}>
           {parts.map((p, i) => (
             <g
               key={i}
               className={`md-diagram-part ${i === active ? "hot" : "dim"}`}
               onClick={() => setActive(i)}
-              role="button"
-              aria-label={p.name}
+              role="img"
+              aria-label={`${p.name}（点击查看说明）`}
             >
+              <title>{p.meta ? `${p.name} · ${p.meta}` : p.name}</title>
               {p.shapes.map((s, si) => renderShape(s, DIAGRAM_COLORS[i % DIAGRAM_COLORS.length], si))}
             </g>
           ))}

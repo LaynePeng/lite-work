@@ -232,6 +232,183 @@ describe("Markdown 原生富内容块（chart / cards / 本地图片）", () => 
   });
 });
 
+// ---------------------------------------------------------------- 富块导出
+
+describe("Markdown 富块导出（chart / table 的 ⇩ 菜单）", () => {
+  it("chart 块带导出入口，点击展开下载 + 导出到项目两项分组", () => {
+    const { container } = render(
+      <Markdown text={'```chart\n{"type":"bar","title":"销量","labels":["一月"],"data":[3]}\n```'} />
+    );
+    const btn = container.querySelector(".md-export-btn");
+    expect(btn).not.toBeNull();
+    // 未展开时无菜单
+    expect(container.querySelector(".md-export-menu")).toBeNull();
+    fireEvent.click(btn!);
+    const menu = container.querySelector(".md-export-menu");
+    expect(menu).not.toBeNull();
+    expect(menu!.textContent).toContain("PNG 图片");
+    expect(menu!.textContent).toContain("独立 HTML");
+    expect(menu!.textContent).toContain("导出到项目");
+  });
+
+  it("table 块导出项为 CSV / HTML 表格", () => {
+    const { container } = render(
+      <Markdown text={'```table\n{"title":"对比","columns":["A","B"],"rows":[["x","1"]]}\n```'} />
+    );
+    const btn = container.querySelector(".md-export-btn");
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn!);
+    const menu = container.querySelector(".md-export-menu")!;
+    expect(menu.textContent).toContain("CSV");
+    expect(menu.textContent).toContain("HTML 表格");
+    expect(menu.textContent).not.toContain("PNG");
+  });
+
+  it("Esc 收起导出菜单", () => {
+    const { container } = render(
+      <Markdown text={'```chart\n{"type":"line","labels":["a"],"data":[1]}\n```'} />
+    );
+    fireEvent.click(container.querySelector(".md-export-btn")!);
+    expect(container.querySelector(".md-export-menu")).not.toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(container.querySelector(".md-export-menu")).toBeNull();
+  });
+
+  it("非富块内容不出现导出入口", () => {
+    const { container } = render(<Markdown text={"普通段落，没有任何富块。"} />);
+    expect(container.querySelector(".md-export")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- 第二批富块形态
+
+// ---------------------------------------------------------------- 专业统计图
+
+describe("Markdown 专业统计图（scatter / boxplot / histogram / heatmap / combo / waterfall / stacked）", () => {
+  it("scatter：散点 + 自动最小二乘趋势线（虚线段）+ 可访问名", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"scatter","title":"广告费与销量相关性",' +
+        '"points":[[1,2],[2,4],[3,5],[4,8],[5,9]]}\n```'
+      } />
+    );
+    const svg = container.querySelector(".md-chart svg");
+    expect(svg).not.toBeNull();
+    expect(svg!.getAttribute("aria-label")).toContain("广告费与销量相关性");
+    expect(container.querySelectorAll(".md-chart circle").length).toBe(5);
+    expect(container.querySelector(".md-chart line[stroke-dasharray]")).not.toBeNull();
+  });
+
+  it("scatter：trend:false 关闭趋势线；无 points 回退代码块", () => {
+    const { container } = render(
+      <Markdown text={'```chart\n{"type":"scatter","points":[[1,2],[2,4],[3,6]],"trend":false}\n```'} />
+    );
+    expect(container.querySelector(".md-chart circle")).not.toBeNull();
+    expect(container.querySelector(".md-chart line[stroke-dasharray]")).toBeNull();
+
+    const { container: c2 } = render(<Markdown text={'```chart\n{"type":"scatter","labels":["a"]}\n```'} />);
+    expect(c2.querySelector(".md-chart")).toBeNull();
+    expect(c2.querySelector("code")).not.toBeNull();
+  });
+
+  it("boxplot：五数概括箱体 + 离群点；别名 box 亦可", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"boxplot","boxStats":[{"label":"A","min":1,"q1":3,"median":5,' +
+        '"q3":7,"max":9,"outliers":[15]}]}\n```'
+      } />
+    );
+    // 箱体是一个 rect；离群值是一个 circle
+    expect(container.querySelector(".md-chart rect")).not.toBeNull();
+    expect(container.querySelectorAll(".md-chart circle").length).toBe(1);
+
+    const { container: c2 } = render(
+      <Markdown text={'```chart\n{"type":"box","boxStats":[{"label":"A","min":0,"q1":1,"median":2,"q3":3,"max":4}]}\n```'} />
+    );
+    expect(c2.querySelector(".md-chart rect")).not.toBeNull();
+  });
+
+  it("histogram：给原始数值自动分箱，箱数 ≥3", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"histogram","title":"响应时间分布","series":[{"data":' +
+        "[1,2,2,3,3,3,4,4,5,5,5,6,7,8,9,10,10,12,14]}]}\n```"
+      } />
+    );
+    expect(container.querySelectorAll(".md-chart rect").length).toBeGreaterThanOrEqual(3);
+    expect(container.querySelector(".md-chart svg")!.getAttribute("aria-label")).toContain("响应时间分布");
+  });
+
+  it("heatmap：矩阵单元格 + 发散色阶图例（mode:diverging）", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"heatmap","title":"相关矩阵","heatmap":{"values":[[1,-0.5],[0.8,1]],' +
+        '"xLabels":["价格","销量"],"yLabels":["价格","销量"],"mode":"diverging"}}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-chart rect").length).toBe(4);
+    expect(container.querySelector(".md-chart-heat-scale")).not.toBeNull();
+  });
+
+  it("combo：柱（左轴）+ 折线（右轴），图例标注左右轴", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"combo","labels":["Q1","Q2","Q3"],"series":[' +
+        '{"name":"销量","data":[10,20,30]},{"name":"增长率","data":[0.1,0.2,0.15],"axis":"right"}]}\n```'
+      } />
+    );
+    expect(container.querySelector(".md-chart rect")).not.toBeNull();      // 柱
+    expect(container.querySelector(".md-chart polyline")).not.toBeNull();  // 折线
+    expect(container.querySelector(".md-chart")!.textContent).toContain("（右轴）");
+  });
+
+  it("waterfall：增量柱悬空 + 小计柱（total）；不足 2 项回退代码块", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"waterfall","items":[{"label":"期初","value":100,"total":true},' +
+        '{"label":"新增","value":30},{"label":"流失","value":-18},{"label":"期末","value":112,"total":true}]}\n```'
+      } />
+    );
+    expect(container.querySelectorAll(".md-chart rect").length).toBe(4);
+
+    const { container: c2 } = render(
+      <Markdown text={'```chart\n{"type":"waterfall","items":[{"label":"只有一个","value":5}]}\n```'} />
+    );
+    expect(c2.querySelector(".md-chart")).toBeNull();
+  });
+
+  it("stacked / stacked-area：堆叠柱为矩形、堆叠面积为多边形", () => {
+    const { container } = render(
+      <Markdown text={
+        '```chart\n{"type":"stacked","labels":["一月","二月"],' +
+        '"series":[{"name":"A","data":[1,2]},{"name":"B","data":[3,1]}]}\n```'
+      } />
+    );
+    // 2 分类 × 2 系列 = 4 段
+    expect(container.querySelectorAll(".md-chart rect").length).toBe(4);
+
+    const { container: c2 } = render(
+      <Markdown text={
+        '```chart\n{"type":"stacked-area","labels":["一月","二月","三月"],' +
+        '"series":[{"name":"A","data":[1,2,3]},{"name":"B","data":[2,1,2]}]}\n```'
+      } />
+    );
+    expect(c2.querySelectorAll(".md-chart polygon").length).toBe(2);
+  });
+
+  it("图型别名归一（hist→histogram / corr→heatmap / dual→combo）", () => {
+    const { container: h } = render(
+      <Markdown text={'```chart\n{"type":"hist","series":[{"data":[1,2,3,4,5,6,7,8]}]}\n```'} />
+    );
+    expect(h.querySelectorAll(".md-chart rect").length).toBeGreaterThanOrEqual(3);
+
+    const { container: c } = render(
+      <Markdown text={'```chart\n{"type":"corr","heatmap":{"values":[[1,0],[0,1]]}}\n```'} />
+    );
+    expect(c.querySelectorAll(".md-chart rect").length).toBe(4);
+  });
+});
+
 // ---------------------------------------------------------------- 第二批富块形态
 
 describe("Markdown 富内容块（kpi / timeline / table / compare / board）", () => {

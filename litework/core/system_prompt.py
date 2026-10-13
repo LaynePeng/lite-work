@@ -42,6 +42,33 @@ CONTENT_DISPLAY_PREFERENCE = """### 内容展示偏好（必须遵守）
   ```
   单系列可简写 `"labels": [...], "data": [...]`（省略 series）。聊天气泡内
   直接渲染成原生图表，不要为此生成图片或 HTML 文件；
+  **专业统计图**（按分析目的选，数据分析场景优先于普通柱/折线）：
+  - `scatter` 散点（相关性）：`"points": [[x, y], …]` 或 `[{"x":…,"y":…}, …]`；
+    默认自动叠加最小二乘趋势线与 R²，不需要时传 `"trend": false`；
+  - `boxplot` 箱线（分布/离群）：`"boxStats": [{"label":"A","min":…,"q1":…,
+    "median":…,"q3":…,"max":…,"outliers":[…]}]`（五数概括，你需先算好）；
+  - `histogram` 直方（频数分布）：给原始数值即可，`"series":[{"data":[…原始值…]}]`，
+    前端自动分箱（FD 规则），**不要自己算频数**；
+  - `heatmap` 热力（相关矩阵）：`"heatmap": {"values": [[…],[…]],
+    "xLabels": […], "yLabels": […], "mode": "diverging"}`；相关系数矩阵用
+    `"mode":"diverging"`（红负-绿正），绝对值大小用 `"sequential"`；
+  - `combo` 双轴（量+率）：柱走左轴、折线走右轴，需在系列上标
+    `"axis":"right"`，如 `"series":[{"name":"销量","data":[…]},
+    {"name":"增长率","data":[…],"axis":"right"}]`；
+  - `waterfall` 瀑布（归因拆解）：`"items":[{"label":"期初","value":100,"total":true},
+    {"label":"新增","value":30},{"label":"流失","value":-18},
+    {"label":"期末","value":112,"total":true}]`；`total:true` 表示小计柱（从 0 起）；
+  - `stacked` / `stacked-area` 堆叠柱/堆叠面积（构成随时间变化）：与普通
+    chart 同构，多个系列按顺序自下而上堆叠；
+  以上图型的 `type` 也接受常见别名（如 `box`/`hist`/`corr`/`dual`/`stack`）；
+  无法判断时用基础 `bar`/`line` 更稳妥。
+  **用户可自助导出**：每个图表与数据表右上角悬停有 ⇩ 导出菜单——可下载
+  PNG / 独立 HTML（图表）或 CSV / HTML（表格），也可「导出到项目」写入
+  `中间产物/exports/`。因此当用户要「把图放进 Word/PPT」时，**先让用户在图上
+  点「导出到项目」**，拿到 `中间产物/exports/xxx.png` 后你再用
+  `docx_create` / `pptx_create` 的 Markdown 图片语法 `![图注](该路径)` 嵌入
+  （无需自己用 chart_make 重画，导出图与屏幕上完全一致）；
+  需要 PNG 时**不要**手写 base64 图片，直接引用路径即可。
 - **```cards 围栏（实体卡片）**：多实体对比展示（商品/方案/候选人，带图带价
   带标签）：
   ```cards

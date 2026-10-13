@@ -36,6 +36,17 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 返回 { ok: true } 或 { ok: false, error }。
    */
   showInFolder: (path) => ipcRenderer.invoke("show-in-folder", path),
+  /**
+   * 富块导出：「另存为」对话框 + 写入（base64，二进制安全）。路径只能来自
+   * 用户的原生选择——渲染进程不提供路径，因此不构成任意文件写入口。
+   * 用户取消 → { ok: false, error: "cancelled" }；成功 → { ok: true, path }。
+   */
+  saveFile: (options) => ipcRenderer.invoke("save-file", options),
+  /**
+   * 富块导出：把 base64 内容写进工作区内文件（用于「导出到项目」，
+   * 产物可直接被 docx_create 等工具引用）。返回 { ok: true, path } 或 { ok: false, error }。
+   */
+  writeWorkspaceFile: (relPath, base64) => ipcRenderer.invoke("write-workspace-file", relPath, base64),
   workspaceChanged: (workspace) => ipcRenderer.send("workspace-changed", workspace),
   terminalStart: (cols, rows) => ipcRenderer.invoke("terminal-start", cols, rows),
   terminalInput: (data) => ipcRenderer.send("terminal-input", data),
