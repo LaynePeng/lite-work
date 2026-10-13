@@ -2,6 +2,10 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [未发布]
+### 修复（打包）
+- Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；
+
 ## [1.10.9] — 盯梢与定时 + 专业统计图 + 富块导出
 
 ### 新增（盯梢 / 定时）

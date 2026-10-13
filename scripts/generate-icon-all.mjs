@@ -20,13 +20,14 @@ const png1024 = path.join(outDir, "app-icon-1024.png");
 fs.mkdirSync(outDir, { recursive: true });
 
 function appBuilderBin() {
-  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  // app-builder-bin 布局按平台不同：win/linux 是 <platform>/<arch>/app-builder[.exe]，
+  // mac 是 mac/app-builder_<amd64|arm64>（无 arch 子目录）。
   const base = path.join(root, "node_modules", "app-builder-bin");
   const bin = process.platform === "win32"
-    ? path.join(base, "win", "app-builder.exe")
+    ? path.join(base, "win", process.arch, "app-builder.exe")
     : process.platform === "darwin"
-      ? path.join(base, "mac", `app-builder_${arch}`)
-      : path.join(base, "linux", `app-builder_${arch}`);
+      ? path.join(base, "mac", process.arch === "arm64" ? "app-builder_arm64" : "app-builder_amd64")
+      : path.join(base, "linux", process.arch, "app-builder");
   if (fs.existsSync(bin)) {
     // npm 解包后二进制有时丢了执行位（本机就踩过：Permission denied），
     // 这里兜底补上，避免「换个环境打包就失败」。
