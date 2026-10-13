@@ -3,7 +3,7 @@
 //
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, type WatchSourceInfo } from "./api";
 import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
@@ -367,6 +367,8 @@ export default function App() {
   //: 展示中的 toast id（用户关掉或超时后移除；历史仍在 watchNotifications 里）
   const [dismissedWatch, setDismissedWatch] = useState<number[]>([]);
   const [watchScheduleSessions, setWatchScheduleSessions] = useState<Record<string, string>>({});
+  //: 可用盯梢数据源（内置 command/file/url + 插件提供的），计划编辑器用
+  const [watchSources, setWatchSources] = useState<WatchSourceInfo[]>([]);
   const dismissWatchToast = useCallback((id: number) => {
     setDismissedWatch((prev) => (prev.includes(id) ? prev : [...prev, id]));
   }, []);
@@ -610,6 +612,10 @@ export default function App() {
       setCollabModes(modes.modes || []);
       // 盯梢计划 → 会话映射（通知里「打开会话」按钮用）。失败静默：
       // 该按钮只是便利入口，拿不到就不显示。
+      void fetch("/api/watch/sources")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => setWatchSources((d?.sources ?? []) as WatchSourceInfo[]))
+        .catch(() => {});
       void fetch("/api/schedules")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
@@ -3426,6 +3432,8 @@ export default function App() {
             backgroundTasks={backgroundTasks}
             watchNotifications={watchNotifications}
             watchConnected={watchConnected}
+            watchSources={watchSources}
+            sessionId={activeSessionId}
             onClearWatchNotifications={clearWatchNotifications}
             onOpenSession={(sid) => void selectSession(sid)}
             collapsed={toolPanelCollapsed}

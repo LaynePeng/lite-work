@@ -9,6 +9,8 @@ import remarkGfm from "remark-gfm";
 import { api } from "../api";
 import type { ToolMetricsSummary } from "../api";
 import { notificationLabel, notificationTone, type WatchNotification as WatchNotice } from "../hooks/useWatchNotifications";
+import type { WatchSourceInfo } from "../api";
+import { ScheduleManager } from "./ScheduleManager";
 import type {
   BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
   ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
@@ -666,23 +668,35 @@ function relTime(ts: number): string {
  *
  *  与右下角浮层的分工：浮层是**瞬时**提醒（几秒后自动消失），这里留痕可回溯。
  *  「无变化」也列出来（便于确认盯梢确实在跑），但不计入角标、不弹系统通知。 */
-function WatchPanel({ items, connected, onClear, onOpenSession }: {
+function WatchPanel({ items, connected, onClear, onOpenSession, sources, sessionId, onChanged }: {
   items: WatchNotice[];
   connected: boolean;
   onClear: () => void;
   onOpenSession?: (sessionId: string) => void;
+  sources: WatchSourceInfo[];
+  sessionId?: string | null;
+  onChanged?: () => void;
 }) {
+  // 「计划管理」始终可用（哪怕还没有任何通知）——它是这个页签的主入口，
+  // 通知列表只是它跑出来的结果。
+  const plans = (
+    <ScheduleManager sessionId={sessionId} sources={sources} onChanged={onChanged} />
+  );
   if (!items.length) {
     return (
-      <div className="tool-panel-empty">
-        暂无盯梢通知
-        {!connected && <div className="watch-panel-offline">通知通道未连接（服务未就绪或已断开）</div>}
+      <div className="watch-panel">
+        {plans}
+        <div className="tool-panel-empty">
+          暂无盯梢通知
+          {!connected && <div className="watch-panel-offline">通知通道未连接（服务未就绪或已断开）</div>}
+        </div>
       </div>
     );
   }
   const notable = items.filter((n) => n.status !== "unchanged").length;
   return (
     <div className="watch-panel">
+      {plans}
       <div className="watch-panel-head">
         <span className="tools-panel-count">
           共 {items.length} 条{notable ? ` · 值得看 ${notable}` : ""}
@@ -1182,6 +1196,7 @@ export default function ToolPanel({
   contextStats, contextHistory, running, liveSpeed, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
   watchNotifications, watchConnected, onClearWatchNotifications, onOpenSession,
+  watchSources, sessionId, onWatchChanged,
   activeTab, onTabChange, onCompact, compacting, onCloseAgent,
 }: {
   contextStats: ContextStats | null;
@@ -1208,6 +1223,12 @@ export default function ToolPanel({
   onClearWatchNotifications?: () => void;
   /** 打开某会话（通知里「打开会话」用） */
   onOpenSession?: (sessionId: string) => void;
+  /** 可用盯梢数据源（内置 + 插件），计划编辑器下拉用 */
+  watchSources?: WatchSourceInfo[];
+  /** 当前会话 id：新建计划默认绑到它 */
+  sessionId?: string | null;
+  /** 计划被增删改后回调（父组件刷新通知/映射） */
+  onWatchChanged?: () => void;
   /** 受控 tab（可选）：聊天区状态条等外部入口可跳转到指定 tab */
   activeTab?: PanelTabId;
   onTabChange?: (tab: PanelTabId) => void;
@@ -1505,6 +1526,9 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
                         connected={watchConnected ?? false}
                         onClear={onClearWatchNotifications ?? (() => {})}
                         onOpenSession={onOpenSession}
+                        sources={watchSources ?? []}
+                        sessionId={sessionId}
+                        onChanged={onWatchChanged}
                       />
                   : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
                     ? (

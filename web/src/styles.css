@@ -9775,3 +9775,204 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   border-top: 1px solid var(--border);
 }
+
+/* ══ 盯梢计划管理（右栏「盯梢」页签内的列表 + 内联编辑器） ══ */
+.sched-list,
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sched-list-head,
+.sched-form-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.sched-form-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.sched-note {
+  font-size: 10.5px;
+  color: var(--green);
+}
+
+.sched-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sched-btn:hover { background: var(--bg-3); color: var(--text-0); }
+.sched-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.sched-btn.primary:hover { filter: brightness(1.08); }
+.sched-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* 列表 */
+.sched-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.sched-item {
+  border-bottom: 1px solid var(--bg-2);
+  padding: 9px 10px;
+}
+.sched-item.off { opacity: 0.55; }
+
+.sched-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sched-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sched-item-status {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.sched-item-status.ok,
+.sched-item-status.changed { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.sched-item-status.error { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+.sched-item-status.skipped { background: color-mix(in srgb, var(--yellow) 18%, transparent); color: var(--yellow); }
+
+.sched-item-desc {
+  font-size: 11px;
+  color: var(--text-1);
+  margin-top: 3px;
+  line-height: 1.5;
+}
+
+.sched-item-next {
+  font-size: 10px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+.sched-item-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.sched-op {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-family: inherit;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.sched-op:hover { background: var(--bg-3); color: var(--text-0); }
+.sched-op:disabled { opacity: 0.5; cursor: default; }
+.sched-op.danger:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+
+.sched-empty {
+  padding: 14px 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.sched-empty b { color: var(--text-1); }
+
+/* 编辑器 */
+.sched-form { padding-bottom: 8px; overflow-y: auto; }
+
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 10px 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.sched-field > input,
+.sched-field > select,
+.sched-field > textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 4px 7px;
+  resize: vertical;
+}
+.sched-field > input:focus,
+.sched-field > select:focus,
+.sched-field > textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sched-hint {
+  font-size: 10px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.sched-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 0;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+.sched-check input { accent-color: var(--accent); }
+
+.sched-err {
+  margin: 7px 10px 0;
+  font-size: 11px;
+  color: var(--red);
+  line-height: 1.5;
+}
+
+.sched-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 10px 0;
+}

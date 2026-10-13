@@ -71,6 +71,45 @@ export interface ToolMetricsSummary {
   enabled: boolean;
 }
 
+/** 盯梢 / 定时计划（/api/schedules）。字段与后端 Schedule 一一对应。 */
+export interface ScheduleInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  schedule_mode: "interval" | "daily" | "cron";
+  interval_seconds: number;
+  time_of_day: string;
+  cron: string;
+  session_id?: string | null;
+  workspace?: string;
+  prompt: string;
+  /** 空 = 纯定时任务；否则为数据源 kind（如 file / url / 插件提供的 email） */
+  source: string;
+  probe_config?: Record<string, unknown>;
+  /** 无人值守权限档：只允许 read / read+web */
+  permissions: string;
+  notify: string[];
+  catch_up: "once" | "all" | "skip";
+  last_run?: number | null;
+  last_status?: string;
+  next_run?: number | null;
+  runs?: { at: number; status: string; detail: string; task_id?: string }[];
+}
+
+/** 盯梢数据源描述（内置 command/file/url + 插件提供的）。 */
+export interface WatchSourceInfo {
+  name: string;
+  source_kind: string;
+  display_name: string;
+  description: string;
+  version: string;
+  probe_interval_hint: number;
+  config_schema: Record<string, string>;
+}
+
+/** 新建/更新计划的载荷（PATCH 时只传要改的字段）。 */
+export type SchedulePayload = Partial<Omit<ScheduleInfo, "id" | "next_run" | "runs" | "last_run" | "last_status">>;
+
 /** 把底层异常翻译成用户可读的中文提示（尤其 AbortError 的原始英文串）。 */
 function friendlyError(err: unknown, timeoutMs: number): Error {
   if (err instanceof DOMException && err.name === "AbortError") {
@@ -109,6 +148,27 @@ async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Pro
 
 export const api = {
   status: () => req<ServerStatus>("/api/status"),
+  // ---- 盯梢 / 定时计划（/api/schedules）----
+  schedules: () => req<{ schedules: ScheduleInfo[] }>("/api/schedules"),
+  watchSources: () => req<{ sources: WatchSourceInfo[] }>("/api/watch/sources"),
+  createSchedule: (payload: SchedulePayload) =>
+    req<{ schedule: ScheduleInfo }>("/api/schedules", {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  updateSchedule: (id: string, payload: SchedulePayload) =>
+    req<{ schedule: ScheduleInfo }>(`/api/schedules/${encodeURIComponent(id)}`, {
+      method: "PATCH", body: JSON.stringify(payload),
+    }),
+  deleteSchedule: (id: string) =>
+    req<{ ok: boolean }>(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** 立即跑一次（无视到期与 enabled）；多实例下靠租约防重复触发 */
+  runSchedule: (id: string) =>
+    req<{ ok: boolean; run: { status: string; detail: string; task_id?: string } }>(
+      `/api/schedules/${encodeURIComponent(id)}/run`, { method: "POST" }),
+  /** 重置指纹基线：下次探测无论是否变化都会触发一次 */
+  resetScheduleFingerprint: (id: string) =>
+    req<{ ok: boolean }>(`/api/schedules/${encodeURIComponent(id)}/reset-fingerprint`,
+      { method: "POST" }),
   config: () => req<AppConfig>("/api/config"),
   /** 检测系统级代理（macOS scutil / Windows 注册表 / env；设置页预填用）。 */
   detectProxy: () => req<{ url: string; source: string }>("/api/proxy/detect"),
