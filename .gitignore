@@ -26,3 +26,8 @@ web/tsconfig.tsbuildinfo
 # 系统
 .DS_Store
 *.png
+# 例外：托盘图标是运行时必需资源（electron/main.js 直接读取），
+# 必须随包分发——否则克隆后「托盘常驻」会静默降级为「关窗即退出」。
+# 由 scripts/generate-tray-icon.mjs 从 scripts/tray-icon.svg 生成，
+# 打包时重新生成以保持与 SVG 同步。
+!electron/tray-icon.png
