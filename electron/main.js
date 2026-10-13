@@ -8,7 +8,7 @@
 //
 // 注意：这里没有调用 app.requestSingleInstanceLock()。每次从系统启动应用都会
 // 创建独立的 Electron 进程与本地 Core，可分别绑定不同项目。
-const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain, Tray } = require("electron");
 const { spawn } = require("child_process");
 const pty = require("node-pty");
 const fs = require("fs");
@@ -738,11 +738,93 @@ app.whenReady().then(async () => {
   await createLocalWindow();
 });
 
+// ── 托盘常驻（P4）─────────────────────────────────────────────────────
+//
+// 默认**关闭**（keepRunningInTray=false，行为与以前完全一致）。开启后：
+// 关掉窗口不退出、Core 继续跑，盯梢/定时能在没人看着的时候照常触发；
+// 从托盘菜单才真正退出（退出时照旧回收 Core，见 before-quit）。
+//
+// 为什么默认关：Core 常驻会持续占用内存与端口，且「关窗后应用还在后台
+// 跑东西」是容易被用户误认为异常的行为，必须显式选择。
+let tray = null;
+
+function keepRunningInTray() {
+  try {
+    const cfg = readClientConfig();
+    return cfg.keepRunningInTray === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 托盘图标：优先用打包好的 PNG；取不到就不建托盘（不阻塞主流程）。 */
+function resolveTrayIcon() {
+  const candidates = [
+    path.join(__dirname, "..", "release", "resources", "tray-icon.png"),
+    path.join(process.resourcesPath || "", "tray-icon.png"),
+    path.join(__dirname, "..", "scripts", "app-icon.svg"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (p && fs.existsSync(p)) return p;
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+/** 显示/聚焦现有窗口；一个都没有时重新拉一个。 */
+function showOrCreateWindow() {
+  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  if (wins.length) {
+    const w = wins[0];
+    if (w.isMinimized()) w.restore();
+    w.show();
+    w.focus();
+    return;
+  }
+  if (coreMode === "local") void createLocalWindow();
+  else if (remoteUrl) createWindow(remoteUrl);
+}
+
+function createTray() {
+  if (tray) return;
+  const iconPath = resolveTrayIcon();
+  if (!iconPath) {
+    writeLog("warn", "托盘常驻已开启，但找不到托盘图标，跳过托盘创建");
+    return;
+  }
+  try {
+    tray = new Tray(iconPath);
+  } catch (err) {
+    writeLog("warn", "创建托盘失败:", err.message);
+    tray = null;
+    return;
+  }
+  tray.setToolTip("lite-work（后台运行中，盯梢/定时继续生效）");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 lite-work", click: () => showOrCreateWindow() },
+    { type: "separator" },
+    { label: "退出", click: () => { app.exit(0); } },
+  ]));
+  // 单击托盘：显示窗口（与「打开」同义，符合各平台习惯）
+  tray.on("click", () => showOrCreateWindow());
+  writeLog("log", "托盘已创建（关窗后应用继续后台运行）");
+}
+
 app.on("window-all-closed", () => {
+  // 托盘常驻模式：关窗只是收起窗口，Core 与调度器继续跑（这是 P4 的全部意义）。
+  // 显式退出走托盘菜单或 Cmd+Q（before-quit 照旧回收 Core）。
+  if (keepRunningInTray()) {
+    writeLog("log", "所有窗口已关闭；托盘常驻模式，应用继续后台运行");
+    return;
+  }
   // macOS 习惯：关窗不退出（应用驻留 Dock）；其余平台关窗即退出
   if (process.platform !== "darwin") app.quit();
 });
 
+app.on("ready", () => {
+  if (keepRunningInTray()) createTray();
+});
 // macOS：点 Dock 图标重新打开窗口（关窗后 Core 已随窗口回收，本地模式重新拉起）
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length > 0) return;

@@ -26,6 +26,7 @@ from .routers import (
     create_llm_router,
     create_meta_router,
     create_office_router,
+    create_schedules_router,
     create_security_router,
     create_sessions_router,
     create_skills_router,
@@ -84,6 +85,28 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 "[Startup] models.dev 缓存已过期 %.1f 天（仍作兜底使用），"
                 "建议在设置页同步", age / 86400)
         await app.mcp_manager.start()
+        # 盯梢 / 定时调度器：探针 → 指纹 → 按需唤 LLM。
+        # 启动时按各计划的 catch_up 策略补跑错过的触发（默认只补一次）。
+        async def _start_watch_task(sched, prompt):
+            """把一条计划变成真正的一次 Agent 任务（调 TaskManager）。
+
+            权限档钉在计划上（read / read+web）并**真正下传**给工具注册表：
+            无人值守时没人点审批，写/执行类工具必须从工具面移除，否则 Agent
+            会调用它、卡在审批门 600s、然后被自动拒绝。
+            返回 task_id；失败返回 None（由调度器记为 error 并推送通知）。
+            """
+            try:
+                handle = tasks.start(sched.session_id or "", prompt, agent_id=None,
+                                     unattended_profile=sched.permissions or "read")
+                return handle.task_id
+            except Exception:  # noqa: BLE001 - 启动失败记入计划历史即可
+                logger.warning("[Watch] 启动计划任务失败", exc_info=True)
+                return None
+
+        try:
+            await app.start_watch_scheduler(_start_watch_task)
+        except Exception:  # noqa: BLE001 - 调度器起不来不该挡住整个服务
+            logger.warning("[Startup] 盯梢调度器启动失败", exc_info=True)
         # 回收上一次运行遗留的后台命令（服务端 TTL 兜底：后端崩溃/断连时子进程
         # 会失去管理者，继续占用 CPU/端口/文件锁）。判定保守，只杀日志里记录过
         # 且"存活时间与记录吻合"的 pid（防 pid 复用误杀）；失败不影响启动。
@@ -94,7 +117,12 @@ def create_app(app: AgentApp, token: Optional[str] = None,
         try:
             yield
         finally:
-            pass
+            # 停机必须显式回收调度循环：否则 asyncio 任务残留会让
+            # 「服务已退出」与「任务仍在跑」并存（测试里表现为调度器未回收）。
+            try:
+                await app.stop_watch_scheduler()
+            except Exception:  # noqa: BLE001 - 停机路径绝不抛
+                logger.warning("[Shutdown] 停止盯梢调度器失败", exc_info=True)
 
     fast_app = FastAPI(title="lite-work", version=VERSION, lifespan=_lifespan)
     auth = TokenAuth(token)
@@ -137,7 +165,7 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     fast_app.include_router(create_agents_router(ctx))
     fast_app.include_router(create_workspace_router(ctx))
     fast_app.include_router(create_office_router(ctx))
-
+    fast_app.include_router(create_schedules_router(ctx))
     # ------------------------------------------------------------ 静态前端
 
     dist_dir = _resolve_dist_dir()

@@ -49,6 +49,8 @@ from .core.proxy import (market_httpx_kwargs, proxy_env, proxy_for,
                          proxy_mounts, ssl_verify_for)
 from .tools.registry import ToolRegistry
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
+from .watch import (Schedule, ScheduleStore, WatchNotificationBus, WatchScheduler,
+                    WatchSourceRegistry, TriggerLease)
 
 if TYPE_CHECKING:  # 仅供类型标注：运行时按需懒导入，避免与 orchestration 循环依赖
     from .orchestration.agent_manager import SessionAgentManager
@@ -231,6 +233,17 @@ class AgentApp:
         # journal：把在跑任务落盘，供下次启动回收孤儿进程（服务端 TTL 兜底）
         self._bg_journal_path = os.path.join(self.config_dir, "bg_tasks.json")
         self._bg_registry = BackgroundRegistry(self._bg_journal_path)
+        # 盯梢 / 定时（watch & schedule）——v1.11.0
+        # 计划文件 + 跨进程触发租约（每开一个窗口 = 独立 Core，必须防重复触发）。
+        # 调度器本身延迟到服务启动时再建（见 start_watch_scheduler），
+        # 因为任务启动器依赖 TaskManager（只有 server 层才有）。
+        self._schedule_store = ScheduleStore(os.path.join(self.config_dir, "schedules.json"))
+        self.watch_registry = WatchSourceRegistry()
+        self._watch_scheduler: Optional[WatchScheduler] = None
+        # 盯梢通知总线（应用级，与任务无关）：调度器 push，前端经 SSE 订阅。
+        # 见 watch/notify.py 顶部注释说明为何不复用任务 SSE。
+        self.watch_notifications = WatchNotificationBus()
+        self.watch_notifier: Optional[Any] = None
         # Jev 压缩判定器（插件注册；None = 用默认 LLM 摘要）——v1.10.1
         self.compaction_decider: Optional[Any] = None
         self.approval_gate = ApprovalGate(
@@ -302,6 +315,76 @@ class AgentApp:
             from .orchestration.agent_manager import SessionAgentManager
             m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
         return m
+
+    # ------------------------------------------------ 盯梢 / 定时（watch & schedule）
+
+    @property
+    def schedule_store(self) -> ScheduleStore:
+        """计划存储（路由层直接读写用）。"""
+        return self._schedule_store
+
+    @property
+    def watch_scheduler(self) -> Optional[WatchScheduler]:
+        return self._watch_scheduler
+
+    def load_watch_plugins(self) -> int:
+        """从用户插件目录发现盯梢数据源（`WatchSource` 子类）。
+
+        与工具插件走同一批文件但**独立扫描**：`WatchSource` 不是 `Plugin`
+        子类，plugin_loader 不会收它。返回新注册的源数量（失败不抛）。
+        """
+        try:
+            plugins_dir = os.path.join(self.config_dir, "plugins")
+            return self.watch_registry.load_from_dir(plugins_dir)
+        except Exception:  # noqa: BLE001 - 插件发现问题绝不影响启动
+            logger.warning("[Watch] 扫描盯梢源插件失败", exc_info=True)
+            return 0
+
+    async def start_watch_scheduler(self, start_task: Any) -> None:
+        """启动调度循环。`start_task` 是「真正跑一条计划」的回调（由 server 层
+        提供，签名 `(schedule, prompt) -> task_id | None`），这样 app 层不必
+        反向依赖 server/routers。
+
+        同时（重新）加载插件源，并按各计划的 catch_up 策略补跑错过的触发。
+        """
+        if self._watch_scheduler is not None:
+            return
+        self.load_watch_plugins()
+        lease = TriggerLease(os.path.join(self.config_dir, "watch_leases"))
+
+        def _notify(note: Dict[str, Any]) -> None:
+            """通知出口：先入总线（前端 SSE 订阅），再交给可选的外部回调。
+
+            总线是**唯一必需**的通路；外部回调（如测试注入）失败不影响总线。
+            """
+            try:
+                self.watch_notifications.push(note)
+            except Exception:  # noqa: BLE001 - 通知失败绝不冒泡进调度循环
+                logger.warning("[Watch] 推送通知到总线失败", exc_info=True)
+            if self.watch_notifier is not None:
+                try:
+                    self.watch_notifier(note)
+                except Exception:  # noqa: BLE001
+                    logger.warning("[Watch] 外部通知回调失败", exc_info=True)
+
+        self._watch_scheduler = WatchScheduler(
+            self._schedule_store,
+            self.watch_registry,
+            lease=lease,
+            start_task=start_task,
+            notify=_notify,
+            config=self.config,
+        )
+        await self._watch_scheduler.start()
+        try:
+            await self._watch_scheduler.catch_up_all()
+        except Exception:  # noqa: BLE001 - 补跑失败不该挡住服务启动
+            logger.warning("[Watch] 补跑错过的计划失败", exc_info=True)
+
+    async def stop_watch_scheduler(self) -> None:
+        if self._watch_scheduler is not None:
+            await self._watch_scheduler.stop()
+            self._watch_scheduler = None
 
     def background_agent_count(self) -> int:
         """全部会话中仍在运行的后台子 Agent 数（MCP 热重载 / 工作区切换守卫用）。
@@ -1666,6 +1749,23 @@ class AgentApp:
                 values[key] = raw.get(key, spec.get("default"))
         return {"name": name, "schema": schema, "values": values}
 
+    def plugin_settings_action(self, name: str, key: str) -> Dict[str, Any]:
+        """执行插件设置页的动作按钮（type: "action"）。
+
+        动作由用户显式点击触发（如 OAuth 授权），允许插件发网络请求与写配置。
+        未声明该 action 的插件调用会被拒（防止绕过声明直接打后端）。
+        """
+        plugin = self.plugin_by_name(name)
+        if plugin is None:
+            raise ValueError(f"插件不存在或未启用：{name}")
+        schema = (getattr(plugin, "contributes", {}) or {}).get("settings", []) or []
+        declared = any(
+            isinstance(s, dict) and s.get("type") == "action" and s.get("key") == key
+            for s in schema)
+        if not declared:
+            raise ValueError(f"插件未声明动作 {key}")
+        return plugin.settings_action(key, dict(self.config))
+
     def plugins_list(self) -> List[Dict[str, Any]]:
         """已安装插件列表（带 TTL 缓存）。
 
@@ -2187,7 +2287,8 @@ class AgentApp:
         self._tool_names_cache = (now, names)
         return names
 
-    def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None) -> ToolRegistry:
+    def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None,
+                              unattended_profile: Optional[str] = None) -> ToolRegistry:
         """按 Agent 配置裁剪工具集（职责域模型，参考 OpenCode：plan 只读、build 全量）。
 
         domains → allowed/permissions 换算：域 allow/ask 的工具进白名单，
@@ -2197,13 +2298,17 @@ class AgentApp:
 
         workspace：隔离工作树模式时传入 worktree 路径——所有工具插件以 worktree
         为工作区构建，Agent 的读写/命令全部落在隔离副本内（默认 None = 主工作区）。
+
+        unattended_profile：**无人值守任务**（盯梢/定时）的权限档（read / read+web）。
+        给了就把档位之外的域强制 deny——没人点审批，不能只靠 ask 兜着。
         """
         from .core.permissions import domains_to_allowed_and_permissions
 
         profile = self.get_agent(agent_id)
         all_names = self._all_tool_names()
         allowed, permissions = domains_to_allowed_and_permissions(
-            profile.domains, all_names, profile.extra_tools
+            profile.domains, all_names, profile.extra_tools,
+            unattended_profile=unattended_profile,
         )
         return self.build_registry(
             allowed=allowed,

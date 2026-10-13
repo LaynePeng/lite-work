@@ -77,6 +77,35 @@ def domain_of(tool_name: str) -> str:
     return TOOL_DOMAIN.get(tool_name, "misc")
 
 
+# ---------------------------------------------------------------- 无人值守权限档
+#
+# 盯梢/定时任务在**没人点审批**的时刻运行（审批门 600s 超时后自动拒绝，
+# 见 security/approval.py）。因此这些任务的权限不能只靠「标记 ask」——
+# 那只会让它卡住然后被拒；必须真的把写/执行类域**从工具面移除**。
+#
+# 档位是白名单式的：值 = **允许保留**的职责域，其余全部 deny。
+# 前端/路由层只接受这里定义的键（见 server/routers/schedules.py 的
+# ALLOWED_PERMISSIONS），未知档位按最保守的 "read" 处理（fail-safe）。
+UNATTENDED_PROFILES: Dict[str, frozenset] = {
+    # 只读：读文件/搜索/Git 查看 + 交互（todo_write 等），不给联网
+    "read": frozenset({"read", "interactive"}),
+    # 只读 + 联网：抓网页（盯网页变化这类计划的基本需求）
+    "read+web": frozenset({"read", "web", "interactive"}),
+}
+
+
+def deny_domains_for(profile: str) -> frozenset:
+    """无人值守权限档 → 需要显式拒绝的职责域集合。
+
+    未知档位返回最保守的结果（只留 read/interactive）——宁可少给能力，
+    也不能因为档位名写错就让一个无人值守任务拿到写/执行权限。
+    """
+    keep = UNATTENDED_PROFILES.get(profile)
+    if keep is None:
+        keep = UNATTENDED_PROFILES["read"]
+    return frozenset(d for d in DOMAIN_ORDER if d not in keep)
+
+
 def resolved_domains(domains: Optional[Dict[str, str]]) -> Dict[str, str]:
     """合并显式 domains 与默认动作（未声明域用默认）。"""
     base = dict(DEFAULT_DOMAIN_ACTIONS)
@@ -90,16 +119,23 @@ def domains_to_allowed_and_permissions(
     domains: Optional[Dict[str, str]],
     all_tool_names: List[str],
     extra_tools: Optional[List[str]] = None,
+    unattended_profile: Optional[str] = None,
 ) -> tuple[List[str], Dict[str, str]]:
     """domains → (allowed, permissions) 换算，供 build_registry 使用。
 
     - allowed：显式域 allow/ask 的工具列表；extra_tools 追加（UI 高级微调）；
     - permissions：域 ask 的工具 → "ask"；域 deny 的工具 → "deny"（双保险拦截）；
+    - unattended_profile：盯梢/定时等**无人值守**任务传档位名（read / read+web）。
+      档位之外的域一律 deny，且 extra_tools 也会被过滤——否则会话配置里的
+      extra_tools 能绕过无人值守收敛，等于没用。
     - 注意：allowed 恒为列表（可为空 = 全禁），**绝不为 None**——
       build_registry(allowed=None) 语义是全量放行，空列表退化会导致
       「应全禁的 Agent 反而获得全部工具」的安全漏洞。
     """
     resolved = resolved_domains(domains)
+    if unattended_profile is not None:
+        for dom in deny_domains_for(unattended_profile):
+            resolved[dom] = "deny"
     allowed: List[str] = []
     permissions: Dict[str, str] = {}
     for t in all_tool_names:
@@ -112,6 +148,9 @@ def domains_to_allowed_and_permissions(
             allowed.append(t)
             permissions[t] = "ask"
     for t in extra_tools or []:
+        # 无人值守时不给 extra_tools 开口子：白名单外的工具一律不放行
+        if unattended_profile is not None and resolved.get(domain_of(t), "ask") == "deny":
+            continue
         if t not in allowed:
             allowed.append(t)
     return allowed, permissions

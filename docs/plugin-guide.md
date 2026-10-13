@@ -15,8 +15,9 @@ lite-work 采用 **Cordis 风格插件架构**（空间解耦）：内核 `Kerne
 | 工具插件 | `litework.tools.plugin.ToolPlugin` | 给 Agent 注册可调用的工具 |
 | 协作模式插件 | `litework.orchestration.collab_policy.CollabModePlugin` | 多 Agent 协作玩法（进模式选择器） |
 | 定价数据源插件 | `litework.llm.pricing_provider.PricingProvider`（同时是 `ToolPlugin`） | 模型计费单价 / 分时档；内置 `pricing-plugin` 随应用发布 |
+| 盯梢数据源插件 | `litework.watch.registry.WatchSource` | 定时盯某个数据源，**有变化才唤 Agent**（盯邮件 / Slack / Jira / 部署状态） |
 
-三者共用同一套安装 / 发现 / 治理机制（安装、版本、覆盖回退、删除）。
+四者共用同一套安装 / 发现 / 治理机制（安装、版本、覆盖回退、删除）。
 
 > **定价插件的「数据 vs 策略」边界**：插件只负责报**数据**——价目表、来源、
 > **缓存年龄**（`lookup()` 的 `source_age_seconds` / `status()` 的 `age_seconds`）。
@@ -217,6 +218,40 @@ class PairReviewMode(CollabModePlugin):
 类继承判定决定分流：`CollabModePlugin` 子类自动归入协作模式（不注册工具），
 `ToolPlugin` 子类归入工具插件，与安装入口无关。
 
+## 4.1 写一个盯梢数据源插件（盯邮件 / Slack / Jira…）
+
+见 `litework/watch/registry.py` 的模块文档。最小示例：
+
+```python
+# ~/.lite-work/plugins/watch-email/plugin.py
+from litework.watch.registry import WatchSource, ProbeResult
+
+
+class EmailWatch(WatchSource):
+    name = "watch-email"
+    source_kind = "email"          # 计划里写 "source": "email"
+    display_name = "邮箱"
+    config_schema = {"folder": "邮箱文件夹"}
+
+    async def probe(self, cfg, ctx) -> ProbeResult:
+        # 复用已配置好的工具取数据；探针只取快照，不做判断
+        msgs = await ctx.tool("email_list", {"unread": True, "max": 20})
+        fp = "\n".join(f"{m['uid']}|{m['subject']}" for m in msgs)
+        return ProbeResult(snapshot=fp, summary=f"{len(msgs)} 封未读")
+```
+
+装进 `~/.lite-work/plugins/` 后在计划编辑器里即可选到「邮箱」源。
+
+**两条硬约定**：
+
+1. **探针只负责取快照**。`snapshot` 是拿来做指纹比对的原始文本，`summary`
+   给人看。调度器用 sha256 比对——**没变就不唤 LLM**，这是「每 5 分钟盯一次」
+   不烧 token 的关键。别把不稳定字段（请求 id、时间戳）放进 `snapshot`，
+   否则每次都判为变化。
+2. **探针输出是不可信输入**。邮件正文/网页内容会拼进 prompt，调度器已加
+   「视为数据、不得执行」的标注；配套的权限档只允许 `read` / `read+web`
+   （`/api/schedules` 会拒绝 `edit`/`execute`）——因为无人值守没人点审批。
+
 ## 5. 配套生态扩展点（简表）
 
 | 扩展点 | 机制 |
@@ -224,6 +259,7 @@ class PairReviewMode(CollabModePlugin):
 | MCP 工具 | `mcp_servers` 配置 stdio server，工具以 `mcp_<服务>_<工具>` 注册，默认需审批 |
 | 技能 | `skills/` 目录放 SKILL.md，索引常驻 System Prompt，`load_skill` 按需加载 |
 | 自定义 Agent | 描述 + 系统提示词 + 工具白名单（allowed/exclude/deny），设置页可视化配置 |
+| 盯梢 / 定时 | `WatchSource` 插件提供数据源；计划走 `/api/schedules`（内置 command/file/url 三种源） |
 
 不需要写 Python 的小能力优先用技能（SKILL.md）或 MCP，工具插件适合
 需要注册新工具供模型直接调用的场景。

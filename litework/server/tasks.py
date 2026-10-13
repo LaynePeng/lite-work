@@ -645,7 +645,8 @@ class TaskManager:
 
     def start(self, session_id: str, prompt: str, agent_id: Optional[str] = None,
               reasoning_effort: Optional[str] = None,
-              merge_worktree: Optional[str] = None) -> TaskHandle:
+              merge_worktree: Optional[str] = None,
+              unattended_profile: Optional[str] = None) -> TaskHandle:
         task_id = uuid.uuid4().hex[:12]
         # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）。
         # 例外：merge_worktree（AI 合并任务）必须落在**主工作区**——它要把分支
@@ -675,7 +676,12 @@ class TaskManager:
                 self.app.set_session_worktree(session_id, False)
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         # workspace：隔离时所有工具插件以 worktree 为工作区构建
-        registry = self.app.create_agent_registry(agent_id or "build", workspace=task_workspace)
+        # unattended_profile：盯梢/定时等无人值守任务传权限档——没人点审批，
+        # 必须把写/执行类域从工具面移除（不能只标记 ask 然后等超时拒绝）
+        registry = self.app.create_agent_registry(
+            agent_id or "build", workspace=task_workspace,
+            unattended_profile=unattended_profile,
+        )
         kernel = self.app.create_kernel(session_id, registry=registry,
                                         security_workspace=task_workspace,
                                         plugins_workspace=task_workspace)

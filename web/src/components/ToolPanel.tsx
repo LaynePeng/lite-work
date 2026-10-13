@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 
 import { api } from "../api";
 import type { ToolMetricsSummary } from "../api";
+import { notificationLabel, notificationTone, type WatchNotification as WatchNotice } from "../hooks/useWatchNotifications";
 import type {
   BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
   ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
@@ -649,6 +650,70 @@ function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKil
   );
 }
 
+// ---------------------------------------------------------------- 盯梢通知中心
+
+/** 相对时间（通知列表用；只做粗粒度即可）。 */
+function relTime(ts: number): string {
+  const d = Math.floor(Date.now() / 1000 - ts);
+  if (!Number.isFinite(d) || d < 0) return "刚刚";
+  if (d < 60) return `${d} 秒前`;
+  if (d < 3600) return `${Math.floor(d / 60)} 分钟前`;
+  if (d < 86400) return `${Math.floor(d / 3600)} 小时前`;
+  return `${Math.floor(d / 86400)} 天前`;
+}
+
+/** 盯梢/定时通知中心。
+ *
+ *  与右下角浮层的分工：浮层是**瞬时**提醒（几秒后自动消失），这里留痕可回溯。
+ *  「无变化」也列出来（便于确认盯梢确实在跑），但不计入角标、不弹系统通知。 */
+function WatchPanel({ items, connected, onClear, onOpenSession }: {
+  items: WatchNotice[];
+  connected: boolean;
+  onClear: () => void;
+  onOpenSession?: (sessionId: string) => void;
+}) {
+  if (!items.length) {
+    return (
+      <div className="tool-panel-empty">
+        暂无盯梢通知
+        {!connected && <div className="watch-panel-offline">通知通道未连接（服务未就绪或已断开）</div>}
+      </div>
+    );
+  }
+  const notable = items.filter((n) => n.status !== "unchanged").length;
+  return (
+    <div className="watch-panel">
+      <div className="watch-panel-head">
+        <span className="tools-panel-count">
+          共 {items.length} 条{notable ? ` · 值得看 ${notable}` : ""}
+        </span>
+        <span className={`watch-panel-conn ${connected ? "on" : "off"}`} title={connected ? "通知通道已连接" : "通知通道断开，正在重连"}>
+          {connected ? "● 已连接" : "○ 断开"}
+        </span>
+        <button className="watch-panel-clear" onClick={onClear} title="清空通知（含服务端历史）">清空</button>
+      </div>
+      <ul className="watch-list">
+        {items.map((n) => (
+          <li key={n.id} className={`watch-item ${notificationTone(n.status)}`}>
+            <div className="watch-item-head">
+              <span className="watch-item-badge">{notificationLabel(n.status)}</span>
+              <span className="watch-item-name" title={n.name}>{n.name}</span>
+              <span className="watch-item-time">{relTime(n.at)}</span>
+            </div>
+            {n.detail && <div className="watch-item-detail">{n.detail}</div>}
+            {n.task_id && <div className="watch-item-task">任务 {n.task_id}</div>}
+          </li>
+        ))}
+      </ul>
+      {onOpenSession && (
+        <div className="watch-panel-foot">
+          想看某次结果？在规划该计划的会话里查看完整对话。
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- Agents 看板（竖排 kanban）
 
 // agent 配色板（对齐 Claude Code per-agent color）：按 role+nickname 稳定哈希取色
@@ -1116,6 +1181,7 @@ function useTabStripDrag() {
 export default function ToolPanel({
   contextStats, contextHistory, running, liveSpeed, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  watchNotifications, watchConnected, onClearWatchNotifications, onOpenSession,
   activeTab, onTabChange, onCompact, compacting, onCloseAgent,
 }: {
   contextStats: ContextStats | null;
@@ -1134,6 +1200,14 @@ export default function ToolPanel({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onKillBackground?: (taskId: string) => void;
+  /** 盯梢/定时通知（应用级 SSE 的最近通知；由 App 注入） */
+  watchNotifications?: WatchNotice[];
+  /** 通知 SSE 连接状态 */
+  watchConnected?: boolean;
+  /** 清空通知（本地 + 服务端历史） */
+  onClearWatchNotifications?: () => void;
+  /** 打开某会话（通知里「打开会话」用） */
+  onOpenSession?: (sessionId: string) => void;
   /** 受控 tab（可选）：聊天区状态条等外部入口可跳转到指定 tab */
   activeTab?: PanelTabId;
   onTabChange?: (tab: PanelTabId) => void;
@@ -1155,6 +1229,8 @@ export default function ToolPanel({
   const todoDone = todos.filter((t) => t.status === "completed").length;
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
   const runningAgents = (agentBoard ?? []).filter((a) => a.status === "running").length;
+  // 通知角标：只数「值得看」的（无变化这类不提醒，与系统通知口径一致）
+  const watchUnread = (watchNotifications ?? []).filter((n) => n.status !== "unchanged").length;
 
 /** 渲染插件面板内容：JSON（lite-tree 通用决策树）→ 决策树；非 JSON → Markdown */
 function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
@@ -1374,6 +1450,8 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
     { id: "agents", label: runningAgents > 0 ? `Agents (${runningAgents})` : "Agents",
       title: "多 Agent 看板：运行中/已完成 竖排交接视图" },
     { id: "background", label: runningCount > 0 ? `后台 (${runningCount})` : "后台" },
+    { id: "watch", label: watchUnread > 0 ? `盯梢 (${watchUnread})` : "盯梢",
+      title: "盯梢/定时通知中心：调度器判定「有变化」或出错时在这里留痕" },
     { id: "tools", label: "工具" },
     // MCP 排在最后：它是低频的「配置/状态」类入口，日常主要看 工具/后台
     { id: "mcp", label: "MCP" },
@@ -1421,6 +1499,13 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
                 ? <McpPanel servers={mcpServers} />
                 : panelTab === "background"
                   ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
+                  : panelTab === "watch"
+                    ? <WatchPanel
+                        items={watchNotifications ?? []}
+                        connected={watchConnected ?? false}
+                        onClear={onClearWatchNotifications ?? (() => {})}
+                        onOpenSession={onOpenSession}
+                      />
                   : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
                     ? (
                       <PluginPanelContent

@@ -16,7 +16,9 @@ import SettingsModal from "./components/SettingsModal";
 import Sidebar, { type SidebarTab } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
+import { WatchToaster } from "./components/WatchToaster";
 import { useResizable } from "./hooks/useResizable";
+import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
 import type { JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
@@ -360,6 +362,23 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // ---- 盯梢通知（应用级 SSE；与任务 SSE 相互独立）----
+  const { items: watchNotifications, connected: watchConnected, clear: clearWatchNotifications } = useWatchNotifications();
+  //: 展示中的 toast id（用户关掉或超时后移除；历史仍在 watchNotifications 里）
+  const [dismissedWatch, setDismissedWatch] = useState<number[]>([]);
+  const [watchScheduleSessions, setWatchScheduleSessions] = useState<Record<string, string>>({});
+  const dismissWatchToast = useCallback((id: number) => {
+    setDismissedWatch((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+  const watchToasts = useMemo(
+    () => watchNotifications.filter((n) => !dismissedWatch.includes(n.id)).slice(0, 4),
+    [watchNotifications, dismissedWatch],
+  );
+  const watchSessionOf = useCallback(
+    (scheduleId: string) => watchScheduleSessions[scheduleId],
+    [watchScheduleSessions],
+  );
+
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
   const taskIdsRef = useRef<Map<string, string>>(new Map());
   const stopRequestedRef = useRef<Set<string>>(new Set());
@@ -589,6 +608,18 @@ export default function App() {
       setMcpServers(mcp.servers || []);
       setRegisteredTools(tools);
       setCollabModes(modes.modes || []);
+      // 盯梢计划 → 会话映射（通知里「打开会话」按钮用）。失败静默：
+      // 该按钮只是便利入口，拿不到就不显示。
+      void fetch("/api/schedules")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const map: Record<string, string> = {};
+          for (const s of (d?.schedules ?? []) as { id: string; session_id?: string }[]) {
+            if (s.session_id) map[s.id] = s.session_id;
+          }
+          setWatchScheduleSessions(map);
+        })
+        .catch(() => {});
       await refreshSessions(st.workspace ?? undefined); // 用刚取到的 workspace，避免 setState 异步时序
     } catch (e) {
       setErrorPublic((e as Error).message);
@@ -3393,6 +3424,10 @@ export default function App() {
             activeTab={toolPanelTab}
             onTabChange={setToolPanelTab}
             backgroundTasks={backgroundTasks}
+            watchNotifications={watchNotifications}
+            watchConnected={watchConnected}
+            onClearWatchNotifications={clearWatchNotifications}
+            onOpenSession={(sid) => void selectSession(sid)}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}
             onCloseAgent={(id) => void handleCloseAgent(id)}
@@ -3436,6 +3471,13 @@ export default function App() {
           onSelect={(p) => void selectProject(p)}
         />
       )}
+      {/* 盯梢通知（右下角）：应用级 SSE，与当前是否有任务无关 */}
+      <WatchToaster
+        items={watchToasts}
+        onDismiss={dismissWatchToast}
+        onOpenSession={(sid) => void selectSession(sid)}
+        sessionOf={(scheduleId) => watchSessionOf(scheduleId)}
+      />
     </div>
   );
 }

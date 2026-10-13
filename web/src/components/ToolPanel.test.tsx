@@ -364,12 +364,12 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
     expect(container.querySelector(".agent-cancel-btn")).toBeNull();
   });
 
-  it("页签顺序：MCP 排在「工具」之后（低频配置类入口靠后）", () => {
+  it("页签顺序：盯梢在「后台」之后，MCP 在「工具」之后（低频/配置类入口靠后）", () => {
     const { container } = render(
       <ToolPanel contextStats={STATS} mcpServers={[]} tools={[]} todos={[]} />
     );
     const labels = Array.from(container.querySelectorAll(".panel-tab")).map((b) => b.textContent);
-    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "工具", "MCP"]);
+    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "盯梢", "工具", "MCP"]);
   });
 
   it("不装插件（api.plugins 返回空）时，右栏不出现任何插件 tab / 面板 / lite-tree", async () => {
@@ -381,7 +381,7 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
     // 等异步 effect 跑完
     await waitFor(() => expect(api.plugins).toHaveBeenCalled());
     const labels = Array.from(container.querySelectorAll(".panel-tab")).map((b) => b.textContent);
-    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "工具", "MCP"]);
+    expect(labels).toEqual(["上下文", "TODOs", "Agents", "后台", "盯梢", "工具", "MCP"]);
     // 也没有任何"插件面板"渲染容器 / 刷新按钮
     expect(container.querySelector(".plugin-panel-md")).toBeNull();
     vi.restoreAllMocks();
@@ -622,5 +622,68 @@ describe("ToolPanel · 工具 tab 指标整合（W3）", () => {
     const calls = (api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length;
     await new Promise((r) => setTimeout(r, 100));
     expect((api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+  });
+});
+
+describe("ToolPanel · 盯梢通知中心", () => {
+  const notices = [
+    { id: 1, at: Math.floor(Date.now() / 1000) - 120, schedule_id: "sch_1",
+      name: "盯部署", status: "changed", detail: "main 有 3 个新提交", task_id: "t_1" },
+    { id: 2, at: Math.floor(Date.now() / 1000) - 30, schedule_id: "sch_2",
+      name: "盯邮箱", status: "unchanged", detail: "3 封未读", task_id: null },
+    { id: 3, at: Math.floor(Date.now() / 1000) - 5, schedule_id: "sch_3",
+      name: "盯构建", status: "error", detail: "抓取失败", task_id: null },
+  ];
+
+  const renderWatch = (over: Record<string, unknown> = {}) =>
+    render(
+      <ToolPanel
+        contextStats={null}
+        mcpServers={[]}
+        tools={[]}
+        todos={[]}
+        activeTab="watch"
+        watchNotifications={notices as never}
+        watchConnected
+        onClearWatchNotifications={vi.fn()}
+        {...over}
+      />,
+    );
+
+  it("列出通知（状态标签 / 摘要 / 相对时间）", () => {
+    const { container } = renderWatch();
+    expect(container.textContent).toContain("盯部署");
+    expect(container.textContent).toContain("main 有 3 个新提交");
+    expect(container.textContent).toContain("检测到变化");
+    expect(container.textContent).toContain("出错");
+    expect(container.textContent).toContain("2 分钟前");
+  });
+
+  it("角标只数「值得看」的，「无变化」不计入", () => {
+    const { container } = renderWatch();
+    // 3 条里 changed + error = 2 条值得看
+    expect(container.textContent).toContain("盯梢 (2)");
+    expect(container.textContent).toContain("值得看 2");
+  });
+
+  it("全部为「无变化」时不显示角标数字", () => {
+    const { container } = renderWatch({
+      watchNotifications: [notices[1]] as never,
+    });
+    expect(container.textContent).toContain("盯梢");
+    expect(container.textContent).not.toContain("盯梢 (");
+  });
+
+  it("显示通知通道连接状态", () => {
+    const { container } = renderWatch({ watchConnected: false });
+    expect(container.textContent).toContain("断开");
+    const { container: c2 } = renderWatch({ watchConnected: true });
+    expect(c2.textContent).toContain("已连接");
+  });
+
+  it("空列表显示空态并提示通道状态", () => {
+    const { container } = renderWatch({ watchNotifications: [] as never, watchConnected: false });
+    expect(container.textContent).toContain("暂无盯梢通知");
+    expect(container.textContent).toContain("通知通道未连接");
   });
 });
