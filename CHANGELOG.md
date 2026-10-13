@@ -7,6 +7,9 @@
 ### 修复（本地图片断链——回归）
 - **中文/空格路径的图片被二次编码 → 后端 404 断图**：react-markdown 在把 markdown 图片地址交给 `img` 组件前已做 URI 归一化（`中间产物/img/a.jpg` → `%E4%B8%AD%E9%97%B4…`），`toFileUrl` 再 `encodeURIComponent` 一次得到 `%25E4%25B8%25AD…`，后端解码后拿到**字面量** `%E4%B8%AD%E9%97%B4…` → 文件不存在。典型现象是**同一条回复里 ```cards 的图片正常、`![](相对路径)` 的图片全断**（cards 的 `image` 走 JSON 原始字符串、未经 mdast 归一化，只编码一次）。现在统一「先解码回原始路径 → 只编码一次」，HTML 片段 rewrite 同样处理；解码失败（文件名含裸 `%`，如 `折扣100%.png`）原样保留；新增 7 条回归用例（中文/空格/已编码/非法转义/远程 URL/cards/html 围栏）；
 
+### 修复（打包：插件用标准库模块漏收）
+- **`imaplib` 未随包收录 → email-plugin 在打包版静默失效**：插件在 `~/.lite-work/plugins/` **运行时才加载**，PyInstaller 静态分析主程序 import 时看不到它们的依赖。`email-plugin` 用 `imaplib` 做 IMAP 收件，漏收会让**插件模块整个 import 失败**（`No module named 'imaplib'`）→ `contributes` 读不出来 → 设置页连「▸ 配置」表单都不出现（`smtplib` 恰好被传递依赖捎带进包，所以只暴露了 `imaplib`）。打包参数补 `--hidden-import imaplib` 根治；社区 `email-plugin` ≥1.0.2 亦自带 `_vendor/imaplib.py` 兜底（lite-work-plugins 仓库 `e9926ae`）；
+
 ## [1.10.8] — 画图方案升级（mermaid + layout）+ 网络代理分流 + 会话跨项目视图 + 富块扩展
 
 ### 修复（代理）
