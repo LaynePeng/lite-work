@@ -105,6 +105,11 @@ if (-not (Test-Path web\node_modules)) {
 Invoke-Step "Build frontend (npm run build:web)" {
     npm run build:web
 }
+# 托盘图标：必须先生成，electron-builder 的 files 只含 electron/**，
+# 缺这个 PNG 会让「托盘常驻」在打包版静默失效（Tray 找不到图标）。
+Invoke-Step "Generate tray icon" {
+    node scripts/generate-tray-icon.mjs
+}
 
 # ------------------------------------------------------------ Backend binary
 

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- 托盘图标：单色白色字形 + 透明底。
+       刻意**不用** app-icon.svg（渐变底 + 闪电 + 齿轮）——那个在 16px 下会
+       糊成一团；托盘图标需要一眼可辨的简单轮廓，且 macOS 模板图标要求
+       单色（系统按明暗主题自动反色）。 -->
+  <path d="M40 4 L16 30 L27 30 L20 60 L48 26 L35 26 Z"
+        fill="#ffffff"/>
+</svg>

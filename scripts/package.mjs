@@ -42,6 +42,9 @@ version = syncedPkg.version;
 
 console.log("[package] Step 0/4: Generate app icon");
 step("icon", () => execSync("node scripts/generate-icon.mjs", { cwd: root, stdio: "inherit" }));
+// 托盘图标与应用图标是两份不同素材（单色小字形 vs 渐变底大图标），
+// 且必须落在 electron/（electron-builder 的 files 白名单只含 electron/**）。
+step("tray-icon", () => execSync("node scripts/generate-tray-icon.mjs", { cwd: root, stdio: "inherit" }));
 
 console.log("[package] Step 1/4: Package backend binary");
 const backendCleanArg = process.argv.includes("--clean") ? " --clean" : "";

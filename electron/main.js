@@ -757,12 +757,17 @@ function keepRunningInTray() {
   }
 }
 
-/** 托盘图标：优先用打包好的 PNG；取不到就不建托盘（不阻塞主流程）。 */
+/** 托盘图标：**只认**随包分发的 electron/tray-icon.png。
+ *
+ *  刻意不回退到 scripts/app-icon.svg：Electron 的 Tray 在 Windows/Linux 上
+ *  不接受 SVG，回退只会把「图标加载失败」推迟到更难排查的地方。找不到就
+ *  返回 null，由调用方**降级为不常驻**（见 window-all-closed）——
+ *  宁可关窗退出，也不能让应用静默驻留却没有图标可以唤回。
+ */
 function resolveTrayIcon() {
   const candidates = [
-    path.join(__dirname, "..", "release", "resources", "tray-icon.png"),
-    path.join(process.resourcesPath || "", "tray-icon.png"),
-    path.join(__dirname, "..", "scripts", "app-icon.svg"),
+    path.join(__dirname, "tray-icon.png"),                       // 开发态 + 打包（files 含 electron/**）
+    path.join(process.resourcesPath || "", "app", "electron", "tray-icon.png"), // 打包兜底路径
   ];
   for (const p of candidates) {
     try {
@@ -770,6 +775,15 @@ function resolveTrayIcon() {
     } catch { /* ignore */ }
   }
   return null;
+}
+
+/** 托盘提示里的实例标识：工作区目录名（多后端时用于区分是哪一个）。
+ *  同一进程内多窗口共用同一 Core 配置目录，故取第一个已知 workspace 即可。 */
+function instanceLabel() {
+  for (const record of localInstances.values()) {
+    if (record.workspace) return path.basename(record.workspace);
+  }
+  return "";
 }
 
 /** 显示/聚焦现有窗口；一个都没有时重新拉一个。 */
@@ -787,20 +801,25 @@ function showOrCreateWindow() {
 }
 
 function createTray() {
-  if (tray) return;
+  if (tray) return false;
   const iconPath = resolveTrayIcon();
   if (!iconPath) {
-    writeLog("warn", "托盘常驻已开启，但找不到托盘图标，跳过托盘创建");
-    return;
+    writeLog("warn", "托盘常驻已开启，但找不到托盘图标（electron/tray-icon.png），"
+      + "将降级为「关窗即退出」以免应用驻留却无法唤回");
+    return false;
   }
   try {
     tray = new Tray(iconPath);
   } catch (err) {
     writeLog("warn", "创建托盘失败:", err.message);
     tray = null;
-    return;
+    return false;
   }
-  tray.setToolTip("lite-work（后台运行中，盯梢/定时继续生效）");
+  // macOS：单色字形作为模板图标，系统按明暗主题自动反色
+  if (process.platform === "darwin") {
+    try { tray.setIgnoreDoubleClickEvents?.(true); } catch { /* 旧版本无此 API */ }
+  }
+  refreshTrayText();
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "打开 lite-work", click: () => showOrCreateWindow() },
     { type: "separator" },
@@ -808,22 +827,44 @@ function createTray() {
   ]));
   // 单击托盘：显示窗口（与「打开」同义，符合各平台习惯）
   tray.on("click", () => showOrCreateWindow());
-  writeLog("log", "托盘已创建（关窗后应用继续后台运行）");
+  writeLog("log", `托盘已创建（关窗后应用继续后台运行）: ${iconPath}`);
+  return true;
+}
+
+/** 刷新托盘提示文案：带上工作区名，多实例并存时用户能分辨是哪一个。 */
+function refreshTrayText() {
+  if (!tray) return;
+  const label = instanceLabel();
+  tray.setToolTip(label
+    ? `lite-work · ${label}（后台运行中，盯梢/定时继续生效）`
+    : "lite-work（后台运行中，盯梢/定时继续生效）");
 }
 
 app.on("window-all-closed", () => {
   // 托盘常驻模式：关窗只是收起窗口，Core 与调度器继续跑（这是 P4 的全部意义）。
   // 显式退出走托盘菜单或 Cmd+Q（before-quit 照旧回收 Core）。
-  if (keepRunningInTray()) {
+  //
+  // fail-safe：托盘没建起来（图标缺失/创建失败）时**不能**驻留——否则应用
+  // 在后台跑却没有窗口也没有图标，用户既看不到也无法唤回。
+  // 这里懒创建一次（窗口就绪前 workspace 未知，tooltip 需要它）。
+  if (keepRunningInTray() && createTray()) {
     writeLog("log", "所有窗口已关闭；托盘常驻模式，应用继续后台运行");
     return;
+  }
+  if (keepRunningInTray()) {
+    writeLog("warn", "托盘常驻已开启但托盘不可用，按普通模式退出（关窗即退）");
   }
   // macOS 习惯：关窗不退出（应用驻留 Dock）；其余平台关窗即退出
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("ready", () => {
+  // 提前建托盘让常驻尽早可见；建不起来也不影响启动（关窗时会再兜底判断）
   if (keepRunningInTray()) createTray();
+});
+// 工作区变化后刷新托盘文案（多实例并存时用于分辨）
+app.on("browser-window-created", () => {
+  if (tray) refreshTrayText();
 });
 // macOS：点 Dock 图标重新打开窗口（关窗后 Core 已随窗口回收，本地模式重新拉起）
 app.on("activate", () => {
