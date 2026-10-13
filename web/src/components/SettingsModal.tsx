@@ -2327,6 +2327,10 @@ export default function SettingsModal({
                                       <select className="form-input" style={{ maxWidth: 320 }} value={String(val ?? "")}
                                         onChange={(e) => setVal(e.target.value)}>
                                         {(s.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                        {/* 插件可用 placeholder 声明「空值」的语义（如「留空＝个人账号」） */}
+                                        {s.placeholder && !String(val ?? "") && (
+                                          <option value="">{s.placeholder}</option>
+                                        )}
                                       </select>
                                     ) : type === "map" ? (
                                       <textarea className="form-input" rows={3}
@@ -2341,12 +2345,15 @@ export default function SettingsModal({
                                     ) : type === "number" ? (
                                       <input className="form-input" style={{ maxWidth: 200 }} type="number"
                                         value={String(val ?? "")}
+                                        placeholder={s.placeholder || ""}
                                         onChange={(e) => setVal(e.target.value === "" ? "" : Number(e.target.value))} />
                                     ) : (
                                       <input className="form-input" style={{ width: "100%" }}
                                         type={type === "secret" ? "password" : "text"}
                                         value={String(val ?? "")}
-                                        placeholder={type === "secret" ? "已配置（留空表示不修改）" : ""}
+                                        placeholder={type === "secret"
+                                          ? (s.placeholder || "已配置（留空表示不修改）")
+                                          : (s.placeholder || "")}
                                         onChange={(e) => setVal(e.target.value)} />
                                     )}
                                     {s.hint && (
