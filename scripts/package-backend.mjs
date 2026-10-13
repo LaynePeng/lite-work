@@ -233,6 +233,11 @@ const specArgs = [
   "--hidden-import", "uvicorn.protocols.websockets.auto",
   "--hidden-import", "uvicorn.lifespan",
   "--hidden-import", "uvicorn.lifespan.on",
+  // 插件用的标准库模块：插件在 ~/.lite-work/plugins/ 运行时才加载，静态分析
+  // 看不到其 import——email-plugin 用 imaplib（IMAP 收件），漏收会让插件模块
+  // import 失败、contributes 读不出来，设置页连配置表单都不出现。
+  // （社区 email-plugin ≥1.0.2 自带 _vendor/imaplib.py 兜底，这里是根治）
+  "--hidden-import", "imaplib",
   path.join(root, "litework_entry.py"),
 ];
 
