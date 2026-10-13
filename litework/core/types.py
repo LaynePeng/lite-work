@@ -144,3 +144,12 @@ class Plugin:
         同样**纯读 + 快返回**；重活请自行缓存。未实现的面板返回空串即可。
         """
         return ""
+
+    def settings_action(self, key: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """设置页动作按钮（type: "action" 字段点击时触发）。
+
+        可执行网络请求 / 写配置（与纯读钩子不同）。返回
+        {"ok": bool, "message": str}，前端原样回显 message。
+        动作只能由用户显式点击触发，不受纯读约定约束。
+        """
+        return {"ok": False, "message": "该插件未实现此动作"}

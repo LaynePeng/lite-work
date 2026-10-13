@@ -135,6 +135,12 @@ export const api = {
     req<{ name: string; panel: string; title: string; markdown: string }>(
       `/api/plugins/${encodeURIComponent(name)}/panel/${encodeURIComponent(panelId)}`),
 
+  /** 通用插件 UI 协议：执行设置页动作按钮（type: "action"），返回 message 原样回显 */
+  pluginSettingsAction: (name: string, key: string) =>
+    req<{ ok: boolean; message: string }>(
+      `/api/plugins/${encodeURIComponent(name)}/settings-action/${encodeURIComponent(key)}`,
+      { method: "POST" }),
+
   agents: () => req<AgentInfo[]>("/api/agents"),
   collabModes: () =>
     req<{ modes: import("./types").CollabMode[] }>("/api/collab/modes"),

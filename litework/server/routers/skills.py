@@ -159,6 +159,21 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
+    @router.post("/api/plugins/{name}/settings-action/{key}")
+    def plugin_settings_action(name: str, key: str, request: Request):
+        """执行插件设置页的动作按钮（schema 里 type: "action" 的字段）。
+
+        动作由用户点击触发（如 OAuth 授权），插件可在其中发网络请求、写配置；
+        后端校验该 action 已在 contributes.settings 声明，未声明的直接拒绝。
+        """
+        ctx.check_auth(request)
+        try:
+            return app.plugin_settings_action(name, key)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
     @router.get("/api/commands")
     def list_commands(request: Request):
         ctx.check_auth(request)

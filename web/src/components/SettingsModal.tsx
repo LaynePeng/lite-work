@@ -371,6 +371,27 @@ export default function SettingsModal({
 
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginMsg, setPluginMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pluginActionMsg, setPluginActionMsg] = useState<
+    Record<string, { key: string; ok: boolean; message: string }>
+  >({});
+  const [pluginActionBusy, setPluginActionBusy] = useState<Record<string, boolean>>({});
+
+  /** 设置页动作按钮（type: "action"）：调后端执行，message 原样回显在按钮旁 */
+  async function runPluginAction(name: string, key: string) {
+    setPluginActionBusy((prev) => ({ ...prev, [name]: true }));
+    setPluginActionMsg((prev) => ({ ...prev, [name]: { key, ok: true, message: "执行中…" } }));
+    try {
+      const r = await api.pluginSettingsAction(name, key);
+      setPluginActionMsg((prev) => ({ ...prev, [name]: { key, ok: r.ok, message: r.message || (r.ok ? "完成" : "失败") } }));
+      if (r.ok) {
+        refreshPlugins();   // 状态行（如「未启动」→「运行中」）即时更新
+      }
+    } catch (e) {
+      setPluginActionMsg((prev) => ({ ...prev, [name]: { key, ok: false, message: `执行失败：${(e as Error).message}` } }));
+    } finally {
+      setPluginActionBusy((prev) => ({ ...prev, [name]: false }));
+    }
+  }
   // 同名插件已存在时覆盖安装（更新）
   const [pluginOverwrite, setPluginOverwrite] = useState(false);
   // 安装任务进度（步骤 + 下载进度条）
@@ -2286,6 +2307,22 @@ export default function SettingsModal({
                                           onChange={(e) => setVal(e.target.checked)} />
                                         启用
                                       </label>
+                                    ) : type === "action" ? (
+                                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                        <button className="btn-test" disabled={pluginActionBusy[item.name]}
+                                          onClick={() => void runPluginAction(item.name, s.key)}>
+                                          {pluginActionBusy[item.name] ? "执行中…" : (s.label || s.key)}
+                                        </button>
+                                        {pluginActionMsg[item.name]?.key === s.key && (
+                                          <span style={{
+                                            fontSize: 11.5,
+                                            color: pluginActionMsg[item.name]?.ok ? "var(--green, #3fb950)" : "var(--red, #f85149)",
+                                            whiteSpace: "pre-wrap", flex: 1, minWidth: 200,
+                                          }}>
+                                            {pluginActionMsg[item.name]?.message}
+                                          </span>
+                                        )}
+                                      </div>
                                     ) : type === "select" ? (
                                       <select className="form-input" style={{ maxWidth: 320 }} value={String(val ?? "")}
                                         onChange={(e) => setVal(e.target.value)}>
