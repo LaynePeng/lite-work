@@ -240,7 +240,10 @@ describe("ChatView 超长会话折叠（P1）", () => {
     expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
   });
 
-  it("1000 turn：首屏折叠 700 轮，逐级展开（300/轮）直到全部可见", async () => {
+  // 超时放宽到 20s：本用例含 4 次全量渲染 + 4 次展开点击，慢速 CI runner
+  // （2 核 Ubuntu）实测约 6.4s，超过默认 5s 上限会被误判失败。
+  // 仅本用例放宽，不放宽全局——避免掩盖其他真正变慢的测试。
+  it("1000 turn：首屏折叠 700 轮，逐级展开（300/轮）直到全部可见", { timeout: 20000 }, async () => {
     // 500 对问答 = 1000 turn（对应 ~/.lite-work/sessions/session_demo_fold_1000turns.json）
     const user = userEvent.setup();
     render(
