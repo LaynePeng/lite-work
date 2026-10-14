@@ -3,6 +3,7 @@
 //
 
 import type { AgentInfo, AppConfig, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
+import { apiUrl, authHeaders } from "./lib/connection";
 
 const TIMEOUT = 15000;
 // 联网类操作（社区清单拉取 / 插件·技能下载安装）走单独的长超时：
@@ -125,10 +126,15 @@ async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Pro
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
+    const res = await fetch(apiUrl(url), {
       ...init,
+      // 现有调用方只传 method/body；headers 合并顺序：默认 → 令牌 → 调用方覆盖
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+        ...(init?.headers as Record<string, string> | undefined),
+      },
+      signal: controller.signal,
     });
     if (!res.ok) {
       let detail = res.statusText;

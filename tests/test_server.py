@@ -71,6 +71,29 @@ async def test_status_and_sessions(live_client):
     assert all(s["session_id"] != sid for s in r.json())
 
 
+async def test_health_and_version_negotiation(tmp_path):
+    """/api/health 匿名可用（Docker healthcheck 带不了 Bearer），status 需令牌。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False  # 短路在线元数据（同 live_client）
+    fast_app = create_app(app, token="secret")
+    async with live_server(fast_app) as (client, _server):
+        r = await client.get("/api/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["version"] == __import__("litework").__version__
+        assert body["min_client"]
+        # 只暴露版本协商字段，不带 workspace 等实例信息
+        assert set(body.keys()) == {"status", "version", "min_client"}
+
+        # 开启鉴权时：status 匿名 401；带令牌 200 且同样含 min_client
+        r = await client.get("/api/status")
+        assert r.status_code == 401
+        r = await client.get("/api/status", headers={"Authorization": "Bearer secret"})
+        assert r.status_code == 200
+        assert r.json()["min_client"] == body["min_client"]
+
+
 async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) -> None:
     """等待 chat 的首条 user 消息落盘。
 

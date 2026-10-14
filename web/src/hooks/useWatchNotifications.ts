@@ -7,11 +7,14 @@
 // 的时刻产生——纯定时、指纹变化、探针失败——此时可能**根本没有任务在跑**，
 // 没有 task_id 可订阅。
 //
-// 断线重连：EventSource 原生重连会带**原始 URL**（不会带上我们后加的 query），
-// 因此这里在重连时自行重建连接并带上 `after=<已收到的最大 id>`，让服务端回放
-// 缺口。配合按 id 去重，做到「不丢也不重」。
+// 断线重连：SSE 走 fetch 流式客户端（lib/sse.ts，可携带 Authorization），
+// 出错即终态、无原生重连，因此这里在重连时自行重建连接并带上
+// `after=<已收到的最大 id>`，让服务端回放缺口。配合按 id 去重，
+// 做到「不丢也不重」。
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { apiUrl, authHeaders } from "../lib/connection";
+import { connectEventStream, type EventStream } from "../lib/sse";
 
 /** 一条盯梢通知（服务端 WatchNotificationBus 的推送体）。 */
 export interface WatchNotification {
@@ -82,7 +85,7 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
   const [connected, setConnected] = useState(false);
   const seenRef = useRef<Set<number>>(new Set());
   const lastIdRef = useRef<number>(0);
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<EventStream | null>(null);
   const timerRef = useRef<number | null>(null);
   const closedRef = useRef(false);
 
@@ -98,7 +101,10 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
     seenRef.current = new Set();
     lastIdRef.current = 0;
     setItems([]);
-    void fetch("/api/watch/notifications/clear", { method: "POST" }).catch(() => {
+    void fetch(apiUrl("/api/watch/notifications/clear"), {
+      method: "POST",
+      headers: authHeaders(),
+    }).catch(() => {
       /* 清远端失败不影响本地已清空 */
     });
   }, []);
@@ -108,7 +114,7 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
     esRef.current?.close();
     const cursor = lastIdRef.current;
     const url = cursor > 0 ? `/api/watch/events?after=${cursor}` : "/api/watch/events";
-    const es = new EventSource(url);
+    const es = connectEventStream(url);
     esRef.current = es;
     es.onopen = () => setConnected(true);
     es.onmessage = (e) => {
@@ -133,7 +139,7 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
     connect();
     // 首次拉一次历史：覆盖「页面在盯梢触发之前就已打开」的场景
     if (pollHistory) {
-      void fetch("/api/watch/notifications?limit=50")
+      void fetch(apiUrl("/api/watch/notifications?limit=50"), { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           const list: WatchNotification[] = d?.notifications ?? [];

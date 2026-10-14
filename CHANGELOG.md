@@ -8,11 +8,16 @@
 > 「云端工作区」；本地模式行为完全不变（默认，零回归）。
 
 ### 新增（P0 准备层）
-- 认证中间件：`LITEWORK_AUTH_TOKEN` 未配置时完全直通（本地模式零回归），
-  配置后全路由强制 Bearer 校验，SSE 走 fetch 流式携带 `Authorization` 头；
-- `/api/health` 版本协商：返回 `{version, min_client}`，客户端连接时校验；
-- 前端 API base 可配置化：Electron 注入 `window.__LITEWORK_API_BASE__`，
-  浏览器/PWA 同源默认；
+- `/api/health` 版本协商：未鉴权存活端点（Docker healthcheck 用），返回
+  `{status, version, min_client}`；`/api/status` 同步带 `min_client`；
+- SSE 客户端从 EventSource 换 fetch 流式解析：浏览器/PWA 远程模式没有
+  Electron 的令牌注入层，必须由渲染进程自带 `Authorization` 头（桌面本地
+  模式行为不变——令牌仍由主进程按 origin 注入）；
+- 前端连接参数管道：API base 可经 `window.__LITEWORK_API_BASE__` 注入
+  （异源部署逃生口，缺省同源直连），令牌读写统一走 localStorage，
+  全部 REST/SSE 请求自动携带；
+- 说明：Bearer 鉴权（CLI 自动生成 token + 全路由校验）与 Electron 令牌
+  注入为 1.x 既有能力，P0 未改变其行为。
 
 ## [未发布]
 ### 修复（打包）

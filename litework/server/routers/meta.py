@@ -16,6 +16,9 @@ from .context import ServerContext
 
 VERSION = __version__
 
+# 低于该版本的前端按不兼容处理（连接前经 /api/health 或 /api/status 协商）
+MIN_CLIENT_VERSION = "2.0.0"
+
 
 class ConfigUpdateRequest(BaseModel):
     updates: Dict[str, Any]
@@ -35,6 +38,15 @@ def create_router(ctx: ServerContext) -> APIRouter:
     router = APIRouter()
     app, tasks, token = ctx.app, ctx.tasks, ctx.auth.token
 
+    @router.get("/api/health")
+    async def health():
+        """未鉴权存活探针：Docker healthcheck 与客户端连接前的版本协商。
+
+        刻意不过 check_auth——容器编排与健康检查带不了 Bearer 头；只暴露
+        版本号，不含 workspace 等任何实例信息。
+        """
+        return {"status": "ok", "version": VERSION, "min_client": MIN_CLIENT_VERSION}
+
     @router.get("/api/status")
     async def status(request: Request):
         ctx.check_auth(request)
@@ -42,6 +54,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         settings = app.llm_registry.get_active_provider_settings()
         return {
             "version": VERSION,
+            "min_client": MIN_CLIENT_VERSION,
             "workspace": app.workspace,
             "model": settings.get("model", ""),
             "base_url": settings.get("base_url", ""),

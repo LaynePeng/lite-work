@@ -22,6 +22,8 @@ import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchN
 import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
+import { apiUrl, authHeaders } from "./lib/connection";
+import { connectEventStream, SSE_CLOSED, type EventStream } from "./lib/sse";
 
 interface StreamingState {
   items: WorkItem[];
@@ -381,7 +383,7 @@ export default function App() {
     [watchScheduleSessions],
   );
 
-  const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
+  const eventSourcesRef = useRef<Map<string, EventStream>>(new Map());
   const taskIdsRef = useRef<Map<string, string>>(new Map());
   const stopRequestedRef = useRef<Set<string>>(new Set());
   const streamingRefs = useRef<Map<string, StreamingState>>(new Map());
@@ -612,11 +614,11 @@ export default function App() {
       setCollabModes(modes.modes || []);
       // 盯梢计划 → 会话映射（通知里「打开会话」按钮用）。失败静默：
       // 该按钮只是便利入口，拿不到就不显示。
-      void fetch("/api/watch/sources")
+      void fetch(apiUrl("/api/watch/sources"), { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => setWatchSources((d?.sources ?? []) as WatchSourceInfo[]))
         .catch(() => {});
-      void fetch("/api/schedules")
+      void fetch(apiUrl("/api/schedules"), { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           const map: Record<string, string> = {};
@@ -2044,7 +2046,10 @@ export default function App() {
   const probeTaskAlive = useCallback((taskId: string) => new Promise<number>((resolve) => {
     const ac = new AbortController();
     const t = window.setTimeout(() => ac.abort(), 5000);
-    fetch(`/api/tasks/${taskId}/events`, { signal: ac.signal })
+    fetch(apiUrl(`/api/tasks/${taskId}/events`), {
+      signal: ac.signal,
+      headers: authHeaders(),
+    })
       .then((r) => {
         window.clearTimeout(t);
         r.body?.cancel().catch(() => {});
@@ -2094,9 +2099,10 @@ export default function App() {
 
   /** 统一的任务 SSE 生命周期：连接、断开自动重连（指数退避）、[DONE] 收尾。
 
-   * - 网络抖动：浏览器原生重连（readyState=CONNECTING），状态指示转黄；
-   * - 服务端拒绝/不可达（readyState=CLOSED）：手动重建连接，1s 起指数退避
-   *   （上限 15s，至多 8 次），重连前先探测任务存活（404 → 视作正常结束）；
+   * SSE 走 fetch 流式客户端（lib/sse.ts，可携带 Authorization）：任何错误
+   * （网络中断/服务端拒绝/流提前关闭）都回调一次 onerror 后进入终态，
+   * 统一由这里手动重连——1s 起指数退避（上限 15s，至多 8 次），重连前先
+   * 探测任务存活（404 → 视作正常结束收尾）；
    * - 服务端断连期间事件保留在任务队列，重连后续读，不丢事件。
    */
   const connectTaskStream = useCallback(
@@ -2141,7 +2147,7 @@ export default function App() {
       };
 
       const open = () => {
-        const es = new EventSource(`/api/tasks/${taskId}/events`);
+        const es = connectEventStream(`/api/tasks/${taskId}/events`);
         eventSourcesRef.current.set(sid, es);
         es.onopen = () => {
           ctl.attempts = 0;
@@ -2169,15 +2175,9 @@ export default function App() {
           }
         };
         es.onerror = () => {
-          if (es.readyState === EventSource.CLOSED) {
-            // 服务端拒绝（404）或持续不可达：浏览器已放弃，手动接管重连
-            eventSourcesRef.current.delete(sid);
-            scheduleReconnect(sid);
-          } else {
-            // 网络抖动：浏览器原生自动重连中（约 3s）
-            patchChat(sid, { sseState: "reconnecting" });
-            pushLog("⚠ SSE 连接中断，等待重连…");
-          }
+          // fetch 版客户端：出错即终态，重连一律手动接管（无浏览器原生重连）
+          eventSourcesRef.current.delete(sid);
+          scheduleReconnect(sid);
         };
       };
 

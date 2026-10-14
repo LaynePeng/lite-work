@@ -50,18 +50,25 @@ vi.mock("./api", () => {
   };
 });
 
-class MockEventSource {
-  static CLOSED = 2;
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  readyState = 0;
-  url: string;
-  constructor(url: string) { this.url = url; }
-  close() { this.readyState = MockEventSource.CLOSED; }
-  addEventListener() {}
-  removeEventListener() {}
-}
+// SSE 走 fetch 流式客户端（lib/sse.ts）：mock 成永远挂起的空流，
+// 避免 jsdom 里真发请求（回调不触发即「连接中」）。类必须在工厂内定义：
+// vi.mock 提升到文件顶部，工厂执行时外部定义的类尚未求值。
+vi.mock("./lib/sse", () => {
+  class MockEventStream {
+    static CLOSED = 2;
+    onopen: (() => void) | null = null;
+    onmessage: ((e: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    readyState = 0;
+    url: string;
+    constructor(url: string) { this.url = url; }
+    close() { this.readyState = MockEventStream.CLOSED; }
+  }
+  return {
+    SSE_CLOSED: 2,
+    connectEventStream: (url: string) => new MockEventStream(url),
+  };
+});
 
 /** 三条历史会话：**故意按「最老在前」返回**，验证取的是 updated_at 最大者（不依赖接口顺序）。 */
 const SESSIONS = [
@@ -71,7 +78,6 @@ const SESSIONS = [
 ];
 
 beforeEach(() => {
-  vi.stubGlobal("EventSource", MockEventSource);
   localStorage.clear();
   for (const [k, v] of Object.entries(__defaults)) __mocks[k].mockReset().mockResolvedValue(v);
 });

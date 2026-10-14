@@ -87,7 +87,8 @@ async def live_server(fast_app, *, timeout: float = 15.0,
     并不等于 accept 循环已经开始跑。高负载（全量套件）下跟着 started 立刻发起的
     第一个请求可能拿到 ``RemoteProtocolError``（连接被断开且无响应），表现为随机
     变红（曾观测到 ``test_status_and_sessions`` 偶发）。这里改为用一次幂等
-    ``GET /api/status`` 轮询到 200 才算就绪，并给 transport 打开连接层重试兜底。
+    ``GET /api/health`` 轮询到 200 才算就绪（未鉴权探针，token 开启的
+    app 也能就绪），并给 transport 打开连接层重试兜底。
 
     产出 ``(client, server)``。退出时置 ``should_exit`` 并等 server 任务结束——放在
     ``finally`` 里，即使就绪断言失败也不会泄漏服务器任务。
@@ -113,7 +114,7 @@ async def live_server(fast_app, *, timeout: float = 15.0,
             deadline = time.monotonic() + ready_timeout
             while time.monotonic() < deadline:
                 try:
-                    if (await client.get("/api/status")).status_code == 200:
+                    if (await client.get("/api/health")).status_code == 200:
                         ready = True
                         break
                     last_err = "非 200 响应"

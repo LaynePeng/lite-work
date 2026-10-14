@@ -13,7 +13,7 @@ import App, { ESC_STOP_CONFIRM_MS } from "./App";
 import { api, __mocks, __defaults } from "./api";
 
 // api 模块全量 mock：显式默认值 + 任意方法兜底（resolved { ok: true }），
-// 使 App 渲染不依赖后端（SSE 由 EventSource 全局 stub 兜底）。
+// 使 App 渲染不依赖后端（SSE 由下方 lib/sse 模块 mock 兜底）。
 vi.mock("./api", () => {
   const __defaults: Record<string, unknown> = {
     status: { workspace: "/ws", version: "1.9.7" },
@@ -62,26 +62,30 @@ vi.mock("./api", () => {
   };
 });
 
-// jsdom 无 EventSource：connectTaskStream 构造时需要，用空实现 stub。
-class MockEventSource {
-  static CLOSED = 2;
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  readyState = 0;
-  url: string;
-  constructor(url: string) {
-    this.url = url;
+// SSE 走 fetch 流式客户端（lib/sse.ts）：mock 成永远挂起的空流，
+// 避免 jsdom 里真发请求；回调不触发即「连接中」，与原 EventSource stub 等价。
+vi.mock("./lib/sse", () => {
+  class MockEventStream {
+    static CLOSED = 2;
+    onopen: (() => void) | null = null;
+    onmessage: ((e: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    readyState = 0;
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+    }
+    close() {
+      this.readyState = MockEventStream.CLOSED;
+    }
   }
-  close() {
-    this.readyState = MockEventSource.CLOSED;
-  }
-  addEventListener() {}
-  removeEventListener() {}
-}
+  return {
+    SSE_CLOSED: 2,
+    connectEventStream: (url: string) => new MockEventStream(url),
+  };
+});
 
 beforeEach(() => {
-  vi.stubGlobal("EventSource", MockEventSource);
   for (const [k, v] of Object.entries(__defaults)) {
     __mocks[k].mockReset().mockResolvedValue(v);
   }
