@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -34,6 +34,8 @@ class ApproveRequest(BaseModel):
     approved: bool
     remember: bool = False
     session_id: Optional[str] = None
+    # 用户在审批卡草稿表单里改后的字段（邮件 WYSIWYG 编辑）；仅 approved=True 生效
+    edits: Optional[Dict[str, Any]] = None
 
 
 class QuestionAnswerRequest(BaseModel):
@@ -127,7 +129,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         # 先取审批上下文（resolve 会把 entry 弹出）：
         # rule 供「记住并允许同类」写入会话级自动同意规则
         info = app.approval_gate.get_pending_info(payload.approval_id)
-        ok = app.approval_gate.resolve(payload.approval_id, payload.approved, by="user")
+        ok = app.approval_gate.resolve(payload.approval_id, payload.approved, by="user",
+                                       edits=payload.edits if payload.approved else None)
         # 无论审批是否存在/是否已处理，都广播 resolved 事件：
         # 卡片能否关闭不应依赖「等待审批的协程恢复后自己发事件」——
         # 任务卡死/被取消时那条路径永远走不到，审批卡就会一直挂着。

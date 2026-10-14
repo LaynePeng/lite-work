@@ -35,12 +35,16 @@ class ApprovalGate:
         self, action: str, risk_reason: str, auto_approve: bool = False,
         rule: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
+        draft: Optional[Dict[str, Any]] = None,
     ) -> "asyncio.Future":
-        """挂起等待 Web UI 的人工确认，返回 future（await 后得到 bool）。
+        """挂起等待 Web UI 的人工确认，返回 future（await 后得到 bool 或 edits）。
 
         rule：审批上下文（{"tool", "kind", "pattern", ...}），供「记住并允许
         同类」按钮在确认时写入自动同意规则；None 表示该操作不提供记住能力
         （如不可逆删除）。session_id：审批所属会话（记住规则的作用域）。
+        draft：结构化草稿（如邮件的收件人/主题/正文），前端在审批卡内渲染
+        可编辑表单；用户改后 resolve 携带 edits，await 结果为 {"approved":
+        True, "edits": {...}}（未改动/旧前端时仍为纯 bool——向后兼容）。
         """
         try:
             loop = asyncio.get_running_loop()
@@ -62,6 +66,7 @@ class ApprovalGate:
             "session_id": session_id,
             "created_at": int(time.time() * 1000),
             "future": future,
+            **({"draft": draft} if draft is not None else {}),
         }
         logger.info("[Approval] %s 等待人工确认: %s", approval_id, action[:120])
 
@@ -82,7 +87,11 @@ class ApprovalGate:
                 return aid
         return ""
 
-    def resolve(self, approval_id: str, approved: bool, by: str = "user") -> bool:
+    def resolve(self, approval_id: str, approved: bool, by: str = "user",
+                edits: Optional[Dict[str, Any]] = None) -> bool:
+        """edits：用户在审批卡草稿表单里改后的字段（approved=True 时生效）。
+        有 edits → future 结果为 {"approved": True, "edits": {...}}；否则纯 bool
+        （旧调用方按 bool 判断，行为不变）。"""
         entry = self._pending.pop(approval_id, None)
         if entry is None:
             return False
@@ -93,7 +102,10 @@ class ApprovalGate:
             # call_soon_threadsafe：无论 resolve 来自哪个线程/loop 都能正确唤醒
             # 等待中的协程（直接 set_result 在跨线程场景下回调不会被执行，
             # 表现为「用户点了允许但 Agent 永远卡住」）
-            def _set(f: asyncio.Future = future, v: bool = approved) -> None:
+            result: Any = ({"approved": True, "edits": edits}
+                           if (approved and edits) else approved)
+
+            def _set(f: asyncio.Future = future, v: Any = result) -> None:
                 if not f.done():
                     f.set_result(v)
             try:
@@ -124,14 +136,17 @@ class ApprovalGate:
                 # rememberable 与 approval:request 事件字段保持一致：SSE 断线
                 # 重连后前端靠 pending 同步补卡，缺该字段会丢掉「记住并允许同类」
                 "rememberable": bool(entry.get("rule")),
-                "session_id": entry.get("session_id")}
+                "session_id": entry.get("session_id"),
+                # 结构化草稿（审批卡内渲染可编辑表单）；无草稿的工具不携带
+                "draft": entry.get("draft")}
 
     def list_pending(self) -> List[Dict[str, Any]]:
         """当前全部挂起审批（SSE 重连后前端兜底同步用）。"""
         return [{"id": e["id"], "action": e["action"], "reason": e["reason"],
                  "created_at": e["created_at"], "rule": e.get("rule"),
                  "rememberable": bool(e.get("rule")),
-                 "session_id": e.get("session_id")}
+                 "session_id": e.get("session_id"),
+                 "draft": e.get("draft")}
                 for e in self._pending.values()]
 
     def pending_count(self) -> int:

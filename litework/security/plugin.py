@@ -245,6 +245,8 @@ class SecurityPlugin(Plugin):
             "rememberable": bool(rule),
             # 恒定携带（None = 该工具没有判定插件意见），与 rememberable 同口径
             "judge_opinion": opinion,
+            # 恒定携带 None：核心安全审批不涉及结构化草稿（邮件类插件自带 draft）
+            "draft": None,
         })
         approved = await future
         # 审批结果广播由 gate.on_resolve（server/app.py 注入）统一发出

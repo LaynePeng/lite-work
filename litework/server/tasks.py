@@ -414,6 +414,8 @@ class TaskHandle:
             "rememberable": False,
             # 判定意见（恒定携带，None = 本路径无判定插件意见）
             "judge_opinion": None,
+            # 结构化草稿（恒定携带 None：技能加载无草稿）
+            "draft": None,
         })
         approved = await future
         # 正常路径（server）：approval:resolved 由 gate.on_resolve（server/app.py

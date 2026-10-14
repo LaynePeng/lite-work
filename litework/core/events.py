@@ -93,6 +93,9 @@ class ApprovalRequestPayload(TypedDict):
     # 插件名由插件自己放在 opinion["source"] 里）。无意见时为 None（恒定携带，
     # 原因同下：本文件 `from __future__ import annotations` 下 NotRequired 会被误判必填）
     judge_opinion: Optional[Dict[str, Any]]
+    # 结构化草稿（如邮件的收件人/主题/正文/HTML），审批卡内渲染可编辑表单；
+    # 无草稿的工具为 None（恒定携带，原因同上）
+    draft: Optional[Dict[str, Any]]
 
 
 class ApprovalResolvedPayload(TypedDict):

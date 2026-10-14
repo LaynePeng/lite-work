@@ -9976,3 +9976,52 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   gap: 8px;
   padding: 9px 10px 0;
 }
+
+/* ---------------------------------------------------------------- 邮件 WYSIWYG 审批编辑器 */
+.email-draft-card { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.email-draft-editor { display: flex; flex-direction: column; gap: 8px; }
+.draft-fields { display: grid; grid-template-columns: 56px 1fr; gap: 6px 10px; align-items: center; }
+.draft-row { display: contents; }
+.draft-label { color: var(--text-2); font-size: 12px; text-align: right; }
+.draft-input {
+  background: var(--bg-0); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-0); font-size: 13px; padding: 6px 10px; outline: none; width: 100%;
+}
+.draft-input:focus { border-color: var(--accent); }
+.draft-toolbar {
+  display: flex; gap: 4px; align-items: center; padding: 5px 8px;
+  background: var(--bg-2); border: 1px solid var(--border); border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+.tb-btn {
+  min-width: 24px; height: 24px; padding: 0 5px; display: inline-flex; align-items: center;
+  justify-content: center; background: var(--bg-0); color: var(--text-0);
+  border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+.tb-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tb-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tb-hint { margin-left: auto; color: var(--text-2); font-size: 11px; }
+.draft-canvas {
+  background: #fff; color: #1f2933; border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+  padding: 12px 14px; min-height: 120px; max-height: 300px; overflow: auto; outline: none;
+  font-size: 14px; line-height: 1.65;
+  font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+}
+.draft-canvas:focus { border-color: var(--accent); }
+.draft-html-src {
+  background: var(--bg-0); color: var(--text-0); border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px; padding: 10px 12px; min-height: 120px; max-height: 300px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  resize: vertical; outline: none; width: 100%;
+}
+.draft-attachments { display: flex; gap: 8px; flex-wrap: wrap; }
+.draft-att {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-1); font-size: 12px; padding: 3px 10px;
+}
+.draft-submit-row {
+  display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  padding-top: 8px; border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+.draft-dirty-hint { color: var(--text-2); font-size: 12px; }
+.draft-buttons { display: flex; gap: 8px; }

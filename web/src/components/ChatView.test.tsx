@@ -387,6 +387,65 @@ describe("ChatView", () => {
     expect(onApprove).toHaveBeenCalledWith("ap1", true);
   });
 
+  it("邮件草稿审批卡：WYSIWYG 编辑器渲染 + 修改后按修改发送回传 edits", async () => {
+    const onApprove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[]}
+        streaming={null}
+        pendingApprovals={[{
+          id: "ap_mail", action: "发送邮件：测试主题", reason: "批准后该邮件将被立即发送。",
+          draft: {
+            kind: "email", to: "a@b.c", cc: "", bcc: "",
+            subject: "测试主题", body: "正文内容", html: "<p>正文内容</p>", attachments: [],
+          },
+        }]}
+        onApprove={onApprove}
+      />
+    );
+    // WYSIWYG 编辑器出现（字段 + 白底画布）
+    expect(document.querySelector(".email-draft-editor")).not.toBeNull();
+    expect(document.querySelector(".draft-canvas")).not.toBeNull();
+    const toInput = document.querySelector(".draft-input") as HTMLInputElement;
+    expect(toInput.value).toBe("a@b.c");
+    // 未修改时按钮文案
+    expect(screen.getByRole("button", { name: "✓ 确认发送" })).toBeInTheDocument();
+
+    // 改收件人 → dirty → 按钮文案切换
+    await user.clear(toInput);
+    await user.type(toInput, "edited@b.c");
+    expect(screen.getByRole("button", { name: "✓ 按修改发送" })).toBeInTheDocument();
+
+    // 点击提交 → edits 携带修改后字段
+    await user.click(screen.getByRole("button", { name: "✓ 按修改发送" }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    const [id, approved, , edits] = onApprove.mock.calls[0];
+    expect(id).toBe("ap_mail");
+    expect(approved).toBe(true);
+    expect(edits).toMatchObject({ to: "edited@b.c", subject: "测试主题" });
+  });
+
+  it("邮件草稿审批卡：未修改直接确认 → edits 为 undefined（原稿发送）", async () => {
+    const onApprove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[]}
+        streaming={null}
+        pendingApprovals={[{
+          id: "ap_mail2", action: "发送邮件：t", reason: "r",
+          draft: { kind: "email", to: "x@y.z", subject: "t", body: "b", html: "" },
+        }]}
+        onApprove={onApprove}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "✓ 确认发送" }));
+    expect(onApprove).toHaveBeenCalledWith("ap_mail2", true, false, undefined);
+  });
+
   it("多个待审批：只渲染一个弹层 + 序号标签，可切换并分别回调", async () => {
     const onApprove = vi.fn();
     const user = userEvent.setup();

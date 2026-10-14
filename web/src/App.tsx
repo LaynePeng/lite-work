@@ -19,7 +19,7 @@ import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { WatchToaster } from "./components/WatchToaster";
 import { useResizable } from "./hooks/useResizable";
 import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
-import type { JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 
@@ -1626,7 +1626,9 @@ export default function App() {
               { id: ev.data.id, action: ev.data.action, reason: ev.data.reason,
                 rememberable: (ev.data as { rememberable?: boolean }).rememberable,
                 // 判定类插件的风险意见 → 审批卡上展示
-                judge_opinion: (ev.data as { judge_opinion?: JudgeOpinion | null }).judge_opinion ?? null },
+                judge_opinion: (ev.data as { judge_opinion?: JudgeOpinion | null }).judge_opinion ?? null,
+                // 结构化草稿（邮件 WYSIWYG 确认卡）；无草稿时 null
+                draft: (ev.data as { draft?: ApprovalDraft | null }).draft ?? null },
             ],
           });
           break;
@@ -2074,7 +2076,7 @@ export default function App() {
         pendingApprovals: [
           ...(cur?.pendingApprovals ?? []),
           ...missing.map((a) => ({ id: a.id, action: a.action, reason: a.reason,
-            rememberable: a.rememberable })),
+            rememberable: a.rememberable, draft: a.draft ?? null })),
         ],
       });
       return missing.length;
@@ -3073,12 +3075,13 @@ export default function App() {
   }, [activeSessionId, getChat, patchChat, pushLog]);
 
   const approve = useCallback(
-    async (approvalId: string, approved: boolean, remember = false) => {
+    async (approvalId: string, approved: boolean, remember = false, edits?: Record<string, string>) => {
       patchActiveChat({ pendingApprovals: (currentChat.pendingApprovals ?? []).filter((p) => p.id !== approvalId) });
       try {
         const r = await api.approve(approvalId, approved, {
           remember,
           sessionId: activeSessionId,
+          ...(edits ? { edits } : {}),
         });
         if (r?.remembered?.ok) {
           pushLog("⚡ 已记住：本会话内同类操作将自动允许");

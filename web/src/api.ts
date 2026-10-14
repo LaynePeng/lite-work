@@ -349,12 +349,13 @@ export const api = {
     req<{ ok: boolean; agent_id: string; previous_status: string }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/close`,
       { method: "POST" }),
-  approve: (approvalId: string, approved: boolean, opts?: { remember?: boolean; sessionId?: string | null }) =>
+  approve: (approvalId: string, approved: boolean, opts?: { remember?: boolean; sessionId?: string | null; edits?: Record<string, string> }) =>
     req<{ ok: boolean; remembered?: { ok: boolean } | null }>("/api/approve", {
       method: "POST", body: JSON.stringify({
         approval_id: approvalId, approved,
         ...(opts?.remember ? { remember: true } : {}),
         ...(opts?.sessionId ? { session_id: opts.sessionId } : {}),
+        ...(opts?.edits ? { edits: opts.edits } : {}),
       }),
     }),
   pendingApprovals: () =>

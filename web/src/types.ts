@@ -662,12 +662,27 @@ export interface TabItem {
  *
  * session_id：审批归属会话（子 Agent 的审批后端以 root_session_id=主会话上报，
  * 前端按当前活跃会话 id 过滤即可命中）。 */
+/** 审批卡内可编辑草稿（邮件 WYSIWYG 确认卡等）。kind 标识渲染器。 */
+export interface ApprovalDraft {
+  kind: string;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body?: string;
+  html?: string;
+  attachments?: string[];
+  [k: string]: unknown;
+}
+
 export interface PendingApprovalInfo {
   id: string;
   action: string;
   reason: string;
   rememberable?: boolean;
   session_id?: string;
+  draft?: ApprovalDraft | null;
+  judge_opinion?: import("./types").JudgeOpinion | null;
 }
 
 // 单个会话的独立状态
@@ -684,7 +699,7 @@ export interface ChatSessionState {
   liveSpeed?: LiveSpeedStats | null;
   error: string | null;
   // 审批队列：并行工具可同时挂起多个审批请求
-  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: JudgeOpinion | null }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: JudgeOpinion | null; draft?: ApprovalDraft | null }[];
   // 任务完成后归档的子 Agent 活动卡（会话级内存态，刷新即失）
   subAgentRecords: SubAgentProgress[];
   /** Agents 看板（右面板 Agents tab）：竖排 kanban，运行中→已完成 卡片流动；会话级累积不随 TTL 清除 */

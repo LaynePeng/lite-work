@@ -428,6 +428,174 @@ function RichCard({ sessionId, card }: { sessionId: string; card: ToolCardInfo }
   );
 }
 
+// ---------------------------------------------------------------- 邮件 WYSIWYG 审批编辑器
+
+/** contenteditable 的初始 HTML：草稿有 html 用 html；否则纯文本按段落转义。 */
+function draftInitialHtml(draft: import("../types").ApprovalDraft): string {
+  const html = (draft.html ?? "").toString().trim();
+  if (html) return html;
+  const text = (draft.body ?? "").toString();
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc(text).replace(/\n/g, "<br>");
+}
+
+/** 邮件草稿 WYSIWYG 编辑器（审批卡内）：
+ *  - 字段行（收件人/抄送/密送/主题）可编辑；
+ *  - 正文 contenteditable 白底画布（= 收件人视角），工具条 B/I/U/列表/清除格式；
+ *  - HTML 源码模式（textarea 直改——「简单修改」）；
+ *  - dirty 检测：任何变化 → onDirtyChange(true)，提交时经 registerGetEdits 取值。 */
+function EmailDraftEditor({ draft, onDirtyChange, registerGetEdits }: {
+  draft: import("../types").ApprovalDraft;
+  onDirtyChange: (dirty: boolean) => void;
+  /** 登记取值函数：审批卡在用户点「确认/按修改发送」时调用拿 edits */
+  registerGetEdits: (fn: () => Record<string, string>) => void;
+}) {
+  const initial = useMemo(() => ({
+    to: (draft.to ?? "").toString(),
+    cc: (draft.cc ?? "").toString(),
+    bcc: (draft.bcc ?? "").toString(),
+    subject: (draft.subject ?? "").toString(),
+    html: draftInitialHtml(draft),
+  }), [draft]);
+  const [fields, setFields] = useState({ to: initial.to, cc: initial.cc, bcc: initial.bcc, subject: initial.subject });
+  const [htmlMode, setHtmlMode] = useState(false);
+  const [htmlSrc, setHtmlSrc] = useState(initial.html);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const dirtyRef = useRef(false);
+
+  // 初值注入 contenteditable（只在草稿变化时重置）
+  useEffect(() => {
+    if (canvasRef.current) canvasRef.current.innerHTML = initial.html;
+  }, [initial.html]);
+
+  const markDirty = () => { if (!dirtyRef.current) { dirtyRef.current = true; onDirtyChange(true); } };
+
+  useEffect(() => {
+    registerGetEdits(() => {
+      if (!dirtyRef.current) return {} as Record<string, string>;
+      const inner = htmlMode ? htmlSrc : (canvasRef.current?.innerHTML ?? htmlSrc);
+      const plain = htmlMode
+        ? htmlSrc.replace(/<[^>]+>/g, "")
+        : (canvasRef.current?.innerText ?? "");
+      return {
+        to: fields.to, cc: fields.cc, bcc: fields.bcc, subject: fields.subject,
+        html: inner, body: plain.trim(),
+      } as Record<string, string>;
+    });
+  }, [fields, htmlSrc, htmlMode, registerGetEdits]);
+
+  const exec = (cmd: string) => {
+    canvasRef.current?.focus();
+    document.execCommand(cmd);
+    markDirty();
+  };
+
+  const fieldRow = (label: string, key: "to" | "cc" | "bcc" | "subject", ph: string) => (
+    <div className="draft-row">
+      <label className="draft-label">{label}</label>
+      <input
+        className="draft-input"
+        value={fields[key]}
+        placeholder={ph}
+        onChange={(e) => { setFields((f) => ({ ...f, [key]: e.target.value })); markDirty(); }}
+      />
+    </div>
+  );
+
+  return (
+    <div className="email-draft-editor">
+      <div className="draft-fields">
+        {fieldRow("收件人", "to", "a@x.com，多个逗号分隔")}
+        {fieldRow("抄送", "cc", "（可选）")}
+        {fieldRow("密送", "bcc", "（可选）")}
+        {fieldRow("主题", "subject", "邮件主题")}
+      </div>
+      <div className="draft-toolbar">
+        <button type="button" className="tb-btn" title="加粗" onClick={() => exec("bold")}><b>B</b></button>
+        <button type="button" className="tb-btn" title="斜体" onClick={() => exec("italic")}><i>I</i></button>
+        <button type="button" className="tb-btn" title="下划线" onClick={() => exec("underline")}><u>U</u></button>
+        <button type="button" className="tb-btn" title="无序列表" onClick={() => exec("insertUnorderedList")}>•—</button>
+        <button type="button" className="tb-btn" title="有序列表" onClick={() => exec("insertOrderedList")}>1—</button>
+        <button type="button" className="tb-btn" title="清除格式" onClick={() => exec("removeFormat")}>✕</button>
+        <button
+          type="button"
+          className={`tb-btn ${htmlMode ? "tb-active" : ""}`}
+          title="HTML 源码模式（直改源码）"
+          onClick={() => {
+            if (htmlMode && canvasRef.current) {
+              canvasRef.current.innerHTML = htmlSrc; // 源码应用回画布
+            } else if (!htmlMode && canvasRef.current) {
+              setHtmlSrc(canvasRef.current.innerHTML);
+            }
+            setHtmlMode((v) => !v);
+          }}
+        >
+          {"</>"}
+        </button>
+        <span className="tb-hint">{htmlMode ? "源码模式：改完再点 </> 回到所见即所得" : "所见即所得 · 编辑即预览"}</span>
+      </div>
+      {htmlMode ? (
+        <textarea
+          className="draft-html-src"
+          value={htmlSrc}
+          onChange={(e) => { setHtmlSrc(e.target.value); markDirty(); }}
+          spellCheck={false}
+        />
+      ) : (
+        <div
+          ref={canvasRef}
+          className="draft-canvas"
+          contentEditable
+          suppressContentEditableWarning
+          onInput={markDirty}
+        />
+      )}
+      {(draft.attachments?.length ?? 0) > 0 && (
+        <div className="draft-attachments">
+          {(draft.attachments ?? []).map((n) => <span key={n} className="draft-att">📎 {n}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 审批卡内的邮件确认卡：draft 存在时接管审批卡主体。
+ *  按钮两键 + dirty 文案：拒绝 / ✓ 确认发送（dirty 时变「按修改发送」）。 */
+function EmailDraftCard({ draft, onApprove, approvalId }: {
+  draft: import("../types").ApprovalDraft;
+  onApprove: (approvalId: string, approved: boolean, remember?: boolean, edits?: Record<string, string>) => void;
+  approvalId: string;
+}) {
+  const [dirty, setDirty] = useState(false);
+  const getEditsRef = useRef<(() => Record<string, string>) | null>(null);
+
+  const submit = (approved: boolean) => {
+    const edits = approved && getEditsRef.current ? getEditsRef.current() : undefined;
+    onApprove(approvalId, approved, false,
+      approved && edits && Object.keys(edits).length > 0 ? edits : undefined);
+  };
+
+  return (
+    <div className="email-draft-card">
+      <p className="approval-action">发送邮件：{draft.subject || "(无主题)"}</p>
+      <EmailDraftEditor
+        draft={draft}
+        onDirtyChange={setDirty}
+        registerGetEdits={(fn) => { getEditsRef.current = fn; }}
+      />
+      <div className="draft-submit-row">
+        <span className="draft-dirty-hint">{dirty ? "已修改——将按修改后内容发送" : "未修改——按原草稿发送"}</span>
+        <div className="draft-buttons">
+          <button className="btn-deny" onClick={() => submit(false)}>拒绝</button>
+          <button className="btn-approve" onClick={() => submit(true)}>
+            {dirty ? "✓ 按修改发送" : "✓ 确认发送"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 工具结果是否含可渲染富块（```html / ```chart / … 围栏）：是则该卡片走
  *  Markdown 渲染（预览盒/图表直出）且默认展开。门控从严：必须出现成对
  *  的三反引号富语言围栏才判富，普通文本结果仍走 <pre> 纯文本。 */
@@ -818,12 +986,12 @@ export default function ChatView({
   goal?: string | null;
   /** 目标循环（/loop）运行状态：null=未开启 */
   loop: { count: number; max: number } | null;
-  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: import("../types").JudgeOpinion | null }[];
+  pendingApprovals: { id: string; action: string; reason: string; rememberable?: boolean; judge_opinion?: import("../types").JudgeOpinion | null; draft?: import("../types").ApprovalDraft | null }[];
   subAgentRecords: SubAgentProgress[];
   skillLoaded?: string[];
   onSend: (prompt: string) => void;
   onStop: () => void;
-  onApprove: (approvalId: string, approved: boolean, remember?: boolean) => void;
+  onApprove: (approvalId: string, approved: boolean, remember?: boolean, edits?: Record<string, string>) => void;
   currentAgent: string;
   /** 任务结束时 TODO 仍有未完成项（展示「继续」按钮） */
   unfinished?: boolean;
@@ -1197,8 +1365,19 @@ export default function ChatView({
                 action/reason 上：实测 reason 被压成 0px 完全不可见，小窗口下按钮还被
                 挤出卡片被 overflow:hidden 裁掉（点不到「允许/拒绝」）。 */}
             <div className="approval-body">
-              <p className="approval-action">{activeApproval.action}</p>
-              <p className="approval-reason">{activeApproval.reason}</p>
+              {activeApproval.draft ? (
+                <EmailDraftCard
+                  key={activeApproval.id}
+                  draft={activeApproval.draft}
+                  onApprove={onApprove}
+                  approvalId={activeApproval.id}
+                />
+              ) : (
+                <>
+                  <p className="approval-action">{activeApproval.action}</p>
+                  <p className="approval-reason">{activeApproval.reason}</p>
+                </>
+              )}
 
               {/* 判定意见（中立概念：核心只按字段渲染，插件名由 opinion.source 提供） */}
               {activeApproval.judge_opinion && (() => {
