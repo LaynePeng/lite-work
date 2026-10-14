@@ -306,6 +306,116 @@ export function rewriteLocalUrls(html: string): string {
   return out;
 }
 
+// ---------------------------------------------------------------- 邮件草稿卡（气泡内编辑）
+
+/** ```email-draft 渲染：对话气泡里的可编辑邮件草稿。
+ *  与审批卡编辑器的分工：这里是「内容创作」现场（可反复改），
+ *  审批卡只是最终「允许发送」开关。确认后把 edits 交给 onConfirm，
+ *  由 Agent 去 dry_run 正式发送（同一轮对话里完成，不发额外请求）。 */
+export function EmailDraftBlock({ spec, onConfirm }: {
+  spec: EmailDraftSpec;
+  onConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
+}) {
+  const [fields, setFields] = useState({
+    to: spec.to, cc: spec.cc ?? "", bcc: spec.bcc ?? "", subject: spec.subject,
+  });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [sent, setSent] = useState(false);
+
+  const fieldRow = (label: string, key: "to" | "cc" | "bcc" | "subject", placeholder: string) => (
+    <tr>
+      <th style={{ padding: "6px 10px", background: "var(--bg-1)", border: "1px solid var(--border)",
+                   textAlign: "left", fontWeight: 600, whiteSpace: "nowrap", width: 64, verticalAlign: "top" }}>{label}</th>
+      <td style={{ padding: "6px 10px", border: "1px solid var(--border)", verticalAlign: "top" }}>
+        <input
+          className="form-input"
+          style={{ width: "100%", fontSize: 13, padding: "4px 8px" }}
+          value={fields[key]}
+          placeholder={placeholder}
+          disabled={sent}
+          onChange={(e) => setFields((f) => ({ ...f, [key]: e.target.value }))}
+        />
+      </td>
+    </tr>
+  );
+
+  const initialHtml = useMemo(() => {
+    const html = (spec.html ?? "").trim();
+    if (html) return html;
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return esc(spec.body).replace(/\n/g, "<br>");
+  }, [spec]);
+
+  useEffect(() => {
+    if (canvasRef.current) canvasRef.current.innerHTML = initialHtml;
+  }, [initialHtml]);
+
+  const confirm = () => {
+    if (sent || !onConfirm) return;
+    const inner = canvasRef.current?.innerHTML ?? "";
+    const plain = canvasRef.current?.innerText ?? spec.body;
+    setSent(true);
+    onConfirm({
+      id: spec.id,
+      to: fields.to, cc: fields.cc, bcc: fields.bcc, subject: fields.subject,
+      body: plain.trim(), html: inner,
+    });
+  };
+
+  return (
+    <div style={{ maxWidth: 720, margin: "10px 0", border: "1px solid var(--border)",
+                  borderRadius: 10, overflow: "hidden", background: "var(--bg-0)" }}>
+      <div style={{ padding: "10px 14px", background: "var(--accent, #4f8cff)", color: "#fff", fontWeight: 600,
+                    fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>📧 邮件草稿 · {spec.id}</span>
+        <span style={{ fontSize: 11, opacity: 0.9, background: "rgba(255,255,255,0.2)",
+                       borderRadius: 8, padding: "1px 8px" }}>
+          {sent ? "✓ 已确认发送" : "未发送 · 可编辑"}
+        </span>
+      </div>
+      <div style={{ padding: "12px 14px" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <tbody>
+            {fieldRow("收件人", "to", "收件邮箱，多个逗号分隔")}
+            {fields.cc !== "" || spec.cc ? fieldRow("抄送", "cc", "可选") : null}
+            {fields.bcc !== "" || spec.bcc ? fieldRow("密送", "bcc", "可选") : null}
+            {fieldRow("主题", "subject", "邮件主题")}
+          </tbody>
+        </table>
+        <div style={{ margin: "12px 0 4px", fontWeight: 600, fontSize: 13 }}>正文
+          <span style={{ fontWeight: 400, color: "var(--text-2)", fontSize: 11 }}>（直接点进去编辑）</span>
+        </div>
+        <div
+          ref={canvasRef}
+          contentEditable={!sent}
+          suppressContentEditableWarning
+          spellCheck={false}
+          style={{ border: "1px dashed var(--border)", borderRadius: 6, padding: 12,
+                   background: "#fff", color: "#222", minHeight: 80, fontSize: 14,
+                   lineHeight: 1.7, outline: "none", maxHeight: 360, overflow: "auto" }}
+        />
+        {spec.attachments && spec.attachments.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-2)" }}>
+            附件：{spec.attachments.join(", ")}
+          </div>
+        )}
+        <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            className="btn-test"
+            disabled={sent}
+            onClick={confirm}
+          >
+            {sent ? "✓ 已确认" : "确认发送这封"}
+          </button>
+          <span style={{ fontSize: 11.5, color: "var(--text-2)" }}>
+            {sent ? "改动已回传给 Agent，等待正式发送结果" : "改完点此确认；不改动直接点也按原稿发送"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- 规格与解析
 
 export interface ChartSeries {
@@ -563,8 +673,23 @@ export interface LayoutSpec {
   edges: LayoutEdge[];
 }
 
+/** 邮件草稿（```email-draft）：dry_run 输出的可编辑草稿卡。
+ *  用户在气泡里直接改收件人/主题/正文，点「确认发送这封」后经
+ *  onEmailDraftConfirm 回传改动，Agent 去 dry_run 正式发送。 */
+export interface EmailDraftSpec {
+  id: string;
+  to: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  body: string;
+  html?: string;
+  attachments?: string[];
+}
+
 export type RichSegment =
   | { kind: "chart"; spec: ChartSpec }
+  | { kind: "email-draft"; spec: EmailDraftSpec }
   | { kind: "cards"; spec: CardsSpec }
   | { kind: "kpi"; spec: KpiSpec }
   | { kind: "timeline"; spec: TimelineSpec }
@@ -580,7 +705,7 @@ export type RichSegment =
  *  mermaid 不在此列——它是 DSL 非 JSON，ChatView 单独分段。 */
 export const RICH_LANGS = [
   "chart", "cards", "kpi", "timeline", "table", "compare", "board", "progress",
-  "interactive", "diagram", "layout",
+  "interactive", "diagram", "layout", "email-draft",
 ] as const;
 
 function toNums(v: unknown): number[] {
@@ -698,6 +823,22 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
       .filter((x): x is string => typeof x === "string" && !!x.trim())
       .map((x) => x.trim().slice(0, per))
       .slice(0, max);
+
+  if (l === "email-draft") {
+    const id = str(rec.id, 32);
+    const to = str(rec.to, 400);
+    const subject = str(rec.subject, 200);
+    if (!id || !to || subject === undefined) return null;
+    const spec: EmailDraftSpec = {
+      id, to, subject: subject ?? "",
+      cc: str(rec.cc, 400),
+      bcc: str(rec.bcc, 400),
+      body: typeof rec.body === "string" ? rec.body.slice(0, 20000) : "",
+      html: typeof rec.html === "string" ? rec.html.slice(0, 60000) : undefined,
+      attachments: strList(rec.attachments, 8),
+    };
+    return { kind: "email-draft", spec };
+  }
 
   if (l === "kpi") {
     const items: KpiItem[] = (Array.isArray(rec.items) ? rec.items : [])

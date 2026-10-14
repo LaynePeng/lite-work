@@ -31,6 +31,7 @@ import {
   toFileUrl,
   tryParseRichBlock,
   type RichSegment,
+  EmailDraftBlock,
 } from "./RichBlocks";
 
 // ---------------------------------------------------------------- 渲染助手
@@ -301,7 +302,10 @@ function HtmlPreview({ html }: { html: string }) {
   );
 }
 
-export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export function Markdown({ text, streaming = false, onEmailDraftConfirm }: {
+  text: string; streaming?: boolean;
+  onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
+}) {
   const segs = useMemo(() => splitSegments(text, streaming), [text, streaming]);
   return (
     <div className="md">
@@ -318,6 +322,9 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
         if (s.kind === "interactive") return <InteractiveBlock key={i} spec={s.spec} />;
         if (s.kind === "diagram") return <DiagramBlock key={i} spec={s.spec} />;
         if (s.kind === "layout") return <LayoutBlock key={i} spec={s.spec} />;
+        if (s.kind === "email-draft") return (
+          <EmailDraftBlock key={i} spec={s.spec} onConfirm={onEmailDraftConfirm} />
+        );
         if (s.kind === "mermaid") return <MermaidBlock key={i} code={s.code} />;
         return (
           <ReactMarkdown
@@ -430,166 +437,37 @@ function RichCard({ sessionId, card }: { sessionId: string; card: ToolCardInfo }
 
 // ---------------------------------------------------------------- 邮件 WYSIWYG 审批编辑器
 
-/** contenteditable 的初始 HTML：草稿有 html 用 html；否则纯文本按段落转义。 */
-function draftInitialHtml(draft: import("../types").ApprovalDraft): string {
-  const html = (draft.html ?? "").toString().trim();
-  if (html) return html;
-  const text = (draft.body ?? "").toString();
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return esc(text).replace(/\n/g, "<br>");
-}
-
-/** 邮件草稿 WYSIWYG 编辑器（审批卡内）：
- *  - 字段行（收件人/抄送/密送/主题）可编辑；
- *  - 正文 contenteditable 白底画布（= 收件人视角），工具条 B/I/U/列表/清除格式；
- *  - HTML 源码模式（textarea 直改——「简单修改」）；
- *  - dirty 检测：任何变化 → onDirtyChange(true)，提交时经 registerGetEdits 取值。 */
-function EmailDraftEditor({ draft, onDirtyChange, registerGetEdits }: {
-  draft: import("../types").ApprovalDraft;
-  onDirtyChange: (dirty: boolean) => void;
-  /** 登记取值函数：审批卡在用户点「确认/按修改发送」时调用拿 edits */
-  registerGetEdits: (fn: () => Record<string, string>) => void;
-}) {
-  const initial = useMemo(() => ({
-    to: (draft.to ?? "").toString(),
-    cc: (draft.cc ?? "").toString(),
-    bcc: (draft.bcc ?? "").toString(),
-    subject: (draft.subject ?? "").toString(),
-    html: draftInitialHtml(draft),
-  }), [draft]);
-  const [fields, setFields] = useState({ to: initial.to, cc: initial.cc, bcc: initial.bcc, subject: initial.subject });
-  const [htmlMode, setHtmlMode] = useState(false);
-  const [htmlSrc, setHtmlSrc] = useState(initial.html);
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const dirtyRef = useRef(false);
-
-  // 初值注入 contenteditable（只在草稿变化时重置）
-  useEffect(() => {
-    if (canvasRef.current) canvasRef.current.innerHTML = initial.html;
-  }, [initial.html]);
-
-  const markDirty = () => { if (!dirtyRef.current) { dirtyRef.current = true; onDirtyChange(true); } };
-
-  useEffect(() => {
-    registerGetEdits(() => {
-      if (!dirtyRef.current) return {} as Record<string, string>;
-      const inner = htmlMode ? htmlSrc : (canvasRef.current?.innerHTML ?? htmlSrc);
-      const plain = htmlMode
-        ? htmlSrc.replace(/<[^>]+>/g, "")
-        : (canvasRef.current?.innerText ?? "");
-      return {
-        to: fields.to, cc: fields.cc, bcc: fields.bcc, subject: fields.subject,
-        html: inner, body: plain.trim(),
-      } as Record<string, string>;
-    });
-  }, [fields, htmlSrc, htmlMode, registerGetEdits]);
-
-  const exec = (cmd: string) => {
-    canvasRef.current?.focus();
-    document.execCommand(cmd);
-    markDirty();
-  };
-
-  const fieldRow = (label: string, key: "to" | "cc" | "bcc" | "subject", ph: string) => (
-    <div className="draft-row">
-      <label className="draft-label">{label}</label>
-      <input
-        className="draft-input"
-        value={fields[key]}
-        placeholder={ph}
-        onChange={(e) => { setFields((f) => ({ ...f, [key]: e.target.value })); markDirty(); }}
-      />
-    </div>
-  );
-
-  return (
-    <div className="email-draft-editor">
-      <div className="draft-fields">
-        {fieldRow("收件人", "to", "a@x.com，多个逗号分隔")}
-        {fieldRow("抄送", "cc", "（可选）")}
-        {fieldRow("密送", "bcc", "（可选）")}
-        {fieldRow("主题", "subject", "邮件主题")}
-      </div>
-      <div className="draft-toolbar">
-        <button type="button" className="tb-btn" title="加粗" onClick={() => exec("bold")}><b>B</b></button>
-        <button type="button" className="tb-btn" title="斜体" onClick={() => exec("italic")}><i>I</i></button>
-        <button type="button" className="tb-btn" title="下划线" onClick={() => exec("underline")}><u>U</u></button>
-        <button type="button" className="tb-btn" title="无序列表" onClick={() => exec("insertUnorderedList")}>•—</button>
-        <button type="button" className="tb-btn" title="有序列表" onClick={() => exec("insertOrderedList")}>1—</button>
-        <button type="button" className="tb-btn" title="清除格式" onClick={() => exec("removeFormat")}>✕</button>
-        <button
-          type="button"
-          className={`tb-btn ${htmlMode ? "tb-active" : ""}`}
-          title="HTML 源码模式（直改源码）"
-          onClick={() => {
-            if (htmlMode && canvasRef.current) {
-              canvasRef.current.innerHTML = htmlSrc; // 源码应用回画布
-            } else if (!htmlMode && canvasRef.current) {
-              setHtmlSrc(canvasRef.current.innerHTML);
-            }
-            setHtmlMode((v) => !v);
-          }}
-        >
-          {"</>"}
-        </button>
-        <span className="tb-hint">{htmlMode ? "源码模式：改完再点 </> 回到所见即所得" : "所见即所得 · 编辑即预览"}</span>
-      </div>
-      {htmlMode ? (
-        <textarea
-          className="draft-html-src"
-          value={htmlSrc}
-          onChange={(e) => { setHtmlSrc(e.target.value); markDirty(); }}
-          spellCheck={false}
-        />
-      ) : (
-        <div
-          ref={canvasRef}
-          className="draft-canvas"
-          contentEditable
-          suppressContentEditableWarning
-          onInput={markDirty}
-        />
-      )}
-      {(draft.attachments?.length ?? 0) > 0 && (
-        <div className="draft-attachments">
-          {(draft.attachments ?? []).map((n) => <span key={n} className="draft-att">📎 {n}</span>)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 审批卡内的邮件确认卡：draft 存在时接管审批卡主体。
- *  按钮两键 + dirty 文案：拒绝 / ✓ 确认发送（dirty 时变「按修改发送」）。 */
+/** 审批卡内的邮件确认卡：内容已在气泡草稿卡里编辑确认过，这里只做
+ *  最终「允许/拒绝」开关（只读摘要 + 两键，不再嵌编辑器——编辑发生在
+ *  对话气泡的 ```email-draft 块，避免同一内容两处编辑互相打架）。 */
 function EmailDraftCard({ draft, onApprove, approvalId }: {
   draft: import("../types").ApprovalDraft;
   onApprove: (approvalId: string, approved: boolean, remember?: boolean, edits?: Record<string, string>) => void;
   approvalId: string;
 }) {
-  const [dirty, setDirty] = useState(false);
-  const getEditsRef = useRef<(() => Record<string, string>) | null>(null);
-
-  const submit = (approved: boolean) => {
-    const edits = approved && getEditsRef.current ? getEditsRef.current() : undefined;
-    onApprove(approvalId, approved, false,
-      approved && edits && Object.keys(edits).length > 0 ? edits : undefined);
-  };
-
+  const submit = (approved: boolean) => onApprove(approvalId, approved, false);
+  const row = (label: string, value: string) => (
+    <div className="draft-summary-row" style={{ display: "flex", gap: 8, fontSize: 13, margin: "3px 0" }}>
+      <span style={{ color: "var(--text-2)", minWidth: 52 }}>{label}</span>
+      <span style={{ flex: 1, wordBreak: "break-all" }}>{value || "(空)"}</span>
+    </div>
+  );
   return (
     <div className="email-draft-card">
       <p className="approval-action">发送邮件：{draft.subject || "(无主题)"}</p>
-      <EmailDraftEditor
-        draft={draft}
-        onDirtyChange={setDirty}
-        registerGetEdits={(fn) => { getEditsRef.current = fn; }}
-      />
+      <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: 10, margin: "8px 0" }}>
+        {row("收件人", (draft.to ?? "").toString())}
+        {draft.cc ? row("抄送", draft.cc.toString()) : null}
+        {row("主题", (draft.subject ?? "").toString())}
+        {(draft.attachments?.length ?? 0) > 0 && row("附件", (draft.attachments ?? []).join(", "))}
+        <div style={{ color: "var(--text-2)", fontSize: 12, marginTop: 6 }}>
+          内容已在上方草稿卡确认；如需再改，请拒绝后让我重新出草稿。
+        </div>
+      </div>
       <div className="draft-submit-row">
-        <span className="draft-dirty-hint">{dirty ? "已修改——将按修改后内容发送" : "未修改——按原草稿发送"}</span>
         <div className="draft-buttons">
           <button className="btn-deny" onClick={() => submit(false)}>拒绝</button>
-          <button className="btn-approve" onClick={() => submit(true)}>
-            {dirty ? "✓ 按修改发送" : "✓ 确认发送"}
-          </button>
+          <button className="btn-approve" onClick={() => submit(true)}>✓ 允许发送</button>
         </div>
       </div>
     </div>
@@ -798,7 +676,10 @@ function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[];
 
 // ---------------------------------------------------------------- 消息气泡
 
-function MessageBubble({ message }: { message: Msg }) {
+function MessageBubble({ message, onEmailDraftConfirm }: {
+  message: Msg;
+  onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
+}) {
   if (message.role === "user") {
     return (
       <div className="msg-row user">
@@ -813,7 +694,12 @@ function MessageBubble({ message }: { message: Msg }) {
     <div className="msg-row assistant">
       <AgentAvatar agent={message.agent} />
       <div className="bubble assistant-bubble">
-        {message.content && <Markdown text={message.content} />}
+        {message.content && (
+          <Markdown
+            text={message.content}
+            onEmailDraftConfirm={(edits) => onEmailDraftConfirm?.(edits)}
+          />
+        )}
       </div>
     </div>
   );
@@ -842,14 +728,17 @@ function StreamingTurn({ items, sessionId, turn }: { items: WorkItem[]; sessionI
 // 单轮渲染组件：props 只有 turn 对象本身。流式刷新（~80ms/次）时
 // 历史 turns 引用不变（useMemo 缓存），memo 直接跳过重渲染，
 // 只有正在增长的流式轮次重新渲染——长会话也不怕
-const TurnItem = memo(function TurnItem({ turn, sessionId }: { turn: RenderTurn; sessionId: string }) {
+const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm }: {
+  turn: RenderTurn; sessionId: string;
+  onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
+}) {
   return (
     <div>
       {turn.key.startsWith("streaming-") ? (
         <StreamingTurn items={turn.items} sessionId={sessionId} turn={turn.streamTurn} />
       ) : (
         <>
-          {turn.user && <MessageBubble message={turn.user} />}
+          {turn.user && <MessageBubble message={turn.user} onEmailDraftConfirm={onEmailDraftConfirm} />}
           {turn.items.length > 0 && (
             <WorkItems items={turn.items} sessionId={sessionId} />
           )}
@@ -857,7 +746,7 @@ const TurnItem = memo(function TurnItem({ turn, sessionId }: { turn: RenderTurn;
             <div className="msg-row assistant">
               <AgentAvatar agent={turn.assistant.agent} />
               <div className="bubble assistant-bubble">
-                <Markdown text={turn.assistant.content} />
+                <Markdown text={turn.assistant.content} onEmailDraftConfirm={onEmailDraftConfirm} />
               </div>
             </div>
           )}
@@ -1192,7 +1081,20 @@ export default function ChatView({
             </button>
           )}
           {renderTurns.map((t) => (
-            <TurnItem key={t.key} turn={t} sessionId={sessionId} />
+            <TurnItem
+              key={t.key}
+              turn={t}
+              sessionId={sessionId}
+              onEmailDraftConfirm={(edits) => onSend(
+                `[邮件草稿 ${edits.id} 已确认] 请按以下最终内容正式发送（去掉 dry_run，会弹审批卡）：\n` +
+                `收件人：${edits.to}\n` +
+                (edits.cc ? `抄送：${edits.cc}\n` : "") +
+                (edits.bcc ? `密送：${edits.bcc}\n` : "") +
+                `主题：${edits.subject}\n` +
+                `纯文本正文：\n${edits.body}\n` +
+                `HTML 正文：\n${edits.html}`)
+              }
+            />
           ))}
           {skillLoaded && skillLoaded.length > 0 && (
             <div className="skill-loaded-hint">📦 已注入技能：{skillLoaded.join("、")}</div>
