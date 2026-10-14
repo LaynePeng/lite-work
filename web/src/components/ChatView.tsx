@@ -483,7 +483,7 @@ function isRichResult(result: string): boolean {
   return new RegExp("```(" + langs + ")[ \\t]*\\r?\\n[\\s\\S]*?```", "i").test(result);
 }
 
-function ToolCard({ card }: { card: ToolCardInfo }) {
+function ToolCard({ card, onEmailDraftConfirm }: { card: ToolCardInfo; onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void }) {
   const richResult = isRichResult(card.result ?? "");
   const important = card.name === "execute_command" || card.name.startsWith("mcp_") || isFileDiff(card.result ?? "") || richResult || card.status === "error" || card.status === "cancelled";
   // 只有 diff / 富结果 / 异常默认展开；普通调用保持为紧凑的一行
@@ -536,7 +536,7 @@ function ToolCard({ card }: { card: ToolCardInfo }) {
             <div className="tool-block-label">参数</div>
             <pre>{JSON.stringify(card.args, null, 2)}</pre>
           </div>
-          {card.result && <div className="tool-block"><div className="tool-block-label">结果</div><DiffStats text={card.result} />{richResult ? <Markdown text={card.result} /> : <DiffPre text={card.result} />}</div>}
+          {card.result && <div className="tool-block"><div className="tool-block-label">结果</div><DiffStats text={card.result} />{richResult ? <Markdown text={card.result} onEmailDraftConfirm={onEmailDraftConfirm} /> : <DiffPre text={card.result} />}</div>}
         </div>
       )}
     </div>
@@ -632,7 +632,7 @@ function SubAgentCard({ card }: { card: ToolCardInfo }) {
   );
 }
 
-function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[]; sessionId: string; streaming?: boolean }) {
+function WorkItems({ items, sessionId, streaming = false, onEmailDraftConfirm }: { items: WorkItem[]; sessionId: string; streaming?: boolean; onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void }) {
   return (
     <div className="work-timeline">
       {items.map((item) => {
@@ -657,7 +657,7 @@ function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[];
               {compact.length > 0 && <ToolActivity tools={compact} />}
               {important.map((tool) => tool.name === "render_card"
                 ? <RichCard key={tool.id} sessionId={sessionId} card={tool} />
-                : <ToolCard key={tool.id} card={tool} />)}
+                : <ToolCard key={tool.id} card={tool} onEmailDraftConfirm={onEmailDraftConfirm} />)}
             </div>
           );
         }
@@ -668,7 +668,7 @@ function WorkItems({ items, sessionId, streaming = false }: { items: WorkItem[];
         if (item.card.name === "render_card") {
           return <RichCard key={item.id} sessionId={sessionId} card={item.card} />;
         }
-        return <ToolCard key={item.id} card={item.card} />;
+        return <ToolCard key={item.id} card={item.card} onEmailDraftConfirm={onEmailDraftConfirm} />;
       })}
     </div>
   );
@@ -707,11 +707,11 @@ function MessageBubble({ message, onEmailDraftConfirm }: {
 
 // ---------------------------------------------------------------- 正在生成
 
-function StreamingTurn({ items, sessionId, turn }: { items: WorkItem[]; sessionId: string; turn?: number }) {
+function StreamingTurn({ items, sessionId, turn, onEmailDraftConfirm }: { items: WorkItem[]; sessionId: string; turn?: number; onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void }) {
   return (
     <>
       {items.length === 0 && <div className="timeline-thinking"><span className="dot" /><span className="dot" /><span className="dot" /><span className="thinking-text">思考中…{turn ? ` (第 ${turn} 轮)` : ""}</span></div>}
-      <WorkItems items={items} sessionId={sessionId} streaming />
+      <WorkItems items={items} sessionId={sessionId} streaming onEmailDraftConfirm={onEmailDraftConfirm} />
     </>
   );
 }
@@ -740,7 +740,7 @@ const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm }
         <>
           {turn.user && <MessageBubble message={turn.user} onEmailDraftConfirm={onEmailDraftConfirm} />}
           {turn.items.length > 0 && (
-            <WorkItems items={turn.items} sessionId={sessionId} />
+            <WorkItems items={turn.items} sessionId={sessionId} onEmailDraftConfirm={onEmailDraftConfirm} />
           )}
           {turn.assistant && turn.assistant.content && (
             <div className="msg-row assistant">
