@@ -1,0 +1,2 @@
+# 部署脚本进容器执行：CRLF 会让 sh 直接语法报错，强制 LF
+*.sh text eol=lf

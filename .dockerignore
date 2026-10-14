@@ -1,0 +1,14 @@
+# 构建上下文瘦身：镜像构建只需要 litework/ web/ pyproject README deploy/
+.git
+.venv
+**/__pycache__
+**/*.pyc
+node_modules
+web/node_modules
+web/dist
+release
+中间产物
+tests
+docs
+*.md
+!README.md

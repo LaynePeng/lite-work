@@ -94,6 +94,17 @@ async def test_health_and_version_negotiation(tmp_path):
         assert r.json()["min_client"] == body["min_client"]
 
 
+async def test_resolve_dist_dir_env_override(tmp_path, monkeypatch):
+    """LITEWORK_WEB_DIST 显式指定前端 dist（Docker 部署：dist 在源码树之外）。"""
+    from litework.server.app import _resolve_dist_dir
+
+    custom = tmp_path / "custom-dist"
+    custom.mkdir()
+    (custom / "index.html").write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setenv("LITEWORK_WEB_DIST", str(custom))
+    assert _resolve_dist_dir() == str(custom)
+
+
 async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) -> None:
     """等待 chat 的首条 user 消息落盘。
 

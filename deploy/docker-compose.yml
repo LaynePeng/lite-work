@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 lite-work contributors
+#
+# lite-work Core 单机部署（Azure B2als v2 · 4GB · Tailscale 优先）。
+# 安全边界：端口只靠 NSG 默认全关 + Tailscale 访问（容器内 token 始终开启）。
+# 注意 Docker 发布端口会绕过 ufw——不要靠 ufw 兜底，公网暴露必须走反代+TLS+NSG。
+
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: lite-work-core:2.0.0
+    container_name: lite-work-core
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - core-data:/data
+    environment:
+      # LLM 引导密钥（首次配置用；之后配置持久化在 /data，可留空）
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # 显式指定令牌时覆盖数据卷里的自动生成值
+      LITEWORK_TOKEN: ${LITEWORK_TOKEN:-}
+    # 4GB 内存护栏：给 OS/内核留 ~500MB，避免 OOM 时内核乱杀进程
+    mem_limit: 3500m
+    # Chromium 渲染需要大 /dev/shm（默认 64MB 会崩标签页）
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  core-data:

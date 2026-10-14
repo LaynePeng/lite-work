@@ -197,6 +197,10 @@ async def _serve_index(dist_dir: str):
 def _resolve_dist_dir() -> str:
     """定位前端构建产物目录，兼容 PyInstaller 打包环境。"""
     candidates = []
+    # Docker 等部署形态：镜像把 dist 打在源码树之外，经环境变量显式指定
+    env_dist = os.environ.get("LITEWORK_WEB_DIST")
+    if env_dist:
+        candidates.append(env_dist)
     # PyInstaller: 前端资源通过 --add-data 打入 _MEIPASS
     bundle_dir = getattr(sys, "_MEIPASS", None)
     if bundle_dir:
