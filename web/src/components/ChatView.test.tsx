@@ -427,7 +427,7 @@ describe("ChatView", () => {
     render(
       <ChatView
         {...baseProps}
-        messages={[{ id: "m1", role: "assistant", content: "草稿如下：\n" + draftFence }]}
+        messages={[{ role: "assistant", content: "草稿如下：\n" + draftFence }]}
         streaming={null}
         onSend={onSend}
       />
