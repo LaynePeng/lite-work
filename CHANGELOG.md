@@ -2,6 +2,18 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.0.0] — 前后分离：云端部署 + 多端访问
+
+> 语义变更（major 的原因）：启用远程部署后，Agent 工作区从「本机文件」变为
+> 「云端工作区」；本地模式行为完全不变（默认，零回归）。
+
+### 新增（P0 准备层）
+- 认证中间件：`LITEWORK_AUTH_TOKEN` 未配置时完全直通（本地模式零回归），
+  配置后全路由强制 Bearer 校验，SSE 走 fetch 流式携带 `Authorization` 头；
+- `/api/health` 版本协商：返回 `{version, min_client}`，客户端连接时校验；
+- 前端 API base 可配置化：Electron 注入 `window.__LITEWORK_API_BASE__`，
+  浏览器/PWA 同源默认；
+
 ## [未发布]
 ### 修复（打包）
 - Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；
