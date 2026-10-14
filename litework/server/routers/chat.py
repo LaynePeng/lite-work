@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .context import ServerContext
+from ..tasks import TaskLimitError
 
 logger = logging.getLogger("litework.server.chat")
 
@@ -63,9 +64,13 @@ def create_router(ctx: ServerContext) -> APIRouter:
             # 会话已有任务在跑：本次输入作为补充指令排队，下一回合注入对话
             handle.queue_input(prompt)
             return {"task_id": handle.task_id, "queued": True}
-        handle = tasks.start(session_id, prompt, agent_id=payload.agent_id,
-                               reasoning_effort=payload.reasoning_effort,
-                               merge_worktree=payload.merge_worktree)
+        try:
+            handle = tasks.start(session_id, prompt, agent_id=payload.agent_id,
+                                  reasoning_effort=payload.reasoning_effort,
+                                  merge_worktree=payload.merge_worktree)
+        except TaskLimitError as exc:
+            # 并发护栏（max_running_tasks，云端小内存机）：429 让前端可提示重试
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         return {"task_id": handle.task_id}
 
     @router.get("/api/tasks/{task_id}/events")

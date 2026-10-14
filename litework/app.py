@@ -82,6 +82,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "agent_max_steps": 12,      # 单个子 agent 默认最大轮数（spawn 可覆盖，上限 agent_max_steps_cap）
     "agent_max_steps_cap": 50,  # spawn max_steps 参数的绝对上限（防失控）
     "agent_spawn_depth": 2,     # 嵌套深度上限（1=子不可再派，2=子可派孙，孙不可再派）
+    # 顶层任务并发护栏（云端小内存机用）：0=不限制（桌面默认，行为与 1.x 一致）。
+    # 覆盖会话任务与盯梢/定时触发的无人值守任务；子 agent 并发另由
+    # max_parallel_agents 约束，两者独立
+    "max_running_tasks": 0,
     "agent_message_max_chars": 8000,   # agent 间消息单条长度上限（防上下文爆仓）
     "agent_meeting_rounds": 3,  # 会议模式默认轮次（技能配方参考）
     "agent_ledger_interval": 5, # 进度账本：每完成 N 个工具/回合后检查一次子 agent 状态

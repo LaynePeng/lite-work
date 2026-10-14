@@ -31,6 +31,11 @@
 - 静态前端目录支持 `LITEWORK_WEB_DIST` 环境变量指定（镜像内 dist 在
   源码树之外，原有 PyInstaller/源码两种定位方式不变）。
 
+### 新增（P1 上云 · 并发护栏）
+- `max_running_tasks` 配置项：顶层任务并发上限，达到即拒（`/api/chat` 返回
+  429，盯梢/定时触发记为 error 并推通知）；默认 0=不限，桌面行为与 1.x
+  完全一致；子 agent 并发仍由既有 `max_parallel_agents` 独立约束；
+
 ## [未发布]
 ### 修复（打包）
 - Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；

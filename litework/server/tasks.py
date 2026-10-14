@@ -640,6 +640,10 @@ class TaskHandle:
             return None
 
 
+class TaskLimitError(RuntimeError):
+    """并发运行中的任务已达 max_running_tasks 上限（云端内存护栏）。"""
+
+
 class TaskManager:
     def __init__(self, app: AgentApp) -> None:
         self.app = app
@@ -649,6 +653,12 @@ class TaskManager:
               reasoning_effort: Optional[str] = None,
               merge_worktree: Optional[str] = None,
               unattended_profile: Optional[str] = None) -> TaskHandle:
+        # 并发护栏：放在一切重对象创建之前（占坑即拒，不浪费 worktree/kernel 构建）。
+        # 定时触发路径由 _start_watch_task 的 except 兜底（记 error 推通知）
+        cap = int(self.app.config.get("max_running_tasks", 0) or 0)
+        if cap > 0 and self.active_count() >= cap:
+            raise TaskLimitError(
+                f"并发任务已达上限 {cap}（max_running_tasks），请等现有任务结束后再试")
         task_id = uuid.uuid4().hex[:12]
         # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）。
         # 例外：merge_worktree（AI 合并任务）必须落在**主工作区**——它要把分支

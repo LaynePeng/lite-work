@@ -105,6 +105,36 @@ async def test_resolve_dist_dir_env_override(tmp_path, monkeypatch):
     assert _resolve_dist_dir() == str(custom)
 
 
+async def test_max_running_tasks_guard(tmp_path, monkeypatch):
+    """并发护栏：达到 max_running_tasks 即拒（占坑即拒，不建任何重对象）。"""
+    from litework.server.tasks import TaskManager, TaskLimitError
+
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+    app.config["max_running_tasks"] = 1
+    tm = TaskManager(app)
+    monkeypatch.setattr(tm, "active_count", lambda: 1)
+    with pytest.raises(TaskLimitError):
+        tm.start("s_guard", "hello")
+
+
+async def test_chat_returns_429_when_task_cap_reached(live_client, monkeypatch):
+    """HTTP 面：护栏触发时 /api/chat 返回 429（前端可提示稍后重试）。"""
+    from litework.server.tasks import TaskManager, TaskLimitError
+
+    c, _, _ = live_client
+    r = await c.post("/api/sessions", json={"name": "满载"})
+    sid = r.json()["session_id"]
+
+    def _full(self, *args, **kwargs):
+        raise TaskLimitError("并发任务已达上限 1（max_running_tasks），请等现有任务结束后再试")
+
+    monkeypatch.setattr(TaskManager, "start", _full)
+    r = await c.post("/api/chat", json={"session_id": sid, "prompt": "再跑一个"})
+    assert r.status_code == 429
+    assert "上限" in r.json()["detail"]
+
+
 async def _wait_first_message_saved(app, session_id: str, timeout: float = 5.0) -> None:
     """等待 chat 的首条 user 消息落盘。
 
