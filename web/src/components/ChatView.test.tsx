@@ -293,6 +293,51 @@ describe("ChatView", () => {
     expect(within(card).getByText(/\[Command OK\]/)).toBeInTheDocument();
   });
 
+  it("富结果工具卡（含 html 围栏）默认展开并渲染 iframe；普通结果仍走纯文本", () => {
+    const msgs = [
+      { role: "user", content: "预览邮件草稿" },
+      {
+        role: "assistant", content: null,
+        tool_calls: [{
+          id: "call_p", type: "function",
+          function: { name: "email_send", arguments: '{"to":"a@b.c","subject":"s","body":"x","dry_run":true}' },
+        }],
+      },
+      {
+        role: "tool", name: "email_send", tool_call_id: "call_p",
+        content: "[Email Preview]: 草稿已组装。\n```html\n<div style='padding:8px'><b>收件人</b>：a@b.c</div>\n```",
+      },
+      { role: "assistant", content: "预览如上。" },
+    ] as unknown as Msg[];
+    const { container } = render(<ChatView {...baseProps} messages={msgs} streaming={null} />);
+    // email_send 普通工具原本进 compact 一行；富结果 → important 独立卡片且默认展开
+    const card = screen.getByText("email_send", { exact: false }).closest(".tool-card") as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.className).not.toContain("tool-card-compact");
+    // 结果走 Markdown 渲染 → html 围栏进沙箱 iframe
+    expect(card.querySelectorAll("iframe.md-html-iframe").length).toBeGreaterThan(0);
+  });
+
+  it("普通文本结果（无围栏）仍为 compact 卡 + pre 纯文本", () => {
+    const msgs = [
+      { role: "user", content: "列邮件" },
+      {
+        role: "assistant", content: null,
+        tool_calls: [{
+          id: "call_l", type: "function",
+          function: { name: "email_list", arguments: '{"max":10}' },
+        }],
+      },
+      {
+        role: "tool", name: "email_list", tool_call_id: "call_l",
+        content: "[Email]: INBOX 共 10 封邮件（纯文本列表）",
+      },
+    ] as unknown as Msg[];
+    render(<ChatView {...baseProps} messages={msgs} streaming={null} />);
+    // 无围栏 → 不判富，走 compact 分档（不出现展开的"结果"块）
+    expect(screen.queryByText("结果")).not.toBeInTheDocument();
+  });
+
   it("工具卡片点击头部可折叠/展开参数", async () => {
     const user = userEvent.setup();
     render(

@@ -75,6 +75,50 @@ describe("Markdown 内联 HTML 渲染（展示型回复）", () => {
     const { container } = render(<Markdown text="普通文字回复" />);
     expect(container.querySelector("iframe")).toBeNull();
   });
+
+  it("四反引号外层包内层 html 围栏样例 → 整体是代码块，样例不被渲染成 iframe", () => {
+    const sample = "```html\n<div>卡片</div>\n```";
+    const { container } = render(<Markdown text={"写法如下：\n\n````\n" + sample + "\n````\n\n照此使用。"} />);
+    expect(container.querySelector("iframe.md-html-iframe")).toBeNull();
+    expect(container.querySelector("code")).not.toBeNull();
+    expect(screen.getByText("写法如下：")).toBeInTheDocument();
+    expect(screen.getByText("照此使用。")).toBeInTheDocument();
+    // 样例原文可见（代码块文本里含 <div>）
+    expect(container.querySelector("code")?.textContent).toContain("<div>卡片</div>");
+  });
+
+  it("四反引号带语言（````text）同样保护内层样例", () => {
+    const { container } = render(
+      <Markdown text={"````text\n```chart\n{\"type\":\"bar\"}\n```\n````"} />
+    );
+    expect(container.querySelector(".md-chart")).toBeNull();
+    expect(container.querySelector("code")).not.toBeNull();
+  });
+
+  it("普通代码围栏内出现富语言字样（如示例里的 ```chart 文本）不触发富块", () => {
+    // 长度 4 的外层围栏包着三反引号行——内层 ```chart 只是文本
+    const { container } = render(
+      <Markdown text={"示例：\n\n````md\n用 ```chart 画柱状图\n````"} />
+    );
+    expect(container.querySelector(".md-chart")).toBeNull();
+    expect(container.querySelector("code")).not.toBeNull();
+  });
+
+  it("三反引号富围栏紧跟四反引号样例块：各自正确渲染/保留", () => {
+    const { container } = render(
+      <Markdown
+        text={
+          '```chart\n{"type":"bar","labels":["A"],"data":[1]}\n```\n\n' +
+          "````\n```html\n<b>x</b>\n```\n````"
+        }
+      />
+    );
+    expect(container.querySelector(".md-chart")).not.toBeNull();
+    expect(container.querySelectorAll("iframe.md-html-iframe").length).toBe(0);
+    // 样例块保留为代码块
+    const codes = container.querySelectorAll("code");
+    expect(codes.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("Markdown 原生富内容块（chart / cards / 本地图片）", () => {

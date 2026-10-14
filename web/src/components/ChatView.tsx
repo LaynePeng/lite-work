@@ -111,6 +111,31 @@ function repairTruncatedJson(raw: string): string | null {
   return out;
 }
 
+type Fence = { start: number; end: number; lang: string; body: string; closed: boolean };
+
+/** 扫描全部 3+ 反引号围栏（CommonMark 规则）：长度 4+ 的围栏吞掉内部的三反引号
+ *  行——「外层四反引号包内层 ```xxx 样例」整体是一个普通代码块，里面的
+ *  ```html / ```chart 字样不再被误拆成富块吞掉（讨论围栏语法本身时的标准写法）。 */
+function scanFences(t: string): Fence[] {
+  const re = /(`{3,})([\w+-]*)[ \t]*\r?\n?/g;
+  const out: Fence[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const openTok = m[1];
+    const lang = m[2] ?? "";
+    // 关闭围栏：等长（或更长）的反引号串、独占一行（前面只有空白）
+    const closeRe = new RegExp(`^[ \t]*\`{${openTok.length},}[ \t]*$`, "m");
+    const rest = t.slice(re.lastIndex);
+    const cm = closeRe.exec(rest);
+    const closeStart = cm ? re.lastIndex + cm.index : t.length;
+    const end = cm ? closeStart + cm[0].length : t.length;
+    const body = t.slice(re.lastIndex, closeStart);
+    out.push({ start: m.index, end, lang, body, closed: !!cm });
+    re.lastIndex = end; // 跳过围栏内部（含闭合行），天然避免嵌套误匹配
+  }
+  return out;
+}
+
 function splitSegments(text: string, streaming = false): Segment[] {
   const t = text ?? "";
   const trimmed = t.trim();
@@ -122,57 +147,49 @@ function splitSegments(text: string, streaming = false): Segment[] {
   }
   const segs: Segment[] = [];
   let last = 0;
-  const langs = "html|mermaid|" + RICH_LANGS.join("|");
-  const closed = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*?)```", "gi");
-  // 流式期：末尾未闭合围栏（直到字符串结尾都没有收尾 ```）
-  const open = new RegExp("```(" + langs + ")[ \\t]*\\r?\\n?([\\s\\S]*)$", "i");
-  let m: RegExpExecArray | null;
-  while ((m = closed.exec(t)) !== null) {
-    const lang = m[1].toLowerCase();
-    const raw = (m[2] ?? "").trim();
-    let seg: Segment | null = null;
+  const richSet = new Set<string>(["html", "mermaid", ...RICH_LANGS]);
+  const toSeg = (lang: string, raw: string): Segment | null => {
     if (lang === "html") {
-      if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
-    } else if (lang === "mermaid") {
+      if (/<[a-zA-Z]/.test(raw)) return { kind: "html", html: raw };
+      return null;
+    }
+    if (lang === "mermaid") {
       // DSL 非 JSON：非空即成段（语法错的降级在 MermaidBlock 内处理）
-      if (raw) seg = { kind: "mermaid", code: raw };
-    } else {
-      seg = tryParseRichBlock(lang, raw);
+      return raw ? { kind: "mermaid", code: raw } : null;
     }
-    if (seg) {
-      if (m.index > last) segs.push({ kind: "md", text: t.slice(last, m.index) });
-      segs.push(seg);
-      last = m.index + m[0].length;
-    }
-  }
-  // 未闭合围栏：只在此前已闭合围栏**之后**的剩余文本里找（否则会误匹配
-  // 到已闭合围栏的开头），且仅 streaming 期尝试——完整消息里的坏 JSON 不猜测
-  if (streaming && last < t.length) {
-    const rest = t.slice(last);
-    const om = open.exec(rest);
-    if (om) {
-      const lang = om[1].toLowerCase();
-      const raw = (om[2] ?? "").trim();
-      let seg: Segment | null = null;
-      if (lang === "html") {
-        if (/<[a-zA-Z]/.test(raw)) seg = { kind: "html", html: raw };
-      } else if (lang === "mermaid") {
-        // 流式期 DSL 半截也能先渲染（mermaid 失败自动降级，下一轮刷新）
-        if (raw) seg = { kind: "mermaid", code: raw };
-      } else if (raw.startsWith("{")) {
-        seg = tryParseRichBlock(lang, raw);
-        if (!seg) {
-          const repaired = repairTruncatedJson(raw);
-          if (repaired) seg = tryParseRichBlock(lang, repaired);
-        }
+    return tryParseRichBlock(lang, raw);
+  };
+  for (const f of scanFences(t)) {
+    if (!f.closed && !streaming) continue;         // 完整消息里未闭合 → 原样给 Markdown
+    if (!f.closed && f.start < last) continue;     // 已被更早的未闭合富围栏消费
+    const lang = f.lang.toLowerCase();
+    const raw = f.body.trim();
+    let seg: Segment | null = null;
+    if (f.closed && richSet.has(lang)) {
+      seg = toSeg(lang, raw);
+    } else if (!f.closed && streaming) {
+      // 流式期：闭合富围栏之外，再看「未闭合且直到结尾」的富语言围栏——
+      // 图表/图解随生成逐步出现。半截 JSON 走容错补齐。
+      if (raw.startsWith("{")) {
+        seg = tryParseRichBlock(lang, raw) ?? (repairTruncatedJson(raw) ? tryParseRichBlock(lang, repairTruncatedJson(raw)!) : null);
+      } else {
+        seg = toSeg(lang, raw);
       }
       if (seg) {
-        const abs = last + om.index;
-        if (abs > last) segs.push({ kind: "md", text: t.slice(last, abs) });
+        if (f.start > last) segs.push({ kind: "md", text: t.slice(last, f.start) });
         segs.push(seg);
         last = t.length; // 未闭合部分已被消费
+        break;
       }
+      continue;
     }
+    if (seg) {
+      if (f.start > last) segs.push({ kind: "md", text: t.slice(last, f.start) });
+      segs.push(seg);
+      last = f.end; // end 含关闭行——整块被消费，后续文本从关闭行之后继续
+    }
+    // seg=null（富语言但内容不可渲染 / 普通语言围栏）：整段留给 Markdown
+    // 作为普通代码块渲染，last 不动
   }
   if (last < t.length) segs.push({ kind: "md", text: t.slice(last) });
   return segs.length ? segs : [{ kind: "md", text: t }];
@@ -411,13 +428,23 @@ function RichCard({ sessionId, card }: { sessionId: string; card: ToolCardInfo }
   );
 }
 
+/** 工具结果是否含可渲染富块（```html / ```chart / … 围栏）：是则该卡片走
+ *  Markdown 渲染（预览盒/图表直出）且默认展开。门控从严：必须出现成对
+ *  的三反引号富语言围栏才判富，普通文本结果仍走 <pre> 纯文本。 */
+function isRichResult(result: string): boolean {
+  if (!result) return false;
+  const langs = "html|mermaid|" + RICH_LANGS.join("|");
+  return new RegExp("```(" + langs + ")[ \\t]*\\r?\\n[\\s\\S]*?```", "i").test(result);
+}
+
 function ToolCard({ card }: { card: ToolCardInfo }) {
-  const important = card.name === "execute_command" || card.name.startsWith("mcp_") || isFileDiff(card.result ?? "") || card.status === "error" || card.status === "cancelled";
-  // 只有 diff / 异常默认展开；普通调用保持为紧凑的一行
+  const richResult = isRichResult(card.result ?? "");
+  const important = card.name === "execute_command" || card.name.startsWith("mcp_") || isFileDiff(card.result ?? "") || richResult || card.status === "error" || card.status === "cancelled";
+  // 只有 diff / 富结果 / 异常默认展开；普通调用保持为紧凑的一行
   const [open, setOpen] = useState(() => important);
 
   useEffect(() => {
-    if (isFileDiff(card.result ?? "") || card.status === "error" || card.status === "cancelled") setOpen(true);
+    if (isFileDiff(card.result ?? "") || isRichResult(card.result ?? "") || card.status === "error" || card.status === "cancelled") setOpen(true);
   }, [card.result, card.status]);
 
   // 卡死看门狗：running 超过「后端超时 + 15s 缓冲」仍无 after_execute → 标记疑似卡死。
@@ -463,7 +490,7 @@ function ToolCard({ card }: { card: ToolCardInfo }) {
             <div className="tool-block-label">参数</div>
             <pre>{JSON.stringify(card.args, null, 2)}</pre>
           </div>
-          {card.result && <div className="tool-block"><div className="tool-block-label">结果</div><DiffStats text={card.result} /><DiffPre text={card.result} /></div>}
+          {card.result && <div className="tool-block"><div className="tool-block-label">结果</div><DiffStats text={card.result} />{richResult ? <Markdown text={card.result} /> : <DiffPre text={card.result} />}</div>}
         </div>
       )}
     </div>
