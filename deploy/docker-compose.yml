@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 #
-# lite-work Core 单机部署（Azure B2als v2 · 4GB · Tailscale 优先）。
-# 安全边界：端口只靠 NSG 默认全关 + Tailscale 访问（容器内 token 始终开启）。
+# lite-work Core 单机部署（自托管：云上 VM 或局域网常开机皆可）。
+# 安全边界：默认只绑 127.0.0.1（局域网/公网都扫不到），访问统一走
+# Tailscale（tailscale serve 反代本机 8787，自动 HTTPS）+ 容器内 Bearer。
+# 局域网直连场景用 LITEWORK_BIND=0.0.0.0 显式放开（无推送、勿在公共网络用）。
 # 注意 Docker 发布端口会绕过 ufw——不要靠 ufw 兜底，公网暴露必须走反代+TLS+NSG。
 
 services:
@@ -14,7 +16,8 @@ services:
     container_name: lite-work-core
     restart: unless-stopped
     ports:
-      - "8787:8787"
+      # 默认回环：只有本机的 tailscale serve 能碰到。放开见文件头注释。
+      - "${LITEWORK_BIND:-127.0.0.1}:8787:8787"
     volumes:
       - core-data:/data
     environment:

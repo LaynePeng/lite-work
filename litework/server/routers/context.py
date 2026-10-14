@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hmac
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -27,7 +28,10 @@ class TokenAuth:
         if not self.token:
             return None
         auth = request.headers.get("Authorization", "")
-        if auth == f"Bearer {self.token}":
+        # 常数时间比较（防时序侧信道逐字节猜令牌）。compare_digest 的 str
+        # 重载要求双方 ASCII，请求头可含任意字符，统一走 bytes 最稳。
+        expected = f"Bearer {self.token}".encode("utf-8")
+        if hmac.compare_digest(auth.encode("utf-8"), expected):
             return None
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 

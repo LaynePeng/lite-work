@@ -130,8 +130,13 @@ Invoke-Step "Package Python backend (PyInstaller)" {
 
 # ------------------------------------------------------------ electron-builder NSIS
 
+# 2.x 独立产品标识（CLI 覆盖，仅 Windows 打包入口生效，mac 命名不变）：
+#   - productName → 独立安装目录（C:\Program Files\lite-work v2）、快捷方式、
+#     产物名（lite-work v2 Setup X.Y.Z.exe）
+#   - appId → NSIS 卸载注册表键（不改的话新装会顶掉 1.10.x 的卸载项）
+#   目的：2.x 与 1.10.x 双装共存；~/.lite-work 配置两版本仍完全共享。
 Invoke-Step "Package Windows installer (electron-builder --win nsis)" {
-    npx electron-builder --win nsis --publish never
+    npx electron-builder --win nsis --publish never --config.productName='lite-work v2' --config.appId='com.litework.app.v2'
 }
 
 Write-Host "==> Done:"

@@ -23,7 +23,7 @@
 
 | 平台 | 命令 | 说明 |
 | --- | --- | --- |
-| **Windows** | `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1` | **唯一正确的 Windows 打包入口**：sync-version → web 构建 → PyInstaller → NSIS，产出 `release/lite-work Setup X.Y.Z.exe` |
+| **Windows** | `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1` | **唯一正确的 Windows 打包入口**：sync-version → web 构建 → PyInstaller → NSIS，产出 `release/lite-work v2 Setup X.Y.Z.exe`（2.x 起用独立 `lite-work v2` 产品标识，可与 1.10.x 双装共存；标识覆盖只在本脚本，mac 命名不变） |
 | Windows 清缓存 | `... build-windows.ps1 -Clean` | 清 PyInstaller 分析缓存（干净出包用） |
 | **Windows (CN)** | `powershell -ExecutionPolicy Bypass -File scripts/build-windows-cn.ps1` | 同 Windows 但自动启用 npmmirror / 清华 PyPI 镜像（本地 CN 环境用，CI 不受影响） |
 | **macOS** | `./scripts/build-macos.sh` | **macOS 一键打包入口**：依赖检查 → web 构建 → `package.mjs`（sync-version → 图标 → PyInstaller → .app）→ spawn-helper 权限修复，产出 `release/lite-work-<版本>-<arch>.dmg` |

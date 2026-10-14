@@ -50,6 +50,42 @@
   调度器；桌面本地模式无订阅即零行为；
 - 新增依赖 `pywebpush>=2.1`（MPL-2.0，活跃维护）；
 
+### 新增（P2 部署 · 网络形态与传输安全）
+- `docker-compose.yml` 默认回环绑定（`LITEWORK_BIND:-127.0.0.1`）：容器
+  端口默认只暴露给本机，公网/跨设备访问需显式覆盖或走反向代理；
+- 部署形态收敛为三条路径（`deploy/README.md` 重写为自托管 runbook +
+  网络形态速查表）：Tailscale `serve` 出 HTTPS（推荐，WireGuard 设备准入
+  + 自动证书 + 推送可用）/ 云主机公网（完整安全标准：认证 + 限流 + 沙箱
+  强制）/ 纯局域网直连（家用，HTTP 无推送）；
+- TokenAuth 令牌比较改 `hmac.compare_digest`（utf-8 bytes，防时序侧信道）。
+
+### 新增（P3 手机 PWA · 完整可编辑）
+- PWA 壳：`manifest.json` + 应用图标（`scripts/generate-pwa-icons.mjs`
+  生成）+ Service Worker（刻意不缓存聊天数据——对话依赖实时连接，SW 仅
+  作为安装与推送载体）；`viewport-fit=cover` / `theme-color` /
+  apple-touch-icon 等 meta 齐；
+- 移动布局判定：`(max-width: 767px)` 且非 Electron（桌面窗口缩窄不切换），
+  `?mobile=1/0` 调试覆盖；
+- 两页移动壳（会话列表 ↔ 聊天）：ChatView / Composer / QuestionBar /
+  审批卡全量复用——能力不简化，只收敛操作层级；会话操作收进底部
+  sheet，交付物 chip 拉取后走系统分享（Web Share，降级新开标签）；
+- 推送铃铛：订阅开关状态机 + iOS 主屏横幅提示；
+- 401 统一处理：`ApiError`（带 status）+ `litework:unauthorized` 窗口
+  广播（3s 去重）→ 连接屏输入令牌；Electron 本地模式有令牌注入层，
+  永不触发；
+- 客户端差异处理：局域网 HTTP 直连（非安全上下文）时铃铛明确提示
+  「需 HTTPS 才有推送」，不再静默缺失或误报「请刷新」。
+
+### 新增（P3 桌面「手机 / 局域网连接」）
+- 桌面设置新增 📱 手机面板：开关写 `client.json`（`lanShare` 字段），
+  Core 以 `--host 0.0.0.0` 重启生效——同一局域网手机可直连本机 Core，
+  无需部署服务器（令牌门仍在；HTTP 连接无推送；远程 Core 直连模式下
+  面板提示不适用）；
+- 配对二维码：面板展示 `http://<内网IP>:<端口>` 与二维码（qrcode，MIT），
+  手机相机扫码打开 `#litework-token=xxx` 链接，前端首帧消费令牌入
+  localStorage 并从地址栏剥除——不用手抄令牌；
+- 多网卡机器列出全部内网 IPv4；重启 Core 前面板明确提示「需重启生效」。
+
 ## [未发布]
 ### 修复（打包）
 - Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；
