@@ -15,6 +15,12 @@ TOKEN_FILE="$CONFIG_DIR/server-token"
 
 mkdir -p "$CONFIG_DIR" "$WORKSPACE"
 
+# 首启播种云端默认配置（卷内无 config.json 时才写，不覆盖用户后续改动）：
+# 4GB 小内存机的顶层任务护栏；桌面版默认 0=不限
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+  echo '{"max_running_tasks": 4}' > "$CONFIG_DIR/config.json"
+fi
+
 if [ -n "$LITEWORK_TOKEN" ]; then
   TOKEN="$LITEWORK_TOKEN"
 else

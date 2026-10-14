@@ -27,7 +27,9 @@
   工作区/令牌）、`/api/health` 健康检查、4GB 内存护栏（mem_limit 3500m +
   Chromium 的 shm_size 1g）、日志轮转；
 - `deploy/docker-entrypoint.sh`：访问令牌首启生成、落卷持久（重启不变，
-  客户端免重新配对；`LITEWORK_TOKEN` 可显式覆盖）+ matplotlib 字体缓存预热；
+  客户端免重新配对；`LITEWORK_TOKEN` 可显式覆盖）+ matplotlib 字体缓存预热
+  + 首启播种云端默认配置（`max_running_tasks: 4`，不覆盖已有配置）；
+- `deploy/README.md`：部署/升级/令牌/备份/内存护栏 runbook；
 - 静态前端目录支持 `LITEWORK_WEB_DIST` 环境变量指定（镜像内 dist 在
   源码树之外，原有 PyInstaller/源码两种定位方式不变）。
 
