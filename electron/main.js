@@ -107,15 +107,30 @@ function setLanShareFlag(enabled) {
   }
 }
 
-/** 本机内网 IPv4（排除回环/虚拟网卡尽量留真实网卡）。 */
+/** 本机内网 IPv4（供手机直连）。不能裸取 os.networkInterfaces()：
+ *  断连网卡会带 APIPA 链路本地地址（169.254.*，不可路由），虚拟网卡
+ *  （WSL/Hyper-V 默认交换机等）也不是手机所在网段；再按家用/办公常见
+ *  网段排序，避免 os 顺序不可依赖导致取错。 */
 function lanIpv4s() {
-  const out = [];
-  for (const list of Object.values(os.networkInterfaces())) {
+  const virtualIf = /WSL|Loopback|VMware|VirtualBox|Docker|ZeroTier|Tailscale|vEthernet \(Default Switch\)/i;
+  const rank = (ip) => {
+    if (ip.startsWith("192.168.")) return 0;
+    if (ip.startsWith("10.")) return 1;
+    const m = ip.match(/^172\.(\d+)\./);
+    if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return 1;
+    return 2;
+  };
+  const found = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
     for (const ni of list || []) {
-      if (ni.family === "IPv4" && !ni.internal) out.push(ni.address);
+      if (ni.family !== "IPv4" || ni.internal) continue;
+      if (ni.address.startsWith("169.254.")) continue;
+      // Hyper-V 外置交换机会以「vEthernet (物理网卡名)」呈现真实上联口，不能按 vEthernet 一刀切
+      if (virtualIf.test(name)) continue;
+      found.push({ ip: ni.address, rank: rank(ni.address) });
     }
   }
-  return out;
+  return found.sort((a, b) => a.rank - b.rank).map((e) => e.ip);
 }
 
 function createWindow(url) {

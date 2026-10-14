@@ -6,7 +6,7 @@
 // http://<内网IP>:<端口>/#litework-token=xxx，前端 consumeTokenFromUrl
 // 自动配对，无需手抄令牌。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import type { LanShareInfo } from "../types";
 
@@ -18,6 +18,8 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
   const [needsRestart, setNeedsRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // 多网卡多网段时由用户点选；缺省第一个（主进程已按常用网段排序）
+  const [selectedIp, setSelectedIp] = useState("");
 
   const refresh = useCallback(async () => {
     const bridge = window.liteWork;
@@ -25,17 +27,7 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
     try {
       const i = await bridge.getLanShare();
       setInfo(i);
-      if (i.enabled && i.url && i.token) {
-        setQr(
-          await QRCode.toDataURL(`${i.url}/#litework-token=${i.token}`, {
-            width: 240,
-            margin: 1,
-            color: { dark: "#0d1117", light: "#ffffff" },
-          })
-        );
-      } else {
-        setQr("");
-      }
+      setSelectedIp((prev) => (i.ips.includes(prev) ? prev : i.ips[0] ?? ""));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -44,6 +36,43 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /** 展示与编码进二维码的地址：以主进程下发的 url 为底，切网段时换 hostname。 */
+  const displayUrl = useMemo(() => {
+    if (!info?.url) return "";
+    if (!selectedIp) return info.url;
+    try {
+      const u = new URL(info.url);
+      u.hostname = selectedIp;
+      return u.href.replace(/\/$/, "");
+    } catch {
+      return info.url;
+    }
+  }, [info, selectedIp]);
+
+  // 二维码跟随选中网段重生成；卸载/网段切换后不落地旧结果
+  useEffect(() => {
+    const token = info?.token;
+    if (!displayUrl || !token) {
+      setQr("");
+      return;
+    }
+    let alive = true;
+    void QRCode.toDataURL(`${displayUrl}/#litework-token=${token}`, {
+      width: 240,
+      margin: 1,
+      color: { dark: "#0d1117", light: "#ffffff" },
+    })
+      .then((data) => {
+        if (alive) setQr(data);
+      })
+      .catch(() => {
+        if (alive) setQr("");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [displayUrl, info]);
 
   const toggle = async (enabled: boolean) => {
     const bridge = window.liteWork;
@@ -77,9 +106,9 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
   };
 
   const copyUrl = async () => {
-    if (!info?.url) return;
+    if (!displayUrl) return;
     try {
-      await navigator.clipboard.writeText(info.url);
+      await navigator.clipboard.writeText(displayUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -136,15 +165,30 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
               ) : (
                 <>
                   <div className="phone-connect-qr">
-                    <img src={qr} alt="手机连接二维码" />
+                    {qr ? (
+                      <img src={qr} alt="手机连接二维码" />
+                    ) : (
+                      <div className="phone-connect-qr-loading">二维码生成中…</div>
+                    )}
                   </div>
                   <div className="phone-connect-url-row">
-                    <code className="phone-connect-url">{info.url}</code>
+                    <code className="phone-connect-url">{displayUrl}</code>
                     <button onClick={() => void copyUrl()}>{copied ? "已复制" : "复制"}</button>
                   </div>
                   {info.ips.length > 1 && (
                     <div className="phone-connect-ips">
-                      其它内网地址：{info.ips.slice(1).join("、")}（扫码用第一个；多网卡时手机连哪个网段用哪个）
+                      <div className="phone-connect-ip-chips">
+                        {info.ips.map((ip) => (
+                          <button
+                            key={ip}
+                            className={`ip-chip ${ip === selectedIp ? "active" : ""}`}
+                            onClick={() => setSelectedIp(ip)}
+                          >
+                            {ip}
+                          </button>
+                        ))}
+                      </div>
+                      <div>手机连哪个 WiFi 就选哪个网段，二维码会跟着切换</div>
                     </div>
                   )}
                   <p className="phone-connect-desc">

@@ -72,12 +72,33 @@ describe("PhoneConnectModal", () => {
     render(<PhoneConnectModal onClose={vi.fn()} />);
 
     const img = await screen.findByAltText("手机连接二维码");
-    const pairingUrl = "http://192.168.1.5:51234/#litework-token=tok-abc_123";
     // toDataURL 的入参被编码进 mock 产出的 data URL，借此断言配对链接正确
-    expect(img.getAttribute("src")).toContain(btoa(pairingUrl));
+    await waitFor(() =>
+      expect(img.getAttribute("src")).toContain(btoa("http://192.168.1.5:51234/#litework-token=tok-abc_123"))
+    );
     expect(screen.getByText("http://192.168.1.5:51234")).toBeInTheDocument();
-    // 多网卡：其余地址也展示
-    expect(screen.getByText(/10\.0\.0\.3/)).toBeInTheDocument();
+    // 双网段：两个 IP 都展示为 chip
+    expect(screen.getByRole("button", { name: "10.0.0.3" })).toBeInTheDocument();
+  });
+
+  it("双网段：点选第二个 IP，URL 与二维码跟随切换", async () => {
+    getLanShare.mockResolvedValue({
+      enabled: true,
+      localCore: true,
+      url: "http://192.168.1.5:51234",
+      token: "tok-abc_123",
+      ips: ["192.168.1.5", "10.0.0.3"],
+    });
+    render(<PhoneConnectModal onClose={vi.fn()} />);
+
+    await screen.findByText("http://192.168.1.5:51234");
+    fireEvent.click(screen.getByRole("button", { name: "10.0.0.3" }));
+
+    expect(await screen.findByText("http://10.0.0.3:51234")).toBeInTheDocument();
+    const img = screen.getByAltText("手机连接二维码");
+    await waitFor(() =>
+      expect(img.getAttribute("src")).toContain(btoa("http://10.0.0.3:51234/#litework-token=tok-abc_123"))
+    );
   });
 
   it("写入失败：展示错误信息", async () => {
