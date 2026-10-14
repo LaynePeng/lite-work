@@ -7,9 +7,12 @@ import { api, type WatchSourceInfo } from "./api";
 import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
+import ConnectScreen from "./components/ConnectScreen";
 import ErrorBoundary from "./components/ErrorBoundary";
+import MobileApp from "./components/MobileApp";
 import NewTaskWizard, { type NewTaskConfig } from "./components/NewTaskWizard";
 import PendingQueue from "./components/PendingQueue";
+import PhoneConnectModal from "./components/PhoneConnectModal";
 import FileViewer from "./components/FileViewer";
 import ProjectPicker from "./components/ProjectPicker";
 import SettingsModal from "./components/SettingsModal";
@@ -22,8 +25,9 @@ import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchN
 import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
-import { apiUrl, authHeaders } from "./lib/connection";
+import { apiUrl, authHeaders, isElectron, UNAUTHORIZED_EVENT } from "./lib/connection";
 import { connectEventStream, SSE_CLOSED, type EventStream } from "./lib/sse";
+import { useIsMobile } from "./hooks/useIsMobile";
 
 interface StreamingState {
   items: WorkItem[];
@@ -233,6 +237,7 @@ export default function App() {
   const [providerMeta, setProviderMeta] = useState<LLMProviderMeta[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showPhoneConnect, setShowPhoneConnect] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   // 模型元数据提醒横幅：启动时检查一次，缓存缺失/过期（>7 天）就顶栏提示
   // 「立即同步」——过期缓存虽仍作兜底（不会静默掉回 128K），但窗口/定价可能
@@ -3113,6 +3118,22 @@ export default function App() {
     return sessions.find((s) => s.session_id === activeSessionId)?.title ?? "新会话";
   }, [activeSessionId, sessions]);
 
+  // ------------------------------------------------------------ P3：令牌门 + 移动布局
+
+  // 401 广播 → 连接屏（仅浏览器/PWA；Electron 有 session 级令牌注入，永不触发）
+  const [authFailed, setAuthFailed] = useState(false);
+  useEffect(() => {
+    const onUnauthorized = () => setAuthFailed(true);
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
+
+  const isMobile = useIsMobile();
+
+  if (authFailed && !isElectron()) {
+    return <ConnectScreen />;
+  }
+
   if (loading) {
     return (
       <div className="app">
@@ -3140,6 +3161,97 @@ export default function App() {
           </div>
         </div>
       </div>
+    );
+  }
+
+  // ------------------------------------------------------------ P3：移动壳（手机 PWA）
+  // 窄屏 + 非 Electron → 两页移动布局（会话列表 + 聊天）。桌面树零改动。
+  if (isMobile) {
+    return (
+      <MobileApp
+        workspaceName={status?.workspace?.split(/[\\/]/).filter(Boolean).pop() ?? "未打开项目"}
+        version={status?.version ?? "?"}
+        workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={(id) => void selectSession(id)}
+        onNewChat={requestNewChat}
+        onNewTask={requestNewTask}
+        onContinueSession={(id, title) => void continueSession(id, title)}
+        onRenameSession={(id, name) => void renameSession(id, name)}
+        onDeleteSession={(id) => void deleteSession(id)}
+        onTogglePinSession={(id, pinned) => void togglePinSession(id, pinned)}
+        onRefreshSessions={() => void refreshSessions()}
+        sessionTitle={activeSessionTitle}
+        currentChat={currentChat}
+        currentAgent={currentAgent}
+        onSend={(p) => void send(p)}
+        onStop={stop}
+        onApprove={(id, a) => void approve(id, a)}
+        onAnswerQuestion={(id, answer) => void answerQuestion(id, answer)}
+        onContinueTask={() => void send(CONTINUE_PROMPT)}
+        onStickChange={handleStickChange}
+        onDismissError={() => patchActiveChat({ error: null })}
+        onWorktreeDiff={() => activeSessionId && void handleWorktreeDiff(activeSessionId)}
+        onWorktreeMerge={() => activeSessionId && void handleWorktreeMerge(activeSessionId)}
+        onWorktreeAiMerge={() => activeSessionId && handleWorktreeAiMerge(activeSessionId, activeSessionId)}
+        onWorktreeAbortMerge={() => activeSessionId && void handleWorktreeAbortMerge(activeSessionId)}
+        onWorktreeDiscard={() => activeSessionId && void handleWorktreeDiscard(activeSessionId)}
+        foldTurns={uiConfig?.chat_fold_turns}
+        foldMessages={uiConfig?.chat_fold_messages}
+        onQueueRemove={(idx) => {
+          const sid = activeSessionId;
+          if (!sid) return;
+          const q = getChat(sid);
+          patchChat(sid, { pendingQueue: q.pendingQueue.filter((_, i) => i !== idx) });
+        }}
+        onQueueReorder={(from, to) => {
+          const sid = activeSessionId;
+          if (!sid) return;
+          const q = getChat(sid);
+          const next = [...q.pendingQueue];
+          const [moved] = next.splice(from, 1);
+          next.splice(to, 0, moved);
+          patchChat(sid, { pendingQueue: next });
+        }}
+        onQueueSend={(idx) => {
+          const sid = activeSessionId;
+          if (!sid) return;
+          const item = getChat(sid).pendingQueue[idx];
+          if (!item) return;
+          patchChat(sid, { pendingQueue: getChat(sid).pendingQueue.filter((_, i) => i !== idx) });
+          if (currentChat.running) sendQueuedItem(sid, item);
+          else void send(item);
+        }}
+        agents={agents}
+        onSelectAgent={setCurrentAgent}
+        collabModes={collabModes}
+        sessionCollabMode={activeSessionId ? currentChat.collabMode ?? null : (activeTabId ? draftCollabModes[activeTabId] ?? null : null)}
+        onSessionCollabMode={setSessionCollabMode}
+        onCollabModesRefresh={refreshCollabModes}
+        llmConfig={llmConfig}
+        providerMeta={providerMeta}
+        sessionModel={activeSessionId ? currentChat.modelOverride ?? null : (draftModels[activeTabId] ?? null)}
+        onSessionModelChange={(model) => void setSessionModel(model)}
+        reasoningEffort={activeSessionId ? (currentChat.reasoningEffort ?? "") : (activeTabId ? draftReasoning[activeTabId] ?? "" : "")}
+        onReasoningEffortChange={(v) => {
+          if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: v });
+          else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: v }));
+        }}
+        scrolledUp={chatScrolledUp}
+        stopArmed={escStopArmed}
+        success={success}
+        onDismissSuccess={() => setSuccess(null)}
+        newTaskOpen={newTaskOpen}
+        onNewTaskCancel={() => setNewTaskOpen(false)}
+        onNewTaskSubmit={(cfg) => void startTaskFromWizard(cfg)}
+        settingsOpen={showSettings}
+        onOpenSettings={() => setShowSettings(true)}
+        onCloseSettings={() => setShowSettings(false)}
+        onSettingsSaved={() => { void refreshAll(); }}
+        watchToasts={watchToasts}
+        onDismissWatchToast={dismissWatchToast}
+      />
     );
   }
 
@@ -3233,6 +3345,7 @@ export default function App() {
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
+        onOpenPhoneConnect={isElectron() ? () => setShowPhoneConnect(true) : undefined}
         onFileOpen={(p, opts) => void openFileTab(p, opts)}
         onDirOpen={(p) => void openDirInSystem(p)}
       />
@@ -3458,6 +3571,7 @@ export default function App() {
           onSaved={() => { void refreshAll(); }}
         />
       )}
+      {showPhoneConnect && <PhoneConnectModal onClose={() => setShowPhoneConnect(false)} />}
       {newTaskOpen && (
         <NewTaskWizard
           collabModes={collabModes}

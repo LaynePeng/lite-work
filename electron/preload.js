@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 成功后页面整页刷新；有任务运行中时返回 { ok: false, error }。
    */
   restartCore: () => ipcRenderer.invoke("restart-core"),
+  /** 局域网共享状态：{ enabled, url, token, ips }（url/token 仅开启时非空） */
+  getLanShare: () => ipcRenderer.invoke("get-lan-share"),
+  /** 开关局域网共享（写 client.json；需重启 Core 生效） */
+  setLanShare: (enabled) => ipcRenderer.invoke("set-lan-share", enabled),
   /**
    * 用系统默认应用打开工作区内的文件（docx/xlsx/pdf/图片等非代码文件）。
    * 返回 { ok: true } 或 { ok: false, error }。

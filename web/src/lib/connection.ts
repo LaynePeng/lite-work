@@ -43,3 +43,35 @@ export function authHeaders(): Record<string, string> {
   const token = authToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+/** 是否运行在 Electron 桌面壳内（preload 注入 window.liteWork）。 */
+export function isElectron(): boolean {
+  return typeof window !== "undefined" && !!window.liteWork;
+}
+
+/** 401 广播：浏览器/PWA 无有效令牌时由 App 弹连接屏。
+ *  Electron 本地模式有 session 级令牌注入，永远不会触发。 */
+export const UNAUTHORIZED_EVENT = "litework:unauthorized";
+
+/** 扫码配对链接（#litework-token=xxx）：取出令牌写 localStorage 并从地址栏
+ *  剥除（不进历史，避免二次分享泄露）。应在应用首帧前调用一次。 */
+export function consumeTokenFromUrl(): void {
+  if (typeof window === "undefined") return;
+  const m = window.location.hash.match(/litework-token=([A-Za-z0-9._-]+)/);
+  if (!m) return;
+  setAuthToken(m[1]);
+  try {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  } catch {
+    /* replaceState 不可用的环境：令牌留在 hash，刷新后重新消费，无害 */
+  }
+}
+
+let lastUnauthorizedAt = 0;
+
+export function notifyUnauthorized(): void {
+  // 页面加载时多个并发请求同时 401，只广播一次
+  if (Date.now() - lastUnauthorizedAt < 3000) return;
+  lastUnauthorizedAt = Date.now();
+  window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+}

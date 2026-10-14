@@ -1094,6 +1094,7 @@ export default function Sidebar({
   onOpenProjectNewWindow,
   onOpenSettings,
   onOpenAbout,
+  onOpenPhoneConnect,
   onFileOpen,
   onDirOpen,
 }: {
@@ -1152,6 +1153,8 @@ export default function Sidebar({
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
+  /** 「手机 / 局域网连接」入口（仅桌面 Electron 传入；缺省不渲染按钮） */
+  onOpenPhoneConnect?: () => void;
   onFileOpen?: (path: string, opts?: OpenFileOptions) => void;
   onDirOpen?: (path: string) => void;
 }) {
@@ -1486,6 +1489,11 @@ export default function Sidebar({
       )}
 
       <div className="sidebar-footer">
+        {onOpenPhoneConnect && (
+          <button className="btn-open-settings" onClick={onOpenPhoneConnect} title="手机 / 局域网连接">
+            📱 手机
+          </button>
+        )}
         <button className="btn-open-settings" onClick={onOpenSettings}>
           ⚙️ 设置
         </button>

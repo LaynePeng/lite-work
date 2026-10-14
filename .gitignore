@@ -31,3 +31,6 @@ web/tsconfig.tsbuildinfo
 # 由 scripts/generate-tray-icon.mjs 从 scripts/tray-icon.svg 生成，
 # 打包时重新生成以保持与 SVG 同步。
 !electron/tray-icon.png
+# 例外：PWA 图标是 manifest.json 引用的必需资源（手机添加到主屏幕）。
+# 由 scripts/generate-pwa-icons.mjs 从 scripts/app-icon.svg 生成后直接提交。
+!web/public/icons/*.png

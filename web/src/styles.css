@@ -10025,3 +10025,335 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 .draft-dirty-hint { color: var(--text-2); font-size: 12px; }
 .draft-buttons { display: flex; gap: 8px; }
+
+/* ================================================================
+   P3：移动壳（手机 PWA）—— 两页：会话列表 + 聊天
+   全部规则以 .mobile-app / .connect-screen 作用域，桌面样式零改动
+   ================================================================ */
+
+.mobile-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh; /* iOS 地址栏收缩跟随 */
+  background: var(--bg-0);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-app * {
+  -webkit-tap-highlight-color: transparent;
+}
+/* iOS：输入字号 < 16px 聚焦会整页缩放 */
+.mobile-app textarea,
+.mobile-app input {
+  font-size: 16px;
+}
+
+/* —— 顶栏（两页共用） —— */
+.mobile-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 14px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+}
+.mobile-brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.mobile-brand-icon { width: 30px; height: 30px; border-radius: 8px; flex: none; }
+.mobile-brand-text { min-width: 0; }
+.mobile-workspace {
+  font-size: 14px; font-weight: 600; color: var(--text-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-version { font-size: 11px; color: var(--text-2); font-family: var(--font-mono); }
+.mobile-header-actions { display: flex; gap: 6px; flex: none; }
+.mobile-icon-btn {
+  width: 36px; height: 36px; border-radius: 10px;
+  border: 1px solid var(--border); background: transparent;
+  font-size: 16px; color: var(--text-1); cursor: pointer;
+  display: grid; place-items: center;
+}
+.mobile-icon-btn.active { background: var(--bg-3); color: var(--text-0); border-color: var(--accent); }
+
+/* —— 会话列表页 —— */
+.mobile-list {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 110px;
+}
+.mobile-list-empty { text-align: center; color: var(--text-2); padding: 72px 20px 0; }
+.mobile-list-empty-icon { font-size: 40px; margin-bottom: 10px; }
+.mobile-list-empty p { font-size: 14px; }
+.mobile-list-empty-sub { font-size: 12px; margin-top: 4px; }
+.mobile-session-card {
+  display: block; width: 100%; text-align: left;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+  cursor: pointer; color: var(--text-0);
+  transition: border-color 0.15s;
+}
+.mobile-session-card:active { border-color: var(--accent); }
+.mobile-session-card.active { border-color: var(--accent); background: var(--bg-2); }
+.mobile-card-top { display: flex; align-items: center; gap: 6px; }
+.mobile-run-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--green); animation: mobile-pulse 1.6s ease infinite;
+}
+@keyframes mobile-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(63, 185, 80, 0); }
+}
+.mobile-card-title {
+  flex: 1; min-width: 0; font-size: 15px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-card-more {
+  flex: none; width: 30px; height: 30px; margin: -6px -6px -6px 0;
+  display: grid; place-items: center; color: var(--text-2);
+  font-size: 18px; border-radius: 8px;
+}
+.mobile-card-progress { margin-top: 9px; }
+.mobile-card-progress-bar { height: 4px; border-radius: 2px; background: var(--grad); min-width: 2px; }
+.mobile-card-progress-text {
+  display: block; margin-top: 4px; font-size: 11px; color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-card-activity {
+  margin-top: 7px; font-size: 12px; color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-card-activity.err { color: var(--yellow); }
+.mobile-card-meta {
+  margin-top: 7px; font-size: 11px; color: var(--text-2);
+  display: flex; align-items: center; gap: 4px;
+}
+.mobile-card-pin { font-size: 11px; }
+
+.mobile-list-actions {
+  position: fixed;
+  right: calc(18px + env(safe-area-inset-right));
+  bottom: calc(22px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 10px; z-index: 50;
+}
+.mobile-new-chat {
+  height: 40px; padding: 0 16px; border-radius: 20px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--text-1); font-size: 13px; cursor: pointer;
+}
+.mobile-fab {
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--grad); border: none; color: #fff;
+  font-size: 26px; line-height: 1; cursor: pointer;
+  box-shadow: 0 8px 24px rgba(79, 140, 255, 0.4);
+  display: grid; place-items: center;
+}
+
+/* —— 聊天页 —— */
+.mobile-back {
+  flex: none; width: 34px; height: 36px;
+  background: none; border: none; color: var(--text-0);
+  font-size: 28px; line-height: 1; cursor: pointer; padding: 0;
+}
+.mobile-chat-title { flex: 1; min-width: 0; }
+.mobile-chat-name {
+  font-size: 15px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-chat-sub { font-size: 11px; color: var(--text-2); }
+.mobile-sse-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--text-2); }
+.mobile-sse-dot.connected { background: var(--green); }
+.mobile-sse-dot.connecting, .mobile-sse-dot.reconnecting { background: var(--yellow); }
+.mobile-sse-dot.lost { background: var(--red); }
+
+.mobile-banner {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 8px 14px; font-size: 13px;
+}
+.mobile-banner span {
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-banner button {
+  flex: none; padding: 4px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-2); color: var(--text-1);
+  font-size: 12px; cursor: pointer;
+}
+.mobile-banner.warn { background: rgba(210, 153, 34, 0.12); color: var(--yellow); }
+.mobile-banner.err { background: rgba(248, 81, 73, 0.12); color: var(--red); }
+.mobile-banner.ok { background: rgba(63, 185, 80, 0.12); color: var(--green); }
+
+.mobile-agent-chip {
+  flex: none; padding: 7px 14px; font-size: 12px; color: var(--text-1);
+  background: var(--bg-1); border-bottom: 1px solid var(--border);
+}
+.mobile-chat-body { flex: 1; min-height: 0; display: flex; }
+
+/* —— 复用组件的窄屏适配 —— */
+.mobile-app .chat-scroll { padding: 16px 0 12px; }
+.mobile-app .msg-row { padding: 0 12px; margin-bottom: 16px; }
+.mobile-app .agent-bar { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+.mobile-app .agent-bar::-webkit-scrollbar { display: none; }
+.mobile-app .question-bar { padding: 10px 12px; }
+.mobile-app .modal { width: 100%; max-width: none; max-height: 92dvh; border-radius: 0; }
+.mobile-app .modal-overlay { place-items: stretch; padding: 0; }
+/* Composer 贴底：聊天页最底元素，吃下方安全区（列表页 FAB 自带偏移） */
+.mobile-app .composer-wrap { padding-bottom: env(safe-area-inset-bottom); }
+
+/* 审批卡紧凑态：桌面 440px 定宽 + 26px 内边距在手机上太奢侈 */
+.mobile-app .approval-overlay { padding: 10px; }
+.mobile-app .approval-card {
+  width: 100%;
+  padding: 18px 14px;
+  max-height: min(calc(100dvh - 64px), 100%);
+}
+.mobile-app .approval-buttons { flex-wrap: wrap; }
+
+/* 交付物 chip（会话卡内）：点击走系统分享面板 */
+.mobile-card-files {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.mobile-file-chip {
+  max-width: 100%;
+  display: inline-flex; align-items: center;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 14px; padding: 4px 10px;
+  color: var(--accent); font-size: 11px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-file-chip.more { color: var(--text-2); cursor: default; }
+
+/* —— bottom sheet（会话操作） —— */
+.mobile-sheet-mask {
+  position: fixed; inset: 0; z-index: 210;
+  background: rgba(5, 8, 14, 0.55);
+  display: flex; align-items: flex-end;
+  animation: fade-in 0.18s ease;
+}
+.mobile-sheet {
+  width: 100%;
+  background: var(--bg-1);
+  border-top-left-radius: 16px; border-top-right-radius: 16px;
+  padding: 6px 0 calc(10px + env(safe-area-inset-bottom));
+  animation: mobile-sheet-up 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes mobile-sheet-up {
+  from { transform: translateY(40px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.mobile-sheet-title {
+  padding: 10px 18px 8px; font-size: 13px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-sheet-item {
+  display: block; width: 100%; text-align: left;
+  padding: 14px 18px; background: none; border: none;
+  border-top: 1px solid var(--border);
+  color: var(--text-0); font-size: 15px; cursor: pointer;
+}
+.mobile-sheet-item.danger { color: var(--red); }
+.mobile-sheet-item.cancel { color: var(--text-2); text-align: center; }
+
+/* —— 连接屏（令牌录入） —— */
+.connect-screen {
+  min-height: 100vh; min-height: 100dvh;
+  display: grid; place-items: center;
+  padding: 24px; background: var(--bg-0);
+}
+.connect-card {
+  width: min(400px, 100%);
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: 16px;
+  padding: 34px 28px 26px; text-align: center;
+}
+.connect-icon { width: 64px; height: 64px; border-radius: 16px; margin-bottom: 14px; }
+.connect-card h1 { font-size: 20px; margin-bottom: 6px; }
+.connect-origin {
+  font-size: 12px; color: var(--text-2); font-family: var(--font-mono);
+  margin-bottom: 22px; word-break: break-all;
+}
+.connect-input-row {
+  display: flex; gap: 8px; align-items: stretch;
+}
+.connect-input-row input {
+  flex: 1; min-width: 0;
+  background: var(--bg-0); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text-0); padding: 10px 12px; font-size: 16px;
+  font-family: var(--font-mono);
+}
+.connect-input-row input:focus { outline: none; border-color: var(--accent); }
+.connect-eye {
+  flex: none; width: 42px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  cursor: pointer; font-size: 15px;
+}
+.connect-error { color: var(--red); font-size: 13px; margin-top: 10px; text-align: left; }
+.connect-submit {
+  width: 100%; margin-top: 14px; padding: 12px;
+  border: none; border-radius: 10px;
+  background: var(--grad); color: #fff; font-size: 15px; font-weight: 600;
+  cursor: pointer;
+}
+.connect-submit:disabled { opacity: 0.6; cursor: default; }
+.connect-hint {
+  margin-top: 18px; font-size: 12px; color: var(--text-2); line-height: 1.7;
+}
+.connect-hint code {
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 6px; word-break: break-all;
+}
+
+/* —— 手机 / 局域网连接面板 —— */
+.phone-connect-modal { width: 460px; }
+.phone-connect-body { display: flex; flex-direction: column; gap: 14px; }
+.phone-connect-desc { font-size: 13px; color: var(--text-1); line-height: 1.7; }
+.phone-connect-notes {
+  list-style: none; display: flex; flex-direction: column; gap: 6px;
+  font-size: 12px; color: var(--text-2);
+}
+.phone-connect-notes li::before { content: "· "; color: var(--text-2); }
+.phone-connect-notes b { color: var(--yellow); font-weight: 600; }
+.phone-connect-error {
+  background: rgba(248, 81, 73, 0.12); color: var(--red);
+  border-radius: 8px; padding: 8px 12px; font-size: 13px;
+}
+.phone-connect-restart {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.35);
+  border-radius: 10px; padding: 10px 14px; font-size: 13px; color: var(--yellow);
+}
+.phone-connect-restart button {
+  flex: none; padding: 6px 14px; border-radius: 8px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-0);
+  font-size: 12px; cursor: pointer;
+}
+.phone-connect-qr {
+  display: grid; place-items: center; padding: 12px;
+  background: #fff; border-radius: 12px; width: fit-content; margin: 0 auto;
+}
+.phone-connect-qr img { width: 240px; height: 240px; display: block; }
+.phone-connect-url-row { display: flex; gap: 8px; align-items: center; }
+.phone-connect-url {
+  flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 13px;
+  background: var(--bg-0); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; color: var(--text-0); word-break: break-all;
+}
+.phone-connect-url-row button {
+  flex: none; padding: 8px 14px; border-radius: 8px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+  font-size: 12px; cursor: pointer;
+}
+.phone-connect-ips { font-size: 11px; color: var(--text-2); line-height: 1.6; }
+.phone-connect-toggle {
+  padding: 11px; border: none; border-radius: 10px;
+  background: var(--grad); color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+.phone-connect-toggle.off {
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+}
+.phone-connect-toggle:disabled { opacity: 0.6; cursor: default; }
+.phone-connect-hint { font-size: 13px; color: var(--text-2); }

@@ -12,7 +12,7 @@
 // 重连交给调用方：出错只回调一次 onerror 并置 CLOSED，上层自行探测存活、
 // 退避或放弃（App.tsx 的任务流与 useWatchNotifications 的盯梢流均如此）。
 
-import { apiUrl, authHeaders } from "./connection";
+import { apiUrl, authHeaders, notifyUnauthorized } from "./connection";
 
 /** 与 EventSource 的 readyState 取值对齐（调用方只用到 CLOSED 判断）。 */
 export const SSE_CLOSED = 2;
@@ -45,6 +45,7 @@ export function connectEventStream(path: string): EventStream {
       });
       if (!res.ok || !res.body) {
         // 服务端拒绝（401/404/5xx）或无流可读：等价 EventSource 的「已放弃」
+        if (res.status === 401) notifyUnauthorized();
         stream.readyState = SSE_CLOSED;
         stream.onerror?.();
         return;

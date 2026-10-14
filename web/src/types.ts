@@ -568,6 +568,23 @@ export interface LiteWorkBridge {
   onTerminalData: (listener: (data: string) => void) => () => void;
   onTerminalExit: (listener: (code: number) => void) => () => void;
   onShowAbout: (listener: () => void) => () => void;
+  /** 局域网共享状态（client.json lanShare + 当前 Core 的局域网直连信息） */
+  getLanShare: () => Promise<LanShareInfo>;
+  /** 开关局域网共享（写 client.json；需重启 Core 生效） */
+  setLanShare: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+}
+
+/** 「手机 / 局域网」面板数据：enabled=false 时 url/token 为空。 */
+export interface LanShareInfo {
+  enabled: boolean;
+  /** 当前窗口是否跑着本地 Core（client.json 远程直连时为 false，功能不适用） */
+  localCore: boolean;
+  /** 局域网直连 URL（http://<内网IP>:<端口>）；未开启为空 */
+  url: string;
+  /** 连接令牌（Core 自动生成）；未开启为空 */
+  token: string;
+  /** 本机全部内网 IPv4（多网卡多地址时都展示） */
+  ips: string[];
 }
 
 declare global {

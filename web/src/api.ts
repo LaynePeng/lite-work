@@ -3,7 +3,18 @@
 //
 
 import type { AgentInfo, AppConfig, FilePreviewResponse, FileReadResponse, LLMConfig, LLMProviderMeta, MCPServerConfig, MCPStatus, MCPServerStatus, ServerStatus, SessionInfo, ToolDef, TreeResponse } from "./types";
-import { apiUrl, authHeaders } from "./lib/connection";
+import { apiUrl, authHeaders, notifyUnauthorized } from "./lib/connection";
+
+/** 带状态码的 API 错误（此前 req() 抛纯 Error，消息里带状态码，调用方无法可靠判别 401/429）。 */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 const TIMEOUT = 15000;
 // 联网类操作（社区清单拉取 / 插件·技能下载安装）走单独的长超时：
@@ -137,12 +148,13 @@ async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Pro
       signal: controller.signal,
     });
     if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized();
       let detail = res.statusText;
       try {
         const body = await res.json();
         detail = body.detail ?? JSON.stringify(body);
       } catch {}
-      throw new Error(`${res.status} ${detail}`);
+      throw new ApiError(res.status, `${res.status} ${detail}`);
     }
     return res.json() as Promise<T>;
   } catch (err) {

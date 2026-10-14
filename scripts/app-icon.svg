@@ -34,4 +34,14 @@
     <circle r="105" fill="#ffffff"/>
     <circle r="42" fill="url(#bg)"/>
   </g>
+
+  <!-- 2.0 版本角标：白圆 + 绿色「2」（主题绿 #3fb950）。位置经三轮校验：
+       完全落在 rx=190 圆角内、避开齿轮辐条（最近 127.9 > 112）、maskable
+       0.78 缩放后仍在 80% 安全区（399.6 < 409.6）。须放在 gloss 元素之后，
+       generate-pwa-icons 的 fullBleed() 才会把它一并缩进安全区。 -->
+  <g id="v2-badge">
+    <circle cx="795" cy="795" r="112" fill="#ffffff"/>
+    <text x="795" y="849" font-family="Arial, 'Segoe UI', 'PingFang SC', sans-serif"
+          font-size="150" font-weight="700" fill="#3fb950" text-anchor="middle">2</text>
+  </g>
 </svg>

@@ -74,6 +74,7 @@ export default function Composer({
   tabCount = 0,
   scrolledUp = false,
   stopArmed = false,
+  autoFocus = true,
 }: {
   disabled?: boolean;
   running: boolean;
@@ -101,6 +102,8 @@ export default function Composer({
   scrolledUp?: boolean;
   /** 已按过一次 Esc、等待第二次确认（App 的 Esc 停止任务待确认态） */
   stopArmed?: boolean;
+  /** 挂载即聚焦输入框；移动端传 false（进聊天页不该自动弹软键盘） */
+  autoFocus?: boolean;
 }) {
   const [text, setText] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -707,7 +710,7 @@ export default function Composer({
           </div>
         )}
         <textarea
-          autoFocus
+          autoFocus={autoFocus}
           ref={inputRef}
           value={text}
           onChange={(e) => {

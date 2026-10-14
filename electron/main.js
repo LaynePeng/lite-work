@@ -87,6 +87,37 @@ function loadClientConfig() {
   return { coreUrl: "", token: "" };
 }
 
+// ---- 局域网共享（手机直连本机 Core）----
+// 开关持久化在 ~/.lite-work/client.json 的 lanShare 字段（与 remote 直连配置
+// 同文件；Core 启动参数据此决定 --host）。渲染进程经 IPC 读写。
+function lanShareEnabled() {
+  return loadClientConfig().lanShare === true;
+}
+
+function setLanShareFlag(enabled) {
+  try {
+    fs.mkdirSync(path.dirname(CLIENT_CONFIG), { recursive: true });
+    const cfg = loadClientConfig();
+    cfg.lanShare = enabled;
+    fs.writeFileSync(CLIENT_CONFIG, JSON.stringify(cfg, null, 2), "utf-8");
+    return { ok: true };
+  } catch (err) {
+    writeLog("error", "写入局域网共享配置失败:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** 本机内网 IPv4（排除回环/虚拟网卡尽量留真实网卡）。 */
+function lanIpv4s() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === "IPv4" && !ni.internal) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
 function createWindow(url) {
   const window = new BrowserWindow({
     width: 1280,
@@ -240,6 +271,8 @@ function spawnLocalCore(workspace) {
     const args = app.isPackaged
       ? ["serve", "--port", "0"]
       : ["-m", "litework", "serve", "--port", "0"];
+    // 局域网共享：放开回环绑定，手机可直连（令牌门仍在；http 无推送）
+    if (lanShareEnabled()) args.push("--host", "0.0.0.0");
     args.push("--config-dir", path.join(os.homedir(), ".lite-work"));
     if (workspace) args.push("--workspace", workspace);
     const env = {
@@ -605,6 +638,32 @@ async function restartLocalCore(winId) {
 }
 
 ipcMain.handle("restart-core", (event) => restartLocalCore(event.sender.id));
+
+// ---- 局域网共享（手机直连本机 Core）：状态查询与开关 ----
+ipcMain.handle("get-lan-share", (event) => {
+  const enabled = lanShareEnabled();
+  const record = localInstances.get(event.sender.id);
+  const ips = lanIpv4s();
+  let url = "";
+  if (enabled && record?.url && ips.length > 0) {
+    try {
+      const u = new URL(record.url);
+      u.hostname = ips[0];
+      url = u.href.replace(/\/$/, "");
+    } catch { /* url 解析失败按未配置处理 */ }
+  }
+  return {
+    enabled,
+    // 远程 Core 直连（client.json coreUrl）时无本地实例，面板据此提示不适用
+    localCore: !!record,
+    url,
+    // 令牌只在开启时下发（面板只在用户自己的桌面里展示）
+    token: enabled ? record?.token || "" : "",
+    ips,
+  };
+});
+
+ipcMain.handle("set-lan-share", (event, enabled) => setLanShareFlag(!!enabled));
 
 function stopTerminal(id) {
   const term = terminals.get(id);
