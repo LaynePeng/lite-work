@@ -39,6 +39,8 @@ dependencies = [
     "pymupdf>=1.28",
     # Web 抓取 TLS 指纹兜底（对抗 Cloudflare JA3 检测）
     "curl_cffi>=0.7",
+    # Web Push（PWA 盯梢通知）：VAPID 签名 + aes128gcm 加密投递
+    "pywebpush>=2.1",
 ]
 
 [project.optional-dependencies]

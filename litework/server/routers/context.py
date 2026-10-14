@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from ...app import AgentApp
 from ..install_jobs import InstallJobRegistry
+from ..push import PushManager
 from ..tasks import TaskManager
 
 
@@ -39,6 +40,7 @@ class ServerContext:
     tasks: TaskManager
     auth: TokenAuth
     jobs: InstallJobRegistry
+    push: PushManager
 
     def check_auth(self, request: Request) -> None:
         denied = self.auth.check(request)

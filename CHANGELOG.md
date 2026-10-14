@@ -36,6 +36,18 @@
   429，盯梢/定时触发记为 error 并推通知）；默认 0=不限，桌面行为与 1.x
   完全一致；子 agent 并发仍由既有 `max_parallel_agents` 独立约束；
 
+### 新增（P1 上云 · Web Push 服务端）
+- `PushManager`（`litework/server/push.py`）：VAPID 密钥对首用生成、落
+  config_dir 持久（公钥即 `pushManager.subscribe` 的 applicationServerKey
+  格式）；订阅簿按 endpoint 去重、原子写；投递走独立线程池，404/410 自动
+  清除失效订阅（设备重开 PWA 时重新订阅）；
+- `/api/push/*`：`vapid-key`（公钥下发）、`subscribe`/`unsubscribe`（订阅
+  登记/注销），全部走既有 Bearer 鉴权；
+- 盯梢通知总线新增 `on_push` 回调通道：create_app 自动接线到设备推送，
+  门槛与前端一致（计划声明 system 且非「无变化」），回调异常自吞不影响
+  调度器；桌面本地模式无订阅即零行为；
+- 新增依赖 `pywebpush>=2.1`（MPL-2.0，活跃维护）；
+
 ## [未发布]
 ### 修复（打包）
 - Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；

@@ -26,6 +26,7 @@ from .routers import (
     create_llm_router,
     create_meta_router,
     create_office_router,
+    create_push_router,
     create_schedules_router,
     create_security_router,
     create_sessions_router,
@@ -34,6 +35,7 @@ from .routers import (
 )
 from .routers.context import ServerContext, TokenAuth
 from .install_jobs import InstallJobRegistry
+from .push import PushManager
 from .tasks import TaskManager
 
 logger = logging.getLogger("litework.server")
@@ -123,11 +125,20 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 await app.stop_watch_scheduler()
             except Exception:  # noqa: BLE001 - 停机路径绝不抛
                 logger.warning("[Shutdown] 停止盯梢调度器失败", exc_info=True)
+            try:
+                push.close()
+            except Exception:  # noqa: BLE001
+                logger.warning("[Shutdown] 关闭推送线程池失败", exc_info=True)
 
     fast_app = FastAPI(title="lite-work", version=VERSION, lifespan=_lifespan)
     auth = TokenAuth(token)
     tasks = TaskManager(app)
-    ctx = ServerContext(app=app, tasks=tasks, auth=auth, jobs=InstallJobRegistry())
+    push = PushManager(app.config_dir)
+    ctx = ServerContext(app=app, tasks=tasks, auth=auth, jobs=InstallJobRegistry(),
+                        push=push)
+    # 盯梢通知的设备推送通道（PWA）：门槛判断在 PushManager.on_watch_note，
+    # 回调异常由总线自吞，不影响调度器
+    app.watch_notifications.on_push = push.on_watch_note
 
     # 审批门统一 resolve 回调：无论用户确认还是超时拒绝都广播 approval:resolved。
     # 此前超时路径只打日志，前端审批卡会永远挂着（「干一会就停止」的表象之一）。
@@ -166,6 +177,7 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     fast_app.include_router(create_workspace_router(ctx))
     fast_app.include_router(create_office_router(ctx))
     fast_app.include_router(create_schedules_router(ctx))
+    fast_app.include_router(create_push_router(ctx))
     # ------------------------------------------------------------ 静态前端
 
     dist_dir = _resolve_dist_dir()

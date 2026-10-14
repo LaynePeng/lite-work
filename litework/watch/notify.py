@@ -25,7 +25,7 @@ import asyncio
 import itertools
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("litework.watch.notify")
 
@@ -39,11 +39,15 @@ SUBSCRIBER_QUEUE_MAX = 64
 class WatchNotificationBus:
     """盯梢通知总线：广播 + 历史回放。"""
 
-    def __init__(self, max_history: int = DEFAULT_MAX_HISTORY) -> None:
+    def __init__(self, max_history: int = DEFAULT_MAX_HISTORY,
+                 on_push: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
         self._subs: List[asyncio.Queue] = []
         self._history: List[Dict[str, Any]] = []
         self._seq = itertools.count(1)
         self.max_history = max_history
+        # 附加投递通道（Web Push 等）：每条通知都回调一次，异常必须自吞——
+        # 通道故障不能影响总线与调度器
+        self.on_push = on_push
 
     # ---- 发布 ----
 
@@ -69,6 +73,11 @@ class WatchNotificationBus:
                 dead.append(q)
         for q in dead:
             self._unsubscribe(q)
+        if self.on_push is not None:
+            try:
+                self.on_push(item)
+            except Exception:  # noqa: BLE001 - 附加通道故障不影响总线
+                logger.warning("[Watch] on_push 回调失败", exc_info=True)
         return item
 
     # ---- 订阅 ----

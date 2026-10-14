@@ -7,6 +7,7 @@ from .chat import create_router as create_chat_router
 from .llm import create_router as create_llm_router
 from .meta import create_router as create_meta_router
 from .office import create_router as create_office_router
+from .push import create_router as create_push_router
 from .schedules import build_router as build_schedules_router
 from .security import create_router as create_security_router
 from .sessions import create_router as create_sessions_router
@@ -29,6 +30,7 @@ __all__ = [
     "create_llm_router",
     "create_meta_router",
     "create_office_router",
+    "create_push_router",
     "create_schedules_router",
     "create_security_router",
     "create_sessions_router",
