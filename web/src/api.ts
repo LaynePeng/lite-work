@@ -385,8 +385,24 @@ export const api = {
 
   llmProviders: () => req<LLMProviderMeta[]>("/api/llm/providers"),
   llmConfig: () => req<LLMConfig>("/api/llm/config"),
-  updateLLMConfig: (active: string, providers: Record<string, Partial<import("./types").LLMProviderSettings>>) =>
-    req<LLMConfig>("/api/llm/config", { method: "POST", body: JSON.stringify({ active, providers }) }),
+  /**
+   * 更新 LLM 配置。`reasoning_replay` 走同一专用通道（不传则本次不改动）——
+   * 不能经通用 `/api/config` 写 `llm` 段：那是浅合并，会整段替换掉
+   * `providers`（含真实 API Key）。
+   */
+  updateLLMConfig: (
+    active: string,
+    providers: Record<string, Partial<import("./types").LLMProviderSettings>>,
+    reasoningReplay?: import("./types").ReasoningReplayConfig,
+  ) =>
+    req<LLMConfig>("/api/llm/config", {
+      method: "POST",
+      body: JSON.stringify(
+        reasoningReplay === undefined
+          ? { active, providers }
+          : { active, providers, reasoning_replay: reasoningReplay },
+      ),
+    }),
   testLLM: (providerId: string, overrides?: Record<string, unknown>) =>
     req<{ ok: boolean; message: string; latency_ms: number }>("/api/llm/test", {
       method: "POST", body: JSON.stringify({ provider_id: providerId, overrides }),

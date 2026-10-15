@@ -111,6 +111,7 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         idle_timeout: float = 120.0,
         proxy_mounts: Optional[Dict[str, Any]] = None,
         ssl_verify: bool = True,
+        replay_reasoning_content: bool = False,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -138,6 +139,11 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         # 推理强度（"low"/"medium"/"high"）：透传 reasoning_effort 字段；
         # 启用时省略 temperature（多数推理模型不接受 temperature）
         self.reasoning_effort = (reasoning_effort or "").strip().lower()
+        # 思考模式回传契约（DeepSeek/Kimi/GLM 系）：当前轮的 assistant(tool_calls)
+        # 需回带 reasoning_content，否则 400（详见 _ensure_reasoning_content）。
+        # 由 registry 按供应商/模型白名单决定——严格网关（Mistral/Cerebras 等
+        # extra="forbid"）会把该字段判为多余而入参非法，故不能全局开启。
+        self.replay_reasoning_content = bool(replay_reasoning_content)
         self._client: Optional[httpx.AsyncClient] = None
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -184,12 +190,46 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         d.pop("agent", None)
         return d
 
+    @staticmethod
+    def _ensure_reasoning_content(wire: List[Dict[str, Any]]) -> None:
+        """给「当前轮」的 assistant(tool_calls) 补 `reasoning_content`（就地改）。
+
+        DeepSeek 思考模式的契约：带 tools 的请求里，**最后一条 user 之后的**
+        assistant(tool_calls) 必须回带 `reasoning_content`，否则
+        `400 The reasoning_content in the thinking mode must be passed back
+        to the API`（Kimi/GLM 同类）。lite-work 的 CoT 只做流式转发、不入
+        Message 与落盘缓存，回传时该字段缺失 → 多轮工具调用必挂。
+
+        三条实测结论决定了这个实现（pydantic-ai 在 deepseek-v4-flash 上录制
+        验证，见其 PR #10251）：
+
+        1. **空串即可**：`reasoning_content: ""` 返回 200，无需回传真实 CoT
+           ——因此不必为回传而存储推理内容（省 token，也不把 CoT 灌回历史）。
+        2. **只需当前轮**：更早 user 轮次里省略该字段，服务端同样接受。
+        3. **改写历史有代价**：补过的消息在下一次请求里会被再次改写，实测可
+           丢失其后的 prefix cache 命中（4,096 cached tokens 级）。故只补
+           最后一条 user 之后的部分，已缓存前缀保持逐字节不变。
+        """
+        last_user = -1
+        for i, m in enumerate(wire):
+            if m.get("role") == "user":
+                last_user = i
+        if last_user < 0:
+            return
+        for m in wire[last_user + 1:]:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                # 已带（真实回传的历史/网关自带）则不动，避免覆盖有效推理
+                m.setdefault("reasoning_content", "")
+
     def _build_payload(
         self, messages: List[Message], tools: List[ToolDefinition]
     ) -> Dict[str, Any]:
+        wire = [self._wire_message(m) for m in messages]
+        if self.replay_reasoning_content:
+            self._ensure_reasoning_content(wire)
         payload: Dict[str, Any] = {
             "model": self.model,
-            "messages": [self._wire_message(m) for m in messages],
+            "messages": wire,
             "stream": True,
             "stream_options": {"include_usage": True},
         }

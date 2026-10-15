@@ -883,7 +883,14 @@ class AgentApp:
     # ------------------------------------------------------------ LLM
 
     def _persist_config(self) -> None:
-        self.config["llm"] = self.llm_registry.to_config(persist_key=True)
+        # to_config() 只产出 active + providers；llm 段里的**非供应商键**（如
+        # reasoning_replay 策略，用户手改或后续版本写入）必须显式带过来，否则
+        # 每次保存设置都会被整段覆盖掉。
+        extra = {
+            k: v for k, v in (self.config.get("llm") or {}).items()
+            if k not in ("active", "providers")
+        }
+        self.config["llm"] = {**extra, **self.llm_registry.to_config(persist_key=True)}
         self._write_config_merged()
 
     async def close_adapter(self) -> None:
@@ -912,10 +919,21 @@ class AgentApp:
         self,
         active: Optional[str] = None,
         providers: Optional[Dict[str, Dict[str, Any]]] = None,
+        reasoning_replay: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """更新 LLM 配置并重建适配器。providers 中 api_key 为脱敏值时忽略。"""
+        """更新 LLM 配置并重建适配器。providers 中 api_key 为脱敏值时忽略。
+
+        reasoning_replay 为 None 表示本次不改动（UI 只提交它关心的字段）；
+        传入 dict 时**按键合并**到既有策略，避免整段覆盖。
+        """
         if active:
             self.llm_registry.active = active
+        if reasoning_replay is not None:
+            merged_rr = {
+                **self.llm_registry.reasoning_replay,
+                **{k: v for k, v in reasoning_replay.items() if v is not None},
+            }
+            self.llm_registry.reasoning_replay = merged_rr
         if providers:
             for pid, settings in providers.items():
                 if pid not in self.llm_registry.providers:

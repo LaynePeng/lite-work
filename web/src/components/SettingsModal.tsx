@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { parseHeaderText } from "../lib/headerText";
 import type { InstallJobStatus, InstallPluginPayload, InstallSkillPayload } from "../api";
-import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, PricingStatus, SkillInfo } from "../types";
+import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMConfig, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, PricingStatus, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
 
 // 职责域 UI 定义（与后端 core/permissions.py 的 DOMAIN_ORDER/DOMAIN_LABELS 对齐）
@@ -217,6 +217,12 @@ export default function SettingsModal({
   const [subagentTimeout, setSubagentTimeout] = useState<number>(600);
   const [maxSteps, setMaxSteps] = useState<number>(100);
   const [timeoutSaved, setTimeoutSaved] = useState(false);
+  // 思考模式推理回传策略（LLM 页签底部；详见 types.ts 的 ReasoningReplayConfig）
+  const [rrMode, setRrMode] = useState<"auto" | "always" | "never">("auto");
+  const [rrExtraPro, setRrExtraPro] = useState("");   // 追加供应商，每行一个
+  const [rrHints, setRrHints] = useState("");         // 追加模型名子串，每行一个
+  const [rrExcluded, setRrExcluded] = useState("");   // 剔除供应商，每行一个
+  const [rrSaved, setRrSaved] = useState(false);
   // 综合设置：聊天区展示折叠阈值（轮数/消息数任一超限即折叠，数据不删仅 UI 折叠）
   const [foldTurns, setFoldTurns] = useState<number>(500);
   const [foldMessages, setFoldMessages] = useState<number>(600);
@@ -998,6 +1004,16 @@ export default function SettingsModal({
 
   // 拉取 LLM 配置并重置全部编辑态（初始化与保存成功后共用：
   // 保存后服务端返回最新配置，用它刷新本地 providers/editing，避免"重开设置才生效"）
+  // 推理回传策略 → 表单态（初始加载与保存成功后共用）
+  const hydrateReasoningReplay = useCallback((c: LLMConfig | undefined) => {
+    const rr = c?.reasoning_replay;
+    const mode = rr?.mode;
+    setRrMode(mode === "always" || mode === "never" ? mode : "auto");
+    setRrExtraPro((rr?.providers ?? []).join("\n"));
+    setRrHints((rr?.model_hints ?? []).join("\n"));
+    setRrExcluded((rr?.exclude_providers ?? []).join("\n"));
+  }, []);
+
   const refreshLLM = useCallback(() => {
     setLlmLoadError("");
     Promise.all([api.llmProviders(), api.llmConfig()]).then(([p, c]) => {
@@ -1015,11 +1031,12 @@ export default function SettingsModal({
       setEditing(edit);
       setHeadersText(texts);
       setModelsText(mtexts);
+      hydrateReasoningReplay(c);
       setLlmLoadError("");
     }).catch((e) => {
       setLlmLoadError(`模型配置加载失败：${(e as Error).message}`);
     });
-  }, []);
+  }, [hydrateReasoningReplay]);
 
   useEffect(() => {
     // 模型数据与 MCP 状态分开请求：MCP 挂了不应让"模型"页整页空白（原先同一个
@@ -1052,11 +1069,12 @@ export default function SettingsModal({
       setEditing(edit);
       setHeadersText(texts);
       setModelsText(mtexts);
+      hydrateReasoningReplay(c);
       setLlmLoadError("");
     }).catch((e) => {
       setLlmLoadError(`模型配置加载失败：${(e as Error).message}`);
     });
-  }, []);
+  }, [hydrateReasoningReplay]);
 
   // ------------------------------------------------------------ MCP 编辑
 
@@ -1548,6 +1566,26 @@ export default function SettingsModal({
   }, [observationPack, compactionEconomics, toolMetrics, trajectoryEnabled,
       completionGate, gateRetries, parallelToolCalls, onSaved]);
 
+  // 推理回传策略保存（走 LLM 专用通道，不动 providers；下个请求即生效）
+  const saveReasoningReplay = useCallback(async () => {
+    setRrSaved(false);
+    const toList = (v: string) =>
+      v.split("\n").map((x) => x.trim()).filter(Boolean);
+    try {
+      await api.updateLLMConfig(activeProvider, {}, {
+        mode: rrMode,
+        providers: toList(rrExtraPro),
+        model_hints: toList(rrHints),
+        exclude_providers: toList(rrExcluded),
+      });
+      setRrSaved(true);
+      setTimeout(() => setRrSaved(false), 2000);
+      onSaved();
+    } catch (err) {
+      window.alert(`保存失败: ${(err as Error).message}`);
+    }
+  }, [activeProvider, rrMode, rrExtraPro, rrHints, rrExcluded, onSaved]);
+
   // 证据收据 reducer 保存（reducer adapter 每任务在 create_loop 重建 → 下个任务生效）
   const saveReducerConfig = useCallback(async () => {
     setReducerSaved(false);
@@ -1863,6 +1901,83 @@ export default function SettingsModal({
                   )}
                 </div>
               )}
+
+              {/* 思考模式推理回传：DeepSeek 系要求当前轮 assistant(tool_calls) 带回
+                  reasoning_content，否则 400；严格网关则相反，故按名单分流 */}
+              <div className="settings-section">
+                <h3>思考模式推理回传</h3>
+                <p className="settings-hint" style={{ color: "var(--text-2)", fontSize: 12, marginTop: -6, marginBottom: 12 }}>
+                  DeepSeek / Kimi / GLM 等思考模式下，带工具的请求要求当前轮的助手消息回带
+                  <code>reasoning_content</code>，否则报
+                  <code>The reasoning_content in the thinking mode must be passed back to the API</code>。
+                  严格网关（Mistral / Cerebras 等）则相反——多带该字段会报 422，故按名单分流，不可全局开启。
+                </p>
+
+                <div className="form-group">
+                  <label>策略</label>
+                  <select
+                    className="form-input"
+                    data-testid="rr-mode"
+                    style={{ maxWidth: 320 }}
+                    value={rrMode}
+                    onChange={(e) => setRrMode(e.target.value as "auto" | "always" | "never")}
+                  >
+                    <option value="auto">自动（按内置名单 + 模型名匹配，推荐）</option>
+                    <option value="always">总是回传（所有供应商）</option>
+                    <option value="never">从不回传（全部关闭）</option>
+                  </select>
+                  <small>
+                    内置名单：DeepSeek / Kimi / GLM；模型名含 deepseek / kimi / moonshot / glm / mimo
+                    的也自动命中（覆盖自定义供应商与中转网关）。
+                  </small>
+                </div>
+
+                <div className="form-group">
+                  <label>追加供应商 ID（每行一个，可留空）</label>
+                  <textarea
+                    className="form-input"
+                    rows={2}
+                    placeholder={"custom_1788492302820"}
+                    value={rrExtraPro}
+                    onChange={(e) => setRrExtraPro(e.target.value)}
+                    spellCheck={false}
+                  />
+                  <small>给上方的自动判定补充名单外的供应商（如中转网关的 custom_* ID）。</small>
+                </div>
+
+                <div className="form-group">
+                  <label>追加模型名关键词（每行一个，可留空）</label>
+                  <textarea
+                    className="form-input"
+                    rows={2}
+                    placeholder={"mimo"}
+                    value={rrHints}
+                    onChange={(e) => setRrHints(e.target.value)}
+                    spellCheck={false}
+                  />
+                  <small>大小写不敏感的子串匹配；模型名命中即回传（如新出的思考模型）。</small>
+                </div>
+
+                <div className="form-group">
+                  <label>排除供应商 ID（每行一个，可留空）</label>
+                  <textarea
+                    className="form-input"
+                    rows={2}
+                    placeholder={"glm"}
+                    value={rrExcluded}
+                    onChange={(e) => setRrExcluded(e.target.value)}
+                    spellCheck={false}
+                  />
+                  <small>自动判定误伤严格网关时，在这里把它排除（优先于内置名单）。</small>
+                </div>
+
+                <div className="form-actions">
+                  <button className="btn-save-settings" onClick={saveReasoningReplay}>
+                    💾 保存
+                  </button>
+                  {rrSaved && <span style={{ color: "var(--green)", fontSize: 12 }}>✓ 已保存</span>}
+                </div>
+              </div>
             </div>
             <div className={`settings-section settings-tabpanel ${activeTab === "mcp" ? "active" : ""}`}>
               {mcpLoadError && (

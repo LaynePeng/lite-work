@@ -14,6 +14,65 @@ from .openai_compat import OpenAICompatAdapter
 
 logger = logging.getLogger("litework.llm")
 
+#: 思考模式要求回传 `reasoning_content` 的供应商（缺了直接 400）。
+#: 反向的严格网关（Mistral/Cerebras/Fireworks 等 extra="forbid"）会因该字段
+#: 多余而 422，故必须按供应商分流——不能全局开关。
+_REASONING_REPLAY_PROVIDERS = frozenset({"deepseek", "kimi", "glm"})
+
+#: 自定义供应商（custom_*）无法靠 pid 判断，按模型名启发式匹配。
+_REASONING_REPLAY_MODEL_HINTS = ("deepseek", "kimi", "moonshot", "glm", "mimo")
+
+#: 回传策略默认值（config["llm"]["reasoning_replay"]，可覆盖内置名单）：
+#: - mode: "auto" 按内置名单（默认）/ "always" 全局开启 / "never" 全局关闭
+#: - providers / model_hints: 追加（新供应商、中转网关、新模型名）
+#: - exclude_providers: 剔除（内置判定误伤严格网关时自救）
+REASONING_REPLAY_DEFAULTS: Dict[str, Any] = {
+    "mode": "auto",
+    "providers": [],
+    "model_hints": [],
+    "exclude_providers": [],
+}
+
+
+def _norm_list(v: Any) -> List[str]:
+    """名单规整为小写去空列表（容错字符串「a,b」/ 数组两种入参）。"""
+    if isinstance(v, str):
+        v = v.split(",")
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip().lower() for x in v if str(x).strip()]
+
+
+def needs_reasoning_replay(
+    provider_id: str, model: str, cfg: Optional[Dict[str, Any]] = None
+) -> bool:
+    """该供应商/模型是否要求回传 reasoning_content。
+
+    cfg = config["llm"]["reasoning_replay"]（缺省走内置名单）。协议上两派互斥：
+    开启方（DeepSeek/Kimi/GLM 系）缺该字段直接 400；严格网关（extra="forbid"）
+    多该字段则 422——所以是白名单而非全局开关。
+    """
+    c = cfg if isinstance(cfg, dict) else {}
+    mode = str(c.get("mode") or "auto").strip().lower()
+    pid = (provider_id or "").lower()
+
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+
+    exclude = set(_norm_list(c.get("exclude_providers")))
+    if pid and pid in exclude:
+        return False
+    if pid and pid in (set(_REASONING_REPLAY_PROVIDERS) - exclude):
+        return True
+    if pid and pid in (set(_norm_list(c.get("providers"))) - exclude):
+        return True
+    hints = set(_REASONING_REPLAY_MODEL_HINTS) | set(_norm_list(c.get("model_hints")))
+    m = (model or "").lower()
+    return any(h in m for h in hints if h)
+
+
 # 预置供应商元数据
 PROVIDER_META: Dict[str, Dict[str, Any]] = {
     "deepseek": {
@@ -224,6 +283,8 @@ class LLMRegistry:
         }
         self.active = "deepseek"
         self._adapter: Optional[BaseLLMAdapter] = None
+        # 推理内容回传策略（config["llm"]["reasoning_replay"]，见 apply_config）
+        self.reasoning_replay: Dict[str, Any] = {}
         # LLM API 出网分流（app 层从 config["proxy"] 解析 scope=llm 后注入；
         # httpx mounts 形态：all://=代理 / bypass host=直连；None = 全直连。
         # 变更时废弃缓存适配器，下一个 get_adapter 用新配置重建）
@@ -292,6 +353,9 @@ class LLMRegistry:
     def apply_config(self, config: Dict[str, Any]) -> None:
         if config.get("active"):
             self.active = config["active"]
+        # 推理内容回传策略（顶层键；缺省走内置名单）
+        rr = config.get("reasoning_replay")
+        self.reasoning_replay = {**REASONING_REPLAY_DEFAULTS, **(rr if isinstance(rr, dict) else {})}
         for pid, settings in (config.get("providers") or {}).items():
             if not isinstance(settings, dict):
                 continue
@@ -346,7 +410,12 @@ class LLMRegistry:
                 "context_window": p.get("context_window"),
                 "custom_headers": p.get("custom_headers") or {},
             }
-        return {"active": self.active, "providers": providers}
+        return {
+            "active": self.active,
+            "providers": providers,
+            # UI 需读回当前策略（设置页显示）；落盘时也靠它写回 llm 段
+            "reasoning_replay": {**REASONING_REPLAY_DEFAULTS, **self.reasoning_replay},
+        }
 
     def provider_meta(self) -> List[Dict[str, Any]]:
         out = []
@@ -449,7 +518,13 @@ class LLMRegistry:
         )
         if meta["kind"] == "anthropic":
             return AnthropicAdapter(**common)
-        return OpenAICompatAdapter(**common)
+        # reasoning_content 回传只在 OpenAI 兼容通道生效（Anthropic 用 thinking 块）
+        return OpenAICompatAdapter(
+            **common,
+            replay_reasoning_content=needs_reasoning_replay(
+                pid, settings.get("model") or meta["default_model"],
+                getattr(self, "reasoning_replay", None)),
+        )
 
     def get_adapter(self) -> BaseLLMAdapter:
         if self._adapter is None:

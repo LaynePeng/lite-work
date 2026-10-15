@@ -428,6 +428,27 @@ export interface LLMProviderSettings {
 export interface LLMConfig {
   active: string;
   providers: Record<string, LLMProviderSettings>;
+  /** 推理内容回传策略（DeepSeek/Kimi/GLM 系的 thinking 模式契约） */
+  reasoning_replay?: ReasoningReplayConfig;
+}
+
+/**
+ * 思考模式推理回传策略。
+ *
+ * 背景：DeepSeek 系的思考模式要求带 tools 的请求里，当前轮的
+ * assistant(tool_calls) 必须回带 `reasoning_content`，否则
+ * `400 The reasoning_content in the thinking mode must be passed back to the API`。
+ * 反向地，Mistral/Cerebras 等严格网关会因该字段多余而 422——故按名单分流。
+ */
+export interface ReasoningReplayConfig {
+  /** auto=按内置名单（默认）/ always=全局开启 / never=全局关闭 */
+  mode?: "auto" | "always" | "never";
+  /** 追加需要回传的供应商 id（自定义/中转网关） */
+  providers?: string[];
+  /** 追加模型名子串（大小写不敏感，命中即回传） */
+  model_hints?: string[];
+  /** 从名单剔除（内置判定误伤严格网关时自救） */
+  exclude_providers?: string[];
 }
 
 /** SSE 连接状态：idle=无任务 / connecting=连接中 / connected=已连接（绿） /

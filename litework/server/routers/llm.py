@@ -16,6 +16,8 @@ from .context import ServerContext
 class LLMConfigRequest(BaseModel):
     active: Optional[str] = None
     providers: Optional[Dict[str, Dict[str, Any]]] = None
+    # 推理内容回传策略（设置页 UI）。None = 本次不改动（合并语义，不会清空）。
+    reasoning_replay: Optional[Dict[str, Any]] = None
 
 
 class LLMTestRequest(BaseModel):
@@ -43,6 +45,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         return app.update_llm_config(
             active=payload.active,
             providers=payload.providers,
+            reasoning_replay=payload.reasoning_replay,
         )
 
     @router.post("/api/llm/test")

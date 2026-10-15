@@ -87,6 +87,10 @@
 - 多网卡机器列出全部内网 IPv4；重启 Core 前面板明确提示「需重启生效」。
 
 ## [未发布]
+
+### 修复（思考模式推理回传）
+- **DeepSeek 系多轮工具调用报 400 `The reasoning_content in the thinking mode must be passed back to the API`**：DeepSeek/Kimi/GLM 的思考模式要求带 `tools` 的请求里，**当前轮**（最后一条 user 之后）的 `assistant(tool_calls)` 必须回带 `reasoning_content`，否则确定性 400（重试必然再失败）。lite-work 的 CoT 一直只做流式转发（UI 实时可见），不入 `Message` 与落盘，回传时该字段缺失 → 多轮工具调用必挂。现按供应商白名单在当前轮补空串（实测空串即满足契约，故不必存储推理内容——省 token，也不把 CoT 灌回历史）；更早轮次逐字节不动以保住 prefix cache 命中。反向的严格网关（Mistral/Cerebras 等 `extra="forbid"`）多该字段会 422，故做成白名单而非全局开关：内置 DeepSeek/Kimi/GLM + 模型名启发式（覆盖 `custom_*` 中转网关），并可在「设置 → LLM → 思考模式推理回传」用 `mode`/`providers`/`model_hints`/`exclude_providers` 覆盖；新增 19 项回归测试；
+
 ### 美化（v2 角标）
 - 应用图标的「2」角标重做：原 `<text>` 方案在缺字体的渲染环境（CI 容器）会
   退化成默认衬线小字（实测字形仅 71×107，近看不清）；改为 **Brush Script

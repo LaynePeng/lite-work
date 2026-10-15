@@ -189,3 +189,54 @@ describe("SettingsModal · 拉取模型列表", () => {
     expect(ta.value).toBe("deepseek-chat");
   });
 });
+
+describe("SettingsModal · 思考模式推理回传", () => {
+  it("回显后端策略：mode 与三个名单（换行展示）", async () => {
+    (api.llmConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      active: "deepseek",
+      providers: { deepseek: { model: "deepseek-chat", models: [], api_key: "sk-x" } },
+      reasoning_replay: {
+        mode: "never",
+        providers: ["custom_abc"],
+        model_hints: ["mimo"],
+        exclude_providers: ["glm"],
+      },
+    });
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    const sel = await screen.findByTestId("rr-mode") as HTMLSelectElement;
+    expect(sel.value).toBe("never");
+    expect(await screen.findByDisplayValue("custom_abc")).toBeTruthy();
+    expect(await screen.findByDisplayValue("mimo")).toBeTruthy();
+    expect(await screen.findByDisplayValue("glm")).toBeTruthy();
+  });
+
+  it("缺省（后端未配）回落到 auto 且名单为空", async () => {
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    const sel = await screen.findByTestId("rr-mode") as HTMLSelectElement;
+    expect(sel.value).toBe("auto");
+  });
+
+  it("保存：走 LLM 专用通道，名单按行拆分并去掉空行", async () => {
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    fireEvent.change(await screen.findByTestId("rr-mode"), { target: { value: "always" } });
+    fireEvent.change(await screen.findByPlaceholderText("custom_1788492302820"), {
+      target: { value: "custom_a\n\ncustom_b" },
+    });
+    fireEvent.change(await screen.findByPlaceholderText("mimo"), { target: { value: "mimo" } });
+    fireEvent.change(await screen.findByPlaceholderText("glm"), { target: { value: "sglm" } });
+    fireEvent.click(await screen.findByText("💾 保存"));
+
+    await waitFor(() => {
+      expect((api.updateLLMConfig as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    });
+    const call = (api.updateLLMConfig as ReturnType<typeof vi.fn>).mock.calls[0];
+    // 第 2 个参数必须是 {}——不能传 providers，否则会覆盖掉用户的 API Key
+    expect(call[1]).toEqual({});
+    expect(call[2]).toEqual({
+      mode: "always",
+      providers: ["custom_a", "custom_b"],
+      model_hints: ["mimo"],
+      exclude_providers: ["sglm"],
+    });
+  });
+});
