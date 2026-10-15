@@ -32,6 +32,14 @@ vi.mock("./NewTaskWizard", () => ({
 vi.mock("./SettingsModal", () => ({
   default: () => <div data-testid="settings" />,
 }));
+vi.mock("./ProjectPicker", () => ({
+  default: (props: { onSelect: (p: string) => void; onClose: () => void }) => (
+    <div data-testid="project-picker">
+      <button onClick={() => props.onSelect("/tmp/picked")}>picker-select</button>
+      <button onClick={props.onClose}>picker-close</button>
+    </div>
+  ),
+}));
 vi.mock("./WatchToaster", () => ({
   WatchToaster: () => <div data-testid="toaster" />,
 }));
@@ -76,6 +84,9 @@ function baseProps(over: Partial<MobileAppProps> = {}): MobileAppProps {
     workspaceName: "my-project",
     version: "2.0.0",
     workspaceIsGit: false,
+    workspace: "/ws/my-project",
+    recentProjects: [],
+    onSwitchProject: vi.fn(),
     sessions: [session({ session_id: "s1", title: "会话一" })],
     activeSessionId: null,
     onSelectSession: vi.fn(),
@@ -233,6 +244,43 @@ describe("MobileApp · 会话操作 sheet", () => {
     expect(share.mock.calls[0]?.[0]?.files?.[0]?.name).toBe("季度总结.pdf");
     expect(alertSpy).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("MobileApp · 项目切换", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("顶栏 📁 打开项目面板：列出最近项目，点选即切换", () => {
+    const props = baseProps({
+      workspace: "/ws/my-project",
+      recentProjects: [
+        { path: "/ws/my-project", name: "my-project", kind: "project", is_git: false, pinned: false, opened_at: "" },
+        { path: "/ws/other", name: "other", kind: "code", is_git: true, pinned: false, opened_at: "" },
+      ],
+    });
+    render(<MobileApp {...props} />);
+
+    fireEvent.click(screen.getByTitle("切换项目"));
+    expect(screen.getAllByText(/my-project/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByTitle("/ws/other"));
+    expect(props.onSwitchProject).toHaveBeenCalledWith("/ws/other");
+    // 点当前项目不触发切换
+    fireEvent.click(screen.getByTitle("切换项目"));
+    fireEvent.click(screen.getByTitle("/ws/my-project"));
+    expect(props.onSwitchProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("项目面板「浏览其它目录」：打开 ProjectPicker，选中后切换", () => {
+    const props = baseProps();
+    render(<MobileApp {...props} />);
+    fireEvent.click(screen.getByTitle("切换项目"));
+    fireEvent.click(screen.getByText(/浏览其它目录/));
+    expect(screen.getByTestId("project-picker")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("picker-select"));
+    expect(props.onSwitchProject).toHaveBeenCalledWith("/tmp/picked");
+    expect(screen.queryByTestId("project-picker")).not.toBeInTheDocument();
   });
 });
 

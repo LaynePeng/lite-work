@@ -250,6 +250,8 @@ export default function App() {
       .catch(() => { /* IPC 失败按本地展示，不阻塞启动 */ });
   }, []);
   const [showPicker, setShowPicker] = useState(false);
+  //: 跨端同步用：最近一次已知的 Core 工作区（其他设备切换项目后据此跟随）
+  const workspaceRef = useRef<string>("");
   // 模型元数据提醒横幅：启动时检查一次，缓存缺失/过期（>7 天）就顶栏提示
   // 「立即同步」——过期缓存虽仍作兜底（不会静默掉回 128K），但窗口/定价可能
   // 失真，必须在设置页之外看得见的地方提醒，而不是查不到就默默用默认值
@@ -1179,8 +1181,12 @@ export default function App() {
             await refreshSessions(res.workspace);
           }
         } catch (e) {
-          setErrorPublic((e as Error).message);
-          return;
+          // 「当前有任务运行，请先停止再切换项目」（其他设备/窗口起的任务）
+          // 不该把会话打开也一起挡掉：降级为**不切项目、只读打开该会话**，
+          // 并明确告知原因。否则表现为「这个对话打不开了」，且无从得知为什么。
+          const msg = (e as Error).message;
+          pushLog(`⚠ 无法切换项目（${msg}）——改为在当前项目下打开该会话`);
+          window.alert(`无法切换到该会话所属项目：${msg}\n仍会打开会话内容（Agent 与终端仍指向当前项目）。`);
         }
       }
       await selectSession(sid);
@@ -1366,6 +1372,9 @@ export default function App() {
       }
     } catch (e) {
       setErrorPublic((e as Error).message);
+      // 手机端没有可见的错误条（会话可能尚未打开），显式弹一次；
+      // 最常见的失败是「切项目时有任务在跑」的后端 409。
+      window.alert(`打开项目失败：${(e as Error).message}`);
     }
   }, [changeSidebarTab, closeStream, openLatestSessionOrNewChat, notifyElectronWorkspace, refreshRecentProjects]);
 
@@ -2216,6 +2225,34 @@ export default function App() {
     }, 5000);
     return () => clearInterval(timer);
   }, [patchChat, pushLog]);
+
+  // 跨端工作区同步（桌面 ↔ 手机共用同一 Core）：其他设备切换项目后，Core 的
+  // app.workspace 随之改变，/api/status.workspace 会与本地不一致。不跟随就会
+  // 出现「这台显示在 A 项目、Agent 实际在 B 项目跑」的错位。仅在本地没有运行中
+  // 任务时采纳，避免打断正在进行的交互（那个任务结束后由下一次轮询收敛）。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const st = await api.status();
+          const remote = st.workspace ?? "";
+          if (!remote || remote === workspaceRef.current) return;
+          if (Object.values(chatStatesRef.current).some((c) => c.running)) return;
+          workspaceRef.current = remote;
+          setStatus((prev) => (prev ? { ...prev, workspace: remote } : prev));
+          notifyElectronWorkspace(remote);
+          closeStream();
+          setChatStates({});
+          chatStatesRef.current = {};
+          await refreshSessions(remote);
+          pushLog(`📂 其他设备切换了项目，已同步: ${remote}`);
+        } catch {
+          /* 轮询失败忽略：主流程仍由用户操作驱动 */
+        }
+      })();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [closeStream, notifyElectronWorkspace, refreshSessions, pushLog]);
 
   // ------------------------------------------------------------ 会话目标与目标循环（/goal · /loop）
 
@@ -3169,6 +3206,9 @@ export default function App() {
         workspaceName={status?.workspace?.split(/[\\/]/).filter(Boolean).pop() ?? "未打开项目"}
         version={status?.version ?? "?"}
         workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
+        workspace={status?.workspace ?? ""}
+        recentProjects={recentProjects}
+        onSwitchProject={(p) => void openRecentProject(p)}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={(id) => void selectSession(id)}

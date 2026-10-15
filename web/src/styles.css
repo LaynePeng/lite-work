@@ -10197,6 +10197,43 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .mobile-app .msg-row { padding: 0 12px; margin-bottom: 16px; }
 .mobile-app .agent-bar { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
 .mobile-app .agent-bar::-webkit-scrollbar { display: none; }
+
+/* —— 气泡与富块：桌面以 820px 居中定宽，手机上必须按屏宽收缩 ——
+   此前 .msg-row / .work-timeline / .tool-card 的 max-width: 820px 与
+   .bubble 的 max-width: 76% 会把助手气泡限制在 76% 宽（内容被压成细长条），
+   而表格 / 图表 / 图解 / 卡片网格等富块又会反向外扩撑破屏幕。 */
+.mobile-app .msg-row { padding: 0 10px; }
+.mobile-app .work-timeline { padding: 0 10px; }
+.mobile-app .work-item-group,
+.mobile-app .tool-card,
+.mobile-app .tool-activity,
+.mobile-app .tool-card-important {
+  max-width: 100%;
+  min-width: 0;
+}
+.mobile-app .bubble { max-width: 100%; }
+.mobile-app .msg-row.assistant .bubble.assistant-bubble { flex: 1 1 auto; min-width: 0; }
+.mobile-app .user-bubble,
+.mobile-app .assistant-bubble { padding: 10px 12px; }
+/* 富块：宽表格 / 看板 / 对比 / 卡片网格一律可横向滚动或单列堆叠 */
+.mobile-app .md table,
+.mobile-app .md-table-wrap,
+.mobile-app .md-chart { max-width: 100%; overflow-x: auto; }
+.mobile-app .md table { display: block; }
+.mobile-app .md-board,
+.mobile-app .md-kpi-grid { grid-template-columns: 1fr 1fr; }
+.mobile-app .md-cards-grid { grid-template-columns: 1fr; }
+.mobile-app .md-cmp { grid-template-columns: 1fr; }
+.mobile-app .md-cmp-vs { justify-self: center; }
+.mobile-app .md-tl-desc { white-space: pre-wrap; word-break: break-word; }
+.mobile-app .md-chart-heat { max-width: 100%; }
+.mobile-app .md-diagram-svg,
+.mobile-app .md-chart-svg,
+.mobile-app .md-mermaid-svg svg { max-width: 100%; height: auto; }
+.mobile-app .md pre,
+.mobile-app .md-code pre { overflow-x: auto; }
+.mobile-app .tool-args-preview { max-width: 100%; }
+.mobile-app .composer-hint { white-space: normal; }
 .mobile-app .question-bar { padding: 10px 12px; }
 .mobile-app .modal { width: 100%; max-width: none; max-height: 92dvh; border-radius: 0; }
 .mobile-app .modal-overlay { place-items: stretch; padding: 0; }
@@ -10256,6 +10293,30 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 .mobile-sheet-item.danger { color: var(--red); }
 .mobile-sheet-item.cancel { color: var(--text-2); text-align: center; }
+
+/* —— 项目切换面板（移动端）：最近项目列表 + 浏览目录 —— */
+.mobile-project-sheet {
+  display: flex; flex-direction: column;
+  max-height: min(80dvh, 560px);
+}
+.mobile-project-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: 52dvh;
+}
+.mobile-project-sheet .mobile-sheet-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+}
+.mobile-project-sheet .mobile-sheet-item.active {
+  color: var(--accent);
+  border-left: 3px solid var(--accent);
+}
+.mobile-project-name { font-size: 15px; }
+.mobile-project-path {
+  font-size: 10.5px; color: var(--text-2); font-family: var(--font-mono);
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mobile-project-sheet .project-empty { color: var(--text-2); font-size: 13px; }
 
 /* —— 连接屏（令牌录入） —— */
 .connect-screen {
@@ -10330,6 +10391,10 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2); font-size: 12px; padding: 6px; border-radius: 6px; cursor: pointer;
 }
 .connect-saved-del:hover { color: var(--red); background: rgba(248, 81, 73, 0.1); }
+
+/* 同源已配对：一键重连（免重新粘贴令牌） */
+.connect-same-origin { justify-content: flex-start; }
+.connect-same-origin:disabled { opacity: 0.6; cursor: default; }
 
 /* —— 手机 / 局域网连接面板 —— */
 .phone-connect-modal { width: 460px; }

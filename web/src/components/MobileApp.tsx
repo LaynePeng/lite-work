@@ -10,18 +10,25 @@ import ChatView, { QuestionBar } from "./ChatView";
 import Composer from "./Composer";
 import NewTaskWizard, { type NewTaskConfig } from "./NewTaskWizard";
 import PendingQueue from "./PendingQueue";
+import ProjectPicker from "./ProjectPicker";
 import SettingsModal from "./SettingsModal";
 import { WatchToaster } from "./WatchToaster";
 import { getPushState, isStandalone, subscribePush, unsubscribePush, type PushState } from "../lib/pwa";
 import { apiUrl, authHeaders } from "../lib/connection";
 import type { WatchNotification } from "../hooks/useWatchNotifications";
-import type { AgentInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, SessionInfo, SessionModel } from "../types";
+import type { AgentInfo, ChatSessionState, CollabMode, LLMConfig, LLMProviderMeta, RecentProject, SessionInfo, SessionModel } from "../types";
 
 export interface MobileAppProps {
   // —— 服务器 / 项目 ——
   workspaceName: string;
   version: string;
   workspaceIsGit: boolean;
+  /** 当前项目绝对路径（项目切换面板高亮用） */
+  workspace: string;
+  /** 最近打开的项目（移动端项目切换面板；手机上此前完全没有项目入口） */
+  recentProjects: RecentProject[];
+  /** 切换到某个项目（由 App 复用桌面同一管线） */
+  onSwitchProject: (path: string) => void;
   // —— 会话列表页 ——
   sessions: SessionInfo[];
   activeSessionId: string | null;
@@ -101,6 +108,9 @@ export default function MobileApp(props: MobileAppProps) {
   const [page, setPage] = useState<"list" | "chat">("list");
   const [sheetSession, setSheetSession] = useState<SessionInfo | null>(null);
   const [pushState, setPushState] = useState<PushState>("unsupported");
+  // 项目面板：最近项目 / 浏览目录（此前手机端没有任何项目入口）
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   useEffect(() => {
     void getPushState().then(setPushState);
@@ -193,6 +203,13 @@ export default function MobileApp(props: MobileAppProps) {
               </div>
             </div>
             <div className="mobile-header-actions">
+              <button
+                className="mobile-icon-btn"
+                onClick={() => setProjectOpen(true)}
+                title="切换项目"
+              >
+                📁
+              </button>
               {pushState !== "unsupported" && (
                 <button
                   className={`mobile-icon-btn ${pushState === "on" ? "active" : ""}`}
@@ -464,6 +481,61 @@ export default function MobileApp(props: MobileAppProps) {
             </button>
           </div>
         </div>
+      )}
+
+      {projectOpen && (
+        <div className="mobile-sheet-mask" onClick={() => setProjectOpen(false)}>
+          <div className="mobile-sheet mobile-project-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-sheet-title">
+              项目 · 当前：{props.workspaceName || "未打开"}
+            </div>
+            <div className="mobile-project-list">
+              {props.recentProjects.length === 0 ? (
+                <div className="mobile-sheet-item project-empty">还没有打开过的项目</div>
+              ) : (
+                props.recentProjects.map((p) => (
+                  <button
+                    key={p.path}
+                    className={`mobile-sheet-item ${p.path === props.workspace ? "active" : ""}`}
+                    onClick={() => {
+                      setProjectOpen(false);
+                      if (p.path !== props.workspace) props.onSwitchProject(p.path);
+                    }}
+                    title={p.path}
+                  >
+                    <span className="mobile-project-name">
+                      {p.kind === "code" ? "💻" : "📁"} {p.name || p.path}
+                    </span>
+                    <span className="mobile-project-path">{p.path}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              className="mobile-sheet-item"
+              onClick={() => {
+                setProjectOpen(false);
+                setBrowsing(true);
+              }}
+            >
+              🗂 浏览其它目录…
+            </button>
+            <button className="mobile-sheet-item cancel" onClick={() => setProjectOpen(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {browsing && (
+        <ProjectPicker
+          initialPath={props.workspace || ""}
+          onClose={() => setBrowsing(false)}
+          onSelect={(p) => {
+            setBrowsing(false);
+            props.onSwitchProject(p);
+          }}
+        />
       )}
 
       {props.newTaskOpen && (
