@@ -1572,7 +1572,8 @@ export default function SettingsModal({
     const toList = (v: string) =>
       v.split("\n").map((x) => x.trim()).filter(Boolean);
     try {
-      await api.updateLLMConfig(activeProvider, {}, {
+      // 不传 providers：后端把「providers 非 None」当完整列表，传 {} 会清空自定义供应商
+      await api.updateLLMConfig(activeProvider, undefined, {
         mode: rrMode,
         providers: toList(rrExtraPro),
         model_hints: toList(rrHints),

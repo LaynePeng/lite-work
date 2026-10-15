@@ -230,8 +230,10 @@ describe("SettingsModal · 思考模式推理回传", () => {
       expect((api.updateLLMConfig as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
     });
     const call = (api.updateLLMConfig as ReturnType<typeof vi.fn>).mock.calls[0];
-    // 第 2 个参数必须是 {}——不能传 providers，否则会覆盖掉用户的 API Key
-    expect(call[1]).toEqual({});
+    // 第 2 个参数必须是 undefined（而非 {}）：后端把「providers 非 None」当作
+    // 「UI 提交的完整列表」，传 {} 会把未列出的 custom_* 供应商全部删除。
+    // 回归背景：曾传 {} 导致用户配置的 providers 被清空。
+    expect(call[1]).toBeUndefined();
     expect(call[2]).toEqual({
       mode: "always",
       providers: ["custom_a", "custom_b"],

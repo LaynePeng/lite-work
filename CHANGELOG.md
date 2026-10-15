@@ -88,6 +88,10 @@
 
 ## [未发布]
 
+### 修复（设置页保存供应商配置被清空）
+- **保存「思考模式推理回传」会删光自定义供应商**：设置页保存该策略时传了 `providers={}`，而后端把「`providers` 非 `None`」当作「这是 UI 提交的完整列表」——空对象于是被判定为「用户删除了全部自定义实例」，`custom_*` 供应商连同 API Key / base_url / custom_headers 一起被清空（用户配置直接丢失）。改为整个省略该字段（`undefined`），后端即保留现有供应商；「删除供应商」按钮依赖的完整列表语义不受影响。新增 3 项后端回归测试 + 组件测试断言「第 2 个参数必须是 `undefined` 而非 `{}`」。
+
+
 ### 修复（思考模式推理回传）
 - **DeepSeek 系多轮工具调用报 400 `The reasoning_content in the thinking mode must be passed back to the API`**：DeepSeek/Kimi/GLM 的思考模式要求带 `tools` 的请求里，**当前轮**（最后一条 user 之后）的 `assistant(tool_calls)` 必须回带 `reasoning_content`，否则确定性 400（重试必然再失败）。lite-work 的 CoT 一直只做流式转发（UI 实时可见），不入 `Message` 与落盘，回传时该字段缺失 → 多轮工具调用必挂。现按供应商白名单在当前轮补空串（实测空串即满足契约，故不必存储推理内容——省 token，也不把 CoT 灌回历史）；更早轮次逐字节不动以保住 prefix cache 命中。反向的严格网关（Mistral/Cerebras 等 `extra="forbid"`）多该字段会 422，故做成白名单而非全局开关：内置 DeepSeek/Kimi/GLM + 模型名启发式（覆盖 `custom_*` 中转网关），并可在「设置 → LLM → 思考模式推理回传」用 `mode`/`providers`/`model_hints`/`exclude_providers` 覆盖；新增 19 项回归测试；
 

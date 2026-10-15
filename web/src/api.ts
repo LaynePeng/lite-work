@@ -392,16 +392,19 @@ export const api = {
    */
   updateLLMConfig: (
     active: string,
-    providers: Record<string, Partial<import("./types").LLMProviderSettings>>,
+    providers?: Record<string, Partial<import("./types").LLMProviderSettings>>,
     reasoningReplay?: import("./types").ReasoningReplayConfig,
   ) =>
     req<LLMConfig>("/api/llm/config", {
       method: "POST",
-      body: JSON.stringify(
-        reasoningReplay === undefined
-          ? { active, providers }
-          : { active, providers, reasoning_replay: reasoningReplay },
-      ),
+      // providers 必须**整个省略**而不是传 {}：后端把「providers 非 None」当作
+      // 「这是 UI 提交的完整列表」，未出现的 custom_* 会被判定为已删除而清空。
+      // 只改策略时传 undefined，让后端保留现有供应商。
+      body: JSON.stringify({
+        active,
+        ...(providers === undefined ? {} : { providers }),
+        ...(reasoningReplay === undefined ? {} : { reasoning_replay: reasoningReplay }),
+      }),
     }),
   testLLM: (providerId: string, overrides?: Record<string, unknown>) =>
     req<{ ok: boolean; message: string; latency_ms: number }>("/api/llm/test", {

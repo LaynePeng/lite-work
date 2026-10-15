@@ -235,3 +235,71 @@ def test_persist_keeps_non_provider_keys():
 class _FakeRegistry:
     def to_config(self, persist_key: bool = False):
         return {"active": "deepseek", "providers": {"deepseek": {"api_key": "k"}}}
+
+def test_update_config_none_providers_keeps_custom_providers():
+    """只改策略（不传 providers）不得删除自定义供应商。
+
+    回归背景：设置页保存「推理回传」时传了 providers={}（空对象≠None），
+    后端把「providers 非 None」当作「UI 提交的完整列表」，于是把未列出的
+    custom_* 全部判为已删除 —— 用户配置的供应商被清空。
+    """
+    from unittest.mock import patch
+
+    from litework.app import AgentApp
+    from litework.llm.registry import LLMRegistry
+
+    app = object.__new__(AgentApp)
+    app.llm_registry = LLMRegistry()
+    for pid in ("custom_a", "custom_b"):
+        app.llm_registry.providers[pid] = {"api_key": "sk-x", "model": "m"}
+    app.config = {"llm": {}}
+    app.config_path = "/tmp/does-not-exist.json"
+
+    with patch.object(AgentApp, "_persist_config", lambda self: None):
+        # providers=None（未提交）→ 必须保留
+        app.update_llm_config(None, None, {"mode": "auto"})
+
+    kept = {p for p in app.llm_registry.providers if p.startswith("custom_")}
+    assert kept == {"custom_a", "custom_b"}, f"自定义供应商被误删: {kept}"
+
+
+def test_update_config_full_list_still_deletes_omitted():
+    """反向语义仍要成立：UI 明确提交完整列表时，未列出的即删除。"""
+    from unittest.mock import patch
+
+    from litework.app import AgentApp
+    from litework.llm.registry import LLMRegistry
+
+    app = object.__new__(AgentApp)
+    app.llm_registry = LLMRegistry()
+    for pid in ("custom_a", "custom_b"):
+        app.llm_registry.providers[pid] = {"api_key": "sk-x", "model": "m"}
+    app.config = {"llm": {}}
+    app.config_path = "/tmp/does-not-exist.json"
+
+    with patch.object(AgentApp, "_persist_config", lambda self: None):
+        # 只提交 custom_a → custom_b 应被视为用户删除
+        app.update_llm_config(None, {"custom_a": {"model": "m2"}})
+
+    kept = {p for p in app.llm_registry.providers if p.startswith("custom_")}
+    assert kept == {"custom_a"}, f"未提交的 custom_b 应被删除: {kept}"
+
+
+def test_update_config_merges_reasoning_replay_without_wiping_providers():
+    """策略保存不应影响 providers（保存前后供应商集合不变）。"""
+    from unittest.mock import patch
+
+    from litework.app import AgentApp
+    from litework.llm.registry import LLMRegistry
+
+    app = object.__new__(AgentApp)
+    app.llm_registry = LLMRegistry()
+    app.llm_registry.providers["custom_z"] = {"api_key": "sk-x", "model": "deepseek-v4.1-flash"}
+    app.config = {"llm": {}}
+    app.config_path = "/tmp/does-not-exist.json"
+
+    with patch.object(AgentApp, "_persist_config", lambda self: None):
+        app.update_llm_config(None, None, {"mode": "never"})
+
+    assert "custom_z" in app.llm_registry.providers
+    assert app.llm_registry.reasoning_replay["mode"] == "never"
