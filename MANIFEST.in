@@ -1,0 +1,7 @@
+# wheel/sdist 随包资源（配合 pyproject.toml 的 include-package-data = true）。
+# builtin_plugins 的 recipe.md / icon.svg / pricing.json 是非 .py 文件，
+# setuptools 默认不收——漏收会让 pip / 容器安装形态下：
+#   - 协作模式插件读不到 recipe.md → 退化为通用 DEFAULT_RECIPE；
+#   - pricing-plugin 读不到 pricing.json → 官方定价源整体失效。
+# PyInstaller 打包走 --add-data，与此无关，但一并保持目录完整更安全。
+recursive-include litework/builtin_plugins *.py *.json *.md *.svg

@@ -87,6 +87,51 @@
 - 多网卡机器列出全部内网 IPv4；重启 Core 前面板明确提示「需重启生效」。
 
 ## [未发布]
+### 美化（v2 角标）
+- 应用图标的「2」角标重做：原 `<text>` 方案在缺字体的渲染环境（CI 容器）会
+  退化成默认衬线小字（实测字形仅 71×107，近看不清）；改为 **Brush Script
+  毛笔字形转矢量 path**（本地字体提取，运行零字体依赖），去掉白底圆、
+  天蓝 #79C0FF 直接压蓝紫渐变底，字高约 240（原 107）；三处产物
+  （icns/ico、PWA icons、托盘）已重新生成；
+
+### 新增（多端连接）
+- **Core 启动日志自带手机配对二维码**：`lite-work serve` 就绪后打印 ASCII 二维码
+  （`{lan-ip}/#litework-token=…`），Docker 部署 `docker compose logs core` 即可扫码，
+  无需进容器敲命令；绑 `0.0.0.0` 时自动取本机非回环 IPv4 展示。裸机可随时
+  `lite-work pair` 重新显示（`--url` / `--token` 可指定）；
+- **手机记住已配对的 Core**：扫码或手输令牌配对过的 Core 存 localStorage
+  （最多 12 个），连接屏显示「已配对的 Core」列表——点选即免扫码直连，✕ 忘记；
+- 桌面「Core」弹窗在浏览器/PWA 形态下展示本 Core 配对二维码（新增
+  `/api/pairing`，已鉴权）。
+
+### 新增（Linux 分发）
+- `scripts/build-linux-backend.sh`：**Linux 仅后端**打包入口（前端 → PyInstaller
+  → 资源完整性校验 → `tar.gz` + `.sha256`），非 Linux 上默认拒绝执行；
+- `scripts/build-linux-image.sh`：容器镜像入口（**源码构建** `deploy/Dockerfile`，
+  多阶段 node 前端 → playwright 基底 pip 装本包；`--tag` / `--push`）；
+- `.github/workflows/release.yml`：新增 `linux-backend` job（`ubuntu-22.04` /
+  `ubuntu-22.04-arm` 双架构，glibc 2.35 基线）上传 tar.gz artifact，并在原生
+  架构上源码构建镜像推 GHCR arch 标签，由 `linux-image-manifest` 合成多架构
+  `:<版本>` / `:latest`；Release 说明与产物清单同步补 Linux 段。
+
+### 修复（容器/分发）
+- `pyproject.toml` 加 `include-package-data` + 新增 `MANIFEST.in`：wheel/sdist
+  此前只收 `.py`，`builtin_plugins` 的 `recipe.md` / `icon.svg` /
+  `pricing-plugin/pricing.json` 全丢——pip / 容器安装形态下协作模式退化为通用
+  recipe，定价插件读不到价目表导致官方定价源整体失效（PyInstaller 走
+  `--add-data` 不受影响）；
+- `deploy/Dockerfile`：补 `ripgrep`（`search_code` 的硬依赖，缺则云端代码检索
+  不可用；noble 的 universe 源，单独一条 fail-soft 安装）、
+  `libgl1 / libglib2.0-0t64 / libgomp1`（cv2 / onnxruntime 的运行期 `.so`，
+  缺则 OCR 全挂；noble 起 glib 包名带 `t64` 后缀，旧名不存在）、`COPY skills`
+  （此前不 COPY，容器内技能列表为空）；
+- `deploy/docker-entrypoint.sh`：把 `HOME` 指到 `/data`——技能的用户级同步落点
+  `$HOME/.agents/skills` 与日志/插件/会话因此都落卷（此前落在容器可写层，
+  重建即丢，与 README「全部状态在 core-data 卷」的承诺不符）；
+- `.dockerignore`：`node_modules` 改为 `**/node_modules`（单段模式只命中根目录
+  那一个，`skills/<技能>/node_modules` 的 470MB 会被当上下文上传）；放行
+  `skills/**/*.md`（`*.md` 会连 `SKILL.md` 一起排除）。
+
 ### 修复（打包）
 - Windows 打包在「生成应用图标」步骤必挂：`generate-icon-all.mjs` 解析 `app-builder` 时 win 路径缺 arch 段（实际布局 `win/<arch>/app-builder.exe`），存在性检查失败后回退裸调命令名 → `不是内部或外部命令`；linux 同样修正为 `<arch>/` 子目录布局，mac 不变；
 

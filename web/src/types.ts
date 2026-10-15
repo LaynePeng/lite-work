@@ -572,6 +572,30 @@ export interface LiteWorkBridge {
   getLanShare: () => Promise<LanShareInfo>;
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */
   setLanShare: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  /** Core 连接：当前模式（local/remote + 显示名）与已保存的远程列表 */
+  getCoreMode: () => Promise<CoreModeInfo>;
+  /** 添加/覆盖一个远程 Core 配置（同 URL 覆盖）。返回 { ok, cores } */
+  coreAdd: (entry: CoreEntry) => Promise<{ ok: boolean; error?: string; cores?: CoreEntry[] }>;
+  /** 移除远程 Core 配置；删的是当前连接时下次启动回本地。返回 { ok, cores } */
+  coreRemove: (url: string) => Promise<{ ok: boolean; cores?: CoreEntry[] }>;
+  /** 切换连接（url 空 = 回本地），成功后应用自动重启。返回 { ok, restarting } */
+  coreSwitch: (url: string) => Promise<{ ok: boolean; error?: string; restarting?: boolean }>;
+}
+
+/** 已保存的远程 Core 配置（client.json cores 数组项） */
+export interface CoreEntry {
+  name: string;
+  url: string;
+  token: string;
+}
+
+/** 「Core 连接」状态：mode + 当前远程显示名 + 已保存列表 */
+export interface CoreModeInfo {
+  mode: "local" | "remote";
+  /** 远程显示名（本地模式为空） */
+  label: string;
+  url: string;
+  cores: CoreEntry[];
 }
 
 /** 「手机 / 局域网」面板数据：enabled=false 时 url/token 为空。 */

@@ -14,7 +14,9 @@
     "build:web": "npm --prefix web run build",
     "test:backend": "node scripts/test-backend.mjs",
     "package": "npm run build:web && node scripts/package.mjs",
-    "package:backend": "node scripts/package-backend.mjs"
+    "package:backend": "node scripts/package-backend.mjs",
+    "build:linux-backend": "bash ./scripts/build-linux-backend.sh",
+    "build:linux-image": "bash ./scripts/build-linux-image.sh"
   },
   "devDependencies": {
     "app-builder-bin": "^4.2.0",

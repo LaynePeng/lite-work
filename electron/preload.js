@@ -30,6 +30,14 @@ contextBridge.exposeInMainWorld("liteWork", {
   getLanShare: () => ipcRenderer.invoke("get-lan-share"),
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */
   setLanShare: (enabled) => ipcRenderer.invoke("set-lan-share", enabled),
+  /** Core 连接：当前模式（local/remote + 显示名）与已保存的远程列表 */
+  getCoreMode: () => ipcRenderer.invoke("get-core-mode"),
+  /** 添加/覆盖一个远程 Core 配置（同 URL 覆盖）。返回 { ok, cores } */
+  coreAdd: (entry) => ipcRenderer.invoke("core-add", entry),
+  /** 移除远程 Core 配置；删的是当前连接时下次启动回本地。返回 { ok, cores } */
+  coreRemove: (url) => ipcRenderer.invoke("core-remove", url),
+  /** 切换连接（url 空 = 回本地），成功后应用自动重启。返回 { ok, restarting } */
+  coreSwitch: (url) => ipcRenderer.invoke("core-switch", url),
   /**
    * 用系统默认应用打开工作区内的文件（docx/xlsx/pdf/图片等非代码文件）。
    * 返回 { ok: true } 或 { ok: false, error }。

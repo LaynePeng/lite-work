@@ -49,6 +49,50 @@ export function isElectron(): boolean {
   return typeof window !== "undefined" && !!window.liteWork;
 }
 
+// ---------------------------------------------------------------- 已配对 Core（手机/浏览器）
+// 扫码/输入令牌配对过的 Core 存 localStorage（origin+令牌），下次免扫码直连。
+
+const CORES_KEY = "litework.paired.cores";
+
+export interface PairedCore {
+  /** 显示名：默认 host */
+  name: string;
+  origin: string;
+  token: string;
+  /** 最近一次连接时间（ms） */
+  at: number;
+}
+
+export function pairedCores(): PairedCore[] {
+  try {
+    const raw = window.localStorage.getItem(CORES_KEY);
+    const list = raw ? (JSON.parse(raw) as PairedCore[]) : [];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 记住（或刷新）一个已配对 Core：同 origin 覆盖，并置为最近使用。 */
+export function rememberCore(origin: string, token: string, name?: string): void {
+  try {
+    const base = origin.replace(/\/+$/, "");
+    const host = base.replace(/^https?:\/\//, "");
+    const list = pairedCores().filter((c) => c.origin !== base);
+    list.unshift({ name: name || host, origin: base, token, at: Date.now() });
+    window.localStorage.setItem(CORES_KEY, JSON.stringify(list.slice(0, 12)));
+  } catch {
+    /* localStorage 不可用（隐私模式）：只影响记忆，不影响连接 */
+  }
+}
+
+export function forgetCore(origin: string): void {
+  try {
+    window.localStorage.setItem(
+      CORES_KEY, JSON.stringify(pairedCores().filter((c) => c.origin !== origin)));
+  } catch { /* ignore */ }
+}
+
 /** 401 广播：浏览器/PWA 无有效令牌时由 App 弹连接屏。
  *  Electron 本地模式有 session 级令牌注入，永远不会触发。 */
 export const UNAUTHORIZED_EVENT = "litework:unauthorized";
@@ -60,6 +104,8 @@ export function consumeTokenFromUrl(): void {
   const m = window.location.hash.match(/litework-token=([A-Za-z0-9._-]+)/);
   if (!m) return;
   setAuthToken(m[1]);
+  // 扫码配对成功：记住本 Core，下次在连接屏免扫码直连
+  rememberCore(window.location.origin, m[1]);
   try {
     history.replaceState(null, "", window.location.pathname + window.location.search);
   } catch {

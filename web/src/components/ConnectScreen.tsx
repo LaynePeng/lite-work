@@ -3,15 +3,23 @@
 //
 // 连接屏：远程模式令牌录入。任何 API 返回 401 时由 App 渲染（Electron 有
 // session 级令牌注入，不会触发）。令牌校验通过后写 localStorage 并整页刷新。
+//
+// 已配对过的 Core 列表也在这里展示（localStorage 记忆）：点选即免扫码直连。
 
 import { useState } from "react";
-import { apiUrl, authHeaders, setAuthToken } from "../lib/connection";
+import { apiUrl, authHeaders, forgetCore, pairedCores, rememberCore, setAuthToken } from "../lib/connection";
 
 export default function ConnectScreen() {
   const [token, setToken] = useState("");
   const [show, setShow] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const saved = pairedCores().filter((c) => c.origin !== window.location.origin);
+
+  /** 连接已保存的 Core：跳转其 origin（带 token hash，配对后自动剥除）。 */
+  const useSaved = (origin: string, t: string) => {
+    window.location.href = `${origin}/#litework-token=${t}`;
+  };
 
   const submit = async () => {
     const t = token.trim();
@@ -34,6 +42,8 @@ export default function ConnectScreen() {
         setError(`服务器响应异常（${res.status}）`);
         return;
       }
+      // 连接成功：记住本 Core，下次免输令牌
+      rememberCore(window.location.origin, t);
       window.location.reload();
     } catch {
       setError("无法连接服务器，请检查网络");
@@ -80,6 +90,26 @@ export default function ConnectScreen() {
             {connecting ? "连接中…" : "连接"}
           </button>
         </form>
+        {saved.length > 0 && (
+          <div className="connect-saved">
+            <div className="connect-saved-title">已配对的 Core</div>
+            {saved.map((c) => (
+              <div key={c.origin} className="connect-saved-item">
+                <button className="connect-saved-btn" onClick={() => useSaved(c.origin, c.token)}>
+                  <span className="connect-saved-name">{c.name}</span>
+                  <span className="connect-saved-host">{c.origin.replace(/^https?:\/\//, "")}</span>
+                </button>
+                <button
+                  className="connect-saved-del"
+                  title="忘记此 Core"
+                  onClick={() => forgetCore(c.origin)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <p className="connect-hint">
           令牌在服务器上：<code>docker exec lite-work-core cat /data/.lite-work/server-token</code>
         </p>

@@ -47,6 +47,23 @@ def create_router(ctx: ServerContext) -> APIRouter:
         """
         return {"status": "ok", "version": VERSION, "min_client": MIN_CLIENT_VERSION}
 
+    @router.get("/api/pairing")
+    async def pairing(request: Request):
+        """配对信息（已鉴权）：本 Core 的连接地址 + 令牌，供前端生成二维码。
+
+        手机扫码配对 = 打开 `{origin}/#litework-token={token}`，前端
+        consumeTokenFromUrl 自动写 localStorage 并剥除 hash。桌面「手机」
+        面板走 Electron IPC（get-lan-share），这里服务浏览器/PWA 形态
+        （Linux Core 直连浏览器时也能展示二维码）。
+        """
+        ctx.check_auth(request)
+        origin = str(request.base_url).rstrip("/")
+        forwarded_host = request.headers.get("x-forwarded-host", "")
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        if forwarded_host:
+            origin = f"{forwarded_proto or 'http'}://{forwarded_host}"
+        return {"origin": origin, "token": token or ""}
+
     @router.get("/api/status")
     async def status(request: Request):
         ctx.check_auth(request)

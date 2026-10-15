@@ -13,6 +13,7 @@ import MobileApp from "./components/MobileApp";
 import NewTaskWizard, { type NewTaskConfig } from "./components/NewTaskWizard";
 import PendingQueue from "./components/PendingQueue";
 import PhoneConnectModal from "./components/PhoneConnectModal";
+import CoreModal from "./components/CoreModal";
 import FileViewer from "./components/FileViewer";
 import ProjectPicker from "./components/ProjectPicker";
 import SettingsModal from "./components/SettingsModal";
@@ -238,6 +239,16 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showPhoneConnect, setShowPhoneConnect] = useState(false);
+  const [showCoreConnect, setShowCoreConnect] = useState(false);
+  // footer「Core」角标：local/remote + 远程显示名（Electron IPC 读取；浏览器端恒为本地）
+  const [coreMode, setCoreMode] = useState<"local" | "remote">("local");
+  const [coreLabel, setCoreLabel] = useState("");
+  useEffect(() => {
+    if (!isElectron() || !window.liteWork?.getCoreMode) return;
+    window.liteWork.getCoreMode()
+      .then((m) => { setCoreMode(m.mode); setCoreLabel(m.label); })
+      .catch(() => { /* IPC 失败按本地展示，不阻塞启动 */ });
+  }, []);
   const [showPicker, setShowPicker] = useState(false);
   // 模型元数据提醒横幅：启动时检查一次，缓存缺失/过期（>7 天）就顶栏提示
   // 「立即同步」——过期缓存虽仍作兜底（不会静默掉回 128K），但窗口/定价可能
@@ -249,9 +260,8 @@ export default function App() {
   // 「项目」页签状态：最近项目列表 + 二级视图（list=项目列表 / sessions=项目内会话）
   const [recentProjects, setRecentProjects] = useState<import("./types").RecentProject[]>([]);
   const [projectsView, setProjectsView] = useState<"list" | "sessions">("list");
-  // 目录选择器的打开模式：project=打开项目 / code=打开代码（校验 git）/
-  // new-project / new-code（新建并展开表单）
-  const [pickerMode, setPickerMode] = useState<"project" | "code" | "new-project" | "new-code">("project");
+  // 目录选择器的打开模式：project=打开项目 / new-project / new-code（新建并展开表单）
+  const [pickerMode, setPickerMode] = useState<"project" | "new-project" | "new-code">("project");
   // 侧栏页签：默认「会话」；真实偏好由后端 config hydrate（见 refreshAll 的 ui_prefs）
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>(DEFAULT_SIDEBAR_TAB);
   const changeSidebarTab = useCallback((t: SidebarTab) => setSidebarTab(t), []);
@@ -1236,6 +1246,8 @@ export default function App() {
           patchActiveChat({ error: result.error ?? "无法切换项目" });
         }
         if (result.ok) {
+          // 非 git 目录当作普通项目打开（git 仓库走代码模式语义由后端按 .git 自动判定，
+          // 与浏览器路径 selectProject 的自动检测一致——打开入口不再区分模式）
           // 重载后默认落在「文件」Tab，直接看到新项目目录树（一次性意图，非配置）
           try { localStorage.setItem(PENDING_SIDEBAR_TAB_KEY, "files"); } catch { /* ignore */ }
           // 「打开项目」后进入该项目最近一条会话：本条路径会整页重载，选不了会话，
@@ -1295,18 +1307,8 @@ export default function App() {
     async (path: string) => {
       setShowPicker(false);
       try {
-        // 打开代码模式：校验是 git 仓库（非 git 仓库提示后按项目打开）。
-        // 注意 fsList 默认过滤隐藏目录——检查 .git 必须传 showHidden
-        if (pickerMode === "code") {
-          const fs = await api.fsList(path, true).catch(() => null);
-          if (fs && !fs.dirs.includes(".git")) {
-            if (!window.confirm(
-              `「${baseName(path)}」不是 git 仓库。\n\n仍作为普通项目打开？（如需 git 仓库，请先在目录内 git init）`
-            )) {
-              return;
-            }
-          }
-        }
+        // 打开入口已合并：代码/项目分类由后端 classify_project_kind 自动判定
+        // （setWorkspace 时自动记忆 kind），前端不再预检 .git。
         const res = await api.setWorkspace(path);
         if (res.ok) {
           setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
@@ -1329,15 +1331,10 @@ export default function App() {
         setErrorPublic((e as Error).message);
       }
     },
-    [pushLog, closeStream, openLatestSessionOrNewChat, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects, pickerMode]
+    [pushLog, closeStream, openLatestSessionOrNewChat, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects]
   );
 
   // ------------------------------------------------------------ 项目页签：最近项目
-
-  const openCode = useCallback(() => {
-    setPickerMode("code");
-    setShowPicker(true);
-  }, []);
 
   const openProjectEntry = useCallback(() => {
     setPickerMode("project");
@@ -3333,7 +3330,6 @@ export default function App() {
         onDeleteSession={(id) => void deleteSession(id)}
         onDeleteSessions={(ids) => void deleteSessions(ids)}
         onOpenProject={openProjectEntry}
-        onOpenCode={openCode}
         onNewProject={newProjectEntry}
         onOpenRecent={(path) => void openRecentProject(path)}
         onRemoveRecent={(path) => void removeRecentProject(path)}
@@ -3346,6 +3342,9 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
         onOpenPhoneConnect={isElectron() ? () => setShowPhoneConnect(true) : undefined}
+        onOpenCoreConnect={() => setShowCoreConnect(true)}
+        coreMode={coreMode}
+        coreLabel={coreLabel}
         onFileOpen={(p, opts) => void openFileTab(p, opts)}
         onDirOpen={(p) => void openDirInSystem(p)}
       />
@@ -3572,6 +3571,7 @@ export default function App() {
         />
       )}
       {showPhoneConnect && <PhoneConnectModal onClose={() => setShowPhoneConnect(false)} />}
+      {showCoreConnect && <CoreModal onClose={() => setShowCoreConnect(false)} />}
       {newTaskOpen && (
         <NewTaskWizard
           collabModes={collabModes}

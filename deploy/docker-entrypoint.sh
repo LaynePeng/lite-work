@@ -14,6 +14,8 @@ PORT="${LITEWORK_PORT:-8787}"
 TOKEN_FILE="$CONFIG_DIR/server-token"
 
 mkdir -p "$CONFIG_DIR" "$WORKSPACE"
+# 技能同步落点 $HOME/.agents/skills 与日志/插件/会话都要落卷
+export HOME="${LITEWORK_HOME:-/data}"
 
 # 首启播种云端默认配置（卷内无 config.json 时才写，不覆盖用户后续改动）：
 # 4GB 小内存机的顶层任务护栏；桌面版默认 0=不限

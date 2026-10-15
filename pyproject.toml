@@ -41,6 +41,8 @@ dependencies = [
     "curl_cffi>=0.7",
     # Web Push（PWA 盯梢通知）：VAPID 签名 + aes128gcm 加密投递
     "pywebpush>=2.1",
+    # CLI `lite-work pair`：终端 ASCII 配对二维码（缺失时退化为打印 URL）
+    "qrcode>=7.4",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +59,13 @@ package = [
 
 [project.scripts]
 lite-work = "litework.cli:main"
+
+[tool.setuptools]
+# 非 .py 的随包资源（builtin_plugins 的 recipe.md / icon.svg、pricing-plugin 的
+# pricing.json）靠 MANIFEST.in + 本开关进入 wheel/sdist：缺了它们，pip/容器
+# 安装的内置协作模式会退化成通用 recipe，定价插件的 pricing.json 读不到 →
+# 官方定价源整体失效（PyInstaller 走 --add-data，不受影响）。
+include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["litework*"]

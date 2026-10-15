@@ -27,17 +27,24 @@ ENV PYTHONUNBUFFERED=1 \
     LITEWORK_WEB_DIST=/opt/lite-work/web-dist \
     MPLCONFIGDIR=/data/.lite-work/mpl
 
-# git：Agent 的 git_commit / worktree；libreoffice：office 工具的格式转换
-# （soffice）；fonts-noto-cjk：matplotlib 图表中文兜底（office.py 自带内嵌
-# 字体，这里只兜 findfont 系统路径）；curl：compose healthcheck
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        git libreoffice fonts-noto-cjk curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# git：Agent 的 git 工具；libreoffice：office 转换/重算；fonts-noto-cjk：图表中文；
+# libgl1 / libglib2.0-0t64 / libgomp1：cv2 / onnxruntime 的 .so；curl：healthcheck。
+# ripgrep 在 noble 的 universe 源，fail-soft 安装。
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        git libreoffice fonts-noto-cjk \
+        libgl1 libglib2.0-0t64 libgomp1 \
+        curl ca-certificates; \
+    apt-get install -y --no-install-recommends ripgrep \
+      || echo "warn: ripgrep 安装失败——search_code 将不可用（其余功能不受影响）" >&2; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY litework ./litework
+# 不 COPY skills 则容器内技能列表为空（_builtin_skills_dir() 候选 /app/skills）
+COPY skills ./skills
 # 先锁 playwright（与基底镜像同版本），再装本包：其 playwright>=1.40 约束
 # 已被满足，pip 不会拉别的版本
 RUN pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" .

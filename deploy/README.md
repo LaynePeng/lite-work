@@ -43,16 +43,20 @@ docker compose up -d --build
 git pull && docker compose up -d --build
 ```
 
-## 3. 拿访问令牌
+## 3. 手机配对 / 拿访问令牌
 
-首启自动生成、存在数据卷（重启不变）：
+Core 启动日志自带**手机配对二维码**——手机相机扫码即自动配对连接，无需手抄令牌：
 
 ```bash
-docker compose logs core | grep "访问令牌"
+docker compose logs core     # 启动横幅里直接扫二维码
 ```
 
-桌面远端模式 / 手机 PWA 连接时都填它。显式指定则 `.env` 里写
-`LITEWORK_TOKEN=xxx`（或 `DEEPSEEK_API_KEY=sk-...` 引导 LLM 配置）。
+配对过的手机会记住该 Core（连接屏「已配对的 Core」点选即连，免重复扫码）。
+裸机/非 Docker 部署同理：`lite-work serve` 启动即打印二维码；也可随时
+`lite-work pair` 重新显示（支持 `--url` / `--token` 指定）。
+
+令牌本身也在日志里（`grep 访问令牌`），桌面远端模式手填用；显式指定则
+`.env` 里写 `LITEWORK_TOKEN=xxx`（或 `DEEPSEEK_API_KEY=sk-...` 引导 LLM 配置）。
 
 ## 4. 对外服务（方案 A：tailscale serve）
 
@@ -89,9 +93,38 @@ docker compose ps                          # healthy
 
 浏览器打开 `https://litework.<tailnet>.ts.net`——同源伺服前端，无需额外配置。
 
+### 镜像形态与获取方式
+
+镜像走**源码构建**（多阶段：node 构建前端 → playwright/python 基底 pip 装本包），
+容器内的依赖由容器自己的 pip 按基座原生环境解析，因此不受 PyInstaller 的
+glibc 基线约束。三条获取路径等价：
+
+```bash
+# ① 官方预构建镜像（推荐，秒级；CI 在 amd64/arm64 原生 runner 上源码构建后推 GHCR）
+docker pull ghcr.io/laynepeng/lite-work/core:2.0.0
+
+# ② 本机源码构建（改过源码时用）
+./scripts/build-linux-image.sh              # 打 lite-work-core:2.0.0-linux-<arch>
+./scripts/build-linux-image.sh --push       # 构建后推送
+
+# ③ compose 原地构建
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+默认标签 `lite-work-core:2.0.0`，可用 `--tag` 覆盖。首次源码构建约 10-20 分钟
+（npm ci + pip 装全部原生依赖），之后层缓存复用。
+
+### 内置外部程序
+
+镜像预装：`git`、`ripgrep`（search_code，noble 的 universe 源，安装失败只告警）、
+`libreoffice`（Office 转换/重算）、`fonts-noto-cjk`（图表中文）、
+`libgl1/libglib2.0-0t64/libgomp1`（cv2 / onnxruntime 的 `.so`）。
+Chrome（技能出图）不预装，技能走内置 matplotlib 兜底或按提示 `playwright install`。
+
 ## 数据与备份
 
-全部状态在卷 `core-data`（`/data`）：会话、插件、技能、工作区
+全部状态在卷 `core-data`（`/data`）：会话、插件、技能（用户级
+`/data/.agents/skills`，靠入口脚本把 `HOME` 指向 `/data` 才落卷）、工作区
 （`/data/workspace`）、盯梢计划、日志、VAPID 密钥、令牌。备份即备卷：
 
 ```bash

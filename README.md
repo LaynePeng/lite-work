@@ -227,10 +227,30 @@ triggers: 关键词1,关键词2
 | --- | --- | --- |
 | macOS | `npm run package` | `release/lite-work-<版本>-arm64.dmg` |
 | Windows | `.\scripts\build-windows.ps1` | `release\lite-work Setup <版本>.exe`（NSIS 安装包） |
+| Linux（仅后端） | `./scripts/build-linux-backend.sh` | `release/lite-work-backend-<版本>-linux-<arch>.tar.gz`（+ `.sha256`） |
+| Linux 容器镜像 | `./scripts/build-linux-image.sh` | 本地镜像 `lite-work-core:<版本>-linux-<arch>` |
 
 两个脚本均支持增量构建：依赖未变化时跳过安装，默认复用 PyInstaller 分析缓存；发布构建加 `--clean`（Windows 为 `-Clean`）。
 
-> 说明：Windows 建议在 Windows 机器上执行打包脚本。
+### Linux 后端（自托管 Core）
+
+Linux 侧**不提供桌面安装包**：Core 跑在服务器/NAS 上，桌面版与手机 PWA 连它（见 `deploy/README.md`）。两种分发形态：
+
+```bash
+# ① 解包即跑（裸机 / 已有容器；PyInstaller 产物，glibc 2.35 基线）
+tar -xzf lite-work-backend-<版本>-linux-x64.tar.gz
+cd lite-work-backend && ./lite-work-backend serve --host 0.0.0.0 --port 8787 \
+  --token <令牌> --workspace /data/workspace --config-dir /data/.lite-work
+
+# ② 容器（推荐；镜像由源码构建，依赖在容器内按基座原生解析）
+docker run -d --name lite-work-core -p 127.0.0.1:8787:8787 \
+  -v lite-work-data:/data --shm-size=1g --memory=3500m \
+  ghcr.io/laynepeng/lite-work/core:<版本>
+```
+
+可选外部程序（缺失时对应工具返回安装指引，其余功能不受影响）：`ripgrep`（search_code）、`libreoffice`（Office 转换/公式重算）、Chrome（技能出图）、`fonts-noto-cjk`（图表中文）。
+
+> 说明：Windows 建议在 Windows 机器上执行打包脚本；Linux 后端必须与目标架构一致并注意 glibc 基线——CI 在 `ubuntu-22.04` / `ubuntu-22.04-arm` 各出一份（glibc 2.35，可跑 22.04+/Debian 12+/RHEL 9+）。容器镜像不受此限制（容器内自带 Python 与其依赖）。
 > 
 > macOS 包未签名（无 Developer ID 证书，未公证）。首次打开如提示「无法验证开发者」，右键应用 →「打开」；如提示「已损坏」，运行 `xattr -dr com.apple.quarantine "/Applications/lite-work.app"` 后重试。
 > 
@@ -238,10 +258,10 @@ triggers: 关键词1,关键词2
 
 ### GitHub Actions 构建（推荐）
 
-仓库已配置 `.github/workflows/release.yml`，无需本地环境即可产出 macOS DMG 与 Windows NSIS 安装包：
+仓库已配置 `.github/workflows/release.yml`，无需本地环境即可产出各平台产物：
 
-1.  推送 `v*` 标签（如 `v1.2.3`，需与 `__version__` 一致）自动触发：构建双平台安装包 → 创建 GitHub Release
-2.  构建产物也可在 **Actions** 运行详情页 **Artifacts** 下载：`macos-arm64` / `windows-x64`
+1.  推送 `v*` 标签（如 `v1.2.3`，需与 `__version__` 一致）自动触发：构建 macOS / Windows 安装包 + Linux 后端（x64、arm64）+ 多架构容器镜像 → 创建 GitHub Release
+2.  构建产物也可在 **Actions** 运行详情页 **Artifacts** 下载：`macos-arm64` / `windows-x64` / `litework-linux-backend-x64` / `litework-linux-backend-arm64`
 
 安装包从 [Releases](https://github.com/LaynePeng/lite-work/releases) 下载：
 
@@ -249,6 +269,7 @@ triggers: 关键词1,关键词2
 | --- | --- |
 | macOS (Apple Silicon) | `lite-work-<版本>-arm64.dmg` |
 | Windows | `lite-work Setup <版本>.exe` |
+| Linux 后端 (x64 / arm64) | `lite-work-backend-<版本>-linux-{x64,arm64}.tar.gz` |
 
 ## 技术栈
 

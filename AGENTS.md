@@ -30,12 +30,19 @@
 | macOS 变体 | `./scripts/build-macos.sh --clean` / `--skip-web` / `--skip-deps` | 清 PyInstaller 缓存 / 跳过前端构建 / 跳过依赖检查 |
 | **macOS (CN)** | `./scripts/build-macos-cn.sh` | 同 macOS 但自动启用国内镜像（本地 CN 环境用，CI 不受影响） |
 | macOS 底层 | `npm run package`（= `scripts/package.mjs`） | 供 `build-macos.sh` 内部调用的 **macOS 专用**流程（iconutil / hdiutil / DMG / .app）——**在 Windows 上运行必失败，也不要直接调它**，永远从 `build-macos.sh` 进 |
-| 仅后端 | `node scripts/package-backend.mjs` | PyInstaller --onedir，输出 `release/backend/` |
+| **Linux（仅后端）** | `./scripts/build-linux-backend.sh` | **Linux 后端一键入口**：前端构建 → PyInstaller（`package-backend.mjs`）→ 资源完整性校验 → `tar.gz` + `.sha256`，产出 `release/lite-work-backend-<版本>-linux-<arch>.tar.gz`。含 `--clean` / `--skip-web` / `--skip-deps` / `--skip-build` / `--dry-run`；**在非 Linux 上默认拒绝**（`LITEWORK_ALLOW_FOREIGN_PLATFORM=1` 仅用于冒烟） |
+| **Linux 容器镜像** | `./scripts/build-linux-image.sh` | **源码构建**镜像（`deploy/Dockerfile`，多阶段 node 前端 → playwright 基底 pip 装本包）；`--tag` / `--push`。镜像内依赖由容器自己的 pip 解析，不受 PyInstaller glibc 基线约束 |
+| Linux 源码镜像（手动） | `docker compose -f deploy/docker-compose.yml build` | 与上面等价的手动路径（compose 默认走源码构建） |
+| 仅后端 | `node scripts/package-backend.mjs` | PyInstaller --onedir，输出 `release/backend/`（三平台通用底层，平台差异由调用脚本负责） |
 | 仅前端 | `npm run build:web` | tsc + vite，输出 `web/dist/` |
 
 **血泪教训（v1.6.1）**：在 Windows 上跑了 `npm run package`，在 icon 步骤因  
 `iconutil` 不存在而崩溃。Windows 打包一律走 `build-windows.ps1`，macOS 打包  
 一律走 `build-macos.sh`——两个脚本都内置 sync-version，不要绕过它们手动拼流程。
+
+**Linux 产物不能跨 glibc 基线**：CI 用 `ubuntu-22.04`（glibc 2.35）出包是刻意的，
+产物可跑 22.04+/Debian 12+/RHEL 9+；换到 24.04 runner 会把下限抬到 glibc 2.39。
+容器镜像基座（`debian:12-slim`）同理——只能往上，不能往下。
 
 ## 3\. 测试
 

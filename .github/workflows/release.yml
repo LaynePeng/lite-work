@@ -111,9 +111,134 @@ jobs:
           path: release/*.exe
           if-no-files-found: error
 
+  # Linux 后端（仅 Core，不含 Electron 桌面包）：自托管部署用。
+  # 基座刻意选 ubuntu-22.04（glibc 2.35）而非 24.04（glibc 2.39）——
+  # PyInstaller 产物硬链构建机 glibc，22.04 出的包可跑在 22.04+/Debian 12+/
+  # RHEL 9+，24.04 只能跑在 24.04+，覆盖面差一大截。
+  linux-backend:
+    name: Build Linux backend (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      LITEWORK_SKIP_ENGINE_PREINSTALL: "1"
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Sync version from single source of truth
+        shell: bash
+        run: node scripts/sync-version.mjs && git diff --exit-code -- package.json web/package.json package-lock.json web/package-lock.json || (echo "Committed npm version files are out of sync with litework/__init__.py"; exit 1)
+      - name: Install Python packaging dependencies
+        shell: bash
+        run: python -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e ".[package]"
+      - name: Install frontend dependencies
+        shell: bash
+        run: npm --prefix web ci
+      - name: Cache diagram-to-office node_modules
+        uses: actions/cache@v6
+        with:
+          path: skills/diagram-to-office/node_modules
+          key: ${{ runner.os }}-${{ matrix.arch }}-dto-${{ hashFiles('skills/diagram-to-office/package-lock.json') }}
+      - name: Build Linux backend
+        shell: bash
+        run: bash ./scripts/build-linux-backend.sh --clean --skip-deps
+      - name: Upload Linux backend
+        uses: actions/upload-artifact@v7
+        with:
+          name: litework-linux-backend-${{ matrix.arch }}
+          path: |
+            release/lite-work-backend-*.tar.gz
+            release/lite-work-backend-*.tar.gz.sha256
+          if-no-files-found: error
+  # 容器镜像：源码构建（deploy/Dockerfile）。与 linux-backend 分开：
+  # 镜像构建是另一条重活，失败只应阻断镜像发布，不该拖着 tar.gz artifact 一起挂。
+  linux-image:
+    name: Build container image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push container image
+        shell: bash
+        run: |
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')/core"
+          version="$(node -p "require('./package.json').version")"
+          bash ./scripts/build-linux-image.sh --tag "${image}:${version}-${{ matrix.arch }}" --push
+
+  linux-image-manifest:
+    name: Publish multi-arch container tags
+    needs: [linux-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compose multi-arch manifest
+        shell: bash
+        run: |
+          image="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')/core"
+          version="$(node -p "require('./package.json').version")"
+          docker buildx imagetools create \
+            -t "${image}:${version}" \
+            -t "${image}:latest" \
+            "${image}:${version}-x64" \
+            "${image}:${version}-arm64"
+          docker buildx imagetools inspect "${image}:${version}"
+
   release:
     name: Create GitHub Release
-    needs: [macos, windows]
+    needs: [macos, windows, linux-backend]
     runs-on: ubuntu-latest
     steps:
       - name: Check out release tag
@@ -131,6 +256,16 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: windows-x64
+          path: dist
+      - name: Download Linux backend (x64)
+        uses: actions/download-artifact@v7
+        with:
+          name: litework-linux-backend-x64
+          path: dist
+      - name: Download Linux backend (arm64)
+        uses: actions/download-artifact@v7
+        with:
+          name: litework-linux-backend-arm64
           path: dist
       - name: Build release notes
         env:
@@ -179,6 +314,16 @@ jobs:
             echo "## 安装包"
             echo "- macOS Apple Silicon：\`*.dmg\`"
             echo "- Windows x64：\`*.exe\`"
+            echo "- Linux 后端（自托管 Core，解包即用）：\`lite-work-backend-<版本>-linux-x64.tar.gz\` / \`...-linux-arm64.tar.gz\`（附 \`.sha256\`）"
+            echo
+            echo "### Linux 后端用法"
+            echo "\`\`\`bash"
+            echo "tar -xzf lite-work-backend-<版本>-linux-x64.tar.gz"
+            echo "cd lite-work-backend && ./lite-work-backend serve --host 0.0.0.0 --port 8787 \\\\"
+            echo "  --token <令牌> --workspace /data/workspace --config-dir /data/.lite-work"
+            echo "\`\`\`"
+            echo "可选外部程序（缺失时对应工具返回安装指引，其余功能不受影响）："
+            echo "libreoffice（Office 转换/重算）、ripgrep（search_code）、chrome（技能出图）、fonts-noto-cjk（图表中文）。"
             echo
             if [ -n "$previous" ]; then
               echo "## 完整提交列表（${previous} 到 ${tag}）"

@@ -9,6 +9,11 @@
 
 services:
   core:
+    # 两种形态任选：
+    #   ① 预构建镜像（推荐，几十秒起）：注释掉 build:，改用
+    #      image: ghcr.io/laynepeng/lite-work/core:2.0.0（或本地
+    #      ./scripts/build-linux-image.sh 出来的 lite-work-core:2.0.0-linux-<arch>）；
+    #   ② 源码构建（默认，首次十几分钟）：保留 build:，docker compose up -d --build
     build:
       context: ..
       dockerfile: deploy/Dockerfile

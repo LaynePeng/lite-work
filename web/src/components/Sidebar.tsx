@@ -394,11 +394,6 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
           >
             ☑ 批量
           </button>
-          {branch && (
-            <span className="git-branch" title="当前分支">
-              ⎇ {branch}
-            </span>
-          )}
           <button
             className={`btn-refresh-tree ${loading ? "spinning" : ""}`}
             onClick={() => void refresh()}
@@ -1082,7 +1077,6 @@ export default function Sidebar({
   onDeleteSession,
   onDeleteSessions,
   onOpenProject,
-  onOpenCode,
   onNewProject,
   onOpenRecent,
   onRemoveRecent,
@@ -1095,6 +1089,9 @@ export default function Sidebar({
   onOpenSettings,
   onOpenAbout,
   onOpenPhoneConnect,
+  onOpenCoreConnect,
+  coreMode,
+  coreLabel,
   onFileOpen,
   onDirOpen,
 }: {
@@ -1139,7 +1136,6 @@ export default function Sidebar({
   /** 批量删除会话（App 层调 api.deleteSessionsBatch 并同步页签/会话列表） */
   onDeleteSessions?: (ids: string[]) => void;
   onOpenProject: () => void;
-  onOpenCode: () => void;
   onNewProject?: (git: boolean) => void;
   onOpenRecent: (path: string) => void;
   onRemoveRecent: (path: string) => void;
@@ -1155,6 +1151,11 @@ export default function Sidebar({
   onOpenAbout: () => void;
   /** 「手机 / 局域网连接」入口（仅桌面 Electron 传入；缺省不渲染按钮） */
   onOpenPhoneConnect?: () => void;
+  /** 「Core 连接」入口（仅桌面 Electron 传入；缺省不渲染按钮） */
+  onOpenCoreConnect?: () => void;
+  /** 当前 Core 模式与远程显示名（footer 状态角标；仅桌面有意义） */
+  coreMode?: "local" | "remote";
+  coreLabel?: string;
   onFileOpen?: (path: string, opts?: OpenFileOptions) => void;
   onDirOpen?: (path: string) => void;
 }) {
@@ -1232,32 +1233,18 @@ export default function Sidebar({
           projectsView === "list" ? (
             <div className="projects-list">
               <div className="projects-entries">
-                <button className="btn-project-entry" onClick={onOpenProject} title="打开任意目录作为项目（文档/办公/任意工作目录）">
+                <button className="btn-project-entry" onClick={onOpenProject} title="打开目录：自动识别 git 仓库（是 → 代码模式，否 → 普通项目）">
                   <span className="entry-icon">📂</span>
                   <span className="entry-text">
                     <span className="entry-title">打开项目</span>
-                    <span className="entry-desc">任意工作目录</span>
+                    <span className="entry-desc">自动识别 git 仓库</span>
                   </span>
                 </button>
-                <button className="btn-project-entry" onClick={onOpenCode} title="打开代码仓库（git 仓库，用代码 Agent 开发）">
-                  <span className="entry-icon">💻</span>
-                  <span className="entry-text">
-                    <span className="entry-title">打开代码</span>
-                    <span className="entry-desc">git 代码仓库</span>
-                  </span>
-                </button>
-                <button className="btn-project-entry" onClick={() => onNewProject?.(false)} title="新建项目目录（不初始化 git）">
-                  <span className="entry-icon">📁</span>
-                  <span className="entry-text">
-                    <span className="entry-title">新建项目</span>
-                    <span className="entry-desc">通用项目目录</span>
-                  </span>
-                </button>
-                <button className="btn-project-entry" onClick={() => onNewProject?.(true)} title="新建代码仓库（自动 git init）">
+                <button className="btn-project-entry" onClick={() => onNewProject?.(true)} title="新建：弹窗选择项目目录或代码仓库（git init）">
                   <span className="entry-icon">✚</span>
                   <span className="entry-text">
-                    <span className="entry-title">新建代码</span>
-                    <span className="entry-desc">默认 git 仓库</span>
+                    <span className="entry-title">新建</span>
+                    <span className="entry-desc">项目 / 代码仓库</span>
                   </span>
                 </button>
               </div>
@@ -1489,6 +1476,26 @@ export default function Sidebar({
       )}
 
       <div className="sidebar-footer">
+        <button className="btn-open-settings footer-core-btn" onClick={onOpenCoreConnect} title="Core 连接">
+          <svg width="14" height="14" viewBox="0 0 24 24" className="core-logo" aria-hidden>
+            <defs>
+              <linearGradient id="coreGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#4f8cff" />
+                <stop offset="1" stopColor="#8b5cf6" />
+              </linearGradient>
+            </defs>
+            <circle cx="12" cy="12" r="9" fill="none" stroke="url(#coreGrad)" strokeWidth="2.5" />
+            <circle cx="12" cy="12" r="4" fill="none" stroke="#3fb950" strokeWidth="2.5" />
+          </svg>
+          <span>Core</span>
+          {coreMode === "remote" || !coreMode ? (
+            <span className={`core-state ${coreMode === "remote" ? "remote" : "local"}`}>
+              {coreMode === "remote" ? coreLabel || "远程" : "本 Core"}
+            </span>
+          ) : (
+            <span className="core-state local">本地</span>
+          )}
+        </button>
         {onOpenPhoneConnect && (
           <button className="btn-open-settings" onClick={onOpenPhoneConnect} title="手机 / 局域网连接">
             📱 手机

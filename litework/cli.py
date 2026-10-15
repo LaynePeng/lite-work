@@ -52,6 +52,10 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
     warmup = sub.add_parser("warmup", help="预热本地缓存（matplotlib 字体缓存，供安装阶段调用）")
+    pair = sub.add_parser("pair", help="打印手机配对二维码（对运行中的 Core 探测地址与令牌）")
+    pair.add_argument("--url", default="", help="Core 地址（默认自动探测本机运行实例）")
+    pair.add_argument("--token", default="", help="访问令牌（默认从 Core 的配置目录读取）")
+    pair.add_argument("--config-dir", default=None, help="配置目录（默认 ~/.lite-work，从中读 server-token）")
 
     parser.add_argument("--version", action="store_true", help="显示版本")
 
@@ -118,6 +122,75 @@ def _run_warmup() -> int:
     return 0
 
 
+def _first_lan_ipv4() -> str:
+    """本机第一个非回环 IPv4（serve 绑 0.0.0.0 时给手机/桌面展示真实地址）。"""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            # 不发包，只为让系统按路由选源地址（UDP connect 是本地操作）
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def _print_pair_qr(url: str, token: str) -> None:
+    """终端打印手机配对二维码（ASCII 方块）。
+
+    手机扫码 → 打开 `{url}/#litework-token={token}` 自动配对。qrcode
+    缺失时退化为打印配对 URL（复制到手机浏览器同样可用）。
+    """
+    pair_url = f"{url.rstrip('/')}/#litework-token={token}"
+    print()
+    print("手机配对：相机扫码，或把下面的链接发到手机浏览器打开")
+    try:
+        import qrcode
+
+        qr = qrcode.QRCode(border=1, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(pair_url)
+        qr.print_ascii(invert=True)
+    except ImportError:
+        print("(安装 qrcode 可显示二维码: pip install qrcode)")
+    print(pair_url)
+    print()
+
+
+def _run_pair(args: argparse.Namespace) -> int:
+    """`lite-work pair`：探测运行中的 Core，打印手机配对二维码。"""
+    import json
+    import os
+    import urllib.request
+
+    # 令牌优先级：--token > 配置目录 server-token > 空（--no-token 部署）
+    token = args.token
+    if not token:
+        cfg_dir = os.path.abspath(os.path.expanduser(args.config_dir or "~/.lite-work"))
+        token_file = os.path.join(cfg_dir, "server-token")
+        try:
+            with open(token_file, encoding="utf-8") as f:
+                token = f.read().strip()
+        except OSError:
+            token = ""
+
+    if args.url:
+        urls = [args.url.rstrip("/")]
+    else:
+        urls = ["http://127.0.0.1:8787", "http://localhost:8787"]
+
+    for base in urls:
+        try:
+            with urllib.request.urlopen(f"{base}/api/health", timeout=3) as resp:
+                if resp.status == 200 and json.loads(resp.read()).get("status") == "ok":
+                    _print_pair_qr(base, token)
+                    return 0
+        except OSError:
+            continue
+    print("未探测到运行中的 Core（默认 127.0.0.1:8787）。", file=sys.stderr)
+    print("用法: lite-work pair --url http://<地址>:<端口> --token <令牌>", file=sys.stderr)
+    return 1
+
+
 def main(argv: list | None = None) -> None:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
@@ -127,6 +200,9 @@ def main(argv: list | None = None) -> None:
 
     if args.command == "warmup":
         sys.exit(_run_warmup())
+
+    if args.command == "pair":
+        sys.exit(_run_pair(args))
 
     if args.command != "serve":
         print("用法: lite-work serve [--port N] [--token xxx | --no-token] [--workspace /path]")
@@ -166,9 +242,17 @@ def main(argv: list | None = None) -> None:
             # 机器可读就绪标记：Electron 主进程据此拿到实际端口与鉴权令牌
             token_part = f" token={token}" if token else ""
             print(f"LITEWORK_CORE_READY port={port} workspace={app.workspace}{token_part}", flush=True)
-            print(f"lite-work Core 已启动 → http://{args.host}:{port}", flush=True)
+            # 对外地址：手机/桌面直连用（127.0.0.1 只在本机有意义）。
+            # 多网卡时取第一个非回环 IPv4；拿不到就退回 host 原值。
+            lan_host = args.host
+            if args.host in ("0.0.0.0", "::"):
+                lan_host = _first_lan_ipv4() or "127.0.0.1"
+            print(f"lite-work Core 已启动 → http://{lan_host}:{port}", flush=True)
             if token:
                 print(f"鉴权已开启，访问令牌: {token}", flush=True)
+                # Docker/自托管形态：日志里直接打印手机配对二维码，
+                # docker compose logs core 即可扫码，无需进容器敲命令
+                _print_pair_qr(f"http://{lan_host}:{port}", token)
             else:
                 print("⚠️  警告: 鉴权已关闭（--no-token），任何能访问该端口的进程均可控制本服务", flush=True)
 

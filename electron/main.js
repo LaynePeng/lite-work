@@ -94,6 +94,83 @@ function lanShareEnabled() {
   return loadClientConfig().lanShare === true;
 }
 
+// ---- Core 连接管理（多远程）----
+// client.json 形态：
+//   { coreUrl, token, cores: [{ name, url, token }], lanShare, keepRunningInTray }
+// coreUrl 非空 = 远程直连（既有行为）；cores 是「Core 连接」弹窗的保存列表。
+// 切换 = 改写 coreUrl/token 后 app.relaunch()（coreMode 在启动时按 coreUrl 判定）。
+function readCores() {
+  const cfg = loadClientConfig();
+  return Array.isArray(cfg.cores) ? cfg.cores : [];
+}
+
+function writeClientConfig(mutate) {
+  const cfg = loadClientConfig();
+  mutate(cfg);
+  fs.mkdirSync(path.dirname(CLIENT_CONFIG), { recursive: true });
+  fs.writeFileSync(CLIENT_CONFIG, JSON.stringify(cfg, null, 2), "utf-8");
+  return cfg;
+}
+
+ipcMain.handle("get-core-mode", () => {
+  const cfg = loadClientConfig();
+  const remote = !!cfg.coreUrl;
+  const hit = remote ? (cfg.cores || []).find((c) => c.url === cfg.coreUrl) : null;
+  return {
+    mode: remote ? "remote" : "local",
+    // 当前远程的显示名（列表里找不到则退化为 host）
+    label: remote ? (hit?.name || safeHost(cfg.coreUrl)) : "",
+    url: remote ? cfg.coreUrl : "",
+    cores: readCores(),
+  };
+});
+
+function safeHost(url) {
+  try { return new URL(url).host; } catch { return url; }
+}
+
+ipcMain.handle("core-list", () => readCores());
+
+ipcMain.handle("core-add", (_event, entry) => {
+  const name = String(entry?.name ?? "").trim();
+  const url = String(entry?.url ?? "").trim().replace(/\/+$/, "");
+  const token = String(entry?.token ?? "").trim();
+  if (!name) return { ok: false, error: "缺少名称" };
+  if (!/^https?:\/\//.test(url)) return { ok: false, error: "地址必须以 http:// 或 https:// 开头" };
+  if (!token) return { ok: false, error: "缺少访问令牌" };
+  const cfg = writeClientConfig((c) => {
+    // 同 URL 视为编辑（覆盖名称/令牌），否则追加
+    c.cores = (c.cores || []).filter((c2) => c2.url !== url);
+    c.cores.push({ name, url, token });
+  });
+  return { ok: true, cores: cfg.cores };
+});
+
+ipcMain.handle("core-remove", (_event, url) => {
+  const cfg = writeClientConfig((c) => {
+    c.cores = (c.cores || []).filter((c2) => c2.url !== url);
+    // 删的是当前连接的远程 → 一并清空直连配置，下次启动回本地
+    if (c.coreUrl === url) { c.coreUrl = ""; c.token = ""; }
+  });
+  return { ok: true, cores: cfg.cores };
+});
+
+// 切换连接：url 为空 = 回本地；否则必须已在 cores 列表里（令牌以列表为准）
+ipcMain.handle("core-switch", (event, url) => {
+  const target = String(url ?? "").trim().replace(/\/+$/, "");
+  const cfg = loadClientConfig();
+  if (!target) {
+    writeClientConfig((c) => { c.coreUrl = ""; c.token = ""; });
+  } else {
+    const hit = (cfg.cores || []).find((c) => c.url === target);
+    if (!hit) return { ok: false, error: "未找到该远程配置" };
+    writeClientConfig((c) => { c.coreUrl = hit.url; c.token = hit.token; });
+  }
+  // 写完即重启应用（coreMode 只在启动时判定）
+  setTimeout(() => { app.relaunch(); app.exit(0); }, 50);
+  return { ok: true, restarting: true };
+});
+
 function setLanShareFlag(enabled) {
   try {
     fs.mkdirSync(path.dirname(CLIENT_CONFIG), { recursive: true });

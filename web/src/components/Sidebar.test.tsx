@@ -51,7 +51,6 @@ const baseProps = {
   onNewSession: () => {},
   onDeleteSession: () => {},
   onOpenProject: () => {},
-  onOpenCode: () => {},
   onOpenRecent: () => {},
   onRemoveRecent: () => {},
   onTogglePin: () => {},
