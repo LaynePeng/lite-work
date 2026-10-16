@@ -1088,6 +1088,137 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   padding: 8px 4px;
 }
 
+/* ══ SVG 放大灯箱（mermaid / diagram / layout 通用） ══
+   需求：架构图在气泡里必然偏小 → 点击浮到最上层放大、可拖动平移、点击返回。
+   参考 markdown-viewer 的「点击图表弹出放大视图（滚轮缩放、拖拽平移）」。
+   层级：z-index 9000（远高于 modal 200 / approval 30）——必须盖住一切 UI。 */
+.md-zoom-wrap {
+  position: relative;
+}
+/* 放大按钮：平时低干扰，悬停浮现；触屏设备常显（无 hover，否则发现不了） */
+.md-zoom-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-2) 90%, transparent);
+  color: var(--text-1);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.md-zoom-wrap:hover .md-zoom-btn,
+.md-zoom-btn:focus-visible {
+  opacity: 1;
+}
+.md-zoom-btn:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border-color: var(--accent);
+}
+@media (hover: none) {
+  .md-zoom-btn { opacity: 1; }
+}
+
+.md-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(5, 8, 14, 0.92);
+  backdrop-filter: blur(3px);
+  display: flex;
+  flex-direction: column;
+  animation: fade-in 0.15s ease;
+}
+
+/* 舞台：占满剩余高度、溢出隐藏（缩放平移由内层 transform 承担） */
+.md-zoom-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none; /* 手势交给 JS 处理（捏合缩放/拖动平移） */
+}
+
+.md-zoom-canvas {
+  transform-origin: center center;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+}
+.md-zoom-canvas svg {
+  width: 100%;
+  height: auto;
+  max-height: calc(100dvh - 140px);
+  display: block;
+}
+
+/* 底部工具条：缩放 / 重置 / 关闭 */
+.md-zoom-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.md-zoom-bar button {
+  min-width: 44px;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 16px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.md-zoom-bar button:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+}
+.md-zoom-pct {
+  min-width: 52px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+.md-zoom-close {
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border)) !important;
+  color: var(--red);
+}
+.md-zoom-hint {
+  flex: none;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 0 16px 10px;
+  background: var(--bg-1);
+}
+/* 触屏上「滚轮 / 双击」提示不适用，隐藏换取简洁 */
+@media (hover: none) {
+  .md-zoom-hint { display: none; }
+}
+
 .md-mermaid-svg svg {
   max-width: 100%;
   height: auto;

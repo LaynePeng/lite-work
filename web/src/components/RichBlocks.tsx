@@ -10,6 +10,7 @@
 // 修复 iframe / 卡片内相对路径断链。
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   blobToBase64, buildCsv, buildExportHtml, downloadBlob, escapeHtml,
@@ -36,6 +37,197 @@ function useCompact(): boolean {
   const ctx = useContext(CompactContext);
   const mobile = useIsMobile();
   return ctx || mobile;
+}
+
+// ---------------------------------------------------------------- SVG 放大灯箱
+
+/** 重写 SVG 内的 id 与其引用（url(#x) / href="#x"）。
+ *
+ *  mermaid 输出的 `<marker id="flowchart-...">` 被 `url(#id)` 引用——同一
+ *  张图在列表与灯箱里各渲染一份时 id 冲突，箭头 marker 会串到错误图形上。
+ *  放大副本统一加前缀，两边互不干扰。 */
+function prefixSvgIds(html: string, prefix: string): string {
+  try {
+    const doc = new DOMParser().parseFromString(html, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (!svg || svg.nodeName === "parsererror") return html;
+    const map = new Map<string, string>();
+    svg.querySelectorAll("[id]").forEach((el) => {
+      const old = el.getAttribute("id")!;
+      const next = `${prefix}${old}`;
+      map.set(old, next);
+      el.setAttribute("id", next);
+    });
+    if (map.size === 0) return html;
+    // 引用：属性值里的 url(#old) 与 #old
+    svg.querySelectorAll("*").forEach((el) => {
+      for (const attr of Array.from(el.attributes)) {
+        let v = attr.value;
+        if (!v.includes("#")) continue;
+        map.forEach((next, old) => {
+          v = v.split(`url(#${old})`).join(`url(#${next})`);
+          if (v === `#${old}`) v = `#${next}`;
+        });
+        if (v !== attr.value) el.setAttribute(attr.name, v);
+      }
+    });
+    return new XMLSerializer().serializeToString(svg);
+  } catch {
+    return html; // 解析失败退回原样（重复 id 的降级：箭头可能串色，可接受）
+  }
+}
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+
+/** 可放大查看的 SVG 容器：点击「⤢ 放大」或双击图形 → 全屏灯箱。
+ *
+ *  为什么需要：架构图（mermaid flowchart / diagram）信息密度高，气泡里
+ *  受宽度限制必然偏小；灯箱按实际像素放大并按需平移，才算看得清。
+ *  交互：按钮/双击打开；+ − 缩放、滚轮/双指捏合缩放、拖动平移；Esc /
+ *  点遮罩 / ✕ 关闭。 */
+function ZoomableSvg({ children, label }: { children: React.ReactNode; label: string }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [markup, setMarkup] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  /** 本轮指针是否发生过拖动（区分「点空白关闭」与「拖动平移结束」） */
+  const movedRef = useRef(false);
+
+  const openZoom = () => {
+    const svg = wrapRef.current?.querySelector("svg");
+    if (!svg) return;
+    setMarkup(prefixSvgIds(svg.outerHTML, "zx-"));
+    setZoom(1);
+    setOffset({ x: 0, y: 0 });
+    setOpen(true);
+  };
+
+  const close = () => setOpen(false);
+
+  // Esc 关闭 + 打开时锁背景滚动
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const onWheel = (e: React.WheelEvent) => {
+    if (!open) return;
+    setZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  };
+
+  // 拖动平移（鼠标 / 单指）
+  const onDown = (e: React.PointerEvent) => {
+    if (zoom <= 1) return; // 未放大时无可平移内容
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    dragRef.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+    movedRef.current = false;
+  };
+  const onMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) movedRef.current = true;
+    setOffset({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
+  };
+  const onUp = () => { dragRef.current = null; };
+
+  // 双指捏合缩放（触屏）
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 2) return;
+    const [a, b] = [e.touches[0], e.touches[1]];
+    pinchRef.current = {
+      dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+      zoom,
+    };
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const p = pinchRef.current;
+    if (!p || e.touches.length !== 2) return;
+    const [a, b] = [e.touches[0], e.touches[1]];
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    if (p.dist > 0) setZoom(clampZoom((p.zoom * dist) / p.dist));
+  };
+  const onTouchEnd = () => { pinchRef.current = null; };
+
+  return (
+    <>
+      <div
+        className="md-zoom-wrap"
+        ref={wrapRef}
+        onDoubleClick={openZoom}
+        title="双击放大查看"
+      >
+        {children}
+        <button
+          type="button"
+          className="md-zoom-btn"
+          onClick={(e) => { e.stopPropagation(); openZoom(); }}
+          aria-label={`放大查看：${label}`}
+          title="放大查看"
+        >
+          ⤢
+        </button>
+      </div>
+
+      {open && createPortal(
+        <div
+          className="md-zoom-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`放大查看：${label}`}
+          onClick={close}
+        >
+          <div
+            className="md-zoom-stage"
+            // 点空白（非拖动）也关闭：与「点遮罩关闭」同一意图，
+            // 但舞台铺满全屏，只靠遮罩点不到——用 movedRef 区分拖动平移
+            onClick={() => { if (!movedRef.current) close(); }}
+            onWheel={onWheel}
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}
+            style={{ cursor: zoom > 1 ? "grab" : "default" }}
+          >
+            <div
+              className="md-zoom-canvas"
+              style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+              dangerouslySetInnerHTML={{ __html: markup }}
+            />
+          </div>
+          <div className="md-zoom-bar" onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => setZoom((z) => clampZoom(z / 1.25))}
+                    aria-label="缩小" title="缩小">−</button>
+            <span className="md-zoom-pct">{Math.round(zoom * 100)}%</span>
+            <button type="button" onClick={() => setZoom((z) => clampZoom(z * 1.25))}
+                    aria-label="放大" title="放大">＋</button>
+            <button type="button" onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }}
+                    aria-label="重置" title="重置">⟲</button>
+            <button type="button" className="md-zoom-close" onClick={close}
+                    aria-label="关闭" title="关闭（Esc）">✕</button>
+          </div>
+          <div className="md-zoom-hint">
+            缩放 ± / 滚轮 / 双指 · 放大后拖动平移 · Esc 关闭
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------- 导出按钮
@@ -2486,6 +2678,7 @@ export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
           </button>
         ))}
       </div>
+      <ZoomableSvg label={spec.title ?? "图解"}>
       <div className="md-diagram-svg-wrap">
         <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img" aria-label={spec.title ?? "图解"}>
           {parts.map((p, i) => (
@@ -2502,6 +2695,7 @@ export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
           ))}
         </svg>
       </div>
+      </ZoomableSvg>
       <div className="md-ix-detail" role="tabpanel">
         <div className="md-ix-detail-head">
           <span className="md-diagram-dot" style={{ background: DIAGRAM_COLORS[Math.min(active, parts.length - 1) % DIAGRAM_COLORS.length] }} />
@@ -2549,11 +2743,13 @@ export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
       {/* 分块聚焦视图（interactive × diagram 组合）：选中块带 shapes 时渲染
           该块的示意图（单块单色，纯展示无点击语义） */}
       {cur.shapes && cur.shapes.length > 0 && (
-        <div className="md-diagram-svg-wrap">
-          <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
-            {cur.shapes.map((s, si) => renderShape(s, "var(--accent)", si, compact))}
-          </svg>
-        </div>
+        <ZoomableSvg label={cur.name || "分块示意图"}>
+          <div className="md-diagram-svg-wrap">
+            <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
+              {cur.shapes.map((s, si) => renderShape(s, "var(--accent)", si, compact))}
+            </svg>
+          </div>
+        </ZoomableSvg>
       )}
       <div className="md-ix-detail" role="tabpanel">
         <div className="md-ix-detail-head">
@@ -2735,6 +2931,7 @@ export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
     <div className="md-rich">
       {spec.title && <div className="md-rich-title">{spec.title}</div>}
       {spec.summary && <div className="md-ix-summary">{spec.summary}</div>}
+      <ZoomableSvg label={spec.title ?? "结构图"}>
       <div className="md-diagram-svg-wrap">
         <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
           {/* 边（先画在下层） */}
@@ -2798,6 +2995,7 @@ export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
           })}
         </svg>
       </div>
+      </ZoomableSvg>
       {/* 图例（分组色） */}
       {(() => {
         const groups = [...new Set(nodes.map((n) => n.group).filter(Boolean))] as string[];
@@ -2894,7 +3092,11 @@ export function MermaidBlock({ code }: { code: string }) {
   return (
     <div className="md-rich md-mermaid-wrap">
       {svg
-        ? <div className="md-mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+        ? (
+          <ZoomableSvg label="Mermaid 图">
+            <div className="md-mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+          </ZoomableSvg>
+        )
         : <div className="rich-card-loading">🎨 图形生成中…</div>}
     </div>
   );
