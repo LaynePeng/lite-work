@@ -36,7 +36,7 @@ from .routers import (
 from .routers.context import ServerContext, TokenAuth
 from .install_jobs import InstallJobRegistry
 from .push import PushManager
-from .tasks import TaskManager
+from .tasks import TaskManager, WorkspaceBusyError
 
 logger = logging.getLogger("litework.server")
 
@@ -101,6 +101,11 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 handle = tasks.start(sched.session_id or "", prompt, agent_id=None,
                                      unattended_profile=sched.permissions or "read")
                 return handle.task_id
+            except WorkspaceBusyError as exc:
+                # 同项目互斥（多端视图分离）：无人值守任务撞上在跑任务，
+                # 明确记入计划历史，而不是笼统的「启动失败」
+                logger.warning("[Watch] 计划任务被同项目互斥拒绝: %s", exc)
+                return None
             except Exception:  # noqa: BLE001 - 启动失败记入计划历史即可
                 logger.warning("[Watch] 启动计划任务失败", exc_info=True)
                 return None

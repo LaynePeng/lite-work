@@ -59,19 +59,23 @@ def test_mcp_update_allowed_when_background_agents_finished(client_and_app):
     assert r.status_code == 200
 
 
-def test_workspace_switch_blocked_while_background_agent_running(client_and_app, tmp_path):
+def test_workspace_switch_allowed_while_background_agent_running(client_and_app, tmp_path):
+    """多客户端视图分离后的新语义：切项目只是登记本端视图（任务与后台 Agent
+    在启动时已钉死各自工作区），不再构成对执行面的抢夺——后台 Agent 运行中
+    也允许切换（原 409 守卫已删除）。"""
     client, app = client_and_app
     app.agent_managers["s1"] = _fake_running_manager({"a1": "running"})
-    r = client.post("/api/workspace", json={"path": str(tmp_path)})
-    assert r.status_code == 409
-    assert "后台 Agent" in r.json()["detail"]
+    r = client.post("/api/workspace", json={"path": str(tmp_path)},
+                    headers={"X-Client-Id": "desktop"})
+    assert r.status_code == 200
 
 
-def test_recent_project_open_blocked_while_background_agent_running(client_and_app, tmp_path):
+def test_recent_project_open_allowed_while_background_agent_running(client_and_app, tmp_path):
+    """同上：打开最近项目不再被后台 Agent 拦截（视图切换语义）。"""
     client, app = client_and_app
     app.agent_managers["s1"] = _fake_running_manager({"a1": "running"})
     r = client.post("/api/projects/recent", json={"path": str(tmp_path)})
-    assert r.status_code == 409
+    assert r.status_code == 200
 
 
 # --------------------------------------------- 工作区切换 × Shell 实例缓存

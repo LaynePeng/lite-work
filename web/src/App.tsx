@@ -2226,33 +2226,9 @@ export default function App() {
     return () => clearInterval(timer);
   }, [patchChat, pushLog]);
 
-  // 跨端工作区同步（桌面 ↔ 手机共用同一 Core）：其他设备切换项目后，Core 的
-  // app.workspace 随之改变，/api/status.workspace 会与本地不一致。不跟随就会
-  // 出现「这台显示在 A 项目、Agent 实际在 B 项目跑」的错位。仅在本地没有运行中
-  // 任务时采纳，避免打断正在进行的交互（那个任务结束后由下一次轮询收敛）。
-  useEffect(() => {
-    const timer = setInterval(() => {
-      void (async () => {
-        try {
-          const st = await api.status();
-          const remote = st.workspace ?? "";
-          if (!remote || remote === workspaceRef.current) return;
-          if (Object.values(chatStatesRef.current).some((c) => c.running)) return;
-          workspaceRef.current = remote;
-          setStatus((prev) => (prev ? { ...prev, workspace: remote } : prev));
-          notifyElectronWorkspace(remote);
-          closeStream();
-          setChatStates({});
-          chatStatesRef.current = {};
-          await refreshSessions(remote);
-          pushLog(`📂 其他设备切换了项目，已同步: ${remote}`);
-        } catch {
-          /* 轮询失败忽略：主流程仍由用户操作驱动 */
-        }
-      })();
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [closeStream, notifyElectronWorkspace, refreshSessions, pushLog]);
+  // 跨端工作区同步已移除（多客户端视图分离）：每端经 X-Client-Id 各自持有
+  // 项目视图，/api/status.workspace 按客户端解析返回——不再需要 3s 轮询跟随
+  // 其他端（切项目不再互抢，任务在启动时钉死会话所属项目）。
 
   // ------------------------------------------------------------ 会话目标与目标循环（/goal · /loop）
 

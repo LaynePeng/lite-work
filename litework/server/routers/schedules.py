@@ -98,7 +98,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/schedules")
     async def list_schedules(request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         items = [_view(s) for s in app.schedule_store.all()]
         now = time.time()
         items.sort(key=lambda d: (not d.get("enabled"), d.get("next_run") or (now + 1e12)))
@@ -107,14 +107,14 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/watch/sources")
     async def list_sources(request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         return {"sources": app.watch_registry.describe_all()}
 
     @router.get("/api/watch/notifications")
     async def list_notifications(request: Request, after: int = 0, limit: int = 50):
         """历史通知（断线重连后补齐缺口用）。`after` = 已收到的最大通知 id。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         items = app.watch_notifications.recent(after=after or None, limit=max(1, min(limit, 200)))
         return {"notifications": items}
 
@@ -122,7 +122,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def clear_notifications(request: Request):
         """清空通知历史（不影响已订阅的 SSE 连接）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         app.watch_notifications.clear()
         return {"ok": True}
 
@@ -138,7 +138,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
         这里只要支持 `after` 参数即能补齐缺口，不重复推送。
         """
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         bus = app.watch_notifications
         queue = bus.subscribe()
         # 订阅瞬间先回放缺口：订阅动作与历史快照之间可能已经有新通知，
@@ -175,7 +175,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.post("/api/schedules")
     async def create_schedule(payload: ScheduleCreate, request: Request):
         ctx.check_auth(request)
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         _validate(payload.schedule_mode, payload.permissions, payload.catch_up)
         sched = Schedule(
             name=payload.name,
@@ -204,7 +204,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/schedules/{schedule_id}")
     async def get_schedule(schedule_id: str, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -213,7 +213,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.patch("/api/schedules/{schedule_id}")
     async def patch_schedule(schedule_id: str, payload: SchedulePatch, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -240,7 +240,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.delete("/api/schedules/{schedule_id}")
     async def delete_schedule(schedule_id: str, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         if not app.schedule_store.delete(schedule_id):
             raise HTTPException(status_code=404, detail="计划不存在")
         scheduler = app.watch_scheduler
@@ -252,7 +252,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def run_now(schedule_id: str, request: Request):
         """立即触发一次（无论是否到期）。同样受触发租约保护，防多窗口重复跑。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -269,7 +269,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def reset_fingerprint(schedule_id: str, request: Request):
         """清空指纹基线：下一次探测无论是否「有变化」都会触发一次（用于首次建基线）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")

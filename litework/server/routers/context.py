@@ -7,9 +7,10 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hmac
-from typing import Optional
+import os
+from typing import Dict, Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -46,15 +47,40 @@ class ServerContext:
     jobs: InstallJobRegistry
     push: PushManager
 
+    # 客户端视图注册表：client-id → 该端当前项目（单用户多端共享一个 Core，
+    # 各端文件树/会话列表/工具列表按自己的项目解析；任务启动时钉会话的项目，
+    # 全局 app.workspace 降级为 CLI --workspace 启动值 + 兜底默认）。
+    client_views: Dict[str, str] = field(default_factory=dict)
+
     def check_auth(self, request: Request) -> None:
         denied = self.auth.check(request)
         if denied is not None:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
-    def require_workspace(self) -> str:
-        if not self.app.workspace:
-            raise HTTPException(status_code=409, detail="请先打开项目后再创建会话或执行任务")
+    @staticmethod
+    def client_id_of(request: Request) -> str:
+        """请求所属客户端（X-Client-Id 头；缺省 = 匿名单端，兼容旧客户端）。"""
+        return (request.headers.get("X-Client-Id") or "").strip()
+
+    def resolve_workspace(self, request: Request) -> Optional[str]:
+        """解析该请求应看到的工作区：客户端视图优先，全局兜底。"""
+        cid = self.client_id_of(request)
+        if cid and cid in self.client_views:
+            return self.client_views[cid]
         return self.app.workspace
+
+    def set_client_view(self, request: Request, workspace: str) -> None:
+        """登记客户端的项目视图（POST /api/workspace）。无 client-id 的旧客户端
+        退回全局语义（保持兼容）。"""
+        cid = self.client_id_of(request)
+        if cid:
+            self.client_views[cid] = workspace
+
+    def require_workspace(self, request: Optional[Request] = None) -> str:
+        ws = self.resolve_workspace(request) if request is not None else self.app.workspace
+        if not ws:
+            raise HTTPException(status_code=409, detail="请先打开项目后再创建会话或执行任务")
+        return ws
 
 
 def _session_title(snapshot: dict) -> str:

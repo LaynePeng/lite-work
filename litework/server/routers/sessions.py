@@ -299,7 +299,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     @router.post("/api/sessions")
     async def create_session(payload: SessionCreateRequest, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
 
         # 毫秒时间戳在快速连续创建会话时会碰撞，导致新会话覆盖旧会话。
         session_id = f"session_{uuid.uuid4().hex}"
@@ -307,7 +307,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
         metadata: Dict[str, Any] = {}
         if payload.name:
             metadata["name"] = payload.name
-        workspace = payload.workspace or app.workspace
+        # 会话归属项目 = 客户端当前视图（多端各建各的项目会话），显式指定优先
+        workspace = payload.workspace or ctx.resolve_workspace(request)
         if workspace:
             metadata["workspace"] = workspace
         app.session_store.save(session_id, [], metadata)
@@ -661,21 +662,21 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def list_worktrees(request: Request):
         """项目级工作树总览：当前分支 + 所有活跃 worktree（含落后状态）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         return app.worktree_overview()
 
     @router.post("/api/worktrees/clean")
     async def clean_worktrees(payload: WorktreeCleanRequest, request: Request):
         """清理遗留 worktree：默认只删无改动的；include_dirty=true 全删（可指定单个 name）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         return app.worktree_clean(include_dirty=bool(payload.include_dirty), name=payload.name)
 
     @router.post("/api/worktrees/abort-merge")
     async def abort_merge(request: Request):
         """放弃进行中的合并（合并冲突后回退主工作区到合并前状态）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         result = app.worktree_abort_merge()
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result.get("reason") or "放弃合并失败")
@@ -685,7 +686,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def worktree_conflicts(request: Request):
         """主工作区当前合并冲突文件列表（合并中状态）。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         return app.worktree_conflicts()
 
     @router.get("/api/sessions/{session_id}/agents")
@@ -706,7 +707,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def compact_session(payload: CompactRequest, request: Request):
         """手动压缩会话上下文：旧轮次摘要化，最近 N 轮原样保留，立即落盘。"""
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         session_id = payload.session_id.strip()
         if not session_id:
             raise HTTPException(status_code=400, detail="session_id 不能为空")

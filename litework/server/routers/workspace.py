@@ -52,7 +52,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/tools")
     async def list_tools(request: Request, agent_id: str = ""):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         # 按 Agent 裁剪工具集：前端「工具」Tab 展示当前 Agent 可用工具，随 Agent 切换刷新
         registry = (
             app.create_agent_registry(agent_id)
@@ -70,7 +70,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         from ..tree import list_tree
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         rel = path.strip().lstrip("/\\") or ""
         try:
             data = await asyncio.to_thread(list_tree, workspace, rel)
@@ -85,26 +85,27 @@ def create_router(ctx: ServerContext) -> APIRouter:
 
     # ------------------------------------------------------------ 工作区
 
-    def _switch_workspace_guarded(path: str) -> None:
-        """切换工作区的公共守卫：任务/后台 Agent 运行中一律拒绝。"""
-        if tasks.active_count() > 0:
-            raise HTTPException(status_code=409, detail="当前有任务运行，请停止或等待任务结束后再切换项目")
-        bg = app.background_agent_count()
-        if bg > 0:
-            raise HTTPException(status_code=409, detail=f"当前有 {bg} 个后台 Agent 运行中（工作区是其执行基准），请等待结束后再切换项目")
-
     @router.post("/api/workspace")
     async def set_workspace(payload: WorkspaceUpdateRequest, request: Request):
+        """切换项目：**客户端视图切换**，不再改全局工作区。
+
+        - 带 X-Client-Id 的客户端（桌面/手机/多窗口）：只登记该端的项目视图，
+          其他端不受影响；任务在启动时钉死各自会话的项目，切换不构成抢夺；
+        - 无 client-id 的旧客户端：退回全局切换（兼容），但全局值不再被
+          任务运行守卫拦截——任务钉死工作区后，全局值只作「未登记端」的兜底。
+        """
         ctx.check_auth(request)
         import os as _os
         path = _os.path.abspath(_os.path.expanduser(payload.path))
         if not _os.path.isdir(path):
             raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
-        _switch_workspace_guarded(path)
-        # 后台命令（execute_command background=true）**不再拦截切换**：注册表是
-        # app 级共享的（AgentApp._bg_registry），任务归属与工作区解耦——切换后
-        # 仍可从任务面板查询/终止旧任务。
-        app.workspace = path
+        # 后台命令（execute_command background=true）不拦截切换：注册表是
+        # app 级共享的，任务归属与工作区解耦——切换后仍可从任务面板查询/终止
+        # 旧任务。后台 Agent 同理不拦（其工作区随派生会话钉死，见 TaskManager）。
+        ctx.set_client_view(request, path)
+        if not ctx.client_id_of(request):
+            # 旧客户端全局切换语义（单端场景与历史行为一致）
+            app.workspace = path
         # 这里不需要失效任何缓存：ShellPlugin 按 workspace 为键缓存
         # （AgentApp._shell_plugins，键就是目录），切换后自然拿到新目录的实例，
         # 不存在"旧目录实例被复用"的可能（历史上正是这个漏洞导致
@@ -117,7 +118,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
             app.remember_project(path, kind=classify_project_kind(path))
         except Exception:
             logger.debug("[Workspace] 记录最近项目失败", exc_info=True)
-        return {"ok": True, "workspace": app.workspace}
+        return {"ok": True, "workspace": path}
 
     @router.post("/api/projects/create")
     async def create_project(payload: ProjectCreateRequest, request: Request):
@@ -204,15 +205,17 @@ def create_router(ctx: ServerContext) -> APIRouter:
         path = _os.path.abspath(_os.path.expanduser(payload.path))
         if not _os.path.isdir(path):
             raise HTTPException(status_code=400, detail=f"目录不存在: {path}")
-        _switch_workspace_guarded(path)
-        # 后台命令运行中不再拦截（注册表 app 级共享，见 set_workspace 注释）
+        # 后台命令运行中不再拦截（注册表 app 级共享，见 set_workspace 注释）。
+        # 与 set_workspace 同一客户端视图语义。
         # 类型按目录内容启发式判定（与 git 解耦）；手动标记过的项目由
         # remember_project 的 kind_locked 保护，不会被这里覆盖
         from ...tools.project_scaffold import classify_project_kind
 
         kind = classify_project_kind(path)
         app.remember_project(path, kind=kind)
-        app.workspace = path
+        ctx.set_client_view(request, path)
+        if not ctx.client_id_of(request):
+            app.workspace = path
         return {"ok": True, "workspace": path, "kind": kind}
 
     @router.post("/api/projects/recent/kind")
@@ -338,7 +341,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         target = _os.path.abspath(_os.path.join(workspace, path))
         if not (target == workspace or target.startswith(workspace + _os.path.sep)):
             raise HTTPException(status_code=403, detail="路径越界")
@@ -397,7 +400,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
         if scope == "project":
-            workspace = ctx.require_workspace()
+            workspace = ctx.require_workspace(request)
             path = _os.path.join(workspace, "AGENTS.md")
         else:
             path = _os.path.join(_os.path.expanduser("~"), ".lite-work", "RULES.md")
@@ -415,7 +418,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         import os as _os
         scope = (payload.scope or "global").strip()
         if scope == "project":
-            workspace = ctx.require_workspace()
+            workspace = ctx.require_workspace(request)
             path = _os.path.join(workspace, "AGENTS.md")
         elif scope == "global":
             path = _os.path.join(_os.path.expanduser("~"), ".lite-work", "RULES.md")

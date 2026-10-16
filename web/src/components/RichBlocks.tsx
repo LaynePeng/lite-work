@@ -9,12 +9,34 @@
 // 相对路径统一 rewrite 到 /api/files/raw（复用后端越界检查与鉴权），
 // 修复 iframe / 卡片内相对路径断链。
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   blobToBase64, buildCsv, buildExportHtml, downloadBlob, escapeHtml,
   exportBaseName, safeFileName, svgToPngBlob, textToBlob, type ExportTable,
 } from "../lib/richExport";
+import { useIsMobile } from "../hooks/useIsMobile";
+import {
+  BAR_W_MAX, COMBO, FONTS, GRID_LINES, HBAR, LABEL_SKIP, LABEL_TRUNC,
+  PIE, PLOT, POINT_R, RADAR, SCATTER, SHOW_VALS_MAX, type ModeKey,
+} from "../lib/chartTheme";
+
+// ---------------------------------------------------------------- compact 主题
+
+/** 渲染层响应式开关（设计稿 docs/rich-blocks-compact-design.md §1）：
+ *  顶层块读一次 context，以 prop 下传内部图表组件——避免 21 个组件各自
+ *  matchMedia。默认跟随 useIsMobile；测试用 Provider 强制注入。 */
+const CompactContext = createContext(false);
+
+/** 测试/嵌入方强制 compact 渲染。 */
+export const CompactProvider = CompactContext.Provider;
+
+/** 顶层富块统一入口：读 context（无 Provider 时 fallback useIsMobile）。 */
+function useCompact(): boolean {
+  const ctx = useContext(CompactContext);
+  const mobile = useIsMobile();
+  return ctx || mobile;
+}
 
 // ---------------------------------------------------------------- 导出按钮
 
@@ -1340,16 +1362,19 @@ function ChartSvg({ vb, cls = "md-chart-svg", spec, children }: {
   );
 }
 
-function YGrid({ max, plotH, y0, padL, w }: { max: number; plotH: number; y0: number; padL: number; w: number }) {
+function YGrid({ max, plotH, y0, padL, w, lines = 4, font = 10 }: {
+  max: number; plotH: number; y0: number; padL: number; w: number;
+  lines?: number; font?: number;
+}) {
   return (
     <>
-      {[0, 1, 2, 3, 4].map((i) => {
-        const t = (max * i) / 4;
+      {Array.from({ length: lines + 1 }, (_, i) => {
+        const t = (max * i) / lines;
         const y = y0 - (t / max) * plotH;
         return (
           <g key={i}>
             <line x1={padL} x2={w} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
-            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(t)}</text>
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={font} fill={C_DIM}>{fmtNum(t)}</text>
           </g>
         );
       })}
@@ -1357,32 +1382,37 @@ function YGrid({ max, plotH, y0, padL, w }: { max: number; plotH: number; y0: nu
   );
 }
 
-function BarChart({ spec }: { spec: ChartSpec }) {
-  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+function BarChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const { W, padL, padR, padT, plotH, padB } = PLOT[k];
+  const fonts = FONTS[k];
   const w = W - padR;
   const n = spec.labels.length;
   const max = seriesMax(spec);
   const y0 = padT + plotH;
   const groupW = (w - padL) / n;
   const ns = spec.series.length;
-  const barW = Math.max(4, Math.min(30, (groupW * 0.6) / ns));
-  const showVals = n <= 10 && ns === 1;
+  const barW = Math.max(4, Math.min(BAR_W_MAX[k], (groupW * 0.6) / ns));
+  const showVals = n <= SHOW_VALS_MAX[k] && ns === 1;
   const blockW = ns * barW + (ns - 1) * 3;
+  const skip = n > LABEL_SKIP[k] ? 2 : 1;
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
-      {spec.labels.map((lb, i) => (
-        <text
-          key={i}
-          x={padL + i * groupW + groupW / 2}
-          y={y0 + 16}
-          textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
-          fontSize={10.5}
-          fill={C_DIM}
-        >
-          {trunc(lb, 10)}
-        </text>
-      ))}
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} lines={GRID_LINES[k]} font={fonts.axis} />
+      {spec.labels.map((lb, i) =>
+        i % skip !== 0 ? null : (
+          <text
+            key={i}
+            x={padL + i * groupW + groupW / 2}
+            y={y0 + 16}
+            textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
+            fontSize={fonts.label}
+            fill={C_DIM}
+          >
+            {trunc(lb, LABEL_TRUNC[k])}
+          </text>
+        ),
+      )}
       {spec.series.map((s, si) =>
         s.data.map((v, i) => {
           const h = Math.max(v > 0 ? 2 : 0, (Math.max(0, v) / max) * plotH);
@@ -1394,7 +1424,7 @@ function BarChart({ spec }: { spec: ChartSpec }) {
                 <title>{seriesTip(spec, s, i)}</title>
               </rect>
               {showVals && v > 0 && (
-                <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize={9.5} fill={C_DIM}>{fmtNum(v)}</text>
+                <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize={fonts.val} fill={C_DIM}>{fmtNum(v)}</text>
               )}
             </g>
           );
@@ -1404,11 +1434,13 @@ function BarChart({ spec }: { spec: ChartSpec }) {
   );
 }
 
-function HBarChart({ spec }: { spec: ChartSpec }) {
+function HBarChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const n = spec.labels.length;
   const ns = spec.series.length;
   const rowH = ns > 1 ? 26 : Math.min(34, Math.max(22, 300 / Math.max(1, n)));
-  const W = 640, padL = 128, padR = 64, padT = 8, padB = 12;
+  const { W, padL, padR, padT, padB } = HBAR[k];
   const plotW = W - padL - padR;
   const H = padT + n * rowH * ns + padB;
   const max = seriesMax(spec);
@@ -1421,10 +1453,10 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
           x={padL - 8}
           y={padT + i * rowH * ns + (rowH * ns) / 2 + 3.5}
           textAnchor="end"
-          fontSize={10.5}
+          fontSize={fonts.label}
           fill={C_DIM}
         >
-          {trunc(lb, 12)}
+          {trunc(lb, k === "m" ? 8 : 12)}
         </text>
       ))}
       {spec.series.map((s, si) =>
@@ -1437,7 +1469,7 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
                 <title>{seriesTip(spec, s, i)}</title>
               </rect>
               {v > 0 && (
-                <text x={padL + w + 6} y={y + bh / 2 + 3.5} fontSize={9.5} fill={C_DIM}>{fmtNum(v)}</text>
+                <text x={padL + w + 6} y={y + bh / 2 + 3.5} fontSize={fonts.val} fill={C_DIM}>{fmtNum(v)}</text>
               )}
             </g>
           );
@@ -1447,8 +1479,10 @@ function HBarChart({ spec }: { spec: ChartSpec }) {
   );
 }
 
-function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
-  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+function LineChart({ spec, area, compact }: { spec: ChartSpec; area?: boolean; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const { W, padL, padR, padT, plotH, padB } = PLOT[k];
+  const fonts = FONTS[k];
   const w = W - padR;
   const n = spec.labels.length;
   const max = seriesMax(spec);
@@ -1456,21 +1490,22 @@ function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
   const xOf = (i: number) => (n <= 1 ? padL + (w - padL) / 2 : padL + ((w - padL) * i) / (n - 1));
   const yOf = (v: number) => y0 - (Math.max(0, v) / max) * plotH;
   const step = n > 24 ? 3 : n > 12 ? 2 : 1;
+  const skipStep = compact ? Math.max(step, n > LABEL_SKIP[k] ? 2 : 1) : step;
   const showDots = n <= 40;
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} lines={GRID_LINES[k]} font={fonts.axis} />
       {spec.labels.map((lb, i) =>
-        i % step !== 0 ? null : (
+        i % skipStep !== 0 ? null : (
           <text
             key={i}
             x={xOf(i)}
             y={y0 + 16}
             textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
-            fontSize={10.5}
+            fontSize={fonts.label}
             fill={C_DIM}
           >
-            {trunc(lb, 10)}
+            {trunc(lb, LABEL_TRUNC[k])}
           </text>
         ),
       )}
@@ -1486,7 +1521,7 @@ function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
             <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             {showDots &&
               s.data.map((v, i) => (
-                <circle key={i} cx={xOf(i)} cy={yOf(v)} r={2.6} fill={color} stroke={C_SURFACE} strokeWidth={1}>
+                <circle key={i} cx={xOf(i)} cy={yOf(v)} r={POINT_R[k]} fill={color} stroke={C_SURFACE} strokeWidth={1}>
                   <title>{seriesTip(spec, s, i)}</title>
                 </circle>
               ))}
@@ -1497,12 +1532,14 @@ function LineChart({ spec, area }: { spec: ChartSpec; area?: boolean }) {
   );
 }
 
-function PieChart({ spec }: { spec: ChartSpec }) {
+function PieChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const geo = PIE[k];
   const s = spec.series[0];
   const vals = s.data.map((v) => Math.max(0, v));
   const total = vals.reduce((a, b) => a + b, 0);
   if (total <= 0) return <div className="md-block-error">⚠ 饼图数据无效（总和为 0）</div>;
-  const cx = 130, cy = 130, R = 92, IR = 58;
+  const cx = geo.size / 2, cy = geo.size / 2, R = geo.R, IR = geo.IR;
   let acc = 0;
   const slices = vals.map((v, i) => {
     const frac = v / total;
@@ -1527,7 +1564,7 @@ function PieChart({ spec }: { spec: ChartSpec }) {
   });
   return (
     <div className="md-chart-flex">
-      <ChartSvg vb="0 0 260 260" cls="md-chart-svg md-chart-pie" spec={spec}>
+      <ChartSvg vb={`0 0 ${geo.size} ${geo.size}`} cls="md-chart-svg md-chart-pie" spec={spec}>
         {slices.map((sl, i) => (
           <g key={i}>
             <path d={sl.d} fill={sl.color} stroke={C_SURFACE} strokeWidth={1.5}>
@@ -1540,7 +1577,7 @@ function PieChart({ spec }: { spec: ChartSpec }) {
             )}
           </g>
         ))}
-        <text x={cx} y={cy - 2} textAnchor="middle" fontSize={13} fill={C_MAIN} fontWeight={700}>{fmtNum(total)}</text>
+        <text x={cx} y={cy - 2} textAnchor="middle" fontSize={geo.total} fill={C_MAIN} fontWeight={700}>{fmtNum(total)}</text>
         <text x={cx} y={cy + 14} textAnchor="middle" fontSize={9.5} fill={C_DIM}>总计</text>
       </ChartSvg>
       <div className="md-chart-legend-list">
@@ -1557,10 +1594,12 @@ function PieChart({ spec }: { spec: ChartSpec }) {
   );
 }
 
-function RadarChart({ spec }: { spec: ChartSpec }) {
+function RadarChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const geo = RADAR[k];
   const n = spec.labels.length;
   if (n < 3) return <div className="md-block-error">⚠ 雷达图至少需要 3 个维度</div>;
-  const size = 300, cx = size / 2, cy = size / 2, R = 105;
+  const size = geo.size, cx = size / 2, cy = size / 2, R = geo.R;
   const max = seriesMax(spec);
   const ang = (i: number) => (i / n) * Math.PI * 2 - Math.PI / 2;
   const pt = (i: number, r: number) => `${cx + r * Math.cos(ang(i))},${cy + r * Math.sin(ang(i))}`;
@@ -1578,7 +1617,7 @@ function RadarChart({ spec }: { spec: ChartSpec }) {
         return (
           <g key={i}>
             <line x1={cx} y1={cy} x2={cx + R * Math.cos(a)} y2={cy + R * Math.sin(a)} stroke={C_GRID} strokeWidth={1} />
-            <text x={lx} y={ly + 3.5} textAnchor={anchor} fontSize={10.5} fill={C_DIM}>{trunc(lb, 8)}</text>
+            <text x={lx} y={ly + 3.5} textAnchor={anchor} fontSize={10.5} fill={C_DIM}>{trunc(lb, geo.trunc)}</text>
           </g>
         );
       })}
@@ -1596,7 +1635,7 @@ function RadarChart({ spec }: { spec: ChartSpec }) {
             {s.data.map((v, i) => {
               const r = (Math.max(0, v) / max) * R;
               return (
-                <circle key={i} cx={cx + r * Math.cos(ang(i))} cy={cy + r * Math.sin(ang(i))} r={2.6} fill={color}>
+                <circle key={i} cx={cx + r * Math.cos(ang(i))} cy={cy + r * Math.sin(ang(i))} r={geo.vertex} fill={color}>
                   <title>{seriesTip(spec, s, i)}</title>
                 </circle>
               );
@@ -1655,7 +1694,9 @@ function histogramBins(values: number[]): { centers: number[]; counts: number[];
 }
 
 /** 散点图：多点 + 每系列最小二乘趋势线（含 R²）。 */
-function ScatterChart({ spec }: { spec: ChartSpec }) {
+function ScatterChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const groups = (spec.points ?? []).filter((g) => g.length > 0);
   const ys = groups.flatMap((g) => g.map((p) => p.y));
   const xs = groups.flatMap((g) => g.map((p) => p.x));
@@ -1663,13 +1704,14 @@ function ScatterChart({ spec }: { spec: ChartSpec }) {
   let ylo = Math.min(...ys, 0), yhi = Math.max(...ys, 0);
   if (xlo === xhi) { xlo -= 1; xhi += 1; }
   if (ylo === yhi) { ylo -= 1; yhi += 1; }
-  const W = 640, padL = 54, padR = 16, padT = 18, plotH = 240, padB = 44;
+  const { W, padL, padR, padT, plotH, padB } = SCATTER[k];
   const plotW = W - padL - padR;
   const y0 = padT + plotH;
   const X = (v: number) => padL + ((v - xlo) / (xhi - xlo)) * plotW;
   const Y = (v: number) => y0 - ((v - ylo) / (yhi - ylo)) * plotH;
   const showTrend = spec.trend !== false;
   const fits = showTrend ? groups.map((g) => linreg(g)) : [];
+  const pr = k === "m" ? 4.2 : 3;
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
       {[0, 1, 2, 3, 4].map((i) => {
@@ -1678,7 +1720,7 @@ function ScatterChart({ spec }: { spec: ChartSpec }) {
         return (
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
-            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={fonts.axis} fill={C_DIM}>{fmtNum(v)}</text>
           </g>
         );
       })}
@@ -1697,7 +1739,7 @@ function ScatterChart({ spec }: { spec: ChartSpec }) {
               </line>
             )}
             {g.map((p, i) => (
-              <circle key={i} cx={X(p.x)} cy={Y(p.y)} r={3} fill={color} fillOpacity={0.72} stroke={color} strokeWidth={0.8}>
+              <circle key={i} cx={X(p.x)} cy={Y(p.y)} r={pr} fill={color} fillOpacity={0.72} stroke={color} strokeWidth={0.8}>
                 <title>{seriesPointTip(spec, spec.series[gi]?.name, p.x, p.y)}</title>
               </circle>
             ))}
@@ -1706,7 +1748,7 @@ function ScatterChart({ spec }: { spec: ChartSpec }) {
       })}
       {[0, 1, 2, 3, 4].map((i) => {
         const v = xlo + ((xhi - xlo) * i) / 4;
-        return <text key={i} x={X(v)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>;
+        return <text key={i} x={X(v)} y={y0 + 16} textAnchor="middle" fontSize={fonts.axis} fill={C_DIM}>{fmtNum(v)}</text>;
       })}
     </ChartSvg>
   );
@@ -1719,20 +1761,23 @@ function seriesPointTip(spec: ChartSpec, name: string | undefined, x: number, y:
 }
 
 /** 箱线图：五数概括（须 + 箱 + 中位线）+ 离群点。 */
-function BoxplotChart({ spec }: { spec: ChartSpec }) {
+function BoxplotChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const groups = (spec.boxStats ?? []).filter((g) => g.length > 0);
   const all: number[] = groups.flatMap((g) => g.flatMap((b) => [b.min, b.max, ...(b.outliers ?? [])]));
   let lo = Math.min(...all), hi = Math.max(...all);
   const pad = (hi - lo || 1) * 0.08;
   lo -= pad; hi += pad;
-  const W = 640, padL = 54, padR = 16, padT = 18, plotH = 240, padB = 44;
+  const { W, padL, padR, padT, plotH, padB } = SCATTER[k];
   const plotW = W - padL - padR;
   const y0 = padT + plotH;
   const Y = (v: number) => y0 - ((v - lo) / (hi - lo)) * plotH;
   // 单系列时并排多组箱盒；多系列时按组内 index 对齐。
   const total = Math.max(...groups.map((g) => g.length));
   const slot = plotW / Math.max(1, total);
-  const boxW = Math.max(14, Math.min(52, (slot * 0.6) / groups.length));
+  const boxWMin = k === "m" ? 10 : 14;
+  const boxW = Math.max(boxWMin, Math.min(52, (slot * 0.6) / groups.length));
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
       {[0, 1, 2, 3, 4].map((i) => {
@@ -1741,7 +1786,7 @@ function BoxplotChart({ spec }: { spec: ChartSpec }) {
         return (
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
-            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={fonts.axis} fill={C_DIM}>{fmtNum(v)}</text>
           </g>
         );
       })}
@@ -1779,26 +1824,28 @@ function BoxplotChart({ spec }: { spec: ChartSpec }) {
       {Array.from({ length: total }, (_, i) => {
         const cx = padL + slot * (i + 0.5);
         const lbl = (groups[0]?.[i]?.label) || spec.labels[i] || String(i + 1);
-        return <text key={i} x={cx} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{trunc(lbl, 8)}</text>;
+        return <text key={i} x={cx} y={y0 + 16} textAnchor="middle" fontSize={fonts.axis} fill={C_DIM}>{trunc(lbl, k === "m" ? 5 : 8)}</text>;
       })}
     </ChartSvg>
   );
 }
 
 /** 直方图：对 series[0] 的取值自动分箱（FD 规则）并画频数柱。 */
-function HistogramChart({ spec }: { spec: ChartSpec }) {
+function HistogramChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const values = spec.series[0]?.data ?? [];
   if (!values.length) return <div className="md-block-error">⚠ 直方图缺少数值</div>;
   const { centers, counts, w, lo } = histogramBins(values);
   const max = niceMax(Math.max(...counts));
-  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+  const { W, padL, padR, padT, plotH, padB } = PLOT[k];
   const w0 = W - padR;
   const y0 = padT + plotH;
   const binW = ((w0 - padL) / centers.length) * 0.92;
   const X = (i: number) => padL + ((w0 - padL) * (i + 0.5)) / centers.length;
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w0} />
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w0} lines={GRID_LINES[k]} font={fonts.axis} />
       {counts.map((c, i) => {
         const h = (c / max) * plotH;
         return (
@@ -1809,8 +1856,8 @@ function HistogramChart({ spec }: { spec: ChartSpec }) {
         );
       })}
       {centers.map((_, i) =>
-        i % Math.ceil(centers.length / 8) === 0 ? (
-          <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={9.5} fill={C_DIM}>
+        i % Math.ceil(centers.length / (k === "m" ? 4 : 8)) === 0 ? (
+          <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={fonts.val} fill={C_DIM}>
             {fmtNum(lo + w * i)}
           </text>
         ) : null,
@@ -1906,14 +1953,16 @@ function HeatmapChart({ spec }: { spec: ChartSpec }) {
 }
 
 /** 双轴组合图：axis=right 的系列画折线（右轴），其余画柱（左轴）。 */
-function ComboChart({ spec }: { spec: ChartSpec }) {
+function ComboChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const bars = spec.series.filter((s) => s.axis !== "right");
   const lines = spec.series.filter((s) => s.axis === "right");
   const n = spec.labels.length;
   const leftMax = niceMax(Math.max(0, ...bars.flatMap((s) => s.data)));
   const lineVals = lines.flatMap((s) => s.data);
   const rLo = Math.min(0, ...lineVals), rHi = Math.max(...lineVals, 1);
-  const W = 640, padL = 52, padR = 56, padT = 16, plotH = 230, padB = 44;
+  const { W, padL, padR, padT, plotH, padB } = COMBO[k];
   const w = W - padR;
   const y0 = padT + plotH;
   const groupW = (w - padL) / n;
@@ -1921,16 +1970,19 @@ function ComboChart({ spec }: { spec: ChartSpec }) {
   const blockW = bars.length * barW + (bars.length - 1) * 3;
   const RY = (v: number) => y0 - ((v - rLo) / (rHi - rLo)) * plotH;
   const showLegend = bars.length > 0 && lines.length > 0;
+  const skip = n > LABEL_SKIP[k] ? 2 : 1;
   return (
     <>
       <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-        <YGrid max={leftMax} plotH={plotH} y0={y0} padL={padL} w={w} />
-        {spec.labels.map((lb, i) => (
-          <text key={i} x={padL + i * groupW + groupW / 2} y={y0 + 16}
-            textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={10} fill={C_DIM}>
-            {trunc(lb, 10)}
-          </text>
-        ))}
+        <YGrid max={leftMax} plotH={plotH} y0={y0} padL={padL} w={w} lines={GRID_LINES[k]} font={fonts.axis} />
+        {spec.labels.map((lb, i) =>
+          i % skip !== 0 ? null : (
+            <text key={i} x={padL + i * groupW + groupW / 2} y={y0 + 16}
+              textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={fonts.label} fill={C_DIM}>
+              {trunc(lb, LABEL_TRUNC[k])}
+            </text>
+          ),
+        )}
         {bars.map((s, si) =>
           s.data.map((v, i) => {
             const h = Math.max(v > 0 ? 2 : 0, (Math.max(0, v) / leftMax) * plotH);
@@ -1978,7 +2030,9 @@ function ComboChart({ spec }: { spec: ChartSpec }) {
 }
 
 /** 瀑布图：增量柱悬空连接，total 柱从 0 起。 */
-function WaterfallChart({ spec }: { spec: ChartSpec }) {
+function WaterfallChart({ spec, compact }: { spec: ChartSpec; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const items = spec.items ?? [];
   // 计算每根柱的起止高度：total 归零重算，增量在上一个累计值上叠加。
   let acc = 0;
@@ -1994,7 +2048,8 @@ function WaterfallChart({ spec }: { spec: ChartSpec }) {
   const allVals = bars.flatMap((b) => [b.from, b.to]);
   const hi = niceMax(Math.max(0, ...allVals));
   const lo = Math.min(0, ...allVals);
-  const W = 640, padL = 54, padR = 14, padT = 16, plotH = 230, padB = 46;
+  const { W, padL, padR, padT, plotH } = PLOT[k];
+  const padB = k === "m" ? 36 : 46;
   const plotW = W - padL - padR;
   const span = hi - lo || 1;
   const y0 = padT + plotH;
@@ -2009,7 +2064,7 @@ function WaterfallChart({ spec }: { spec: ChartSpec }) {
         return (
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={y} y2={y} stroke={C_GRID} strokeWidth={1} />
-            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={10} fill={C_DIM}>{fmtNum(v)}</text>
+            <text x={padL - 6} y={y + 3.5} textAnchor="end" fontSize={fonts.axis} fill={C_DIM}>{fmtNum(v)}</text>
           </g>
         );
       })}
@@ -2024,14 +2079,14 @@ function WaterfallChart({ spec }: { spec: ChartSpec }) {
             <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={2} fill={color} fillOpacity={b.total ? 0.95 : 0.85}>
               <title>{`${b.label || `步骤 ${i + 1}`}：${b.delta >= 0 && !b.total ? "+" : ""}${fmtNum(b.delta)}${spec.unit ? ` ${spec.unit}` : ""}`}</title>
             </rect>
-            <text x={cx} y={b.delta >= 0 ? top - 4 : top + h + 11} textAnchor="middle" fontSize={9.5} fill={C_DIM}>
+            <text x={cx} y={b.delta >= 0 ? top - 4 : top + h + 11} textAnchor="middle" fontSize={fonts.val} fill={C_DIM}>
               {b.total ? fmtNum(b.to) : `${b.delta >= 0 ? "+" : ""}${fmtNum(b.delta)}`}
             </text>
             {i < bars.length - 1 && (
               <line x1={cx + barW / 2} x2={padL + slot * (i + 1.5) - barW / 2} y1={Y(b.to)} y2={Y(b.to)}
                 stroke={C_DIM} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
             )}
-            <text x={cx} y={y0 + 17} textAnchor="middle" fontSize={9.5} fill={C_DIM}>{trunc(b.label, 8)}</text>
+            <text x={cx} y={y0 + 17} textAnchor="middle" fontSize={fonts.val} fill={C_DIM}>{trunc(b.label, k === "m" ? 4 : 8)}</text>
           </g>
         );
       })}
@@ -2040,12 +2095,14 @@ function WaterfallChart({ spec }: { spec: ChartSpec }) {
 }
 
 /** 堆叠柱 / 堆叠面积：按系列逐层累加（第一个系列在最底部）。 */
-function StackedChart({ spec, areaMode }: { spec: ChartSpec; areaMode?: boolean }) {
+function StackedChart({ spec, areaMode, compact }: { spec: ChartSpec; areaMode?: boolean; compact?: boolean }) {
+  const k: ModeKey = compact ? "m" : "d";
+  const fonts = FONTS[k];
   const n = spec.labels.length;
   const ns = spec.series.length;
   const totals = Array.from({ length: n }, (_, i) => spec.series.reduce((a, s) => a + Math.max(0, s.data[i] ?? 0), 0));
   const max = niceMax(Math.max(0, ...totals));
-  const W = 640, padL = 50, padR = 14, padT = 16, plotH = 230, padB = 44;
+  const { W, padL, padR, padT, plotH, padB } = PLOT[k];
   const w = W - padR;
   const y0 = padT + plotH;
   const X = (i: number) => n <= 1 ? padL + (w - padL) / 2 : padL + ((w - padL) * i) / (n - 1);
@@ -2064,15 +2121,15 @@ function StackedChart({ spec, areaMode }: { spec: ChartSpec; areaMode?: boolean 
     });
     return (
       <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-        <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
+        <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} lines={GRID_LINES[k]} font={fonts.axis} />
         {bands.map((b, i) => (
           <polygon key={i} points={b.pts} fill={b.color} fillOpacity={0.7} stroke={b.color} strokeWidth={1}>
             <title>{b.name ?? `系列 ${i + 1}`}</title>
           </polygon>
         ))}
         {spec.labels.map((lb, i) =>
-          i % Math.ceil(n / 10) === 0 ? (
-            <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={C_DIM}>{trunc(lb, 10)}</text>
+          i % Math.ceil(n / (k === "m" ? 5 : 10)) === 0 ? (
+            <text key={i} x={X(i)} y={y0 + 16} textAnchor="middle" fontSize={fonts.label} fill={C_DIM}>{trunc(lb, LABEL_TRUNC[k])}</text>
           ) : null,
         )}
       </ChartSvg>
@@ -2082,11 +2139,11 @@ function StackedChart({ spec, areaMode }: { spec: ChartSpec; areaMode?: boolean 
   const barW = Math.max(6, Math.min(48, groupW * 0.62));
   return (
     <ChartSvg vb={`0 0 ${W} ${padT + plotH + padB}`} spec={spec}>
-      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} />
+      <YGrid max={max} plotH={plotH} y0={y0} padL={padL} w={w} lines={GRID_LINES[k]} font={fonts.axis} />
       {spec.labels.map((lb, i) => (
         <text key={i} x={padL + i * groupW + groupW / 2} y={y0 + 16}
-          textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={10} fill={C_DIM}>
-          {trunc(lb, 10)}
+          textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={fonts.label} fill={C_DIM}>
+          {trunc(lb, LABEL_TRUNC[k])}
         </text>
       ))}
       {spec.labels.map((_, i) => {
@@ -2117,6 +2174,7 @@ export function ChartBlock({ spec }: { spec: ChartSpec }) {
   const multi = spec.series.length > 1 && spec.type !== "pie";
   const isHeat = spec.type === "heatmap";
   const isCombo = spec.type === "combo";
+  const compact = useCompact();
   return (
     <div className="md-chart">
       {(spec.title || spec.unit) && (
@@ -2126,20 +2184,20 @@ export function ChartBlock({ spec }: { spec: ChartSpec }) {
         </div>
       )}
       <ExportMenu build={(host) => chartExportItems(spec, host)} />
-      {spec.type === "hbar" ? <HBarChart spec={spec} />
-        : spec.type === "line" ? <LineChart spec={spec} />
-        : spec.type === "area" ? <LineChart spec={spec} area />
-        : spec.type === "pie" ? <PieChart spec={spec} />
-        : spec.type === "radar" ? <RadarChart spec={spec} />
-        : spec.type === "scatter" ? <ScatterChart spec={spec} />
-        : spec.type === "boxplot" ? <BoxplotChart spec={spec} />
-        : spec.type === "histogram" ? <HistogramChart spec={spec} />
+      {spec.type === "hbar" ? <HBarChart spec={spec} compact={compact} />
+        : spec.type === "line" ? <LineChart spec={spec} compact={compact} />
+        : spec.type === "area" ? <LineChart spec={spec} area compact={compact} />
+        : spec.type === "pie" ? <PieChart spec={spec} compact={compact} />
+        : spec.type === "radar" ? <RadarChart spec={spec} compact={compact} />
+        : spec.type === "scatter" ? <ScatterChart spec={spec} compact={compact} />
+        : spec.type === "boxplot" ? <BoxplotChart spec={spec} compact={compact} />
+        : spec.type === "histogram" ? <HistogramChart spec={spec} compact={compact} />
         : spec.type === "heatmap" ? <HeatmapChart spec={spec} />
-        : spec.type === "combo" ? <ComboChart spec={spec} />
-        : spec.type === "waterfall" ? <WaterfallChart spec={spec} />
-        : spec.type === "stacked" ? <StackedChart spec={spec} />
-        : spec.type === "stacked-area" ? <StackedChart spec={spec} areaMode />
-        : <BarChart spec={spec} />}
+        : spec.type === "combo" ? <ComboChart spec={spec} compact={compact} />
+        : spec.type === "waterfall" ? <WaterfallChart spec={spec} compact={compact} />
+        : spec.type === "stacked" ? <StackedChart spec={spec} compact={compact} />
+        : spec.type === "stacked-area" ? <StackedChart spec={spec} areaMode compact={compact} />
+        : <BarChart spec={spec} compact={compact} />}
       {multi && !isCombo && !isHeat && (
         <div className="md-chart-legend">
           {spec.series.map((s, i) => (
@@ -2367,11 +2425,13 @@ function softFill(color: string): string {
   return `${color}1f`; // 8 位 hex：末两位 ≈12% alpha
 }
 
-function renderShape(s: DiagramShape, color: string, key: number) {
+function renderShape(s: DiagramShape, color: string, key: number, compact = false) {
   // 面图形（圆/椭圆/矩形）用低饱和填充 + 描边——从「线框」升级为「填充卡」，
   // 视觉层次更接近 GPT 的图解（形状实底、连线细）；线类保持细描边。
   // key 必须显式传给每个元素：塞进 spread 的 props 会触发 React 的
   // 「key is being spread」警告。
+  // compact：label 字号 ×1.15——小屏上 viewBox 缩放后 13px 字物理只剩 ~9px，
+  // 放大让图内命名保持可读（设计稿 rich-blocks-compact §4）。
   const common = { stroke: color, strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   const soft = softFill(color);
   switch (s.t) {
@@ -2388,7 +2448,7 @@ function renderShape(s: DiagramShape, color: string, key: number) {
           x={s.x}
           y={s.y}
           fill="var(--text-0, #e6edf3)"
-          fontSize={s.size ?? 13}
+          fontSize={compact ? Math.round((s.size ?? 13) * 1.15) : (s.size ?? 13)}
           fontWeight={600}
           textAnchor={s.anchor ?? "middle"}
           dominantBaseline="middle"
@@ -2402,6 +2462,7 @@ function renderShape(s: DiagramShape, color: string, key: number) {
 
 export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
   const [active, setActive] = useState(0);
+  const compact = useCompact();
   const parts = spec.parts;
   const cur = parts[Math.min(active, parts.length - 1)];
   const canvas = spec.canvas ?? { w: 470, h: 300 };
@@ -2436,7 +2497,7 @@ export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
               aria-label={`${p.name}（点击查看说明）`}
             >
               <title>{p.meta ? `${p.name} · ${p.meta}` : p.name}</title>
-              {p.shapes.map((s, si) => renderShape(s, DIAGRAM_COLORS[i % DIAGRAM_COLORS.length], si))}
+              {p.shapes.map((s, si) => renderShape(s, DIAGRAM_COLORS[i % DIAGRAM_COLORS.length], si, compact))}
             </g>
           ))}
         </svg>
@@ -2460,6 +2521,7 @@ export function DiagramBlock({ spec }: { spec: DiagramSpec }) {
  *  不执行任何脚本（安全模型与 render_card 沙箱一致）。 */
 export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
   const [active, setActive] = useState(0);
+  const compact = useCompact();
   const parts = spec.parts;
   const cur = parts[Math.min(active, parts.length - 1)];
   const canvas = spec.canvas ?? { w: 470, h: 190 };
@@ -2489,7 +2551,7 @@ export function InteractiveBlock({ spec }: { spec: InteractiveSpec }) {
       {cur.shapes && cur.shapes.length > 0 && (
         <div className="md-diagram-svg-wrap">
           <svg viewBox={`0 0 ${canvas.w} ${canvas.h}`} className="md-diagram-svg" role="img">
-            {cur.shapes.map((s, si) => renderShape(s, "var(--accent)", si))}
+            {cur.shapes.map((s, si) => renderShape(s, "var(--accent)", si, compact))}
           </svg>
         </div>
       )}
@@ -2771,21 +2833,32 @@ function groupSeqOf(nodes: { group?: string }[], group: string): number {
 
 /** Mermaid 渲染（strict 安全级：禁 HTML/脚本）。
  *  异步渲染 + 失败降级：DSL 语法错 → 显示原文本代码块（用户还能看清内容）。
- *  懒初始化：首个 mermaid 块出现才 import（约 2MB，不该进主 bundle）。 */
+ *  懒初始化：首个 mermaid 块出现才 import（约 2MB，不该进主 bundle）。
+ *
+ *  compact（P3）：mermaid 全局配置按模式记忆，模式变化重新 initialize
+ *  （mermaid 允许重复调用覆盖配置）。compact 用 fontSize 15——默认 16 在
+ *  小屏 SVG 缩放后物理只剩 ~11px，放大后与图表 compact 的 10.5px 对齐。 */
 let mermaidInit: Promise<typeof import("mermaid").default> | null = null;
-function ensureMermaid() {
-  if (!mermaidInit) {
+let mermaidMode = "";
+
+async function ensureMermaid(compact: boolean) {
+  const mode = compact ? "m" : "d";
+  if (!mermaidInit || mermaidMode !== mode) {
     mermaidInit = import("mermaid").then((mod) => {
       mod.default.initialize({
         startOnLoad: false,
         securityLevel: "strict",
         theme: "dark",
         fontFamily: "inherit",
+        // compact：15px 源字号（SVG 等比缩到 ~340px 宽后物理 ≈11px，
+        // 与图表 compact 的 10.5px 对齐）；desktop 16 = mermaid 默认
+        ...(compact ? { fontSize: 15 } : {}),
         flowchart: { curve: "basis", useMaxWidth: true },
         sequence: { useMaxWidth: true },
       });
       return mod.default;
     });
+    mermaidMode = mode;
   }
   return mermaidInit;
 }
@@ -2794,12 +2867,13 @@ export function MermaidBlock({ code }: { code: string }) {
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState("");
   const idRef = useRef(`mmd-${Math.random().toString(36).slice(2, 9)}`);
+  const compact = useCompact();
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const mermaid = await ensureMermaid();
+        const mermaid = await ensureMermaid(compact);
         const { svg: out } = await mermaid.render(idRef.current, code);
         if (alive) { setSvg(out); setError(""); }
       } catch (e) {
@@ -2807,7 +2881,7 @@ export function MermaidBlock({ code }: { code: string }) {
       }
     })();
     return () => { alive = false; };
-  }, [code]);
+  }, [code, compact]);
 
   if (error) {
     return (

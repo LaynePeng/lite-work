@@ -85,6 +85,10 @@ class TaskHandle:
         self.skill_ask_names: List[str] = []
         # 隔离工作树模式：任务实际工作区（None = 主工作区）
         self.workspace: Optional[str] = None
+        # 任务所属会话的项目（metadata.workspace，启动时钉死）：同项目互斥与
+        # 多端视图分离的判定基准；与 workspace 的区别——后者是执行目录
+        # （worktree 隔离时是副本路径），前者是逻辑归属项目
+        self.session_workspace: str = ""
         self.worktree_name: Optional[str] = None
         # AI 合并任务：待合并的 worktree 名（非 None 时任务结束后校验并清理）
         self.merge_worktree: Optional[str] = None
@@ -644,6 +648,10 @@ class TaskLimitError(RuntimeError):
     """并发运行中的任务已达 max_running_tasks 上限（云端内存护栏）。"""
 
 
+class WorkspaceBusyError(RuntimeError):
+    """同项目已有任务运行中（方案 A：同项目互斥，跨项目并行）。"""
+
+
 class TaskManager:
     def __init__(self, app: AgentApp) -> None:
         self.app = app
@@ -686,6 +694,47 @@ class TaskManager:
                 logger.warning("[Task] worktree 不可用，已关闭该会话的隔离模式: %s",
                                created.get("reason"))
                 self.app.set_session_worktree(session_id, False)
+        # —— 任务钉工作区（多客户端视图分离的执行侧真相）——
+        # 任务的工作区由**会话所属项目**（metadata.workspace）决定，不再读全局
+        # app.workspace：全局值只是未登记客户端的兜底。这样任一端切项目都不
+        # 影响其他端正在跑的任务（浏览与执行解耦）。
+        session_ws = str(metadata.get("workspace") or "") or self.app.workspace
+        if merge_worktree:
+            # AI 合并任务必须落在主工作区（该项目的 git 主分支）
+            task_workspace = session_ws
+        elif metadata.get("worktree"):
+            mgr = self.app.worktree_manager()
+            created = mgr.create(session_id)
+            if created.get("ok"):
+                task_workspace = created["path"]
+                worktree_name = session_id
+                if created.get("restored"):
+                    logger.info("[Task] 已恢复会话 %s 的隔离工作树（分支 %s）",
+                                session_id, created.get("branch"))
+            else:
+                # 既不能建也不能恢复（git 不可用/分支被删）→ 隔离模式失效：
+                # 清除标记，避免"界面说隔离、任务其实在主工作区"的静默隔离丢失
+                logger.warning("[Task] worktree 不可用，已关闭该会话的隔离模式: %s",
+                               created.get("reason"))
+                self.app.set_session_worktree(session_id, False)
+                task_workspace = session_ws
+        else:
+            task_workspace = session_ws
+        # —— 同项目互斥（方案 A）——
+        # 两个 Agent 同时改一个目录必打架（并发写/ git 状态互踩）。跨项目并行
+        # 不受限；同项目已有任务在跑 → 429 拒绝。worktree 隔离任务在独立副本里，
+        # 与主工作区不冲突，不参与互斥。
+        if task_workspace and not worktree_name:
+            base_ws = str(metadata.get("workspace") or "")
+            for other in self.tasks.values():
+                if not other.running or other.stopping:
+                    continue
+                other_ws = other.workspace or other.session_workspace or ""
+                if base_ws and other_ws and os.path.normcase(os.path.abspath(other_ws)) == \
+                        os.path.normcase(os.path.abspath(base_ws)):
+                    raise WorkspaceBusyError(
+                        f"该项目已有任务运行中（{other.kernel.session_id}），"
+                        "请等它结束、停止它，或开启会话的隔离工作树后再试")
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         # workspace：隔离时所有工具插件以 worktree 为工作区构建
         # unattended_profile：盯梢/定时等无人值守任务传权限档——没人点审批，
@@ -724,6 +773,7 @@ class TaskManager:
         handle = TaskHandle(task_id, kernel, registry, loop, self.app)
         handle.agent_id = agent_id or "build"
         handle.workspace = task_workspace
+        handle.session_workspace = session_ws or ""
         handle.worktree_name = worktree_name
         handle.merge_worktree = merge_worktree
         if merge_worktree:

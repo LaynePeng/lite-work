@@ -69,10 +69,11 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         llm_active = app.llm_registry.active
         settings = app.llm_registry.get_active_provider_settings()
+        # workspace 按客户端视图解析（多端各看各的项目）；未登记的端回全局值
         return {
             "version": VERSION,
             "min_client": MIN_CLIENT_VERSION,
-            "workspace": app.workspace,
+            "workspace": ctx.resolve_workspace(request) or "",
             "model": settings.get("model", ""),
             "base_url": settings.get("base_url", ""),
             "active_provider": llm_active,

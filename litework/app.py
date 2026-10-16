@@ -2448,8 +2448,11 @@ class AgentApp:
             if _ad is not None and hasattr(_ad, "idle_timeout"):
                 _ad.idle_timeout = _idle
         loop.workspace = workspace or self.workspace or "."  # 工作树隔离时指向 worktree
-        # 隔离工作树模式：记录 worktree 边界 + 主工作区（工具调用越界检查用）
-        if workspace:
+        # 隔离工作树模式：记录 worktree 边界 + 主工作区（工具调用越界检查用）。
+        # 任务钉工作区改造后 workspace 也可能是会话主项目路径（非 worktree）——
+        # 只有与全局工作区不同的路径才是隔离副本，主项目不应设隔离根
+        # （否则普通任务被误判为「在隔离副本里」，越界检查/提示全错）。
+        if workspace and os.path.abspath(workspace) != os.path.abspath(self.workspace or ""):
             loop.isolation_root = workspace
             loop.main_workspace = self.workspace
         # 多 Agent 通知注入源：按 session_id 查询（懒创建的 manager 也能找到）

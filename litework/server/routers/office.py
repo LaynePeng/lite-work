@@ -133,7 +133,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         try:
             form = await request.form()
         except Exception:
@@ -173,7 +173,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         target = _os.path.abspath(_os.path.join(workspace, path))
         if not (target == workspace or target.startswith(workspace + _os.path.sep)):
             raise HTTPException(status_code=403, detail="路径越界")
@@ -194,7 +194,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         返回 {items: [{name, path, source, size, mtime}], total}。
         """
         ctx.check_auth(request)
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         items = _list_uploads(workspace)
         return {"items": items, "total": len(items)}
 
@@ -212,7 +212,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         rel, target, is_dir = _resolve_delete_target(workspace, path, allow_dir=True)
         if is_dir:
             if not recursive:
@@ -244,7 +244,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         if not payload.paths:
             raise HTTPException(status_code=400, detail="paths 不能为空")
         if len(payload.paths) > 500:
@@ -277,7 +277,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         parent_rel = (payload.parent or "").strip().lstrip("/\\").replace("\\", "/")
         if parent_rel in (".", "/"):
             parent_rel = ""
@@ -332,7 +332,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         rel = (payload.path or "").strip().lstrip("/\\").replace("\\", "/")
         if not rel:
             raise HTTPException(status_code=400, detail="缺少 path")
@@ -394,7 +394,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         target = _os.path.abspath(_os.path.join(workspace, path))
         if not (target == workspace or target.startswith(workspace + _os.path.sep)):
             raise HTTPException(status_code=403, detail="路径越界")
@@ -416,7 +416,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         import os as _os
 
-        workspace = ctx.require_workspace()
+        workspace = ctx.require_workspace(request)
         target = _os.path.abspath(_os.path.join(workspace, path))
         if not (target == workspace or target.startswith(workspace + _os.path.sep)):
             raise HTTPException(status_code=403, detail="路径越界")

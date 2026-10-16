@@ -10211,8 +10211,14 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   max-width: 100%;
   min-width: 0;
 }
-.mobile-app .bubble { max-width: 100%; }
-.mobile-app .msg-row.assistant .bubble.assistant-bubble { flex: 1 1 auto; min-width: 0; }
+/* 气泡宽度（真实对话模拟实测的 flex content-sizing 循环依赖修复）：
+   chat-view 的 automatic minimum size（min-width:auto）会把最宽行的
+   min-content 当作自己的下限，行→气泡→富块互相撑到 451px+。三个锚点：
+   ① chat-view min-width:0 钳住滚动容器；② assistant 气泡 flex-basis 0
+   （不参与 content sizing，拉满剩余空间）；③ user 气泡视口相对上限。 */
+.mobile-app .chat-view { min-width: 0; }
+.mobile-app .bubble { max-width: calc(100vw - 76px); }
+.mobile-app .msg-row.assistant .bubble.assistant-bubble { flex: 1 1 0; min-width: 0; max-width: 100%; }
 .mobile-app .user-bubble,
 .mobile-app .assistant-bubble { padding: 10px 12px; }
 /* 富块：宽表格 / 看板 / 对比 / 卡片网格一律可横向滚动或单列堆叠 */
@@ -10220,11 +10226,67 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .mobile-app .md-table-wrap,
 .mobile-app .md-chart { max-width: 100%; overflow-x: auto; }
 .mobile-app .md table { display: block; }
+/* 数据表组件（table.md-table）例外：保持原生 table 布局 + width:max-content，
+   th nowrap 撑开自然宽后由 .md-table-wrap 横滚。display:block 会把 table
+   盒钉在容器宽、内容溢出留在内部（tableSW>tableW）而 wrap 察觉不到。 */
+.mobile-app table.md-table { display: table; width: max-content; min-width: 100%; }
+/* 富块包装盒（.md-rich 是 table/compare/board/progress 的外壳，.md-cards 是
+   卡片网格外壳）：此前没有 overflow，宽内容把盒子撑到内容宽度、再向上
+   撑破 bubble——溢出发生在无 overflow 的祖先层，浏览器既不裁切也不出
+   滚动条。统一给外壳挂 overflow-x + min-width:0，让滚动发生在正确的层。 */
+.mobile-app .md-rich,
+.mobile-app .md-cards {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+/* 移动端横向滚动条可见化：全局 ::-webkit-scrollbar 是 9px 深灰细条（thumb
+   #2c3547），深色背景上触屏几乎不可见，用户不知道「这块能横着划」。
+   提亮 thumb + 保持 6px 纤细（宽了吃内容）。iOS Safari 触屏本就不常驻
+   显示，此规则主要覆盖 Android Chrome 与 PWA。agent-bar 维持刻意隐藏。 */
+.mobile-app ::-webkit-scrollbar { height: 6px; }
+.mobile-app ::-webkit-scrollbar-thumb { background: #46536b; }
 .mobile-app .md-board,
 .mobile-app .md-kpi-grid { grid-template-columns: 1fr 1fr; }
 .mobile-app .md-cards-grid { grid-template-columns: 1fr; }
 .mobile-app .md-cmp { grid-template-columns: 1fr; }
 .mobile-app .md-cmp-vs { justify-self: center; }
+/* 数据表冻结首列：横向滚动长表时类目列不丢（sticky + 底色遮住下层滚动内容）。
+   nowrap：默认 white-space:normal 会在窄列里折行（实测「B 托管」折成两行，
+   表格行高被撑爆）；min-width 兜底短类目，超长走单行省略 */
+.mobile-app .md-table th:first-child,
+.mobile-app .md-table td:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--bg-1);
+  z-index: 1;
+  white-space: nowrap;
+  min-width: 4.5em;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mobile-app .md-table th:first-child { background: var(--bg-2); }
+/* 饼图图例（手机）：名称与数值列间距拉开（截图实测「A40 40.0%」挤在一起） */
+.mobile-app .md-chart-legend-row { gap: 10px; }
+.mobile-app .md-chart-legend-name { min-width: 3em; }
+/* 看板多列（≥3）改横滑 + scroll-snap：保住「列」语义（每列约 78vw），
+   列少（≤2）维持网格堆叠。
+   ⚠ grid-auto-columns 的 minmax **min 值不能大于容器**：minmax(292px,1fr)
+   会让 grid 容器 min-content 变 3×292=876，向上传染把气泡撑到 920px
+   （真实对话模拟实测）。改 minmax(0, min(78vw,300px))——min=0 让容器
+   可收缩，列宽由 max 侧决定，溢出走 overflow-x 横滑。 */
+.mobile-app .md-board {
+  grid-auto-flow: column;
+  grid-auto-columns: min(78vw, 300px);
+  grid-template-columns: none;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-app .md-board-col {
+  scroll-snap-align: start;
+}
 .mobile-app .md-tl-desc { white-space: pre-wrap; word-break: break-word; }
 .mobile-app .md-chart-heat { max-width: 100%; }
 .mobile-app .md-diagram-svg,
@@ -10234,20 +10296,77 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .mobile-app .md-code pre { overflow-x: auto; }
 .mobile-app .tool-args-preview { max-width: 100%; }
 .mobile-app .composer-hint { white-space: normal; }
-.mobile-app .question-bar { padding: 10px 12px; }
+/* 非阻塞提问条：桌面 margin 带 820px 居中计算，手机上直接贴边（padding 已紧凑） */
+.mobile-app .question-bar { margin: 0; padding: 10px 12px; }
 .mobile-app .modal { width: 100%; max-width: none; max-height: 92dvh; border-radius: 0; }
 .mobile-app .modal-overlay { place-items: stretch; padding: 0; }
 /* Composer 贴底：聊天页最底元素，吃下方安全区（列表页 FAB 自带偏移） */
 .mobile-app .composer-wrap { padding-bottom: env(safe-area-inset-bottom); }
 
-/* 审批卡紧凑态：桌面 440px 定宽 + 26px 内边距在手机上太奢侈 */
-.mobile-app .approval-overlay { padding: 10px; }
+/* 审批卡紧凑态：桌面 440px 定宽 + 26px 内边距在手机上太奢侈。
+   safe center：卡片高于视口时 grid 居中会把溢出推到滚动区两端之外，
+   滚动位置停在中间回不去（经典 grid 陷阱）——safe 保证起点可见、从头滚起。 */
+.mobile-app .approval-overlay { padding: 10px; place-items: safe center; }
 .mobile-app .approval-card {
   width: 100%;
   padding: 18px 14px;
   max-height: min(calc(100dvh - 64px), 100%);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
-.mobile-app .approval-buttons { flex-wrap: wrap; }
+/* 审批内容长时按钮贴底，不必滚到最底才够得着（显式选中按钮区，
+   不依赖它是最后一个子元素——多审批 tabs/判定意见块的结构可能变化） */
+.mobile-app .approval-card .approval-buttons { margin-top: auto; flex-wrap: wrap; flex: none; }
+
+/* 沙箱 iframe（```html 围栏 / render_card）：桌面定高 380px 按桌面宽度排版，
+   手机上横向溢出且超出屏高。改为按屏宽收缩 + 限高内滚 + 内容可横向滚动。 */
+.mobile-app .md-html-iframe {
+  width: 100%;
+  max-width: 100%;
+  height: min(60dvh, 420px);
+  resize: vertical;
+}
+
+/* render_card 的富卡片 iframe（rich-card-frame）：与 md-html-iframe 同类问题——
+  桌面 320px 定高，手机上限高可调。卡片自带 height 参数时（style 内联）优先。 */
+.mobile-app .rich-card-frame {
+  height: min(60dvh, 380px);
+}
+
+/* 饼图：桌面 230px 定宽 + 图例并排（md-chart-flex gap 16px），窄屏上
+   230px+图例会挤/溢出——收缩饼图并让图例换到下方（flex-wrap 已有，
+   收窄饼图让 wrap 更早生效） */
+.mobile-app .md-chart-pie {
+  width: 168px;
+  max-width: 60vw;
+}
+
+/* 导出菜单（chart/table 右上 ⇩）：桌面 min-width 196px 且右对齐，
+   窄气泡里会溢出屏幕右缘——限宽并允许收窄 */
+.mobile-app .md-export-menu {
+  min-width: 0;
+  max-width: calc(100vw - 48px);
+}
+
+/* 交互图解分块 pill：meta（mono 规格）不换行会把 pill 撑得很宽——
+   小屏上截断 meta，名字保持完整；pill 高度满足触控规范（≥36px 命中） */
+.mobile-app .md-ix-meta {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mobile-app .md-ix-part { min-height: 36px; }
+
+/* 图解/交互块：SVG 本身按 viewBox 缩放，但 wrapper 不限高时大画布会把
+   页面撑爆（配合 max-height + 内部横向滚动兜底） */
+.mobile-app .md-diagram-svg-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.mobile-app .md-diagram-svg-wrap svg {
+  max-height: 56dvh;
+}
 
 /* 交付物 chip（会话卡内）：点击走系统分享面板 */
 .mobile-card-files {

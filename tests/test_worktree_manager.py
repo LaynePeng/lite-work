@@ -399,8 +399,9 @@ def test_ai_merge_task_runs_in_main_workspace(tmp_path):
     try:
         tm = TaskManager(app)
         h = tm.start(sid, "请合并", agent_id="build", merge_worktree=sid)
-        # 合并任务不做隔离：工作区为主工作区，loop 隔离根为空
-        assert h.workspace is None
+        # 合并任务不做隔离：工作区钉为会话所属项目（= 主工作区），loop 隔离根为空。
+        # 任务钉工作区改造后 workspace 不再是 None，而是会话项目的绝对路径。
+        assert h.workspace == str(tmp_path)
         assert h.worktree_name is None
         assert h.loop.isolation_root is None
         assert h.merge_worktree == sid
@@ -466,8 +467,9 @@ def test_task_start_clears_flag_when_worktree_unavailable(tmp_path):
     try:
         tm = TaskManager(app)
         h = tm.start(sid, "干活", agent_id="build")
-        # 隔离失效 → 标记被清除，任务回落主工作区（工作区为 None）
-        assert h.workspace is None
+        # 隔离失效 → 标记被清除，任务回落主工作区（任务钉工作区改造后
+        # workspace = 会话主项目路径，非 None）
+        assert h.workspace == str(tmp_path)
         assert app.session_worktree_enabled(sid) is False
         h.task.cancel()
         loop.run_until_complete(asyncio.gather(h.task, return_exceptions=True))

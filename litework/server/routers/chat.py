@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .context import ServerContext
-from ..tasks import TaskLimitError
+from ..tasks import TaskLimitError, WorkspaceBusyError
 
 logger = logging.getLogger("litework.server.chat")
 
@@ -51,7 +51,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
     @router.post("/api/chat")
     async def chat(payload: ChatRequest, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace()
+        ctx.require_workspace(request)
         session_id = payload.session_id.strip()
         if not session_id:
             raise HTTPException(status_code=400, detail="session_id 不能为空")
@@ -68,8 +68,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
             handle = tasks.start(session_id, prompt, agent_id=payload.agent_id,
                                   reasoning_effort=payload.reasoning_effort,
                                   merge_worktree=payload.merge_worktree)
-        except TaskLimitError as exc:
-            # 并发护栏（max_running_tasks，云端小内存机）：429 让前端可提示重试
+        except (TaskLimitError, WorkspaceBusyError) as exc:
+            # 并发护栏（max_running_tasks，云端小内存机）与同项目互斥（多端
+            # 视图分离）：429 让前端可提示重试
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         return {"task_id": handle.task_id}
 

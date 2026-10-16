@@ -88,6 +88,63 @@
 
 ## [未发布]
 
+### 变更（单 Core 多客户端：项目视图按端隔离）
+- **手机连上 Core 桌面就被抢走项目**：全局唯一 `app.workspace` 是抢夺点——任一端
+  切项目全世界跟着切（表现为「桌面没法用了」）。现改为**客户端视图分离**：每端
+  （窗口/PWA 实例）一个 `X-Client-Id`，切项目只登记该端视图，其他端不受影响；
+  全局值降级为未登记端/旧客户端的兜底（无 client-id 的请求保持旧全局语义，
+  API 兼容）；
+- **任务钉工作区**：任务启动时按**会话所属项目**（`metadata.workspace`）钉死
+  工作区（复用 worktree 隔离管线），不再读全局值——任一端切项目不影响其他端
+  正在跑的任务；定时/盯梢任务随其绑定会话自动覆盖；
+- **同项目互斥（方案 A）**：同项目已有任务在跑 → `/api/chat` 429（明确提示
+  等待/停止/开 worktree 隔离）；跨项目并行不受限；worktree 隔离任务在独立
+  副本执行，不参与互斥。原「切项目遇任务运行 409」整组守卫随之删除——
+  切项目不再改全局状态，无拦截必要；
+- 桌面端 3s 轮询跟随其他端切项目的逻辑删除（视图分离后无意义）；
+- `/api/status.workspace` 按客户端解析返回；会话创建按该端当前视图归属项目；
+- **手机端审批卡卡在屏幕中间回不去**：grid `place-items: center` 在卡片高于
+  视口时把溢出推到滚动区两端（滚动停在中间）——改 `safe center` + 按钮贴底，
+  长命令列表从顶滚起；
+- **手机端沙箱 iframe（```html 围栏 / render_card）超一屏**：桌面定高 380px
+  改为屏宽自适应 + `min(60dvh, 420px)` 限高可调；图解/交互块 SVG 限高 56dvh
+  且 wrapper 可横向滚动；
+- 新增 8 项回归测试（视图分离 4 + 任务钉工作区 1 + 同项目互斥 3）。
+
+### 变更（富块渲染层响应式：compact 主题）
+- **手机端图表字号被等比缩小 53% 不可读**：图表按桌面 640px viewBox 渲染、
+  CSS 等比缩放到手机后 10px 字变 5.3px。现引入 **compact 渲染主题**
+  （设计稿 `docs/rich-blocks-compact-design.md`）：模型输出的 spec 数据
+  一份不变（多端共享同一会话），渲染层按端选择参数集——手机上 W=300
+  近乎 1:1 渲染，字号保持物理 10.5px；desktop 参数集与改造前逐值一致
+  （22 项测试断言防回归）；
+- **十一类图表** compact 化（bar/line/area/hbar/pie/combo/scatter/boxplot/
+  histogram/waterfall/stacked/radar）：画布 640→300、网格 5→4 线、
+  类目超 6 个隔标签显示、标签截断 10→5 字、数值标注阈值收紧、
+  数据点半径 2.6→3.4（触控命中）、饼图 260→220 + 图例下移、
+  雷达 300→270；热力图本就自适应无需改；mermaid 保持 CSS 兜底；
+- **传播机制**：`CompactContext`（RichBlocks 内，测试可 Provider 注入）+
+  `useCompact()`（默认跟随 useIsMobile，Electron 桌面红线不变）；
+- **图解（diagram/interactive）**：compact 下 label 字号 ×1.15（viewBox
+  缩放后保持可读）；分块 pill 最小高度 36px（触控规范）；
+- **数据表冻结首列**：手机上横滚长表时类目列 sticky 不丢；
+- **看板横滑**：多列看板改横滑 + scroll-snap（每列 78vw），保住「列」语义；
+- **手机端横向滚动条可见化**：上一轮修复了「溢出发生在无 overflow 的
+  `.md-rich` 外壳层」，本轮补全局 `.mobile-app ::-webkit-scrollbar`
+  6px 提亮（原 9px 深灰在深底上不可见）；
+- 新增 22 项回归测试（compact 断言 + desktop 防回归）。
+
+### 修复（compact 主题 · 浏览器模拟验收发现）
+- **mermaid 图 compact 主题**（P3）：全局配置按模式记忆，compact 下
+  fontSize 15（SVG 缩放后物理 ≈11px，与图表 compact 对齐），模式切换时
+  重新 initialize；
+- **冻结首列折行**：sticky 首列默认 `white-space: normal` 会把「B 托管」
+  折成两行、撑爆行高（375px 截图实测）——补 `nowrap`（超长走单行省略）；
+- **饼图图例挤压**：图例名称与数值列间距不足（实测「A40 40.0%」粘连）——
+  compact 下 gap 10px + 名称列 min-width 3em；
+- 验收方式：esbuild stdin 打包全部 16 类富块 + Playwright 375px（iPhone
+  UA/触屏/2x）截图逐块检查，替代真机（截图存 `.outputs/tmp-compact-check/`）。
+
 ### 修复（手机端连接与显示）
 - **重复输入令牌**：CLI 此前每次启动都新生成随机令牌，扫码配对只在当次进程内
   有效——重启后手机必然 401，表现为「第二次进去又要输 token」。现改为首启生成

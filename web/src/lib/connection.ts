@@ -38,10 +38,34 @@ export function setAuthToken(token: string): void {
   }
 }
 
-/** 统一请求头：有令牌才带 Authorization。 */
+/** 统一请求头：有令牌才带 Authorization；客户端身份头始终携带（多端视图）。 */
 export function authHeaders(): Record<string, string> {
   const token = authToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    "X-Client-Id": clientId(),
+  };
+}
+
+// ---------------------------------------------------------------- 客户端身份
+// 单用户多端共享一个 Core：每端（窗口/PWA 实例）一个稳定 client-id，
+// 后端据此维护「该端当前项目」的视图——切项目只影响自己这端，任务在
+// 启动时钉死会话所属项目。localStorage 持久（刷新不变），隐身模式退化为
+// 空（后端按全局工作区兜底，行为与旧单端一致）。
+
+const CLIENT_ID_KEY = "litework.client.id";
+
+export function clientId(): string {
+  try {
+    let id = window.localStorage.getItem(CLIENT_ID_KEY);
+    if (!id) {
+      id = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      window.localStorage.setItem(CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
 }
 
 /** 是否运行在 Electron 桌面壳内（preload 注入 window.liteWork）。 */
