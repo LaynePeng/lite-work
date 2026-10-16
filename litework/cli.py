@@ -122,6 +122,42 @@ def _run_warmup() -> int:
     return 0
 
 
+def _load_or_create_token(config_dir: str | None) -> str:
+    """读取/生成访问令牌并落盘 `server-token`（跨重启稳定）。
+
+    桌面本地 Core 每次启动都是新进程：若每次都重新生成随机令牌，已配对的
+    手机/浏览器下次连接必然 401（扫码配对形同一次性）。这与容器入口的策略
+    一致（`deploy/docker-entrypoint.sh` 首启生成一次、落卷持久），CLI 侧此前
+    漏了这一步。
+
+    优先级：调用方显式传入的 `--token` 已在外层处理；本函数只在未显式指定时
+    使用。落盘失败（目录不可写）退化为「本次进程内有效」，不影响启动。
+    """
+    import secrets
+
+    cfg_dir = os.path.abspath(os.path.expanduser(config_dir or "~/.lite-work"))
+    path = os.path.join(cfg_dir, "server-token")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = f.read().strip()
+        if saved:
+            return saved
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(24)
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(token)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        print(f"警告: 令牌无法落盘（{path}）: {exc}——重启后将更换令牌", file=sys.stderr)
+    return token
+
+
 def _first_lan_ipv4() -> str:
     """本机第一个非回环 IPv4（serve 绑 0.0.0.0 时给手机/桌面展示真实地址）。"""
     import socket
@@ -218,8 +254,7 @@ def main(argv: list | None = None) -> None:
         sys.exit(1)
     token = args.token
     if token is None and not args.no_token:
-        import secrets
-        token = secrets.token_urlsafe(24)
+        token = _load_or_create_token(args.config_dir)
 
     app = AgentApp(
         workspace=args.workspace,

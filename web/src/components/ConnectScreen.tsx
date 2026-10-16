@@ -14,19 +14,19 @@ export default function ConnectScreen() {
   const [show, setShow] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 当前 origin 已配对过的令牌：401 后一键重连，不必重新粘贴（此前这里刻意
+  // 把同源项过滤掉了，导致「明明配对过却只能手抄令牌」）。
+  const sameOrigin = pairedCores().find((c) => c.origin === window.location.origin);
   const saved = pairedCores().filter((c) => c.origin !== window.location.origin);
 
-  /** 连接已保存的 Core：跳转其 origin（带 token hash，配对后自动剥除）。 */
+  /** 连接已保存的 Core：跳转其他 origin（带 token hash，配对后自动剥除）。 */
   const useSaved = (origin: string, t: string) => {
     window.location.href = `${origin}/#litework-token=${t}`;
   };
 
-  const submit = async () => {
-    const t = token.trim();
-    if (!t || connecting) {
-      if (!t) setError("请输入访问令牌");
-      return;
-    }
+  /** 用给定令牌连接本 Core：校验通过才落盘并刷新。 */
+  const connectWith = async (t: string) => {
+    if (!t || connecting) return;
     setConnecting(true);
     setError(null);
     setAuthToken(t);
@@ -50,6 +50,15 @@ export default function ConnectScreen() {
     } finally {
       setConnecting(false);
     }
+  };
+
+  const submit = () => {
+    const t = token.trim();
+    if (!t) {
+      setError("请输入访问令牌");
+      return;
+    }
+    void connectWith(t);
   };
 
   return (
@@ -90,6 +99,19 @@ export default function ConnectScreen() {
             {connecting ? "连接中…" : "连接"}
           </button>
         </form>
+        {sameOrigin && (
+          <div className="connect-saved">
+            <div className="connect-saved-title">本机已配对过这台 Core</div>
+            <button
+              className="connect-saved-btn connect-same-origin"
+              disabled={connecting}
+              onClick={() => void connectWith(sameOrigin.token)}
+            >
+              <span className="connect-saved-name">🔗 一键重连</span>
+              <span className="connect-saved-host">免输令牌（上次配对记录）</span>
+            </button>
+          </div>
+        )}
         {saved.length > 0 && (
           <div className="connect-saved">
             <div className="connect-saved-title">已配对的 Core</div>

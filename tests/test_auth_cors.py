@@ -10,11 +10,51 @@
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from litework.app import AgentApp
+from litework.cli import _load_or_create_token
 from litework.server.app import create_app
+
+
+def test_generated_token_persists_across_restarts(tmp_path):
+    """未显式指定令牌时：首启生成并落盘，重启复用同一令牌。
+
+    回归背景：此前每次启动都 `secrets.token_urlsafe()` 新生成随机令牌，
+    手机/浏览器扫码配对只在当次进程内有效——重启后必然 401，表现为
+    「第二次进去又要输 token」。
+    """
+    cfg = str(tmp_path / "cfg")
+    first = _load_or_create_token(cfg)
+    second = _load_or_create_token(cfg)
+    assert first and first == second
+    with open(os.path.join(cfg, "server-token"), encoding="utf-8") as f:
+        assert f.read().strip() == first
+
+
+def test_explicit_token_file_is_reused(tmp_path):
+    """已有 server-token 时直接复用（不被新随机值覆盖）。"""
+    cfg = str(tmp_path / "cfg")
+    os.makedirs(cfg, exist_ok=True)
+    with open(os.path.join(cfg, "server-token"), "w", encoding="utf-8") as f:
+        f.write("fixed-token\n")
+    assert _load_or_create_token(cfg) == "fixed-token"
+    assert _load_or_create_token(cfg) == "fixed-token"
+
+
+def test_token_generation_survives_unwritable_dir(tmp_path, monkeypatch):
+    """落盘失败（目录不可写）不阻断启动：退化为进程内随机令牌。"""
+    cfg = str(tmp_path / "ro")
+
+    def boom(*_a, **_kw):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(os, "makedirs", boom)
+    token = _load_or_create_token(cfg)
+    assert token
 
 
 @pytest.fixture

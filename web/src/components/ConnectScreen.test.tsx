@@ -56,4 +56,19 @@ describe("ConnectScreen", () => {
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(authToken()).toBe("good-token");
   });
+
+  it("同源已配对：显示「一键重连」，点击用保存的令牌连接（免重新粘贴）", async () => {
+    localStorage.setItem("litework.paired.cores", JSON.stringify([
+      { name: "core.example.com", origin: window.location.origin, token: "saved-token", at: 1 },
+    ]));
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    render(<ConnectScreen />);
+
+    fireEvent.click(screen.getByText(/一键重连/));
+
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    expect(authToken()).toBe("saved-token");
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer saved-token");
+  });
 });
