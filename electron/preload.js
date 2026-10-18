@@ -26,10 +26,15 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 成功后页面整页刷新；有任务运行中时返回 { ok: false, error }。
    */
   restartCore: () => ipcRenderer.invoke("restart-core"),
-  /** 局域网共享状态：{ enabled, url, token, ips }（url/token 仅开启时非空） */
+  /** 局域网共享状态：{ enabled, localCore, applied, url, token, ips, addresses, port } */
   getLanShare: () => ipcRenderer.invoke("get-lan-share"),
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */
   setLanShare: (enabled) => ipcRenderer.invoke("set-lan-share", enabled),
+  /**
+   * 从某内网地址探测本 Core 是否可达（主进程发起，流经真实网卡）。
+   * 返回 { ok, reason, target?, error?, version? }；reason 见 types.ts 的 ProbeResult。
+   */
+  probeLanShare: (ip) => ipcRenderer.invoke("probe-lan-share", ip),
   /** Core 连接：当前模式（local/remote + 显示名）与已保存的远程列表 */
   getCoreMode: () => ipcRenderer.invoke("get-core-mode"),
   /** 添加/覆盖一个远程 Core 配置（同 URL 覆盖）。返回 { ok, cores } */

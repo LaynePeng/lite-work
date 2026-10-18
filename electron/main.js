@@ -16,6 +16,7 @@ const os = require("os");
 const path = require("path");
 
 const { createTokenInjector, originOf } = require("./token-injector");
+const { lanAddresses, coreSpawnArgs, selectLanSharePort } = require("./lan");
 
 const CLIENT_CONFIG = path.join(os.homedir(), ".lite-work", "client.json");
 const LOG_DIR = path.join(os.homedir(), ".lite-work", "logs");
@@ -205,30 +206,10 @@ function setLanShareFlag(enabled) {
   }
 }
 
-/** 本机内网 IPv4（供手机直连）。不能裸取 os.networkInterfaces()：
- *  断连网卡会带 APIPA 链路本地地址（169.254.*，不可路由），虚拟网卡
- *  （WSL/Hyper-V 默认交换机等）也不是手机所在网段；再按家用/办公常见
- *  网段排序，避免 os 顺序不可依赖导致取错。 */
-function lanIpv4s() {
-  const virtualIf = /WSL|Loopback|VMware|VirtualBox|Docker|ZeroTier|Tailscale|vEthernet \(Default Switch\)/i;
-  const rank = (ip) => {
-    if (ip.startsWith("192.168.")) return 0;
-    if (ip.startsWith("10.")) return 1;
-    const m = ip.match(/^172\.(\d+)\./);
-    if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return 1;
-    return 2;
-  };
-  const found = [];
-  for (const [name, list] of Object.entries(os.networkInterfaces())) {
-    for (const ni of list || []) {
-      if (ni.family !== "IPv4" || ni.internal) continue;
-      if (ni.address.startsWith("169.254.")) continue;
-      // Hyper-V 外置交换机会以「vEthernet (物理网卡名)」呈现真实上联口，不能按 vEthernet 一刀切
-      if (virtualIf.test(name)) continue;
-      found.push({ ip: ni.address, rank: rank(ni.address) });
-    }
-  }
-  return found.sort((a, b) => a.rank - b.rank).map((e) => e.ip);
+/** 本机内网 IPv4（供手机直连）。实现见 electron/lan.js（可单测）；
+ *  iPhone 热点网段 172.20.10.x 排最前——它是 iPhone 唯一能到达本机的路径。 */
+function lanAddressesNow() {
+  return lanAddresses(os.networkInterfaces());
 }
 
 function createWindow(url) {
@@ -377,32 +358,52 @@ function stopCore(child) {
   killBackendTree(child);
 }
 
-function spawnLocalCore(workspace) {
-  return new Promise((resolve, reject) => {
-    const python = resolvePython();
-    const projectRoot = coreCwd();
-    const args = app.isPackaged
-      ? ["serve", "--port", "0"]
-      : ["-m", "litework", "serve", "--port", "0"];
-    // 局域网共享：放开回环绑定，手机可直连（令牌门仍在；http 无推送）
-    if (lanShareEnabled()) args.push("--host", "0.0.0.0");
-    args.push("--config-dir", path.join(os.homedir(), ".lite-work"));
-    if (workspace) args.push("--workspace", workspace);
-    const env = {
-      ...process.env,
-      // Finder 启动 Electron 时不会继承 shell PATH；覆盖 Homebrew/MacPorts
-      // 等常见 ripgrep 安装位置，Python 后端也会继续使用绝对路径探测。
-      PATH: [
-        process.env.PATH || "",
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/opt/local/bin",
-        path.join(process.env.HOME || "", ".cargo/bin"),
-        path.join(process.env.HOME || "", ".local/bin"),
-      ].filter(Boolean).join(path.delimiter),
-      LITEWORK_SPAWNED: "1",
-    };
+async function spawnLocalCore(workspace) {
+  const python = resolvePython();
+  const projectRoot = coreCwd();
+  const lanShare = lanShareEnabled();
+  const env = {
+    ...process.env,
+    // Finder 启动 Electron 时不会继承 shell PATH；覆盖 Homebrew/MacPorts
+    // 等常见 ripgrep 安装位置，Python 后端也会继续使用绝对路径探测。
+    PATH: [
+      process.env.PATH || "",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/opt/local/bin",
+      path.join(process.env.HOME || "", ".cargo/bin"),
+      path.join(process.env.HOME || "", ".local/bin"),
+    ].filter(Boolean).join(path.delimiter),
+    LITEWORK_SPAWNED: "1",
+  };
 
+  // 开启共享时优先绑固定端口：令牌跨重启稳定（cli.py 落盘 server-token），
+  // 端口却是随机的（--port 0）——端口一变，手机存的 origin（含端口）就失效，
+  // 书签/主屏图标每次重启桌面版都得重扫。
+  const wantPort = lanShare ? await selectLanSharePort() : 0;
+  const start = (port) => spawnCoreOnce({
+    python, projectRoot, env, workspace, lanShare, port,
+  });
+  try {
+    return await start(wantPort);
+  } catch (err) {
+    // 探测空闲与真正绑定之间有窗口期：两个窗口同时启动时，后绑的那个会因
+    // EADDRINUSE 直接退出——比端口随机更糟（用户付了"固定"的代价却起不来）。
+    // 故退回随机端口重试一次，宁可书签失效也不能打不开。
+    // 只在「提前退出」时重试：启动超时（如 python 缺失、依赖未装）重试也是白等。
+    if (wantPort === 0 || !/提前退出/.test(err.message)) throw err;
+    writeLog("warn", `固定端口 ${wantPort} 启动失败（${err.message}），退回随机端口重试`);
+    return await start(0);
+  }
+}
+
+/** 拉起一次 Core，等就绪标记。port=0 时由系统分配临时端口。 */
+function spawnCoreOnce({ python, projectRoot, env, workspace, lanShare, port }) {
+  const args = coreSpawnArgs({ packaged: app.isPackaged, lanShare, port });
+  args.push("--config-dir", path.join(os.homedir(), ".lite-work"));
+  if (workspace) args.push("--workspace", workspace);
+
+  return new Promise((resolve, reject) => {
     writeLog("log", `启动本地 Core: ${python} ${args.join(" ")}`);
     const child = spawn(python, args, {
       cwd: projectRoot,
@@ -433,9 +434,11 @@ function spawnLocalCore(workspace) {
       if (m && !resolved) {
         resolved = true;
         clearTimeout(timer);
-        const port = parseInt(m[1], 10);
+        const boundPort = parseInt(m[1], 10);
         const token = m[3] || "";
-        resolve({ child, url: `http://127.0.0.1:${port}`, token });
+        // lanShare 记的是"这个进程是不是按共享参数起来的"（而非配置开关）：
+        // 面板据此区分「已生效」与「改了开关但还没重启」。
+        resolve({ child, url: `http://127.0.0.1:${boundPort}`, token, lanShare, port: boundPort });
       }
     };
 
@@ -447,7 +450,6 @@ function spawnLocalCore(workspace) {
         reject(new Error(`后端进程提前退出（code=${code}）`));
       }
     });
-
   });
 }
 
@@ -738,6 +740,10 @@ async function restartLocalCore(winId) {
     record.url = instance.url;
     record.token = instance.token;
     record.workspace = workspace;
+    // 共享参数随重启可能变（开了/关了共享、固定端口被占退随机），面板的
+    // applied/port 都读这两个字段，必须一并更新
+    record.lanShare = instance.lanShare === true;
+    record.port = instance.port || 0;
     releaseCoreToken(previousUrl);
     if (record.window && !record.window.isDestroyed()) {
       record.window.loadURL(instance.url);
@@ -752,11 +758,16 @@ async function restartLocalCore(winId) {
 
 ipcMain.handle("restart-core", (event) => restartLocalCore(event.sender.id));
 
-// ---- 局域网共享（手机直连本机 Core）：状态查询与开关 ----
+// ---- 局域网共享（手机直连本机 Core）：状态查询、开关与连通性检测 ----
+
+/** 网络类型标识 → 面板展示文案（热点优先标出：它是 iPhone 唯一可达的路径）。 */
+const IFACE_KINDS = { hotspot: "热点", lan: "网络" };
+
 ipcMain.handle("get-lan-share", (event) => {
   const enabled = lanShareEnabled();
   const record = localInstances.get(event.sender.id);
-  const ips = lanIpv4s();
+  const addresses = lanAddressesNow();
+  const ips = addresses.map((a) => a.ip);
   let url = "";
   if (enabled && record?.url && ips.length > 0) {
     try {
@@ -765,18 +776,68 @@ ipcMain.handle("get-lan-share", (event) => {
       url = u.href.replace(/\/$/, "");
     } catch { /* url 解析失败按未配置处理 */ }
   }
+  // 生效 = 这个 Core 进程就是按"共享"参数拉起来的（绑 0.0.0.0）。
+  // 刻意不叠加配置开关：关掉共享但还没重启时，进程仍在监听——applied 必须仍为
+  // true，面板才能提示"重启前仍接受局域网连接"（反之则是改了开关没重启，
+  // 二维码注定连不通，必须挡住）。
+  const applied = record?.lanShare === true;
   return {
     enabled,
     // 远程 Core 直连（client.json coreUrl）时无本地实例，面板据此提示不适用
     localCore: !!record,
+    applied,
     url,
     // 令牌只在开启时下发（面板只在用户自己的桌面里展示）
     token: enabled ? record?.token || "" : "",
     ips,
+    // [{ ip, iface, kind, label }]：多网卡时供面板标注「热点 / 网络」
+    addresses: addresses.map((a) => ({ ...a, label: IFACE_KINDS[a.kind] || "网络" })),
+    // 实际监听端口（固定端口生效后书签/主屏图标才跨重启有效）
+    port: record?.port || 0,
   };
 });
 
 ipcMain.handle("set-lan-share", (event, enabled) => setLanShareFlag(!!enabled));
+
+/** 从某内网地址探本 Core 的存活探针（未鉴权）。
+ *
+ *  这条请求会真正流经那一张网卡（而非 loopback），因此能分辨「地址/端口根本没人
+ *  应答」与「连不上但 Core 活着」。共享开好后该探测必须成功——失败即防火墙未放行
+ *  或热点不允许设备互访；这正是用户最难自行定位的一步，把它从「只能看手机 Safari
+ *  的通用报错」变成一句结论。 */
+ipcMain.handle("probe-lan-share", async (event, targetIp) => {
+  const record = localInstances.get(event.sender.id);
+  if (!record?.url || !record.port) {
+    return { ok: false, reason: "no-core", error: "当前窗口没有运行中的本地 Core" };
+  }
+  const ip = String(targetIp || "");
+  if (!lanAddressesNow().some((a) => a.ip === ip)) {
+    return { ok: false, reason: "not-local", error: "该地址不是本机的网络地址" };
+  }
+  const target = `http://${ip}:${record.port}/api/health`;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const resp = await net.fetch(target, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      return { ok: false, reason: "bad-status", target, error: `端口有应答但状态异常（HTTP ${resp.status}）` };
+    }
+    const body = await resp.json().catch(() => ({}));
+    if (body?.status !== "ok") {
+      return { ok: false, reason: "bad-status", target, error: "端口有应答但不是 lite-work Core" };
+    }
+    return { ok: true, target, version: body.version || "" };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "unreachable",
+      target,
+      error: `无法从 ${ip} 连到 Core（${err.name === "AbortError" ? "超时" : err.message}）`
+      + "——多半是系统防火墙未放行，或热点不允许设备互访",
+    };
+  }
+});
 
 function stopTerminal(id) {
   const term = terminals.get(id);

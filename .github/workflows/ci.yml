@@ -98,3 +98,8 @@ jobs:
       # 回归「多项目窗口互相顶掉 Authorization 注入 → 先开窗口全部 401」。
       - name: Electron token injector tests (node:test)
         run: node --test tests/js/token-injector.test.mjs
+      # 局域网共享决策逻辑（端口选择 / iPhone 热点网段识别与排序）。
+      # 回归「多网卡时默认选中 192.168.x → iPhone 在热点网段够不着」与
+      # 「共享端口随机 → 重启后手机书签失效」。
+      - name: Electron LAN share tests (node:test)
+        run: node --test tests/js/lan.test.mjs

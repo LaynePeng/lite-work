@@ -593,6 +593,8 @@ export interface LiteWorkBridge {
   getLanShare: () => Promise<LanShareInfo>;
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */
   setLanShare: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  /** 从某内网地址探测本 Core 是否可达（主进程发起，流经真实网卡） */
+  probeLanShare?: (ip: string) => Promise<LanProbeResult>;
   /** Core 连接：当前模式（local/remote + 显示名）与已保存的远程列表 */
   getCoreMode: () => Promise<CoreModeInfo>;
   /** 添加/覆盖一个远程 Core 配置（同 URL 覆盖）。返回 { ok, cores } */
@@ -624,12 +626,42 @@ export interface LanShareInfo {
   enabled: boolean;
   /** 当前窗口是否跑着本地 Core（client.json 远程直连时为 false，功能不适用） */
   localCore: boolean;
+  /** 当前这个 Core 进程是否**真的**按共享参数起来了（绑 0.0.0.0）。
+   *  仅 enabled=true 不够：改了开关但没重启时配置是 true、进程仍绑 127.0.0.1，
+   *  此时展示的二维码不可能连通——面板据此区分「已生效 / 未生效」。 */
+  applied: boolean;
   /** 局域网直连 URL（http://<内网IP>:<端口>）；未开启为空 */
   url: string;
   /** 连接令牌（Core 自动生成）；未开启为空 */
   token: string;
   /** 本机全部内网 IPv4（多网卡多地址时都展示） */
   ips: string[];
+  /** 网段明细（与 ips 同序）：iface 网卡名，kind=hotspot 即 iPhone 个人热点 */
+  addresses: LanAddress[];
+  /** 当前 Core 实际监听端口（0 = 尚未启动/未知） */
+  port: number;
+}
+
+/** 一个可供手机连接的本机地址 */
+export interface LanAddress {
+  ip: string;
+  /** 网卡名（en0 / vEthernet…），仅用于排查时对照 */
+  iface: string;
+  /** hotspot = iPhone 个人热点网段（172.20.10.0/28） */
+  kind: "hotspot" | "lan";
+  /** 展示文案：热点 / 网络 */
+  label: string;
+}
+
+/** 局域网连通性探测结果（主进程从内网地址请求 /api/health） */
+export interface LanProbeResult {
+  ok: boolean;
+  /** unreachable=无人应答（防火墙/热点隔离）；bad-status=有应答但非本 Core；
+   *  not-local=非本机地址；no-core=无本地 Core */
+  reason?: "unreachable" | "bad-status" | "not-local" | "no-core";
+  target?: string;
+  error?: string;
+  version?: string;
 }
 
 declare global {

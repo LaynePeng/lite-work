@@ -14,16 +14,33 @@ vi.mock("qrcode", () => ({
 }));
 
 import PhoneConnectModal from "./PhoneConnectModal";
+import type { LanShareInfo } from "../types";
 
 const getLanShare = vi.fn();
 const setLanShare = vi.fn();
 const restartCore = vi.fn();
+const probeLanShare = vi.fn();
 
-function mockBridge() {
+/** 主进程 get-lan-share 的默认返回（applied=true：进程确实按共享参数起来了）。 */
+const lanInfo = (over: Partial<LanShareInfo> = {}): LanShareInfo => ({
+  enabled: true,
+  localCore: true,
+  applied: true,
+  url: "http://192.168.1.5:51234",
+  token: "tok-abc_123",
+  ips: ["192.168.1.5"],
+  addresses: [{ ip: "192.168.1.5", iface: "en0", kind: "lan", label: "网络" }],
+  port: 51234,
+  ...over,
+});
+
+function mockBridge(platform = "win32") {
   (window as unknown as { liteWork?: unknown }).liteWork = {
+    platform,
     getLanShare,
     setLanShare,
     restartCore,
+    probeLanShare,
   };
 }
 
@@ -31,6 +48,7 @@ describe("PhoneConnectModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockBridge();
+    probeLanShare.mockResolvedValue({ ok: true, target: "http://192.168.1.5:51234", version: "2.0.1" });
   });
   afterEach(() => {
     delete (window as unknown as { liteWork?: unknown }).liteWork;
@@ -39,13 +57,9 @@ describe("PhoneConnectModal", () => {
   it("未开启：说明与风险提示；点击开启 → setLanShare(true) + 重启提示", async () => {
     // 有状态 mock：setLanShare 落配置后，后续 getLanShare 反映新状态
     let enabled = false;
-    getLanShare.mockImplementation(async () => ({
-      enabled,
-      localCore: true,
-      url: enabled ? "http://192.168.1.5:51234" : "",
-      token: enabled ? "tok-abc_123" : "",
-      ips: ["192.168.1.5"],
-    }));
+    getLanShare.mockImplementation(async () => (
+      enabled ? lanInfo() : lanInfo({ enabled: false, applied: false, url: "", token: "", ips: [], addresses: [] })
+    ));
     setLanShare.mockImplementation(async (v: boolean) => {
       enabled = v;
       return { ok: true };
@@ -62,13 +76,13 @@ describe("PhoneConnectModal", () => {
   });
 
   it("已开启：展示连接地址与二维码（QR 内容带配对令牌）", async () => {
-    getLanShare.mockResolvedValue({
-      enabled: true,
-      localCore: true,
-      url: "http://192.168.1.5:51234",
-      token: "tok-abc_123",
+    getLanShare.mockResolvedValue(lanInfo({
       ips: ["192.168.1.5", "10.0.0.3"],
-    });
+      addresses: [
+        { ip: "192.168.1.5", iface: "en0", kind: "lan", label: "网络" },
+        { ip: "10.0.0.3", iface: "en1", kind: "lan", label: "网络" },
+      ],
+    }));
     render(<PhoneConnectModal onClose={vi.fn()} />);
 
     const img = await screen.findByAltText("手机连接二维码");
@@ -78,21 +92,21 @@ describe("PhoneConnectModal", () => {
     );
     expect(screen.getByText("http://192.168.1.5:51234")).toBeInTheDocument();
     // 双网段：两个 IP 都展示为 chip
-    expect(screen.getByRole("button", { name: "10.0.0.3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /10\.0\.0\.3/ })).toBeInTheDocument();
   });
 
   it("双网段：点选第二个 IP，URL 与二维码跟随切换", async () => {
-    getLanShare.mockResolvedValue({
-      enabled: true,
-      localCore: true,
-      url: "http://192.168.1.5:51234",
-      token: "tok-abc_123",
+    getLanShare.mockResolvedValue(lanInfo({
       ips: ["192.168.1.5", "10.0.0.3"],
-    });
+      addresses: [
+        { ip: "192.168.1.5", iface: "en0", kind: "lan", label: "网络" },
+        { ip: "10.0.0.3", iface: "en1", kind: "lan", label: "网络" },
+      ],
+    }));
     render(<PhoneConnectModal onClose={vi.fn()} />);
 
     await screen.findByText("http://192.168.1.5:51234");
-    fireEvent.click(screen.getByRole("button", { name: "10.0.0.3" }));
+    fireEvent.click(screen.getByRole("button", { name: /10\.0\.0\.3/ }));
 
     expect(await screen.findByText("http://10.0.0.3:51234")).toBeInTheDocument();
     const img = screen.getByAltText("手机连接二维码");
@@ -101,8 +115,18 @@ describe("PhoneConnectModal", () => {
     );
   });
 
+  it("开关已存但 Core 未按共享参数重启：不给二维码，改提示重启", async () => {
+    // 最坑的失败模式：配置 enabled=true 而进程仍绑 127.0.0.1，
+    // 此时渲染出来的二维码**不可能连通**——必须挡住。
+    getLanShare.mockResolvedValue(lanInfo({ applied: false }));
+    render(<PhoneConnectModal onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/仍是仅本机可访问/)).toBeInTheDocument();
+    expect(screen.queryByAltText("手机连接二维码")).not.toBeInTheDocument();
+  });
+
   it("写入失败：展示错误信息", async () => {
-    getLanShare.mockResolvedValue({ enabled: false, localCore: true, url: "", token: "", ips: [] });
+    getLanShare.mockResolvedValue(lanInfo({ enabled: false, applied: false, url: "", token: "", ips: [], addresses: [] }));
     setLanShare.mockResolvedValue({ ok: false, error: "disk full" });
     render(<PhoneConnectModal onClose={vi.fn()} />);
 
@@ -111,7 +135,9 @@ describe("PhoneConnectModal", () => {
   });
 
   it("远程 Core 直连（localCore=false）：提示不适用、无开关", async () => {
-    getLanShare.mockResolvedValue({ enabled: false, localCore: false, url: "", token: "", ips: [] });
+    getLanShare.mockResolvedValue(lanInfo({
+      enabled: false, localCore: false, applied: false, url: "", token: "", ips: [], addresses: [],
+    }));
     render(<PhoneConnectModal onClose={vi.fn()} />);
 
     expect(await screen.findByText(/远程 Core/)).toBeInTheDocument();
@@ -120,13 +146,11 @@ describe("PhoneConnectModal", () => {
 
   it("从开启切回关闭：仍提示需重启（旧绑定重启前持续生效）", async () => {
     let enabled = true;
-    getLanShare.mockImplementation(async () => ({
-      enabled,
-      localCore: true,
-      url: enabled ? "http://192.168.1.5:51234" : "",
-      token: enabled ? "tok-abc_123" : "",
-      ips: ["192.168.1.5"],
-    }));
+    getLanShare.mockImplementation(async () => (
+      enabled
+        ? lanInfo()
+        : lanInfo({ enabled: false, applied: true })  // 进程仍按共享参数在跑
+    ));
     setLanShare.mockImplementation(async (v: boolean) => {
       enabled = v;
       return { ok: true };
@@ -136,6 +160,55 @@ describe("PhoneConnectModal", () => {
     fireEvent.click(await screen.findByRole("button", { name: "关闭局域网共享" }));
     await waitFor(() => expect(setLanShare).toHaveBeenCalledWith(false));
     // 关闭同样要重启才生效：横幅必须还在（否则用户误以为已断开）
-    expect(await screen.findByText(/重启前仍接受局域网连接/)).toBeInTheDocument();
+    expect(await screen.findByText(/仍接受局域网连接/)).toBeInTheDocument();
+  });
+
+  it("iPhone 热点网段被标为「热点」并默认选中（192.168 排其后）", async () => {
+    getLanShare.mockResolvedValue(lanInfo({
+      url: "http://172.20.10.2:8787",
+      ips: ["172.20.10.2", "192.168.1.5"],
+      addresses: [
+        { ip: "172.20.10.2", iface: "en7", kind: "hotspot", label: "热点" },
+        { ip: "192.168.1.5", iface: "en0", kind: "lan", label: "网络" },
+      ],
+      port: 8787,
+    }));
+    render(<PhoneConnectModal onClose={vi.fn()} />);
+
+    // 默认选中热点：二维码里编的必须是 iPhone 够得着的那个地址
+    const img = await screen.findByAltText("手机连接二维码");
+    await waitFor(() =>
+      expect(img.getAttribute("src")).toContain(btoa("http://172.20.10.2:8787/#litework-token=tok-abc_123"))
+    );
+    expect(screen.getByText("热点")).toBeInTheDocument();
+  });
+
+  it("检测连接：可达显示 ✓ 与 Core 版本；不可达显示原因", async () => {
+    getLanShare.mockResolvedValue(lanInfo());
+    const { unmount } = render(<PhoneConnectModal onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检测连接" }));
+    expect(await screen.findByText(/192\.168\.1\.5 可达/)).toBeInTheDocument();
+    expect(probeLanShare).toHaveBeenCalledWith("192.168.1.5");
+
+    // 不可达：把主进程给的结论原样展示（含防火墙/热点隔离的提示）
+    probeLanShare.mockResolvedValue({
+      ok: false, reason: "unreachable",
+      error: "无法从 192.168.1.5 连到 Core（超时）——多半是系统防火墙未放行，或热点不允许设备互访",
+    });
+    unmount();
+    render(<PhoneConnectModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "检测连接" }));
+    expect(await screen.findByText(/系统防火墙未放行/)).toBeInTheDocument();
+  });
+
+  it("防火墙文案按平台分支：macOS 不提 Windows 的「专用网络」", async () => {
+    delete (window as unknown as { liteWork?: unknown }).liteWork;
+    mockBridge("darwin");
+    getLanShare.mockResolvedValue(lanInfo({ enabled: false, applied: false, url: "", token: "", ips: [], addresses: [] }));
+    render(<PhoneConnectModal onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/是否允许接受传入网络连接/)).toBeInTheDocument();
+    expect(screen.queryByText(/专用网络/)).not.toBeInTheDocument();
   });
 });

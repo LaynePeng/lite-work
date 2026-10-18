@@ -10697,10 +10697,26 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   padding: 5px 12px; border-radius: 999px; font-size: 12px;
   font-family: var(--font-mono); cursor: pointer;
   background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .phone-connect-ip-chips .ip-chip.active {
   background: rgba(79, 140, 255, 0.15); border-color: var(--accent); color: var(--accent);
 }
+/* 网段类型角标：热点=橙色（iPhone 唯一可达本机的路径，值得被一眼认出） */
+.ip-chip-kind {
+  font-family: inherit; font-size: 10px; padding: 1px 6px;
+  border-radius: 999px; background: var(--bg-3); color: var(--text-2);
+}
+.ip-chip-kind.kind-hotspot { background: rgba(210, 153, 34, 0.18); color: var(--yellow); }
+.phone-connect-probe { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.phone-connect-probe button {
+  padding: 7px 14px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+}
+.phone-connect-probe button:disabled { opacity: 0.6; cursor: default; }
+.phone-connect-probe-result { font-size: 12px; line-height: 1.6; flex: 1; min-width: 0; }
+.phone-connect-probe-result.ok { color: var(--green); }
+.phone-connect-probe-result.bad { color: var(--red); }
 .phone-connect-qr-loading {
   width: 240px; height: 240px; display: grid; place-items: center;
   font-size: 12px; color: var(--text-2);
