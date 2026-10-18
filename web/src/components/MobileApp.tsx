@@ -33,7 +33,7 @@ export interface MobileAppProps {
   sessions: SessionInfo[];
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
-  onNewChat: () => void;
+  onNewChat: () => void | Promise<void>;
   onNewTask: () => void;
   onContinueSession: (id: string, title: string) => void;
   onRenameSession: (id: string, name: string) => void;
@@ -121,8 +121,9 @@ export default function MobileApp(props: MobileAppProps) {
     setPage("chat");
   };
   const newChat = () => {
-    props.onNewChat();
-    setPage("chat");
+    // 手机端首次连上 Core 时无项目视图：App 层会先切个人区再建会话（异步），
+    // await 到位再翻页——否则页签可能还是「无项目」的旧状态
+    void Promise.resolve(props.onNewChat()).finally(() => setPage("chat"));
   };
   const backToList = () => {
     props.onRefreshSessions();
@@ -543,6 +544,7 @@ export default function MobileApp(props: MobileAppProps) {
           collabModes={props.collabModes}
           workspaceName={props.workspaceName}
           workspaceIsGit={props.workspaceIsGit}
+          hasProject={!!props.workspace}
           onCancel={props.onNewTaskCancel}
           onSubmit={submitTask}
         />

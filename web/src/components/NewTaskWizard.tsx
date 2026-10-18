@@ -31,6 +31,7 @@ export default function NewTaskWizard({
   collabModes,
   workspaceName,
   workspaceIsGit,
+  hasProject = true,
   onCancel,
   onSubmit,
 }: {
@@ -38,6 +39,8 @@ export default function NewTaskWizard({
   /** 当前项目显示名（落盘位置「当前项目」的标签） */
   workspaceName: string;
   workspaceIsGit: boolean;
+  /** 是否已打开项目：false 时「当前项目」不可选，落盘位置默认个人区 */
+  hasProject?: boolean;
   onCancel: () => void;
   onSubmit: (cfg: NewTaskConfig) => void;
 }) {
@@ -49,8 +52,9 @@ export default function NewTaskWizard({
   const [collab, setCollab] = useState("");
   // 计划项（可选）：每行一个 TODO 步骤；留空则交给 Agent 规划
   const [planText, setPlanText] = useState("");
-  // 落盘位置（Goals 全局视图）：任务属于我，项目只是落盘选择之一
-  const [wsMode, setWsMode] = useState<TaskWorkspaceMode>("current");
+  // 落盘位置（Goals 全局视图）：任务属于我，项目只是落盘选择之一。
+  // 未打开项目（手机端首次连上 Core）时「当前项目」无意义，默认落个人区
+  const [wsMode, setWsMode] = useState<TaskWorkspaceMode>(hasProject ? "current" : "personal");
   const [customWs, setCustomWs] = useState("");
 
   const canStart = useMemo(
@@ -116,16 +120,21 @@ export default function NewTaskWizard({
           <div className="wizard-section">
             <div className="wizard-label">
               落盘位置
-              <span className="wizard-hint">任务属于我；项目只是产物放哪的选择</span>
+              <span className="wizard-hint">
+                {hasProject ? "任务属于我；项目只是产物放哪的选择" : "还没有打开项目，默认落个人区；想放进项目请先切项目"}
+              </span>
             </div>
             <div className="wizard-radio-row">
-              <label className={`wizard-radio ${wsMode === "current" ? "checked" : ""}`}>
+              <label
+                className={`wizard-radio ${wsMode === "current" ? "checked" : ""} ${hasProject ? "" : "disabled"}`}
+                title={hasProject ? `产物落当前项目：${workspaceName}` : "还没有打开项目——请先在顶部 📁 里选择或新建项目"}
+              >
                 <input
-                  type="radio" name="wizard-ws" checked={wsMode === "current"}
+                  type="radio" name="wizard-ws" checked={wsMode === "current"} disabled={!hasProject}
                   onChange={() => setWsMode("current")}
                 />
                 <span>当前项目</span>
-                <small>{workspaceName}</small>
+                <small>{hasProject ? workspaceName : "未打开项目"}</small>
               </label>
               <label className={`wizard-radio ${wsMode === "personal" ? "checked" : ""}`}
                 title="不隶属任何项目的任务（发邮件、整理照片等）产物落个人区 ~/lite-work/personal">

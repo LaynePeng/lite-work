@@ -120,6 +120,20 @@ describe("NewTaskWizard 新建任务向导", () => {
     expect(screen.getByRole("checkbox", { name: /隔离工作树/ })).toBeDisabled();
   });
 
+  it("未打开项目（hasProject=false）：「当前项目」置灰，落盘位置默认个人区", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderWizard({ hasProject: false, workspaceName: "未打开项目" });
+    expect(screen.getByRole("radio", { name: /当前项目/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /个人/ })).toBeChecked();
+
+    await user.type(screen.getByRole("textbox", { name: "任务目标" }), "整理照片");
+    await user.click(screen.getByRole("button", { name: "开始任务" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      goal: "整理照片",
+      workspaceMode: "personal",
+    }));
+  });
+
   it("填写计划项：每行拆分、去空行、去首尾空格后随配置提交", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderWizard();

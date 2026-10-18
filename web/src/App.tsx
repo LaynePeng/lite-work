@@ -296,6 +296,11 @@ export default function App() {
   const draftModelsRef = useRef<Record<string, SessionModel | null>>({});
   const draftReasoningRef = useRef<Record<string, string>>({});
 
+  // 移动布局判定（窄屏 + 非 Electron）：手机端「＋ / ✏️ 对话」在未打开项目时
+  // 兜底落个人区（见 fallbackPersonalWorkspace）；桌面与宽屏浏览器保持
+  // 「先有项目再有会话」——那里有目录选择器，不该替用户决定产物落哪。
+  const isMobile = useIsMobile();
+
   // 对话区是否被上翻（非贴底）：驱动 Composer 的状态化快捷键提示
   const [chatScrolledUp, setChatScrolledUp] = useState(false);
   const handleStickChange = useCallback((stick: boolean) => setChatScrolledUp(!stick), []);
@@ -1311,14 +1316,46 @@ export default function App() {
     }
   }, [patchActiveChat]);
 
-  const requestNewChat = useCallback(() => {
-    if (status?.workspace) {
-      newChatTab();
+  /**
+   * 未打开任何项目时的兜底落盘位置：个人区（~/lite-work/personal）。
+   *
+   * 手机端首次连上 Core 时该端没有项目视图，此前「✏️ 对话 / ＋ 新建任务 / 发送」
+   * 一律被「请先打开项目」拦下（手机上也没有原生目录对话框，只能弹项目面板）。
+   * 任务属于我、项目只是产物放哪的选择，故无项目时默认落个人区直接开工——
+   * 与向导「落盘位置 → 个人」走同一条管线（客户端视图切换，不影响其他端）。
+   * 失败返回 null，调用方退回旧的「提示 + 打开项目」路径。
+   */
+  const fallbackPersonalWorkspace = useCallback(async (): Promise<string | null> => {
+    // 仅手机壳兜底：Electron 桌面端与宽屏浏览器保持原行为（「请先打开项目」+ 目录
+    // 选择器），桌面「先有项目再有会话」是明确设计，不该替用户决定产物落哪。
+    if (!isMobile) return null;
+    try {
+      const path = (await api.personalWorkspace()).path;
+      const res = await api.setWorkspace(path);
+      if (!res.ok) return null;
+      setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
+      notifyElectronWorkspace(res.workspace);
+      changeSidebarTab("sessions");
+      setProjectsView("sessions");
+      void api.recentProjects().then((r) => setRecentProjects(r.items)).catch(() => {});
+      await refreshSessions(res.workspace);
+      pushLog(`👤 未打开项目，已在个人区开始: ${res.workspace}`);
+      setSuccess(`未打开项目，已在个人区开始（${res.workspace}）`);
+      setTimeout(() => setSuccess(null), 4000);
+      return res.workspace;
+    } catch {
+      return null;
+    }
+  }, [notifyElectronWorkspace, changeSidebarTab, refreshSessions, pushLog, isMobile]);
+
+  const requestNewChat = useCallback(async () => {
+    if (!status?.workspace && !(await fallbackPersonalWorkspace())) {
+      window.alert("请先打开项目后再新建对话。");
+      void openProject();
       return;
     }
-    window.alert("请先打开项目后再新建对话。");
-    void openProject();
-  }, [newChatTab, openProject, status?.workspace]);
+    newChatTab();
+  }, [newChatTab, openProject, status?.workspace, fallbackPersonalWorkspace]);
 
   // ------------------------------------------------------------ 项目页签：最近项目
 
@@ -2719,7 +2756,8 @@ export default function App() {
 
   const send = useCallback(
     async (prompt: string) => {
-      if (!status?.workspace) {
+      if (!status?.workspace && !(await fallbackPersonalWorkspace())) {
+        // 兜底切换失败（如后端不可达）：退回旧路径提示并打开项目
         window.alert("请先打开项目后再开始对话。");
         void openProject();
         return;
@@ -2837,7 +2875,7 @@ export default function App() {
         pushLog(`✗ 提交失败: ${(e as Error).message}`);
       }
     },
-    [activeTabId, activeSessionId, draftCollabModes, getChat, patchChat, refreshSessions, cancelStreamFlush, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, runContinueCommand, runWorktreeCommand]
+    [activeTabId, activeSessionId, draftCollabModes, getChat, patchChat, refreshSessions, cancelStreamFlush, pushLog, currentAgent, openProject, status?.workspace, runCompact, runGoalCommand, runLoopCommand, runContinueCommand, runWorktreeCommand, fallbackPersonalWorkspace]
   );
 
   // 发送队列中的单条指令到当前运行任务（queue_input 注入下一回合）
@@ -2908,14 +2946,16 @@ export default function App() {
   const startTaskFromWizard = useCallback(async (cfg: NewTaskConfig) => {
     setNewTaskOpen(false);
     try {
+      // 未打开项目（手机端首次连上 Core）：落盘位置「当前项目」无意义，按个人区处理
+      const wsMode = cfg.workspaceMode === "current" && !status?.workspace ? "personal" : cfg.workspaceMode;
       // 落盘位置（Goals 全局视图）：个人/自定义目录 = **先热切换工作区再启动**——
       // 任务执行以 app.workspace 为准（/api/chat），只写 metadata.workspace 会让
       // Agent 仍在旧项目里跑、产物落旧项目根目录（「落盘位置」沦为装饰）。
       // 切换与「点跨项目卡=切项目进会话」同一模型：你开始在哪里工作，就在哪里。
       let taskWs: string | undefined;
-      if (cfg.workspaceMode === "personal") {
+      if (wsMode === "personal") {
         taskWs = (await api.personalWorkspace().catch(() => null))?.path;
-      } else if (cfg.workspaceMode === "custom" && cfg.customWorkspace) {
+      } else if (wsMode === "custom" && cfg.customWorkspace) {
         taskWs = cfg.customWorkspace;
       }
       if (taskWs && taskWs !== status?.workspace) {
@@ -3179,8 +3219,6 @@ export default function App() {
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
-
-  const isMobile = useIsMobile();
 
   if (authFailed && !isElectron()) {
     return <ConnectScreen />;
@@ -3635,6 +3673,7 @@ export default function App() {
           collabModes={collabModes}
           workspaceName={status?.workspace?.split(/[\\/]/).filter(Boolean).pop() ?? "未打开项目"}
           workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
+          hasProject={!!status?.workspace}
           onCancel={() => setNewTaskOpen(false)}
           onSubmit={(cfg) => void startTaskFromWizard(cfg)}
         />

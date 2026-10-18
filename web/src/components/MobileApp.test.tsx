@@ -5,7 +5,7 @@
 // 弹层透传。ChatView/Composer 等重组件全部 mock——它们的移动适配属各组件
 // 自身的测试范围。
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "./MobileApp";
 import type { MobileAppProps } from "./MobileApp";
@@ -189,6 +189,22 @@ describe("MobileApp · 两页导航", () => {
     fireEvent.click(screen.getByText("会话一"));
     fireEvent.click(screen.getByText("mock-send"));
     expect(props.onSend).toHaveBeenCalledWith("hi");
+  });
+
+  it("「✏️ 对话」等 onNewChat 完成才翻页（无项目时 App 先切个人区）", async () => {
+    // App 层在无项目时要先异步切个人区再建会话，翻页必须等它落地
+    let resolveNewChat: () => void = () => {};
+    const onNewChat = vi.fn(() => new Promise<void>((r) => { resolveNewChat = r; }));
+    const props = baseProps({ onNewChat });
+    render(<MobileApp {...props} />);
+
+    fireEvent.click(screen.getByText("✏️ 对话"));
+    expect(onNewChat).toHaveBeenCalled();
+    // 尚未完成：仍停在列表页
+    expect(screen.queryByTestId("chat-view")).not.toBeInTheDocument();
+
+    await act(async () => { resolveNewChat(); });
+    await screen.findByTestId("chat-view");
   });
 });
 
