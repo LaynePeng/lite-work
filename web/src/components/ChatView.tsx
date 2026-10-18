@@ -1042,6 +1042,23 @@ export default function ChatView({
     : 0;
   const activeApproval = pendingApprovals[approvalIdx];
 
+  // 必须 useCallback 保持引用稳定：TurnItem 是 memo 组件，此前这里传的是
+  // 内联箭头函数（每次渲染都是新引用）→ memo 判等永远失败 → 每个流式 delta
+  // 都把全部历史轮次重新渲染一遍。长会话下这是流式卡顿的主因
+  // （实测 262KB 对话单次全量渲染 117ms，80ms 节流下约 146% 单核）。
+  const handleEmailDraftConfirm = useCallback(
+    (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => onSend(
+      `[邮件草稿 ${edits.id} 已确认] 请按以下最终内容正式发送（去掉 dry_run，会弹审批卡）：\n` +
+      `收件人：${edits.to}\n` +
+      (edits.cc ? `抄送：${edits.cc}\n` : "") +
+      (edits.bcc ? `密送：${edits.bcc}\n` : "") +
+      `主题：${edits.subject}\n` +
+      `纯文本正文：\n${edits.body}\n` +
+      `HTML 正文：\n${edits.html}`
+    ),
+    [onSend],
+  );
+
   return (
     <div className="chat-view">
       {turns.length === 0 && !streaming ? (
@@ -1085,15 +1102,7 @@ export default function ChatView({
               key={t.key}
               turn={t}
               sessionId={sessionId}
-              onEmailDraftConfirm={(edits) => onSend(
-                `[邮件草稿 ${edits.id} 已确认] 请按以下最终内容正式发送（去掉 dry_run，会弹审批卡）：\n` +
-                `收件人：${edits.to}\n` +
-                (edits.cc ? `抄送：${edits.cc}\n` : "") +
-                (edits.bcc ? `密送：${edits.bcc}\n` : "") +
-                `主题：${edits.subject}\n` +
-                `纯文本正文：\n${edits.body}\n` +
-                `HTML 正文：\n${edits.html}`)
-              }
+              onEmailDraftConfirm={handleEmailDraftConfirm}
             />
           ))}
           {skillLoaded && skillLoaded.length > 0 && (

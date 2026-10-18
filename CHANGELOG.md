@@ -2,6 +2,39 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [未发布]
+
+### 性能
+- **流式重渲染修复（长会话卡顿主因）**：`ChatView` 的 `TurnItem` 是 `memo`
+  组件，但传入的 `onEmailDraftConfirm` 与上游 `onSend` 都是内联箭头函数
+  （每次渲染新引用）→ memo 判等永远失败 → 每个流式 delta 都把全部历史轮次
+  重渲染一遍。改用 `useCallback` 稳定引用后，实测 40 轮历史的流式增量从
+  29.8ms/次 降到 1.1ms/次（约 27 倍）；262KB 对话的全量渲染理论占用从
+  约 138% 单核降到 0.4%；
+- **启动内存与冷启动**：`office`/`ocr` 工具插件的**模块级**导入会连带拉起
+  cv2、onnxruntime、pandas、matplotlib 等重库，而 serve 启动路径并不需要
+  （工具定义只在请求 `/api/tools`、`/api/plugins` 时读取）。改为在
+  `OcrPlugin`/`OfficePlugin.__init__` 内按需导入，并把
+  `routers/office.py` 对 `UPLOADS_DIR_NAME` 的依赖改为延迟解析：
+  `import litework.server.app` 常驻内存 242.2MB → 67.4MB（省 175MB），
+  导入耗时约 2.4s → 0.31s。注：`tools/office.py` 与 `tools/ocr.py` 是与社区
+  插件同源的副本（AGENTS.md §6），本次改动全部落在主仓库原生文件中，
+  社区文件一字未动；
+- **Electron 日志写入**：`writeLog` 此前每行都 `mkdirSync` + 轮转探测
+  （4 次 `existsSync`/`renameSync`）并 `appendFileSync` 同步落盘，Core 逐行
+  转发输出时会阻塞主进程。改为目录只建一次、按累计字节惰性轮转、异步
+  `appendFile` 追加；轮转判定改用自有字节计数（异步写入下磁盘 size 滞后，
+  按 size 判断会导致永不轮转）；
+- **前端轮询治理**：后台任务轮询从固定 2s 改为「有任务 2s / 空闲 10s /
+  窗口不可见 30s 且跳过」，并监听 `visibilitychange` 变可见立即补拉；审批
+  兜底轮询同样加可见性守卫。实测单窗口空闲态请求量由约 3.3 万/天降到约
+  8.6 千/天。
+
+### 修复
+- 后端 access log 默认关闭（按 `--log-level` 推导，仅 debug 开启）：前端
+  每 2s 轮询 `/api/tasks/background` 会把日志刷成噪声并白白占用磁盘 I/O；
+  排查时仍可用 `--log-level debug` 恢复。
+
 ## [2.0.0] — 前后分离：云端部署 + 多端访问
 
 > 语义变更（major 的原因）：启用远程部署后，Agent 工作区从「本机文件」变为

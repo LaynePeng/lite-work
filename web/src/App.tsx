@@ -373,12 +373,39 @@ export default function App() {
     hydrated: { ready: prefsReady, value: prefsRef.current.toolPanel ?? null },
   });
 
-  // 后台命令轮询：每 2s 拉取右侧工具面板「后台」tab 数据
+  // 后台命令轮询：有在跑的后台任务时 2s，没有时退避到 10s。
+  // 窗口不可见（最小化/切走）直接跳过，并将节奏降到 30s——挂机时前端每 2s
+  // 拉一次 /api/tasks/background 纯属空转（无任务时响应体恒为空）。
+  // 变可见立即补拉一次，避免面板显示过期数据。
   useEffect(() => {
-    const timer = setInterval(() => {
-      api.backgroundTasks().then((r) => setBackgroundTasks(r.tasks)).catch(() => {});
-    }, 2000);
-    return () => clearInterval(timer);
+    const IDLE_MS = 10_000;
+    const HIDDEN_MS = 30_000;
+    let timer = 0;
+    const load = () => {
+      // 用 promise 链延迟并整体容错：单测里 api 常只 mock 用到的少数方法，
+      // 直接调用会同步抛错把 effect 炸掉。
+      Promise.resolve()
+        .then(() => api.backgroundTasks())
+        .then((r) => setBackgroundTasks(r.tasks))
+        .catch(() => {});
+    };
+    const schedule = () => {
+      const every = document.hidden
+        ? HIDDEN_MS
+        : (backgroundTasksRef.current.some((t) => t.running) ? 2000 : IDLE_MS);
+      timer = window.setTimeout(() => {
+        if (!document.hidden) load();
+        schedule();
+      }, every);
+    };
+    load();
+    schedule();
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   // ---- 盯梢通知（应用级 SSE；与任务 SSE 相互独立）----
@@ -409,12 +436,16 @@ export default function App() {
   // SSE 重连控制器：每会话一个 {taskId, attempts, timer}
   const streamCtlRef = useRef<Map<string, { taskId: string; attempts: number; timer: number | null }>>(new Map());
   const chatStatesRef = useRef<Record<string, ChatSessionState>>({});
+  // 后台任务列表的 ref 镜像：轮询间隔要按「有没有任务在跑」自适应，
+  // 但轮询 effect 只跑一次（不能依赖 backgroundTasks，否则每次刷新重建定时器）
+  const backgroundTasksRef = useRef<BackgroundTaskInfo[]>([]);
   const tabsRef = useRef<TabItem[]>([]);
   const sessionsRequestRef = useRef(0);
   // 任务启动器 ref：供 handleSSEEvent 在 task:done 时自动发送下一条（避免循环依赖）
   const taskLauncherRef = useRef<(sid: string, prompt: string, effort?: string, mergeWorktree?: string) => void>(() => {});
 
   useEffect(() => { chatStatesRef.current = chatStates; }, [chatStates]);
+  useEffect(() => { backgroundTasksRef.current = backgroundTasks; }, [backgroundTasks]);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => { draftModelsRef.current = draftModels; }, [draftModels]);
   useEffect(() => { draftReasoningRef.current = draftReasoning; }, [draftReasoning]);
@@ -2204,8 +2235,14 @@ export default function App() {
   useEffect(() => {
     if (!activeSessionId) return;
     const sid = activeSessionId;
-    pullPendingApprovals(sid);
-    const timer = setInterval(() => pullPendingApprovals(sid), PENDING_APPROVAL_POLL_MS);
+    const tick = () => {
+      // 窗口不可见时跳过：审批要用户在场才能点，后台拉取没有意义。
+      if (document.hidden) return;
+      pullPendingApprovals(sid);
+    };
+    // 首帧仍在后台（如启动即最小化/切到别的应用）时不预热，等可见再拉。
+    if (!document.hidden) pullPendingApprovals(sid);
+    const timer = setInterval(tick, PENDING_APPROVAL_POLL_MS);
     return () => clearInterval(timer);
   }, [activeSessionId, pullPendingApprovals]);
 
@@ -2859,6 +2896,11 @@ export default function App() {
     })();
   };
 
+  // 传给 ChatView 的稳定回调：ChatView 内部 TurnItem 是 memo 组件，任一 prop
+  // 引用变化都会让全部历史轮次重渲染。此前这里写的是内联箭头函数，每次 App
+  // 渲染都是新引用 → 流式期间整棵聊天树全量重渲染。统一收口到 useCallback。
+  const handleSend = useCallback((p: string) => void send(p), [send]);
+
   // 「＋ 新建任务」（任务 Tab 入口）：打开向导弹窗。
   const requestNewTask = useCallback(() => setNewTaskOpen(true), []);
 
@@ -3198,7 +3240,7 @@ export default function App() {
         sessionTitle={activeSessionTitle}
         currentChat={currentChat}
         currentAgent={currentAgent}
-        onSend={(p) => void send(p)}
+        onSend={handleSend}
         onStop={stop}
         onApprove={(id, a) => void approve(id, a)}
         onAnswerQuestion={(id, answer) => void answerQuestion(id, answer)}
@@ -3423,7 +3465,7 @@ export default function App() {
               pendingApprovals={currentChat.pendingApprovals}
               subAgentRecords={currentChat.subAgentRecords}
               skillLoaded={currentChat.skillLoaded}
-              onSend={(p) => void send(p)}
+              onSend={handleSend}
               onStop={stop}
               onApprove={(id, a) => void approve(id, a)}
               currentAgent={currentAgent}
@@ -3482,7 +3524,7 @@ export default function App() {
               onCollabModesRefresh={refreshCollabModes}
               currentAgent={currentAgent}
               onSelectAgent={setCurrentAgent}
-              onSend={(p) => void send(p)}
+              onSend={handleSend}
               onStop={stop}
               llmConfig={llmConfig}
               providerMeta={providerMeta}

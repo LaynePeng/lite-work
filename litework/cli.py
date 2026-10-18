@@ -291,7 +291,13 @@ def main(argv: list | None = None) -> None:
             else:
                 print("⚠️  警告: 鉴权已关闭（--no-token），任何能访问该端口的进程均可控制本服务", flush=True)
 
-    server = _Server(uvicorn.Config(fast_app, host=args.host, port=args.port, log_level=args.log_level))
+    # access_log=True 时每条请求都记一行：前端每 2s 轮询 /api/tasks/background，
+    # 长时间挂机足以把日志刷成噪声并白白吃掉磁盘 I/O（--log-level debug 时又希望
+    # 保留它排查）。故默认按 log_level 推导：仅 debug 开 access log。
+    server = _Server(uvicorn.Config(
+        fast_app, host=args.host, port=args.port, log_level=args.log_level,
+        access_log=args.log_level == "debug",
+    ))
     try:
         server.run()
     except KeyboardInterrupt:

@@ -23,19 +23,25 @@ const ELECTRON_LOG_FILE = path.join(LOG_DIR, "electron.log");
 const LOG_MAX_BYTES = 5 * 1024 * 1024;
 const LOG_BACKUP_COUNT = 3;
 
+/** 归档当前日志（不做大小判断——异步追加下磁盘 size 滞后于写入量，
+ *  是否该轮转由调用方的字节计数决定）。返回是否真正归档。 */
 function rotateLogFile() {
   try {
-    if (!fs.existsSync(ELECTRON_LOG_FILE) || fs.statSync(ELECTRON_LOG_FILE).size < LOG_MAX_BYTES) return;
     for (let index = LOG_BACKUP_COUNT - 1; index >= 1; index -= 1) {
       const source = `${ELECTRON_LOG_FILE}.${index}`;
       const target = `${ELECTRON_LOG_FILE}.${index + 1}`;
       if (fs.existsSync(source)) fs.renameSync(source, target);
     }
-    fs.renameSync(ELECTRON_LOG_FILE, `${ELECTRON_LOG_FILE}.1`);
+    if (fs.existsSync(ELECTRON_LOG_FILE)) fs.renameSync(ELECTRON_LOG_FILE, `${ELECTRON_LOG_FILE}.1`);
+    return true;
   } catch {
     // 日志写入失败不应影响桌面应用启动。
+    return false;
   }
 }
+
+let logDirReady = false;
+let logBytes = 0; // 已写字节的近似值，用于惰性轮转（避免每行都 statSync）
 
 function writeLog(level, ...messages) {
   const text = messages.map((message) => (
@@ -43,11 +49,26 @@ function writeLog(level, ...messages) {
   )).join(" ");
   console[level](`[lite-work] ${text}`);
   try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    rotateLogFile();
-    fs.appendFileSync(ELECTRON_LOG_FILE, `${new Date().toISOString()} ${level.toUpperCase()} ${text}\n`, "utf-8");
+    const line = `${new Date().toISOString()} ${level.toUpperCase()} ${text}\n`;
+    // mkdir 只在首次执行：此前每行日志都 mkdirSync + rotateLogFile（4 次
+    // existsSync/renameSync 探测），Core 输出逐行落盘时是纯同步 I/O 浪费。
+    if (!logDirReady) {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      logDirReady = true;
+      logBytes = fs.existsSync(ELECTRON_LOG_FILE) ? fs.statSync(ELECTRON_LOG_FILE).size : 0;
+    }
+    // 轮转改为按累计字节惰性触发：写入前预判，超限才归档一次。
+    // 只有归档真正发生才把计数归零——异步追加下磁盘 size 滞后于计数，
+    // 无条件归零会让计数与实际脱节、长期不再轮转。
+    if (logBytes + line.length >= LOG_MAX_BYTES && rotateLogFile()) {
+      logBytes = 0;
+    }
+    logBytes += line.length;
+    // appendFileSync 会阻塞主进程（Core 的 stdout/stderr 是逐行转发的，量大时
+    // 直接把 UI 拖卡）；改异步追加，失败仅丢弃该行日志。
+    fs.appendFile(ELECTRON_LOG_FILE, line, "utf-8", () => {});
   } catch {
-    // 同上：磁盘或权限异常时仅保留控制台输出。
+    // 磁盘或权限异常时仅保留控制台输出。
   }
 }
 let coreMode = "local"; // "local" | "remote" | "dev"

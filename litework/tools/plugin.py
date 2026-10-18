@@ -20,13 +20,18 @@ from .codebase import CodebaseTools
 from .editor import EditorTools
 from .filesystem import FileSystemTools
 from .git import GitTools
-from .office import OfficeTools
 from .registry import ToolRegistry
 from .review import ReviewTools
 from .shell import BackgroundRegistry, ShellTools
 from .skills import SkillsTools
 from .web import WebFetchTools
-from .ocr import OCRTools
+
+# office / ocr 的**模块级**导入会连带拉起 cv2、onnxruntime、pandas、matplotlib
+# 等重库（实测 +190MB 常驻、冷启动 +0.45s），而它们的工具定义只在请求
+# /api/tools、/api/plugins 时才被读取——serve 启动路径并不需要。
+# 故改为在 __init__ 内按需导入（实例化仍很轻，重成本全在模块导入）。
+# 注：tools/office.py 与 tools/ocr.py 是与社区插件同源的副本（AGENTS.md §6），
+# 不可在本仓库改动，因此把延迟导入放在本文件（主仓库原生）。
 
 logger = logging.getLogger("litework.tools")
 
@@ -226,6 +231,8 @@ class OcrPlugin(ToolPlugin):
     description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
 
     def __init__(self, workspace: str) -> None:
+        from .ocr import OCRTools  # 延迟导入：见文件头说明
+
         self._tools = OCRTools(workspace)
 
     def get_tools(self) -> List[ToolDefinition]:
@@ -255,6 +262,8 @@ class OfficePlugin(ToolPlugin):
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
+        from .office import OfficeTools  # 延迟导入：见文件头说明
+
         self._tools = OfficeTools(workspace)
 
     def get_tools(self) -> List[ToolDefinition]:

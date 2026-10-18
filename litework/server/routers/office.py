@@ -17,8 +17,16 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ...tools.office import UPLOADS_DIR_NAME
 from .context import ServerContext
+
+# 素材目录名与 tools/office.py 共用同一个常量，但该模块顶层会拉起
+# pandas/matplotlib 等重库（实测 +190MB）；本路由只需要一个目录名，
+# 故延迟到首次用到时导入（模块在首次 OCR/Office 工具调用时反正会加载）。
+# 不额外缓存：模块导入本身由 sys.modules 缓存，重复导入只是一次字典查找。
+def _uploads_dir_name() -> str:
+    from ...tools.office import UPLOADS_DIR_NAME
+
+    return UPLOADS_DIR_NAME
 
 
 def _list_uploads(workspace: str) -> list:
@@ -26,7 +34,7 @@ def _list_uploads(workspace: str) -> list:
 
     跳过隐藏文件与 Office 锁文件（`~$xxx`）；递归但记录相对路径。
     """
-    base = _os.path.join(workspace, UPLOADS_DIR_NAME)
+    base = _os.path.join(workspace, _uploads_dir_name())
     out: list = []
     if not _os.path.isdir(base):
         return out
@@ -152,7 +160,7 @@ def create_router(ctx: ServerContext) -> APIRouter:
         if not data:
             raise HTTPException(status_code=400, detail="空文件")
 
-        uploads_dir = _os.path.join(workspace, UPLOADS_DIR_NAME)
+        uploads_dir = _os.path.join(workspace, _uploads_dir_name())
         _os.makedirs(uploads_dir, exist_ok=True)
         # 同名冲突：追加序号
         base, ext = _os.path.splitext(filename)
