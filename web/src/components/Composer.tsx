@@ -129,6 +129,18 @@ export default function Composer({
   const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
   const pasteSeq = useRef(0);
 
+  // ------------------------------------------------------------ 输入框临时放大
+  // 长文本（未达折叠阈值、或用户手动展开编辑）在 3 行小窗里看不全，
+  // 只能靠滚动条逐行找。这里提供「发送前临时放大」：点按钮或粘贴长文本时
+  // 把输入框放到约 5 倍高（受视口约束），发送后自动还原。
+  // 为什么不做成常驻自适应：对话页底部空间宝贵，输入框长期占半屏会挤掉消息。
+  const [zoomed, setZoomed] = useState(false);
+  // 放大态下按内容量决定实际高度（避免内容只有 2 行却撑满整屏）
+  const [zoomedHeight, setZoomedHeight] = useState(0);
+
+  /** 内容超过「小窗」容量时才有必要放大（否则按钮是噪音）。 */
+  const needsZoom = text.split("\n").length > 7 || text.length > 400;
+
   /** 移除某个粘贴块（同时收起它的预览）。 */
   const removePasteBlock = (id: number) => {
     setPasteBlocks((list) => list.filter((b) => b.id !== id));
@@ -298,7 +310,14 @@ export default function Composer({
     // 统一换行（CRLF → LF）并去掉尾部换行，保证行数统计与预览整洁
     const normalized = pasted.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
     const lines = normalized.split("\n").length;
-    if (lines < PASTE_FOLD_LINES && normalized.length < PASTE_FOLD_CHARS) return;
+    if (lines < PASTE_FOLD_LINES && normalized.length < PASTE_FOLD_CHARS) {
+      // 未达折叠阈值：不折叠，但如果内容明显超出小窗（3 行 / 160px），
+      // 自动临时放大——否则用户只能在 7 行小窗里滚动找内容。
+      if (normalized.split("\n").length > 7 || normalized.length > 400) {
+        setZoomed(true);
+      }
+      return;
+    }
     e.preventDefault();
     pasteSeq.current += 1;
     const id = pasteSeq.current;
@@ -306,6 +325,23 @@ export default function Composer({
     setExpandedPaste(null);
     inputRef.current?.focus();
   };
+
+  // ------------------------------------------------------------ 临时放大（5 倍 + 滚动条）
+  /** 放大态按内容算高度：足以容纳全部内容，但不超过视口 70%。 */
+  useEffect(() => {
+    if (!zoomed) { setZoomedHeight(0); return; }
+    const el = inputRef.current;
+    if (!el) return;
+    const prev = el.style.height;
+    el.style.height = "auto";              // 先复位才能测到真实内容高度
+    const content = el.scrollHeight;
+    el.style.height = prev;
+    const cap = Math.round(window.innerHeight * 0.7);
+    setZoomedHeight(Math.min(content + 8, cap));
+  }, [zoomed, text]);
+
+  /** 收起放大（发送后 / Esc / 点按钮）。 */
+  const collapseZoom = useCallback(() => setZoomed(false), []);
 
   // 拖拽文件：dataTransfer 里有文件才接管（阻止默认跳转），拖文本不受影响
   const handleDragOver = (e: React.DragEvent<HTMLTextAreaElement>) => {
@@ -526,6 +562,7 @@ export default function Composer({
     setText("");
     setPasteBlocks([]);
     setExpandedPaste(null);
+    setZoomed(false);          // 发送后还原，给消息区让出空间
   };
 
   // 发送可用性：有文字指令或有粘贴块即可（仅有粘贴块也能发）
@@ -806,6 +843,15 @@ export default function Composer({
           placeholder={running ? "任务进行中：输入将加入待发送队列" : `给 lite-work 下达任务…（/ 命令 · @ 角色派生${isMaterialAgent ? " · # 引用素材" : ""}）`}
           rows={3}
           disabled={disabled}
+          className={zoomed ? "composer-zoomed" : undefined}
+          style={zoomed && zoomedHeight ? { height: zoomedHeight } : undefined}
+          onKeyDownCapture={(e) => {
+            // 放大态下 Esc 先收起放大（不打断输入内容）
+            if (e.key === "Escape" && zoomed) {
+              e.stopPropagation();
+              collapseZoom();
+            }
+          }}
         />
         {running ? (
           <>
@@ -825,6 +871,16 @@ export default function Composer({
               style={{ display: "none" }}
               onChange={(e) => void handleFilesPicked(e.target.files)}
             />
+            {/* 临时放大：内容超出小窗时才出现，点开约 5 倍高 + 滚动条，发送后还原 */}
+            {(needsZoom || zoomed) && (
+              <button
+                className={`btn-zoom ${zoomed ? "on" : ""}`}
+                onClick={() => (zoomed ? collapseZoom() : setZoomed(true))}
+                title={zoomed ? "收起输入框（Esc）" : "放大输入框（临时，发送后还原）"}
+              >
+                {zoomed ? "⤡" : "⤢"}
+              </button>
+            )}
             <button
               className="btn-upload"
               onClick={() => fileInputRef.current?.click()}

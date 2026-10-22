@@ -4181,6 +4181,30 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
 }
 
+/* 临时放大态：约 5 倍高（160px → 800px，受视口 70% 约束）+ 滚动条。
+   height 由内联 style 按内容算，这里给上限与滚动行为兜底。
+   只在发送前生效——发送后自动收起，避免长期挤占消息区。 */
+.composer textarea.composer-zoomed {
+  max-height: 70vh;
+  overflow-y: auto;
+  line-height: 1.7;
+}
+/* 放大切换按钮：低调的次要动作，不跟发送按钮抢视觉 */
+.btn-zoom {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.btn-zoom:hover { background: var(--bg-3); color: var(--text-0); border-color: #3a455c; }
+.btn-zoom.on { background: rgba(79, 140, 255, .14); border-color: var(--accent); color: var(--accent); }
+
 .btn-send {
   width: 36px;
   height: 36px;

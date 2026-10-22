@@ -2,6 +2,9 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -243,6 +246,91 @@ describe("Composer · 长文本粘贴折叠为粘贴块", () => {
     expect(onSend.mock.calls[0][0]).toContain("行20: error");
     // 发送后清空：胶囊消失
     expect(screen.queryByRole("button", { name: /粘贴内容/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Composer · 输入框临时放大", () => {
+  // 需求：长文本在 3 行小窗（max-height 160px ≈ 7 行）里看不全，
+  // 应能临时放大到约 5 倍高 + 滚动条；发送后自动还原。
+
+  // 800 字符以上会触发折叠，这里取「未折叠但明显超出小窗」的区间：
+  // 行数 ≤ 7 且长度 < 800，但字符数 > 400（触发需要放大）
+  const MEDIUM = "字段说明文字".repeat(60);   // 360 字
+  const MEDIUM_LONG = "这是一段较长的说明".repeat(60);  // 480 字
+
+  it("短内容不显示放大按钮（避免噪音）", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    await user.click(screen.getByRole("textbox"));
+    await user.paste("短");
+    expect(document.querySelector(".btn-zoom")).toBeNull();
+  });
+
+  it("长内容出现放大按钮；粘贴时已自动放大，点按钮可收起/再展开", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(MEDIUM_LONG);
+
+    // 粘贴即自动放大（不必先手动点）
+    expect(ta.className).toContain("composer-zoomed");
+    const zoomBtn = document.querySelector<HTMLButtonElement>(".btn-zoom");
+    expect(zoomBtn).toBeTruthy();
+    expect(zoomBtn!.className).toContain("on");
+
+    // 点一次收起
+    await user.click(zoomBtn!);
+    expect(ta.className).not.toContain("composer-zoomed");
+
+    // 再点展开
+    await user.click(document.querySelector<HTMLButtonElement>(".btn-zoom")!);
+    expect(ta.className).toContain("composer-zoomed");
+  });
+
+  it("粘贴长文本时自动放大（无需手动点）", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(MEDIUM_LONG);
+    expect(ta.className).toContain("composer-zoomed");
+  });
+
+  it("发送后还原放大态", async () => {
+    const onSend = vi.fn();
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} onSend={onSend} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(MEDIUM_LONG);
+    expect(ta.className).toContain("composer-zoomed");
+
+    await user.click(document.querySelector<HTMLButtonElement>(".btn-send")!);
+    expect(onSend).toHaveBeenCalled();
+    expect(ta.className).not.toContain("composer-zoomed");
+  });
+
+  it("放大态按 Esc 收起，且不改动已输入内容", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...baseProps} />);
+    const ta = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(ta);
+    await user.paste(MEDIUM_LONG);
+    const before = ta.value;
+
+    await user.keyboard("{Escape}");
+    expect(ta.className).not.toContain("composer-zoomed");
+    expect(ta.value).toBe(before);
+  });
+
+  it("样式契约：放大态有高度上限与滚动", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf-8");
+    const i = css.indexOf(".composer textarea.composer-zoomed");
+    expect(i, "缺少 .composer-zoomed 规则").toBeGreaterThan(-1);
+    const block = css.slice(i, css.indexOf("}", i));
+    expect(block).toMatch(/max-height:\s*\d+vh/);
+    expect(block).toMatch(/overflow-y:\s*auto/);
   });
 });
 
