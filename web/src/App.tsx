@@ -3034,6 +3034,22 @@ export default function App() {
     });
   }, [cancelStreamFlush, connectTaskStream, currentAgent, getChat, handleSSEEvent, patchChat, pushLog]);
 
+  const handleSessionModelChange = useCallback(
+    (model: SessionModel | null) => void setSessionModel(model),
+    [setSessionModel],
+  );
+
+  // 推理强度切换：收口成 useCallback。内联箭头会让 Composer 的 props
+  // 每次 App 渲染都换新引用，使 memo 失效——打字时每按键都跟着父树重渲染，
+  // 表现为输入卡顿。依赖只保留真正影响行为的两个值。
+  const handleReasoningEffortChange = useCallback(
+    (v: string) => {
+      if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: v });
+      else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: v }));
+    },
+    [activeSessionId, activeTabId, patchChat],
+  );
+
   // 更新 taskLauncherRef：供 handleSSEEvent 在 task:done 时自动发送下一条
   taskLauncherRef.current = (targetSid, prompt, effort, mergeWorktree) => {
     const reasoning = effort ?? getChat(targetSid)?.reasoningEffort ?? "";
@@ -3452,12 +3468,9 @@ export default function App() {
         llmConfig={llmConfig}
         providerMeta={providerMeta}
         sessionModel={activeSessionId ? currentChat.modelOverride ?? null : (draftModels[activeTabId] ?? null)}
-        onSessionModelChange={(model) => void setSessionModel(model)}
+        onSessionModelChange={handleSessionModelChange}
         reasoningEffort={activeSessionId ? (currentChat.reasoningEffort ?? "") : (activeTabId ? draftReasoning[activeTabId] ?? "" : "")}
-        onReasoningEffortChange={(v) => {
-          if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: v });
-          else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: v }));
-        }}
+        onReasoningEffortChange={handleReasoningEffortChange}
         scrolledUp={chatScrolledUp}
         stopArmed={escStopArmed}
         success={success}
@@ -3715,12 +3728,9 @@ export default function App() {
               llmConfig={llmConfig}
               providerMeta={providerMeta}
               sessionModel={activeSessionId ? currentChat.modelOverride ?? null : (draftModels[activeTabId] ?? null)}
-              onSessionModelChange={(model) => void setSessionModel(model)}
+              onSessionModelChange={handleSessionModelChange}
               reasoningEffort={activeSessionId ? (currentChat.reasoningEffort ?? "") : (activeTabId ? draftReasoning[activeTabId] ?? "" : "")}
-              onReasoningEffortChange={(v) => {
-                if (activeSessionId) patchChat(activeSessionId, { reasoningEffort: v });
-                else if (activeTabId) setDraftReasoning((p) => ({ ...p, [activeTabId]: v }));
-              }}
+              onReasoningEffortChange={handleReasoningEffortChange}
               tabCount={tabs.length}
               scrolledUp={chatScrolledUp}
               stopArmed={escStopArmed}

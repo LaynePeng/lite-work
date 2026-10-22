@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AgentInfo, CollabMode, CommandInfo, LLMConfig, LLMProviderMeta, SessionModel, SkillInfo } from "../types";
 import { AGENT_META } from "../lib/agentMeta";
@@ -53,7 +53,7 @@ function fmtSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function Composer({
+function Composer({
   disabled = false,
   running,
   agents,
@@ -327,17 +327,29 @@ export default function Composer({
   };
 
   // ------------------------------------------------------------ 临时放大（5 倍 + 滚动条）
-  /** 放大态按内容算高度：足以容纳全部内容，但不超过视口 70%。 */
+  /** 放大态按内容算高度：足以容纳全部内容，但不超过视口 70%。
+   *
+   *  性能：只在放大态才测量（收起态直接跳过）。测量本身要读 scrollHeight，
+   *  会强制同步 reflow——放在**每次按键**的路径上会造成输入卡顿。
+   *  这里用 rAF 合并同一帧内的多次触发，并且只在放大态执行。
+   */
   useEffect(() => {
-    if (!zoomed) { setZoomedHeight(0); return; }
-    const el = inputRef.current;
-    if (!el) return;
-    const prev = el.style.height;
-    el.style.height = "auto";              // 先复位才能测到真实内容高度
-    const content = el.scrollHeight;
-    el.style.height = prev;
-    const cap = Math.round(window.innerHeight * 0.7);
-    setZoomedHeight(Math.min(content + 8, cap));
+    if (!zoomed) {
+      setZoomedHeight(0);
+      return;
+    }
+    let raf = 0;
+    raf = window.requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      const prev = el.style.height;
+      el.style.height = "auto";            // 先复位才能测到真实内容高度
+      const content = el.scrollHeight;
+      el.style.height = prev;
+      const cap = Math.round(window.innerHeight * 0.7);
+      setZoomedHeight(Math.min(content + 8, cap));
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [zoomed, text]);
 
   /** 收起放大（发送后 / Esc / 点按钮）。 */
@@ -995,3 +1007,9 @@ export default function Composer({
     </div>
   );
 }
+
+// memo：输入框的 text 状态在本组件内，App 不需要因打字重渲染；
+// 反过来 App 的流式刷新（80ms 一次）也不该把输入框一起重渲染——否则
+// 打字时每次按键都与流式 flush 竞争主线程，表现为输入卡顿。
+// 前提是 App 侧传的 props 引用稳定（回调已收口到 useCallback）。
+export default memo(Composer);
