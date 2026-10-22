@@ -136,6 +136,17 @@ class FileSystemTools:
                     },
                 },
             ),
+            ToolDefinition(
+                name="read_manual",
+                description="查阅富围栏（chart/cards/kpi/timeline/table/compare/board/"
+                            "progress/interactive/diagram/mermaid/layout）的完整 JSON 语法手册。"
+                            "System Prompt 里只有速查表；你要输出某个富围栏且不确定字段格式时，"
+                            "先调用本工具查一次（结果进了上下文后续轮次不用再查）",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
 
     # ------------------------------------------------------------ 执行
@@ -152,6 +163,10 @@ class FileSystemTools:
             result = self._list_dir(args, access)
         elif name == "file_tree":
             result = await asyncio.to_thread(self._file_tree, args)
+        elif name == "read_manual":
+            # 富围栏语法手册（v2 精简 System Prompt 的按需补充，纯内存读取）
+            from ..core.display_manual import MANUAL
+            result = MANUAL
         else:
             raise ValueError(f"Unknown FileSystem Tool: {name}")
         return result

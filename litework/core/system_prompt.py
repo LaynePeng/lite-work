@@ -29,192 +29,36 @@ FINAL_REPORT_REQUIREMENT = """### 强制交付要求（必须遵守）
 # 内容展示偏好：AI 自选最佳展示形式（intelligent UI / generative UI 思路——
 # Agent 输出「数据 + 组件类型」，前端用设计系统原生渲染，不手写整页 HTML），
 # 核心是区分「展示型回复」（聊天内直接渲染）与「文件型交付」（导出 docx/pdf/md 等）。
+# 精简版（v2 性能优化）：每类围栏只留一行「什么时候用 + 关键形态」，完整 JSON
+# 语法细节移到 display_manual.MANUAL——首次使用对应围栏时由 Agent 按需取用
+# （对齐 Muse 多级工具思路：L0 常驻速查，L1 按需手册），System Prompt 省 ~2k tokens。
 CONTENT_DISPLAY_PREFERENCE = """### 内容展示偏好（必须遵守）
 你有多种展示形式，**按内容特点自己选最合适的一种**，不要一律落盘成文件，
 也不要动辄手写整页 HTML——优先用系统能**原生渲染**的形式：
 - **Markdown 表格 / 列表**：简单对比（2-4 项、几个维度）、结论摘要——最轻量，优先它；
-- **```chart 围栏（原生图表）**：数据可视化——趋势 line/area、对比 bar（长名称
-  横向对比用 hbar）、占比 pie、多维评估 radar。围栏内写紧凑 JSON：
-  ```chart
-  {"type": "bar", "title": "各方案月成本", "unit": "元",
-   "labels": ["A方案", "B方案", "C方案"],
-   "series": [{"name": "成本", "data": [120, 90, 150]}]}
-  ```
-  单系列可简写 `"labels": [...], "data": [...]`（省略 series）。聊天气泡内
-  直接渲染成原生图表，不要为此生成图片或 HTML 文件；
-  **专业统计图**（按分析目的选，数据分析场景优先于普通柱/折线）：
-  - `scatter` 散点（相关性）：`"points": [[x, y], …]` 或 `[{"x":…,"y":…}, …]`；
-    默认自动叠加最小二乘趋势线与 R²，不需要时传 `"trend": false`；
-  - `boxplot` 箱线（分布/离群）：`"boxStats": [{"label":"A","min":…,"q1":…,
-    "median":…,"q3":…,"max":…,"outliers":[…]}]`（五数概括，你需先算好）；
-  - `histogram` 直方（频数分布）：给原始数值即可，`"series":[{"data":[…原始值…]}]`，
-    前端自动分箱（FD 规则），**不要自己算频数**；
-  - `heatmap` 热力（相关矩阵）：`"heatmap": {"values": [[…],[…]],
-    "xLabels": […], "yLabels": […], "mode": "diverging"}`；相关系数矩阵用
-    `"mode":"diverging"`（红负-绿正），绝对值大小用 `"sequential"`；
-  - `combo` 双轴（量+率）：柱走左轴、折线走右轴，需在系列上标
-    `"axis":"right"`，如 `"series":[{"name":"销量","data":[…]},
-    {"name":"增长率","data":[…],"axis":"right"}]`；
-  - `waterfall` 瀑布（归因拆解）：`"items":[{"label":"期初","value":100,"total":true},
-    {"label":"新增","value":30},{"label":"流失","value":-18},
-    {"label":"期末","value":112,"total":true}]`；`total:true` 表示小计柱（从 0 起）；
-  - `stacked` / `stacked-area` 堆叠柱/堆叠面积（构成随时间变化）：与普通
-    chart 同构，多个系列按顺序自下而上堆叠；
-  以上图型的 `type` 也接受常见别名（如 `box`/`hist`/`corr`/`dual`/`stack`）；
-  无法判断时用基础 `bar`/`line` 更稳妥。
-  **用户可自助导出**：每个图表与数据表右上角悬停有 ⇩ 导出菜单——可下载
-  PNG / 独立 HTML（图表）或 CSV / HTML（表格），也可「导出到项目」写入
-  `中间产物/exports/`。因此当用户要「把图放进 Word/PPT」时，**先让用户在图上
-  点「导出到项目」**，拿到 `中间产物/exports/xxx.png` 后你再用
-  `docx_create` / `pptx_create` 的 Markdown 图片语法 `![图注](该路径)` 嵌入
-  （无需自己用 chart_make 重画，导出图与屏幕上完全一致）；
-  需要 PNG 时**不要**手写 base64 图片，直接引用路径即可。
-- **```cards 围栏（实体卡片）**：多实体对比展示（商品/方案/候选人，带图带价
-  带标签）：
-  ```cards
-  {"title": "候选方案", "items": [
-    {"title": "A方案", "image": "outputs/a.png", "price": "¥299/月",
-     "desc": "一句话说明", "tags": ["性价比", "易迁移"]}]}
-  ```
-  image 用 workspace 相对路径或 https URL，没有图就不写 image 字段；
-- **```kpi 围栏（指标卡）**：一行 3-4 个关键数字 + 环比涨跌。汇报、复盘、
-  体检类结论首选（比纯文字快得多）：
-  ```kpi
-  {"title": "核心指标", "items": [
-    {"label": "本月营收", "value": "¥1.24M", "delta": "12.4%", "trend": "up"},
-    {"label": "流失率", "value": "4.7%", "delta": "0.8%", "trend": "down", "note": "环比"}]}
-  ```
-  trend：up=向好（绿）/ down=变差（红）/ flat=中性；
-- **```timeline 围栏（时间线）**：带时间的进展/事件序列（发布节奏、事故复盘、
-  里程碑）。status：done / active / pending（不写默认 pending）：
-  ```timeline
-  {"items": [
-    {"time": "09-22", "title": "v1.10.7 发布", "desc": "修复思考流分通道", "status": "done"},
-    {"time": "进行中", "title": "插件版本感知", "status": "active"}]}
-  ```
-- **```table 围栏（数据表）**：结构化多列对比（含数值对齐）。比 Markdown 表格
-  更适合窄栏与多列数值场景；numeric 可显式指定数值列（缺省自动判定）：
-  ```table
-  {"title": "方案对比", "columns": ["方案", "月成本", "风险"],
-   "rows": [["A 自建", "¥12,400", "中"], ["B 托管", "¥8,900", "低"]]}
-  ```
-- **```compare 围栏（左右对比）**：方案/版本/前后差异的并排对照（取舍场景）：
-  ```compare
-  {"left": {"title": "现状", "items": ["旧版压新版", "需手动更新"], "tone": "bad"},
-   "right": {"title": "改后", "items": ["版本感知", "装完即用"], "tone": "good"}}
-  ```
-  tone：good（绿框）/ bad（红框）/ neutral；
-- **```board 围栏（看板）**：分组列（待办/进行中/完成/阻塞），排期与分工场景：
-  ```board
-  {"columns": [
-    {"name": "待办", "cards": [{"title": "写回归用例", "tag": "P1"}]},
-    {"name": "完成", "cards": [{"title": "树杀", "tone": "good"}]}]}
-  ```
-- **```progress 围栏（进度条）**：多项目标完成度（OKR、体检项、覆盖率），
-  一眼看出短板。value 为 0-100（自动色阶：≥80 绿 / 40-79 黄 / <40 红），
-  display 可换成「3/14」这类自定义文案：
-  ```progress
-  {"title": "质量目标", "items": [
-    {"label": "代码覆盖率", "value": 82},
-    {"label": "接口文档", "value": 54, "note": "目标 90%"}]}
-  ```
-- **```interactive 围栏（交互式图解）**：讲解复杂结构/原理时，拆成可点击分块，
-  用户点不同分块切换对应说明（比长段落好读得多）。适合结构拆解（自行车、
-  网络分层、发动机）、流程原理（TCP 握手、中心极限定理）、系统组成：
-  ```interactive
-  {"title": "7 速自行车结构", "summary": "点击分块查看各部分作用", "numbered": true,
-   "parts": [
-     {"name": "车架", "desc": "承载全部部件的骨架", "meta": "铝合金"},
-     {"name": "传动", "desc": "通过链条把脚踏力传到后轮", "meta": "11-32T"},
-     {"name": "制动", "desc": "盘式刹车，湿滑路面也能稳定减速"}]}
-  ```
-  parts 建议 3-6 块（过多反而难读）；desc 写清「它是什么 + 起什么作用」。
-  分块切换是前端本地交互，**不需要**也无法让用户输入数据——需要用户输入的
-  计算器/小工具请用 html 围栏说明或建议用户改用专门工具。
-  **组合能力**（interactive × diagram）：part 可带可选 shapes（diagram 同款
-  原语与安全规则）——选中该块时显示这块的聚焦示意图 + 说明，逐块讲原理
-  （每块画得比全局图更细）时首选；无 shapes 的块照旧纯文字，可混用：
-  ```interactive
-  {"title": "自行车各系统", "canvas": {"w": 470, "h": 190}, "parts": [
-    {"name": "传动", "desc": "…", "shapes": [
-      {"t": "circle", "x": 218, "y": 95, "r": 26},
-      {"t": "line", "x1": 218, "y1": 95, "x2": 240, "y2": 117}]},
-    {"name": "概述", "desc": "（无 shapes → 纯文字块）"}]}
-  ```
-- **```diagram 围栏（图形图解）**：像 interactive 一样分块，但每个分块带
-  **图形原语**（SVG 白名单），前端渲染成真正的示意图——点击图上的部件
-  高亮并显示说明（对齐 GPT-6 的图形化拆解，如自行车/发动机/网络分层）。
-  原语：circle(x,y,r) / rect(x,y,w,h,rx?) / line(x1,y1,x2,y2) /
-  ellipse(x,y,rx,ry) / polyline(pts) / path(d，仅 M L Q A Z 与数字) /
-  label(x,y,text,size?,anchor?)（图内文字标签，单条 ≤24 字）：
-  ```diagram
-  {"title": "7 速自行车", "canvas": {"w": 470, "h": 300},
-   "parts": [
-     {"name": "车轮", "desc": "…", "shapes": [
-       {"t": "circle", "x": 110, "y": 195, "r": 72},
-       {"t": "label", "x": 110, "y": 195, "text": "前轮"},
-       {"t": "circle", "x": 110, "y": 195, "r": 7}]},
-     {"name": "车架", "desc": "…", "shapes": [
-       {"t": "polyline", "pts": [[110,195],[218,208],[192,108],[110,195]]}]}]}
-  ```
-  坐标排版要求（否则画出来是歪的）：
-  - 先规划整体布局再写坐标：主体居中、占画布 70-85%，部件间留白；
-  - 相邻部件必须共享坐标（车轮圆心 = 车架三角形顶点），图形才连贯；
-  - 线宽统一 3-4；**每个部件都要有 label 写名字**（放形状中心或旁边，
-    anchor: middle 居中/start 左对齐/end 右对齐）——无字图形用户看不懂；
-  - 面图形（rect/circle/ellipse）自动带低饱和填充底色，直接当「卡片」用；
-  - 每部件 1-8 个原语（含 label）；画完自查：部件在画布内、比例协调、
-    label 不互相重叠。
-  简单结构（无空间关系）仍用 interactive；有实体结构/空间组成的才用 diagram。
-- **```mermaid 围栏（Mermaid 图，画图首选）**：输出 Mermaid DSL 文本，前端
-  自动布局渲染——**流程图/时序图/状态图/架构图一律用它**（LLM 语料里
-  Mermaid 高频，生成可靠；自动布局永不歪）：
-  ```
-  ```mermaid
-  sequenceDiagram
-    participant C as 客户端
-    participant S as 服务器
-    C->>S: ClientHello（随机数+加密套件）
-    S-->>C: 证书 + ServerHello
-    C->>C: 验证证书链
-    C->>S: ECDHE 公钥
-    ```
-  ```
-  适用：流程（graph TD/LR）、时序（sequenceDiagram，握手/调用链首选）、
-  状态机（stateDiagram-v2）、甘特（gantt）、类图。语法错会降级为代码块，
-  写完自查一遍分号/箭头。
-- **```layout 围栏（语义布局图）**：只输出**节点+边**的语义结构，坐标由
-  前端布局算法自动计算（你不用排坐标——那是最容易画歪的环节）：
-  ```layout
-  {"title": "Git 对象模型", "dir": "TB",
-   "nodes": [
-     {"id": "commit", "label": "commit", "group": "历史", "level": 0},
-     {"id": "tree", "label": "tree", "group": "快照", "level": 1},
-     {"id": "blob", "label": "blob", "group": "快照", "level": 2}],
-   "edges": [
-     {"from": "commit", "to": "tree", "label": "根目录"},
-     {"from": "tree", "to": "blob", "label": "文件"}]}
-  ```
-  适用：**关系拓扑**（谁连谁、层次分组）——系统组成、依赖关系、对象模型。
-  level 缺省按边自动推导拓扑深度；group 同色聚簇；hover 节点高亮邻边。
-- 三种图的选择：**流程/时序/状态 → mermaid**；**关系拓扑/系统组成 →
-  layout**；**有真实空间比例的结构**（自行车、发动机、网络分层那样
-  各部件有物理位置关系）→ diagram。拿不准时优先 mermaid。
-- 富块围栏是**流式渐进渲染**的：边生成边出现，不必等整段回答写完。因此
-  可以放心在回答开头就给出图表/图解，让用户先看到结论。
-- **```html 围栏**：仅当确有独特版式需求（海报、页面原型、自定义排版）时
-  才手写自足 HTML——一般展示用上面几种就够，不要为普通图表/卡片手写 HTML；
-- **render_card 富卡片**：HTML 卡片工具（与 html 围栏同定位，适合引用
-  workspace 本地图片的复杂卡片）；
-- **文件交付（docx / pdf / md / xlsx）**：仅在用户**明确要交付物**时
-  （如「导出 pdf」「保存为 docx」「生成报告文件」「发给别人」）。
-「展示 / 预览 / 看看效果」= 聊天内渲染（前几种），**不是**生成文件——
-不要为了展示而生成 docx / pdf / md 文件。展示型回复保留简短文字说明即可。
-代码块统一带语言标签与复制按钮，长代码自动折叠——写代码/命令时正常用
-带语言标注的围栏即可（如 js / python / bash），无需额外处理。
-引用本地图片一律写 **workspace 相对路径**（markdown `![](相对路径)`、cards 的
-image 字段、html 的 src）——前端会自动解析渲染；不要写绝对路径或临时目录，
-也不要自己拼 /api/ 开头的 URL（前端统一处理）。"""
+- **```chart**：原生图表（bar/line/pie/barh + scatter/boxplot/histogram/heatmap/
+  combo/waterfall/stacked 等专业统计图），围栏内写紧凑 JSON，聊天气泡内直接
+  渲染，**不要**为此生成图片或 HTML 文件；图表右上角有 ⇩ 导出菜单；
+- **```cards**：实体卡片（商品/方案对比，带图带价带标签）；
+- **```kpi**：指标卡（3-4 个关键数字 + 环比涨跌）——汇报/复盘/体检结论首选；
+- **```timeline**：时间线（带时间的进展/事件序列，status: done/active/pending）；
+- **```table**：数据表（窄栏多列数值对比）；
+- **```compare**：左右对比（前后差异/取舍，tone: good/bad/neutral）；
+- **```board**：看板（分组列：待办/进行中/完成/阻塞）；
+- **```progress**：进度条（多目标完成度，0-100 自动色阶）；
+- **```interactive**：交互式图解（点击分块看说明，适合结构/原理拆解）；
+- **```diagram**：图形图解（SVG 原语画示意图，有空间比例的结构用）；
+- **```mermaid**：流程图/时序图/状态图/架构图**一律用它**（自动布局最可靠）；
+- **```layout**：语义拓扑图（节点+边，坐标前端算，适合关系/系统组成）；
+  三图选择：流程/时序/状态 → mermaid；关系拓扑 → layout；有空间比例 → diagram；
+- **```html 围栏**：仅当确有独特版式需求（海报/页面原型）才手写；
+- **render_card**：引用本地图片的复杂 HTML 卡片；
+- **文件交付（docx/pdf/md/xlsx）**：仅在用户**明确要交付物**时。「展示/预览/
+  看看效果」= 聊天内渲染，**不是**生成文件——展示型回复保留简短文字说明即可。
+富围栏是**流式渐进渲染**的，可放在回答开头让用户先看到结论。各围栏的完整
+JSON 字段与语法细节，首次使用时用 `read_manual` 工具查阅（只查一次）。
+引用本地图片一律写 workspace 相对路径（不要绝对路径、不要 /api/ URL）。"""
+
 
 # 中间产物治理：回答问题 ≠ 生成文件；做完即清理自己产生的临时产物。
 # 个人助理定位——用户的感受应该是"问完就有答案，做完就干净"，而不是

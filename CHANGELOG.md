@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+### 变更（性能第一版：轮次延迟 + 内存）
+
+- **System Prompt「内容展示偏好」段精简 84%**：7517 字符 → 1184 字符（约省
+  2.1k tokens/轮，直接降低 prefill 成本与首 token 延迟）。每类富围栏只留
+  一行「什么时候用」，完整 JSON 语法细节移入新工具 `read_manual`
+  （`litework/core/display_manual.py`）按需查阅——对齐 Muse 多级工具的
+  L0 常驻速查 / L1 按需手册思路；
+- **SessionStore.list() 缓存只存轻量摘要**：原先常驻缓存每个会话的完整
+  JSON（大会话 3MB+，几十个会话就是上百 MB 常驻内存）。现在解析时一次性
+  提取摘要字段（metadata / message_count / first_user_message /
+  last_activity / has_user_message），messages 即刻释放；并新增 200 条
+  LRU 上限防无界增长。`/api/sessions` 消费摘要字段，响应结构不变；
+- **SessionStore.save() 不再全量回读**：旧实现每次落盘都 `load()` 一次旧
+  文件回填 `created_at`——AgentLoop 每轮都走 save，3300+ 条消息的会话
+  每轮白白重新解析 3MB JSON。现在 `created_at` 由调用方显式传入
+  （AgentLoop 落盘路径已带上），需要保留原值的元数据更新走
+  `update_metadata`（那里本来就要 load）；
+
 ### 新增（PPT · 能力补全——对照 Claude Code pptx skill 的差距清单逐项修复）
 
 - **skill 同步到上游 v6.7.2**：ppt-master 自 v6.4.0 收录后未跟进，上游 5 周内

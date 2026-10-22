@@ -1440,6 +1440,7 @@ class AgentLoop:
                     meta["last_agent_id"] = agent_id
                 self.session_store.save(
                     self.kernel.session_id, self.kernel.ctx.messages, meta,
+                    created_at=existing.created_at if existing is not None else None,
                 )
             except Exception:
                 logger.exception("[AgentLoop] 会话落盘失败")

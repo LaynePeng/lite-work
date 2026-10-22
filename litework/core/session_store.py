@@ -16,6 +16,43 @@ from .types import Message
 logger = logging.getLogger("litework.session")
 
 
+def _tail_activity_summary(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """消息尾部倒扫：最后一个工具调用（含成败）或助手文本 → 最近活动摘要。
+
+    与 server/routers/sessions.py 的 _last_activity 同构，但这里是纯 dict
+    提取（server 侧消费 SessionStore 摘要，不再自己扫 messages）。
+    """
+    tail_results: Dict[str, bool] = {}
+    for m in reversed(messages):
+        role = m.get("role")
+        if role == "tool":
+            content = str(m.get("content") or "")
+            tail_results[str(m.get("tool_call_id") or "")] = not (
+                content.startswith("[Error]") or content.startswith("[Execution Exception]"))
+            continue
+        if role == "assistant":
+            calls = m.get("tool_calls") or []
+            if calls:
+                call = calls[-1]
+                tc = call.get("function", {}) if isinstance(call, dict) else {}
+                name = str(tc.get("name") or "tool")
+                try:
+                    import json as _json
+                    args_raw = tc.get("arguments") or ""
+                    args = _json.loads(args_raw) if isinstance(args_raw, str) else {}
+                    key = next((str(args.get(k)) for k in
+                                ("filePath", "filename", "path", "query", "command", "url", "name")
+                                if args.get(k)), "")
+                except Exception:
+                    key = ""
+                ok = tail_results.get(str(call.get("id") or ""))
+                return {"summary": f"{name} {key[:40]}".strip(), "ok": ok, "tool": name}
+            content = str(m.get("content") or "").strip()
+            if content:
+                return {"summary": content[:60], "ok": None, "tool": ""}
+    return None
+
+
 class SessionSnapshot:
     def __init__(
         self,
@@ -66,13 +103,20 @@ class SessionStore:
         safe_id = session_id.replace("/", "_").replace("\\", "_")
         return os.path.join(self.storage_dir, f"{safe_id}.json")
 
-    def save(self, session_id: str, messages: List[Message], metadata: Optional[Dict[str, Any]] = None) -> None:
-        existing = self.load(session_id)
+    def save(self, session_id: str, messages: List[Message], metadata: Optional[Dict[str, Any]] = None,
+             created_at: Optional[int] = None) -> None:
+        """保存会话（原子写盘）。
+
+        created_at 由调用方显式传入；不传时不再读旧文件回填（旧实现每次
+        save 全量 load 一次，大会话纯浪费 IO——调用链里 AgentLoop 每次
+        落盘都走这里，3300+ 条消息的会话每轮重复解析 3MB JSON）。
+        需要保留原 created_at 的调用方用 `update_metadata`（那里本来就要 load）。
+        """
         snapshot = SessionSnapshot(
             session_id=session_id,
             messages=messages,
             metadata=metadata or {},
-            created_at=existing.created_at if existing else int(__import__("time").time() * 1000),
+            created_at=created_at if created_at is not None else int(__import__("time").time() * 1000),
             updated_at=int(__import__("time").time() * 1000),
         )
         # 原子写盘：先写临时文件再 rename，防止中途崩溃产生半截 JSON
@@ -98,13 +142,40 @@ class SessionStore:
             logger.exception("[SessionStore] Error reading session file %s", session_id)
             return None
 
-    def list(self) -> List[Dict[str, Any]]:
-        """会话快照列表（未变的文件复用缓存解析结果）。
+    #: list() 缓存的条目上限：会话文件多如牛毛时防缓存无界增长（LRU 淘汰）
+    _LIST_CACHE_MAX = 200
 
-        返回值是浅拷贝：调用方可以随意在顶层加字段，不会污染缓存（嵌套的
-        messages/metadata 仍共享——请勿就地修改，列表接口本就契约只读）。
+    @staticmethod
+    def _summarize(data: Dict[str, Any]) -> Dict[str, Any]:
+        """全量快照 → 轻量列表行（不含 messages 大头）。
+
+        列表消费方（/api/sessions、cleanup、meta 计数）只用到：元数据、
+        计数、首条用户消息（标题）、尾部活动摘要。全量 messages 动辄几 MB，
+        常驻缓存几十个会话就是上百 MB——只留摘要。
         """
-        snapshots: List[Dict[str, Any]] = []
+        messages = data.get("messages") or []
+        first_user = next(
+            (str(m.get("content") or "") for m in messages if m.get("role") == "user"), "")
+        return {
+            "session_id": data.get("session_id", ""),
+            "created_at": data.get("created_at", 0),
+            "updated_at": data.get("updated_at", 0),
+            "metadata": data.get("metadata", {}) or {},
+            "message_count": len(messages),
+            "has_user_message": any(m.get("role") == "user" for m in messages),
+            "first_user_message": first_user[:200],
+            # 尾部活动摘要（与 server _last_activity 同构，但这里是无依赖的
+            # 纯提取：最后一个工具调用名 + 首个关键参数，或尾部助手文本）
+            "last_activity": _tail_activity_summary(messages),
+        }
+
+    def list(self) -> List[Dict[str, Any]]:
+        """会话摘要列表（未变的文件复用缓存解析结果，**不含 messages**）。
+
+        返回值是浅拷贝：调用方可以随意在顶层加字段，不会污染缓存。
+        需要完整消息历史的调用方用 `load(session_id)` 单个读。
+        """
+        rows: List[Dict[str, Any]] = []
         try:
             names = os.listdir(self.storage_dir)
         except OSError:
@@ -122,7 +193,7 @@ class SessionStore:
             key = (st.st_ino, st.st_mtime_ns, st.st_size)
             hit = self._list_cache.get(fname)
             if hit is not None and hit[0] == key:
-                snapshots.append(hit[1])
+                rows.append(hit[1])
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -132,13 +203,18 @@ class SessionStore:
                 continue
             if not isinstance(data, dict):
                 continue
-            self._list_cache[fname] = (key, data)
-            snapshots.append(data)
+            summary = self._summarize(data)
+            self._list_cache[fname] = (key, summary)
+            rows.append(summary)
         # 清掉已删除会话的缓存条目，避免缓存无界增长
         for gone in [k for k in self._list_cache if k not in live]:
             self._list_cache.pop(gone, None)
-        snapshots.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
-        return [dict(s) for s in snapshots]
+        # 超上限时按访问序淘汰（list 每次都重写命中条目实现简易 LRU）
+        if len(self._list_cache) > self._LIST_CACHE_MAX:
+            for victim in list(self._list_cache)[:len(self._list_cache) - self._LIST_CACHE_MAX]:
+                self._list_cache.pop(victim, None)
+        rows.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
+        return [dict(r) for r in rows]
 
     def delete(self, session_id: str) -> bool:
         path = self._file_path(session_id)

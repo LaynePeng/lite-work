@@ -162,48 +162,7 @@ def _deliverables(workspace: str, created_at_ms: int, limit: int = 5) -> list:
     return out[:limit]
 
 
-def _last_activity(messages: list) -> Optional[Dict[str, Any]]:
-    """消息尾部倒扫：最后一个工具调用（含成败）或助手文本 → 最近活动摘要。
-
-    消息序列形如 assistant(tool_calls) → tool(结果) → assistant(…)；
-    倒扫时先记住尾部 tool 结果的成败（按 tool_call_id 对齐），遇到带
-    tool_calls 的 assistant 消息即组装返回；纯文本回复则截断为摘要。
-    """
-    import json as _json
-
-    tail_results: Dict[str, Any] = {}  # tool_call_id → {ok}
-    for m in reversed(messages):
-        role = m.get("role")
-        if role == "tool":
-            content = m.get("content") or ""
-            tc_id = m.get("tool_call_id") or ""
-            tail_results[tc_id] = {
-                "ok": not (content.startswith("[Error]") or content.startswith("[Execution Exception]")),
-            }
-            continue
-        if role == "assistant":
-            calls = m.get("tool_calls") or []
-            if calls:
-                call = calls[-1]
-                tc = call.get("function", {}) if isinstance(call, dict) else {}
-                name = tc.get("name") or "tool"
-                args_raw = tc.get("arguments") or ""
-                try:
-                    args: Dict[str, Any] = _json.loads(args_raw) if isinstance(args_raw, str) else {}
-                    # 摘要取首个命中的关键参数（含 camelCase 变体，如 write_file 的 filePath）
-                    key = next((args[k] for k in
-                                ("filePath", "filename", "path", "query", "command", "url", "name")
-                                if args.get(k)), "")
-                    summary = f"{name} {str(key)[:40]}".strip()
-                except Exception:
-                    summary = name
-                tc_id = call.get("id") or ""
-                ok = tail_results.get(tc_id, {}).get("ok")
-                return {"summary": summary, "ok": ok, "tool": name}
-            content = (m.get("content") or "").strip()
-            if content:
-                return {"summary": content[:60], "ok": None, "tool": ""}
-    return None
+# 最近活动摘要已由 SessionStore.list() 的轻量摘要提供（session_store._tail_activity_summary）。
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -229,15 +188,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
             # （C:\Users\proj 与 c:\users\PROJ 是同一项目）
             if workspace and os.path.normcase(os.path.abspath(s_ws)) != os.path.normcase(os.path.abspath(workspace)):
                 continue
-            messages = s.get("messages", [])
-            if not any(m.get("role") == "user" for m in messages):
+            if not s.get("has_user_message"):
                 # 列表接口必须是纯读取；创建与首条消息之间存在短暂空窗。
                 continue
             session_id = str(s.get("session_id") or "")
-            metadata = s.get("metadata", {})
+            metadata = s.get("metadata", {}) or {}
             # —— 任务卡聚合字段（Goals 视图；全部可选，旧前端无感）——
             todo_progress = _todo_progress(app.todo_plugin.get(session_id))
-            last_activity = _last_activity(messages)
+            last_activity = s.get("last_activity")
             # 交付物指针（P3）：仅 TODO 全部完成的会话计算（省一次根目录扫描）
             deliverables = (
                 _deliverables(s_ws, int(s.get("created_at") or 0))
@@ -253,12 +211,12 @@ def create_router(ctx: ServerContext) -> APIRouter:
                 "session_id": session_id,
                 "created_at": s.get("created_at"),
                 "updated_at": s.get("updated_at"),
-                "message_count": len(messages),
+                "message_count": s.get("message_count", 0),
                 "title": _session_title(s),
+                "subagent_count": subagent_count,
                 "metadata": metadata,
                 "todo_progress": todo_progress,
                 "last_activity": last_activity,
-                "subagent_count": subagent_count,
                 "cost_usd": cost_usd,
                 "running": running,
                 "pinned": bool(metadata.get("pinned", False)),

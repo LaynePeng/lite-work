@@ -84,12 +84,19 @@ class ServerContext:
 
 
 def _session_title(snapshot: dict) -> str:
-    """从会话消息推导标题：优先用户自定义 name，其次首条用户消息，空会话兜底。"""
+    """从会话消息推导标题：优先用户自定义 name，其次首条用户消息，空会话兜底。
+
+    兼容两种输入：SessionStore.list() 的轻量摘要（first_user_message）与
+    全量快照（messages）。
+    """
     meta = snapshot.get("metadata") or {}
     if meta.get("name"):
         return meta["name"]
-    for m in snapshot.get("messages", []):
-        if m.get("role") == "user":
-            text = (m.get("content") or "").strip().replace("\n", " ")
-            return text[:40] or "未命名会话"
-    return "新会话"
+    first_user = snapshot.get("first_user_message")
+    if first_user is None:
+        for m in snapshot.get("messages", []):
+            if m.get("role") == "user":
+                first_user = m.get("content") or ""
+                break
+    text = str(first_user or "").strip().replace("\n", " ")
+    return text[:40] or "未命名会话"

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from litework.core.session_store import SessionStore
-from litework.core.types import Message
+from litework.core.types import Message, ToolCall
 
 
 def _save_session(store: SessionStore, sid: str) -> None:
@@ -93,12 +93,45 @@ def test_list_cache_invalidates_on_save_delete_create(tmp_path: Path):
         Message(role="assistant", content="world"),
     ], {})
     row = {s["session_id"]: s for s in store.list()}["session_a"]
-    assert len(row["messages"]) == 2, f"追加消息未反映: {row}"
+    assert row["message_count"] == 2, f"追加消息未反映: {row}"
 
     # 删除 → 立即消失，且缓存条目被清理
     assert store.delete("session_b") is True
     assert {s["session_id"] for s in store.list()} == {"session_a"}
     assert len(store._list_cache) == 1
+
+
+def test_list_returns_lightweight_summaries(tmp_path: Path):
+    """list() 返回轻量摘要：不含 messages，标题/计数/尾部活动从摘要字段取。"""
+    store = SessionStore(str(tmp_path / "sessions"))
+    store.save("session_d", [
+        Message(role="user", content="帮我修个 bug"),
+        Message(role="assistant", content="", tool_calls=[ToolCall(
+            id="call_1", name="write_file", arguments='{"filePath": "a.py"}')]),
+        Message(role="tool", content="ok", tool_call_id="call_1"),
+    ], {"name": "自定义名"})
+    rows = store.list()
+    assert len(rows) == 1
+    row = rows[0]
+    assert "messages" not in row, "列表行不应携带全量 messages"
+    assert row["message_count"] == 3
+    assert row["has_user_message"] is True
+    assert row["first_user_message"] == "帮我修个 bug"
+    assert row["metadata"]["name"] == "自定义名"
+    act = row["last_activity"]
+    assert act and act["tool"] == "write_file" and act["ok"] is True
+    assert act["summary"].startswith("write_file")
+
+
+def test_list_cache_max_entries(tmp_path: Path):
+    """缓存条目超上限时淘汰（防无界增长）。"""
+    store = SessionStore(str(tmp_path / "sessions"))
+    store._LIST_CACHE_MAX = 5
+    for i in range(8):
+        _save_session(store, f"session_bulk_{i}")
+    store.list()  # 触发填充 + 淘汰
+    assert len(store._list_cache) == 5
+    assert len(store.list()) == 8  # 磁盘上的会话都在，只是缓存被限
 
 
 def test_list_returns_shallow_copies(tmp_path: Path):
