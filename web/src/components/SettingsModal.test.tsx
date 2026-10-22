@@ -65,7 +65,7 @@ function primeAll() {
   a.agentsTools.mockResolvedValue({ tools: [], use_all: false });
   a.pricingStatus.mockResolvedValue({
     models_dev: { cached: false, models: 0, age_seconds: null, stale: true },
-    provider: { name: "pricing-plugin", version: "1.0.0", description: "官方定价", source: "builtin" },
+    provider: { name: "pricing-plugin", version: "1.0.1", description: "官方定价", source: "builtin" },
     sources: [
       { id: "deepseek", label: "DeepSeek 官方定价", url: "https://example.com", cached: false, models: 0, age_seconds: null, stale: true, snapshot_date: "2026-09-17" },
     ],

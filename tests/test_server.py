@@ -687,7 +687,9 @@ async def test_model_meta_endpoints(live_client):
     assert body["provider"] is not None
     assert body["provider"]["name"] == "pricing-plugin"
     source_ids = [s["id"] for s in body["sources"]]
-    assert "deepseek" in source_ids and "kimi" in source_ids
+    # DeepSeek 因分时计费保留专源；kimi 已改用 models.dev（不再作数据源）
+    assert "deepseek" in source_ids
+    assert "kimi" not in source_ids
 
 
 async def test_model_meta_refresh_returns_pricing(live_client):
