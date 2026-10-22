@@ -430,3 +430,75 @@ async def test_404_not_retried(monkeypatch):
     r = await tools.execute("webfetch", {"url": "https://example.com/missing"})
     assert r.startswith("[Fetch Error]")
     assert calls["n"] == 1
+
+
+class TestCurlCffiProxy:
+    """curl_cffi 兜底路径的代理必须与 httpx 路径同源。
+
+    踩过的点：curl_cffi 的 `trust_env` 默认 True，会自己读环境变量代理。
+    于是这条兜底路在「用户配了代理但环境变量没有」时直连（需要代理的网络
+    上直接失败），或在「用户关了代理但 shell 有 HTTPS_PROXY」时偷偷走代理。
+    """
+
+    def test_curl_cffi_disables_trust_env_and_passes_proxy(self, monkeypatch):
+        from litework.tools import web as web_mod
+
+        captured = {}
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                class R:
+                    status_code = 200
+                    content = b"<html><body>ok</body></html>"
+                    headers = {"content-type": "text/html"}
+                return R()
+
+        monkeypatch.setattr(web_mod, "_HAS_CURL_CFFI", True)
+        monkeypatch.setattr(web_mod, "_CurlAsyncSession", FakeSession)
+
+        tools = web_mod.WebFetchTools(proxy_url="http://127.0.0.1:7890")
+        import asyncio
+        res = asyncio.run(tools._curl_cffi_fetch("https://example.com"))
+        assert res is not None
+        assert captured.get("trust_env") is False, "必须关掉环境变量代理"
+        assert captured.get("proxy") == "http://127.0.0.1:7890"
+
+    def test_no_proxy_configured_passes_no_proxy(self, monkeypatch):
+        from litework.tools import web as web_mod
+
+        captured = {}
+
+        class FakeSession:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                class R:
+                    status_code = 200
+                    content = b"x"
+                    headers = {"content-type": "text/plain"}
+                return R()
+
+        monkeypatch.setattr(web_mod, "_HAS_CURL_CFFI", True)
+        monkeypatch.setattr(web_mod, "_CurlAsyncSession", FakeSession)
+
+        tools = web_mod.WebFetchTools()          # 没配代理
+        import asyncio
+        asyncio.run(tools._curl_cffi_fetch("https://example.com"))
+        assert captured.get("trust_env") is False
+        assert "proxy" not in captured, "没配代理就不该传 proxy（直连）"

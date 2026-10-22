@@ -142,6 +142,7 @@ class WebFetchTools:
         cache_ttl: float = CACHE_TTL,
         proxy_mounts: Optional[Dict[str, Any]] = None,
         ssl_verify: bool = True,
+        proxy_url: str = "",
     ) -> None:
         self._profile_turn = random.randrange(len(BROWSER_PROFILES))
         self._client_factory = client_factory or self._default_client_factory
@@ -150,6 +151,9 @@ class WebFetchTools:
         # webfetch 出网分流（httpx mounts：all://=代理 / bypass host=直连）；
         # 自定义 client_factory 场景忽略（工厂自担）
         self._proxy_mounts = proxy_mounts
+        # curl_cffi 兜底路径要用代理**原始 URL**：mounts 里存的是 transport，
+        # 取不回 URL。两条路径必须同源，否则兜底会绕过用户配的代理。
+        self._proxy_url = proxy_url or ""
         # TLS 校验（config["proxy"]["ssl_verify"]）
         self._ssl_verify = ssl_verify
 
@@ -290,11 +294,25 @@ class WebFetchTools:
         请求头再像浏览器也无用；libcurl-impersonate 复刻 Chrome 的完整
         握手指纹。仅在 2xx/3xx 成功时返回 (status, content_type, text)，
         未安装/失败/仍被拦截一律返回 None（调用方走拦截提示）。
+
+        代理必须与 httpx 路径同源：curl_cffi 的 `trust_env` **默认 True**，
+        会自己读 HTTP_PROXY/HTTPS_PROXY。不显式约束的话，这条兜底路会在
+        「用户配了代理但环境变量没有」时直连（需要代理的网络上直接失败），
+        或在「用户关了代理但 shell 里有 HTTPS_PROXY」时偷偷走代理——
+        与 `_default_client_factory` 的 trust_env=False 语义冲突。
+        这里统一：只认 config 的代理 URL，显式传 proxy 并关掉 trust_env。
         """
         if not _HAS_CURL_CFFI:
             return None
         try:
-            async with _CurlAsyncSession(impersonate="chrome", timeout=TIMEOUT) as session:
+            # 从 mounts 里取代理 URL（mounts 是 httpx transport，取不到原始
+            # URL，故由构造方另外传入 _proxy_url）
+            proxy = getattr(self, "_proxy_url", "") or None
+            async with _CurlAsyncSession(
+                impersonate="chrome", timeout=TIMEOUT,
+                trust_env=False,                       # 不读环境变量代理
+                **({"proxy": proxy} if proxy else {}),
+            ) as session:
                 resp = await session.get(url)
             if not (200 <= resp.status_code < 400):
                 return None

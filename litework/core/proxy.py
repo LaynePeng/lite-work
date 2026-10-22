@@ -3,13 +3,14 @@
 
 """代理配置（出网分流）。
 
-lite-work 的出网面分六类（scope），可分别选择是否走代理：
+lite-work 的出网面分七类（scope），可分别选择是否走代理：
   llm       LLM API 调用（anthropic / openai_compat / deepseek 适配器）
   webfetch  Agent 联网工具（webfetch / webfetch_batch）
   meta      models.dev 模型元数据 / 定价数据刷新
   market    社区插件/技能市场（检查更新、下载）
   mcp       MCP 子进程（stdio：以环境变量 HTTP(S)_PROXY 注入）
   shell     Agent 执行的命令（execute_command / 打包脚本：同样 env 注入）
+  media     PPT 配图（生图大模型 / 开放图库：skills 里的 requests 子进程）
 
 URL 普适性归一化（用户手填格式五花八门，这里统一收口）：
   http://user:pass@host:port     标准格式
@@ -38,7 +39,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger("litework.proxy")
 
 #: 全部出网 scope（配置校验 + 设置页分组展示用）
-PROXY_SCOPES = ("llm", "webfetch", "meta", "market", "mcp", "shell")
+PROXY_SCOPES = ("llm", "webfetch", "meta", "market", "mcp", "shell", "media")
 
 #: 系统代理检测缓存（进程内一次；scutil/注册表读取不必每次）
 _system_proxy_cache: Optional[Dict[str, str]] = None
@@ -143,6 +144,7 @@ SCOPE_LABELS = {
     "market": "插件/技能市场（检查更新）",
     "mcp": "MCP 子进程",
     "shell": "Agent 执行的命令",
+    "media": "PPT 配图（生图 / 图库检索）",
 }
 
 #: 代理 scheme 白名单：http(s) / socks5 / socks5h（curl 变体，归一到 socks5）

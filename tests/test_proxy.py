@@ -87,8 +87,12 @@ def test_proxy_for_socks5_without_deps(monkeypatch):
 
 
 def test_scopes_and_labels_complete():
-    """六个出网面齐备（llm/webfetch/meta/market/mcp/shell），标签全覆盖。"""
-    assert PROXY_SCOPES == ("llm", "webfetch", "meta", "market", "mcp", "shell")
+    """七个出网面齐备（llm/webfetch/meta/market/mcp/shell/media），标签全覆盖。
+
+    media = PPT 配图（生图大模型 / 开放图库）：走 skills 里的 requests
+    子进程，只能靠 HTTP_PROXY 环境变量注入。
+    """
+    assert PROXY_SCOPES == ("llm", "webfetch", "meta", "market", "mcp", "shell", "media")
     assert set(SCOPE_LABELS.keys()) == set(PROXY_SCOPES)
 
 
