@@ -540,7 +540,7 @@ describe("QuestionBar（ask_user 非阻塞提问条）", () => {
     render(<QuestionBar pendingQuestions={questions} onAnswerQuestion={onAnswer} />);
     const input = screen.getByPlaceholderText(/自定义回答/);
     await user.type(input, "MySQL");
-    await user.click(screen.getByRole("button", { name: "提交回答" }));
+    await user.click(screen.getByRole("button", { name: "提交" }));
     expect(onAnswer).toHaveBeenCalledWith("q1", "MySQL");
   });
 
@@ -553,7 +553,7 @@ describe("QuestionBar（ask_user 非阻塞提问条）", () => {
     }];
     render(<QuestionBar pendingQuestions={multiQuestions} onAnswerQuestion={onAnswer} />);
     // 未选时提交按钮禁用
-    const submit = screen.getByRole("button", { name: /提交所选/ });
+    const submit = screen.getByRole("button", { name: "提交" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     // 勾选两项
     await user.click(screen.getByRole("button", { name: /邮件/ }));
@@ -574,8 +574,66 @@ describe("QuestionBar（ask_user 非阻塞提问条）", () => {
     render(<QuestionBar pendingQuestions={multiQuestions} onAnswerQuestion={onAnswer} />);
     const input = screen.getByPlaceholderText(/自定义回答/);
     await user.type(input, "C 和 D");
-    await user.click(screen.getByRole("button", { name: "提交回答" }));
+    await user.click(screen.getByRole("button", { name: "提交" }));
     expect(onAnswer).toHaveBeenCalledWith("q3", "C 和 D");
+  });
+
+  // 用户反馈：「提交多选和提交不是同一个按钮，提交多选那个按钮太丑」。
+  // 旧实现里多选的「提交所选」是塞在多选选项容器里的 .btn-approve（绿色审批
+  // 按钮），而单选是下方另一行的「提交回答」——两个按钮两个样子两个位置。
+  it("单选与多选共用同一颗提交按钮（同一位置、同一样式）", () => {
+    const single = [{ id: "s1", question: "选哪个？", options: ["A", "B"] }];
+    const multi = [{ id: "m1", question: "要哪些？", options: ["A", "B", "C"], multiSelect: true }];
+
+    const { unmount } = render(
+      <QuestionBar pendingQuestions={single} onAnswerQuestion={() => {}} />);
+    const singleBtn = screen.getByRole("button", { name: "提交" });
+    const singleRow = singleBtn.closest(".question-submit-row");
+    const singleCls = singleBtn.className;
+    unmount();
+
+    render(<QuestionBar pendingQuestions={multi} onAnswerQuestion={() => {}} />);
+    const multiBtn = screen.getByRole("button", { name: "提交" });
+    const multiRow = multiBtn.closest(".question-submit-row");
+
+    // 同一个容器（同一行，同一位置语义）
+    expect(singleRow).toBeTruthy();
+    expect(multiRow).toBeTruthy();
+    // 同一个样式类
+    expect(multiBtn.className).toBe(singleCls);
+    expect(singleCls).toContain("btn-question-submit");
+    // 多选的提交按钮不能再挂在选项容器里（旧 bug 的形态）
+    expect(multiBtn.closest(".question-options")).toBeNull();
+  });
+
+  it("多选：勾选项与手写补充同时送出（不互相覆盖）", async () => {
+    const onAnswer = vi.fn();
+    const user = userEvent.setup();
+    const multi = [{
+      id: "m2", question: "要启用哪些？", options: ["邮件", "日历", "文档"], multiSelect: true,
+    }];
+    render(<QuestionBar pendingQuestions={multi} onAnswerQuestion={onAnswer} />);
+    await user.click(screen.getByRole("button", { name: /邮件/ }));
+    // 勾选后占位符会变（提示「可留空」），按当前状态取输入框
+    const input = screen.getByRole("textbox");
+    await user.type(input, "还要 RSS");
+    await user.click(screen.getByRole("button", { name: "提交" }));
+    expect(onAnswer).toHaveBeenCalledWith("m2", "邮件；还要 RSS");
+  });
+
+  it("多选：未勾选时也能只靠手写提交", async () => {
+    const onAnswer = vi.fn();
+    const user = userEvent.setup();
+    const multi = [{
+      id: "m3", question: "要启用哪些？", options: ["甲", "乙", "丙"], multiSelect: true,
+    }];
+    render(<QuestionBar pendingQuestions={multi} onAnswerQuestion={onAnswer} />);
+    const submit = screen.getByRole("button", { name: "提交" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    await user.type(screen.getByPlaceholderText(/自定义回答/), "全都不要");
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    await user.click(submit);
+    expect(onAnswer).toHaveBeenCalledWith("m3", "全都不要");
   });
 });
 

@@ -3793,13 +3793,30 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-color: var(--red);
 }
 
+/* 审批/确认类主按钮。必须自带完整几何：此前只有 background/color，
+   padding 与圆角写在 `.question-custom-row .btn-approve` 这种后代选择器里，
+   于是同一个 .btn-approve 换个位置（如曾经的「提交所选」）就渲染成
+   19px 高、圆角 0 的怪按钮。 */
 .btn-approve {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
   background: var(--grad);
   color: #fff;
+  transition: filter .12s;
 }
 
-.btn-approve:hover {
+.btn-approve:hover:not(:disabled) {
   filter: brightness(1.12);
+}
+
+.btn-approve:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
 }
 
 /* ---------------- Agent 提问卡（ask_user） ---------------- */
@@ -3869,6 +3886,64 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* 统一提交行：单选（自定义输入）与多选（勾选）共用同一行、同一颗按钮。
+   此前多选的提交按钮是塞在选项卡容器里的 .btn-approve（绿色审批按钮），
+   与单选的「提交回答」并列成两个长相/位置都不同的按钮——用户每次都要判断
+   「该点哪个」，而且那个绿色按钮在多选语境下语义也不对（不是两次确认）。 */
+.question-submit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.question-custom-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.question-picked-row {
+  margin-bottom: 6px;
+}
+
+.question-picked-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.btn-question-submit {
+  flex: none;
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: var(--grad);
+  color: #fff;
+  transition: filter .12s;
+}
+
+.btn-question-submit:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.btn-question-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* 单选选项：点一下即提交，不需要再按按钮（与多选区分开） */
+.question-options:not(.question-options-multi) .btn-option {
+  position: relative;
+}
+
+/* 兼容旧类名：状态栏/历史样式引用，保留不再新用。
+   注意 .btn-submit-picked 已删除——它把「提交所选」塞在多选选项容器里，
+   且因 .btn-approve 的样式作用域问题渲染成 19px 高、圆角 0 的怪按钮。 */
 .question-custom-row {
   display: flex;
   gap: 8px;
@@ -3933,7 +4008,7 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   margin-bottom: 12px;
 }
 
-.question-bar .question-custom-row .form-input {
+.question-bar .question-custom-input {
   background: var(--bg-0);
 }
 
@@ -6787,10 +6862,28 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-1);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  overflow-x: auto;
-  padding: 0 0 0 8px;
-  min-height: 36px;
+  /* 栏高固定一行：页签再多也只横向滚动，绝不被内容撑高/换行 */
+  height: 36px;
+  padding-left: 8px;
   align-items: stretch;
+  overflow: hidden;
+}
+
+/* 页签滚动容器：只有这一层能横向滚动，右侧动作按钮永远钉在栏尾不参与滚动。
+   分成两层是因为 .tab-bar 自身若 overflow-x:auto，绝对定位/浮层会一起被裁。 */
+.tab-list {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab-list::-webkit-scrollbar {
+  height: 0;
 }
 
 .tab-item {
@@ -6805,7 +6898,12 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   white-space: nowrap;
   user-select: none;
   transition: background 0.1s, color 0.1s;
-  min-width: 0;
+  /* 不收缩：页签宽度由标题决定（上限 200px），页签多到装不下时由 .tab-list
+     横向滚动。若允许收缩，overflow:hidden 会把 flex 自动最小尺寸归零，
+     页签能被压成几条竖线、标题挤到盒子外 —— 那正是「文字浮在中间栏上」。 */
+  flex: none;
+  max-width: 200px;
+  overflow: hidden;
 }
 
 .tab-item:hover {
@@ -6816,18 +6914,23 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .tab-item.active {
   background: var(--bg-0);
   color: var(--text-0);
-  border-bottom: 2px solid var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tab-icon {
   font-size: 11px;
-  flex-shrink: 0;
+  flex: none;
 }
 
+/* 标题：占满页签剩余宽度、超出用省略号截断。
+   min-width 必须是 0：允许被 max-width:200px 的页签裁窄，而不是把
+   整段文字顶出盒子（那会在中间栏上方「浮」出一条文字）。 */
 .tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 120px;
+  white-space: nowrap;
 }
 
 /* 会话 tab 的 SSE 连接状态点（标题右侧，任务运行中显示） */
@@ -6852,16 +6955,66 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 }
 
 .tab-close {
+  flex: none;
   font-size: 10px;
   color: var(--text-3);
   padding: 1px 3px;
   border-radius: 3px;
   margin-left: 2px;
-  flex-shrink: 0;}
+}
 
 .tab-close:hover {
   background: var(--bg-3);
   color: var(--text-0);
+}
+
+/* 页签栏右侧的常驻动作：
+   模板入口此前只在空对话页首屏出现，一旦有历史对话就再也找不到，
+   因此提到页签栏——与页签同级，任何页面都点得到。 */
+.tab-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.tab-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.tab-action:hover {
+  color: var(--accent);
+  border-color: rgba(79, 140, 255, 0.35);
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.tab-action-wide {
+  font-weight: 500;
+}
+
+/* 窄屏（或工具面板拉得很宽时）：动作按钮只留图标，把宽度让给页签列表。
+   阈值按「按钮 + 至少两个页签」估：1100 以下文本按钮会吃掉 110px 里的大半。 */
+@media (max-width: 900px) {
+  .tab-action-label {
+    display: none;
+  }
+  .tab-bar-actions {
+    padding: 0 6px;
+  }
 }
 
 /* ─────────────────────────────────── 文件查看器 */
@@ -9650,9 +9803,12 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* ── ask_user 多选（QuestionBar multiSelect） ── */
+/* ── ask_user 多选（QuestionBar multiSelect） ──
+   勾选项用网格排布（两列），比 flex-wrap 更整齐：选项长短不一时不会
+   参差成锯齿状。提交按钮已移到 .question-submit-row，不再挂在容器里。 */
 .question-options-multi {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 6px;
 }
 
@@ -9660,21 +9816,23 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 9px 12px;
 }
 
 .btn-option-check .option-check {
   font-size: 14px;
   line-height: 1;
+  color: var(--text-3);
 }
 
 .btn-option-check.picked {
   border-color: var(--accent, #4f8cff);
-  background: var(--bg-3);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-0);
 }
 
-.btn-submit-picked {
-  align-self: flex-end;
+.btn-option-check.picked .option-check {
+  color: var(--accent);
 }
 
 /* ── 无障碍：尊重系统「减少动态效果」（弱机 / 前庭敏感用户） ──
@@ -10842,3 +11000,842 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   padding: 0 22px 16px; font-size: 11px; color: var(--text-2); line-height: 1.7;
 }
 .modal-note b { color: var(--yellow); }
+
+/* ============================== PPT 编辑器 ==============================
+   独立页签（kind="ppt"）占满 .main：气泡定宽 820px、单条再被收窄到 76%
+   （≈623px），装不下 1280×720 的幻灯片，故不进聊天流。
+   三栏：幻灯片轨 | 画布 | 检查器。检查器只在选中元素时出现（浏览态让出
+   宽度），1032 屏以下隐藏轨道保证画布可用。 */
+
+.ppt-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-0);
+}
+
+.ppt-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  flex-shrink: 0;
+}
+.ppt-editor-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+.ppt-editor-meta {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.ppt-editor-meta em { color: var(--yellow); font-style: normal; }
+.ppt-editor-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ppt-editor-busy { font-size: 11px; color: var(--accent); }
+
+.ppt-editor .btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  transition: background .12s, border-color .12s;
+}
+.ppt-editor .btn:hover:not(:disabled) { background: var(--bg-3); border-color: #3a455c; }
+.ppt-editor .btn:disabled { opacity: .45; cursor: not-allowed; }
+.ppt-editor .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ppt-editor .btn.primary:hover:not(:disabled) { background: #3d7bf0; }
+
+.ppt-editor-error {
+  padding: 7px 14px;
+  background: rgba(248, 81, 73, .12);
+  border-bottom: 1px solid rgba(248, 81, 73, .3);
+  color: var(--red);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ppt-editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- 左：幻灯片轨（竖长比例，与侧栏同构） ---- */
+.ppt-rail {
+  width: 168px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-1);
+  overflow-y: auto;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ppt-thumb {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  text-align: left;
+  transition: background .12s, border-color .12s;
+}
+.ppt-thumb:hover { background: var(--bg-2); }
+.ppt-thumb.active {
+  background: rgba(79, 140, 255, .1);
+  border-color: var(--accent);
+}
+.ppt-thumb-n {
+  font-size: 10px;
+  color: var(--text-2);
+  width: 13px;
+  text-align: right;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+.ppt-thumb.active .ppt-thumb-n { color: var(--accent); font-weight: 600; }
+.ppt-thumb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ppt-thumb-title {
+  font-size: 11px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ppt-thumb.active .ppt-thumb-title { color: var(--text-0); }
+.ppt-thumb-mark { font-size: 9.5px; color: var(--yellow); }
+
+/* ---- 中：画布 ---- */
+.ppt-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  /* 不能用 center：内容宽于容器时，居中对齐会把左半边推到负坐标区，
+     overflow 滚不到那里，表现为「放大后左边内容消失且无法滚回」。
+     改用 flex-start + .ppt-stage 的 margin:auto —— 内容比容器小时 margin:auto
+     仍居中，比容器大时 auto 退化为 0，两端都能完整滚到。 */
+  align-items: flex-start;
+  justify-content: flex-start;
+  background: #0a0e15;
+  overflow: auto;
+  padding: 16px;
+}
+.ppt-stage {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  border-radius: 3px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+  /* 与父级 flex-start 配合实现「小则居中、大则可滚」 */
+  margin: auto;
+}
+
+/* 画布右下角缩放控件 */
+.ppt-zoom {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(22, 27, 34, .92);
+  border: 1px solid var(--border);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, .45);
+  z-index: 15;
+  backdrop-filter: blur(6px);
+}
+.ppt-zoom button {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  transition: background .12s, color .12s;
+}
+.ppt-zoom button:hover { background: var(--bg-3); color: var(--text-0); }
+.ppt-zoom button.on { background: var(--accent); color: #fff; }
+.ppt-zoom .pct {
+  min-width: 44px;
+  font-size: 11px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.ppt-svg, .ppt-svg svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* 热区：透明覆盖层，只接管点击。指针事件默认穿透到按钮本身，
+   因此不影响 SVG 内的文字选择与链接。 */
+.ppt-hotspot {
+  position: absolute;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  padding: 0;
+  transition: border-color .1s, background .1s;
+}
+.ppt-hotspot:hover {
+  border-color: rgba(79, 140, 255, .65);
+  background: rgba(79, 140, 255, .08);
+}
+.ppt-hotspot.active {
+  border-color: var(--accent);
+  border-width: 1.5px;
+  background: rgba(79, 140, 255, .1);
+}
+.ppt-hotspot.annotated { border-color: rgba(210, 153, 34, .7); border-style: dashed; }
+.ppt-hotspot.annotated.active { border-color: var(--yellow); border-style: solid; }
+
+/* ---- 右：检查器（选中才出现） ---- */
+.ppt-inspector {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ppt-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+  flex-shrink: 0;
+}
+.ppt-inspector-head code {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-2);
+  font-weight: 400;
+}
+.ppt-inspector-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ppt-inspector-tabs button {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+  border-bottom: 1.5px solid transparent;
+}
+.ppt-inspector-tabs button.on {
+  color: var(--text-0);
+  border-bottom-color: var(--accent);
+}
+.ppt-inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.ppt-fields { display: flex; flex-direction: column; gap: 6px; }
+.ppt-fields > label {
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.ppt-fields input:not([type="color"]),
+.ppt-fields textarea {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: inherit;
+  resize: vertical;
+}
+.ppt-fields input[type="color"] {
+  width: 100%;
+  height: 28px;
+  padding: 1px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+}
+.ppt-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 6px;
+  align-items: center;
+}
+.ppt-grid2 label { font-size: 10px; color: var(--text-2); }
+.ppt-btnrow { display: flex; gap: 4px; }
+.ppt-btnrow button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+.ppt-btnrow button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ppt-row { display: flex; gap: 6px; margin-top: 4px; }
+.ppt-row .btn { flex: 1; }
+.ppt-hint { font-size: 10.5px; color: var(--text-2); line-height: 1.6; }
+.ppt-file {
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ppt-mini { border-collapse: collapse; width: 100%; font-size: 11px; }
+.ppt-mini td { border: 1px solid var(--border); padding: 0; }
+.ppt-mini td input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-0);
+  font-size: 11px;
+  padding: 3px 5px;
+  font-family: inherit;
+}
+.ppt-mini td input:focus { outline: 1px solid var(--accent); background: var(--bg-0); }
+.ppt-mini-cat { padding: 3px 6px !important; color: var(--text-2); white-space: nowrap; }
+
+.ppt-annotate { display: flex; flex-direction: column; gap: 7px; }
+.ppt-annotate textarea {
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: inherit;
+  resize: vertical;
+}
+
+.ppt-toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 16px;
+  border-radius: 16px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
+  z-index: 20;
+}
+
+/* 窄屏：轨道让位给画布（编辑仍可用，只是少了缩略图） */
+@media (max-width: 1100px) {
+  .ppt-rail { display: none; }
+}
+@media (max-width: 860px) {
+  .ppt-inspector { width: 260px; }
+}
+
+/* 未提交改动：热区用虚线青色标出，与「标注」的黄色虚线区分 */
+.ppt-hotspot.dirty {
+  border-color: rgba(79, 140, 255, .75);
+  border-style: dashed;
+}
+.ppt-hotspot.dirty.active {
+  border-style: solid;
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, .25);
+}
+/* 顶栏「N 处未提交」提示 */
+.ppt-editor-meta em.draft { color: var(--accent); font-style: normal; }
+
+/* ============================== PPT 模板 / 从模板做 PPT ==============================
+   两条路径同一个页签：
+   - AI 生成（默认）：说需求 → 规划逐页方案 → 改文案/换版式 → 生成 → 原地进编辑器；
+   - 手动编排：直接逐页填占位符。
+   视觉层级：套件选择（左栏，次要）→ 主工作区（提示词/方案，主要）→ 动作栏（固定底部）。 */
+
+.ppt-tpl {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+  background: var(--bg-0);
+}
+.ppt-tpl-loading { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
+
+/* ppt-master 缺失：把「缺什么/怎么修」讲清楚，而不是显示空模板库 */
+.ppt-tpl-unavailable {
+  max-width: 620px; margin: 28px auto; padding: 28px 30px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: linear-gradient(165deg, rgba(210,153,34,.07), transparent 55%), var(--bg-1);
+  text-align: left;
+}
+.ppt-tpl-unavailable-icon { font-size: 34px; line-height: 1; margin-bottom: 12px; }
+.ppt-tpl-unavailable h4 {
+  margin: 0 0 10px; font-size: 15px; font-weight: 600; color: var(--text-0);
+  line-height: 1.5;
+}
+.ppt-tpl-unavailable-reason {
+  margin: 0 0 6px; font-size: 12.5px; line-height: 1.7; color: var(--yellow);
+  word-break: break-word;
+}
+.ppt-tpl-unavailable-hint {
+  margin: 0 0 16px; font-size: 12px; line-height: 1.75; color: var(--text-2);
+}
+.ppt-tpl-unavailable-checks {
+  list-style: none; margin: 0 0 18px; padding: 12px 14px;
+  border-radius: 9px; background: var(--bg-0); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ppt-tpl-unavailable-checks li {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 11.5px; line-height: 1.6; color: var(--text-1);
+  word-break: break-all;
+}
+.ppt-tpl-unavailable-checks code {
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-3); color: var(--text-1);
+}
+.ppt-tpl-check-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 6px;
+}
+.ppt-tpl-unavailable-checks li.ok .ppt-tpl-check-dot { background: var(--green); }
+.ppt-tpl-unavailable-checks li.bad .ppt-tpl-check-dot { background: var(--red); }
+.ppt-tpl-unavailable-checks li.ok { color: var(--text-1); }
+.ppt-tpl-unavailable-checks li.bad { color: var(--text-0); }
+.ppt-tpl-unavailable-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+.ppt-tpl-unavailable-note {
+  margin: 0; font-size: 11px; line-height: 1.75; color: var(--text-2);
+  padding-top: 14px; border-top: 1px solid var(--border);
+}
+.ppt-tpl-unavailable-note b { color: var(--text-1); font-weight: 600; }
+
+/* —— 头部：标题 + 模式切换 —— */
+.ppt-tpl-head {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+}
+.ppt-tpl-head-main { min-width: 0; flex: 1; }
+.ppt-tpl-head h3 {
+  margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--text-0);
+  letter-spacing: .2px;
+}
+.ppt-tpl-head p {
+  margin: 0; font-size: 11.5px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ppt-tpl-head p code {
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-3); color: var(--text-1);
+}
+
+/* 模式切换：胶囊分段控件（选中态用主题色实底，非选中是幽灵态） */
+.ppt-tpl-modes {
+  display: inline-flex; flex-shrink: 0; padding: 3px; gap: 2px;
+  border-radius: 9px; background: var(--bg-0); border: 1px solid var(--border);
+}
+.ppt-tpl-modes button {
+  font-size: 11.5px; padding: 5px 13px; border-radius: 7px;
+  color: var(--text-2); background: transparent; border: none;
+  transition: background .14s, color .14s;
+  white-space: nowrap;
+}
+.ppt-tpl-modes button:hover { color: var(--text-0); background: var(--bg-2); }
+.ppt-tpl-modes button.on {
+  background: var(--accent); color: #fff; font-weight: 600;
+}
+
+.ppt-tpl-body { display: flex; flex: 1; min-height: 0; }
+
+/* —— 左栏：套件 / 配色 / 风格 —— */
+.ppt-tpl-side {
+  width: 236px; flex-shrink: 0; border-right: 1px solid var(--border);
+  background: var(--bg-1); overflow-y: auto; padding: 14px 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ppt-tpl-label {
+  font-size: 10.5px; color: var(--text-2); font-weight: 600;
+  letter-spacing: .4px; text-transform: none;
+}
+.ppt-tpl-list { display: flex; flex-direction: column; gap: 3px; }
+.ppt-tpl-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 7px; border: 1px solid transparent;
+  text-align: left; transition: background .12s, border-color .12s;
+}
+.ppt-tpl-item:hover { background: var(--bg-2); }
+.ppt-tpl-item.on {
+  background: rgba(79,140,255,.12); border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(79,140,255,.12);
+}
+.ppt-tpl-item-t { font-size: 11.5px; color: var(--text-1); line-height: 1.35; }
+.ppt-tpl-item.on .ppt-tpl-item-t { color: var(--text-0); font-weight: 500; }
+.ppt-tpl-item-s { font-size: 10px; color: var(--text-2); flex-shrink: 0; }
+
+.ppt-tpl-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ppt-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; padding: 3px 9px; border-radius: 12px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.ppt-chip:hover { background: var(--bg-3); color: var(--text-0); }
+.ppt-chip.on { background: rgba(79,140,255,.16); border-color: var(--accent); color: var(--accent); }
+.ppt-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* —— 主工作区 —— */
+.ppt-tpl-main {
+  flex: 1; min-width: 0; overflow-y: auto; padding: 16px 18px 20px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* 提示词卡片：未规划时是本页的主视觉 */
+.ppt-tpl-brief {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 16px 14px; border-radius: 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(160deg, rgba(79,140,255,.07), transparent 62%), var(--bg-1);
+}
+.ppt-tpl-brief.compact { padding: 12px 14px 10px; gap: 8px; }
+.ppt-tpl-brief-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ppt-tpl-brief-row.wrap { flex-wrap: wrap; justify-content: flex-start; gap: 14px; }
+.ppt-tpl-brief-input {
+  width: 100%; font-size: 12.5px; line-height: 1.7; padding: 10px 12px;
+  border-radius: 9px; border: 1px solid var(--border);
+  background: var(--bg-0); color: var(--text-0);
+  font-family: inherit; resize: vertical;
+  transition: border-color .14s, box-shadow .14s;
+}
+.ppt-tpl-brief-input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79,140,255,.13);
+}
+.ppt-tpl-brief-input::placeholder { color: var(--text-2); }
+.ppt-tpl-examples { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.ppt-tpl-inline {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-2);
+}
+.ppt-tpl-inline input, .ppt-tpl-inline select {
+  font-size: 11.5px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-0); color: var(--text-0);
+  font-family: inherit;
+}
+.ppt-tpl-inline input { width: 150px; }
+.ppt-tpl-inline input:focus, .ppt-tpl-inline select:focus {
+  outline: none; border-color: var(--accent);
+}
+
+/* 配图行：开关 + 后端选择 + 说明 */
+.ppt-tpl-imagerow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 10px; border-top: 1px dashed var(--border);
+}
+.ppt-tpl-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--text-1); cursor: pointer;
+  user-select: none;
+}
+.ppt-tpl-toggle input { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
+.ppt-tpl-toggle.disabled { color: var(--text-2); cursor: not-allowed; }
+.ppt-tpl-toggle.disabled input { cursor: not-allowed; }
+.ppt-tpl-inline-select {
+  font-size: 11.5px; padding: 4px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-0); color: var(--text-0);
+  font-family: inherit;
+}
+.ppt-tpl-inline-select:focus { outline: none; border-color: var(--accent); }
+.ppt-tpl-imagehint { font-size: 10.5px; color: var(--text-2); }
+
+/* 规划结果里的配图提示词块（与占位符文案同一网格，跨整行） */
+.ppt-tpl-imgprompts {
+  display: flex; flex-direction: column; gap: 6px;
+  padding-top: 8px; border-top: 1px dashed var(--border);
+}
+.ppt-tpl-imgprompts-head { font-size: 10.5px; color: var(--accent); font-weight: 600; }
+
+/* 行内文字按钮（「重新规划」「重新描述需求」） */
+.ppt-tpl-link {
+  font-size: 11px; padding: 2px 4px; border-radius: 4px;
+  background: transparent; border: none; color: var(--accent);
+  transition: color .12s, background .12s;
+}
+.ppt-tpl-link:hover:not(:disabled) { background: rgba(79,140,255,.12); }
+.ppt-tpl-link:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 规划结果提示条（成功=中性色，降级=黄色） */
+.ppt-tpl-note {
+  font-size: 11.5px; line-height: 1.65; padding: 8px 12px; border-radius: 8px;
+  background: rgba(79,140,255,.09); border: 1px solid rgba(79,140,255,.22);
+  color: var(--text-1);
+}
+
+/* 规划结果：左侧页列表 + 右侧单页文案编辑（两栏，避免长列表冲掉编辑区） */
+.ppt-tpl-planbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.ppt-tpl-planbar-ops { display: flex; gap: 6px; }
+.ppt-tpl-plan {
+  display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 12px;
+  align-items: start;
+}
+.ppt-tpl-plan-list {
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 460px; overflow-y: auto; padding-right: 2px;
+}
+.ppt-tpl-plan-item {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  padding: 7px 9px; border-radius: 7px; border: 1px solid transparent;
+  transition: background .12s, border-color .12s;
+}
+.ppt-tpl-plan-item:hover { background: var(--bg-2); }
+.ppt-tpl-plan-item.on {
+  background: rgba(79,140,255,.12); border-color: rgba(79,140,255,.45);
+}
+.ppt-tpl-plan-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ppt-tpl-plan-item-t {
+  font-size: 11.5px; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ppt-tpl-plan-item.on .ppt-tpl-plan-item-t { color: var(--text-0); }
+.ppt-tpl-plan-item-s { font-size: 10px; color: var(--text-2); }
+.ppt-tpl-plan-editor {
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg-1); overflow: hidden;
+}
+
+.ppt-tpl-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ppt-tpl-pages { display: flex; flex-direction: column; gap: 8px; }
+.ppt-tpl-page {
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg-1); overflow: hidden;
+  transition: border-color .12s;
+}
+.ppt-tpl-page:hover { border-color: #38425a; }
+.ppt-tpl-page-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+}
+/* 规划编辑器里的版式下拉：与页头同一个视觉重量 */
+.ppt-tpl-page-head select {
+  font-size: 11.5px; padding: 3px 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-1); color: var(--text-0);
+  font-family: inherit; max-width: 220px;
+}
+.ppt-tpl-page-head select:focus { outline: none; border-color: var(--accent); }
+.ppt-tpl-page-n {
+  width: 19px; height: 19px; border-radius: 5px; font-size: 10px; font-weight: 700;
+  background: rgba(79,140,255,.16); color: var(--accent); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.ppt-tpl-page-name { font-size: 11.5px; color: var(--text-0); }
+.ppt-tpl-page-ops { margin-left: auto; display: flex; gap: 2px; }
+.ppt-tpl-page-ops button {
+  width: 21px; height: 21px; border-radius: 5px; font-size: 10px; color: var(--text-2);
+  transition: background .12s, color .12s;
+}
+.ppt-tpl-page-ops button:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
+.ppt-tpl-page-ops button:disabled { opacity: .3; }
+.ppt-tpl-fields {
+  padding: 10px 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px;
+}
+.ppt-tpl-fields label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ppt-tpl-fields label.wide { grid-column: 1 / -1; }
+.ppt-tpl-fields span { font-size: 10px; color: var(--text-2); }
+.ppt-tpl-fields input, .ppt-tpl-fields textarea {
+  width: 100%; font-size: 11.5px; line-height: 1.6; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-0); color: var(--text-0);
+  font-family: inherit; resize: vertical;
+  transition: border-color .12s, box-shadow .12s;
+}
+.ppt-tpl-fields input:focus, .ppt-tpl-fields textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79,140,255,.11);
+}
+.ppt-tpl-empty { font-size: 11px; color: var(--text-2); }
+.ppt-tpl-add { display: flex; flex-direction: column; gap: 6px; }
+.ppt-tpl-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-top: 10px; border-top: 1px solid var(--border); margin-top: auto;
+}
+.ppt-tpl-summary { font-size: 11.5px; color: var(--text-2); }
+
+/* 主操作栏：固定在滚动区之外（不随页面列表滚走）。
+   全局 `button` 把 border/background 重置了，若不在容器内补回，
+   `class="btn"` 就只是一个裸文字（曾因此被当成「点了没反应」）。 */
+.ppt-tpl-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding: 11px 18px; border-top: 1px solid var(--border);
+  background: var(--bg-1); flex-shrink: 0;
+}
+.ppt-tpl-actions-hint { font-size: 11.5px; color: var(--text-2); margin-right: auto; }
+
+/* 规划中的小转圈：暗示「在等模型」，与「生成中」的进度文案区分 */
+.ppt-tpl-spinner {
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid rgba(79,140,255,.25); border-top-color: var(--accent);
+  animation: ppt-tpl-spin .8s linear infinite;
+}
+@keyframes ppt-tpl-spin { to { transform: rotate(360deg); } }
+
+/* 模板页签内的按钮（含 .btn / .btn.primary）：与 PPT 编辑器共用同一套观感 */
+.ppt-tpl .btn {
+  font-size: 12px;
+  padding: 6px 15px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  transition: background .12s, border-color .12s;
+}
+.ppt-tpl .btn:hover:not(:disabled) { background: var(--bg-3); border-color: #3a455c; color: var(--text-0); }
+.ppt-tpl .btn:disabled { opacity: .45; cursor: not-allowed; }
+.ppt-tpl .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+  min-width: 132px;
+  box-shadow: 0 1px 10px rgba(79,140,255,.22);
+}
+.ppt-tpl .btn.primary:hover:not(:disabled) { background: #3d7bf0; }
+
+/* 窄屏：主工作区的两栏方案退化为上下，左侧套件栏收窄 */
+@media (max-width: 1100px) {
+  .ppt-tpl-side { width: 190px; }
+  .ppt-tpl-plan { grid-template-columns: 1fr; }
+  .ppt-tpl-plan-list { max-height: 200px; flex-direction: row; overflow-x: auto; }
+  .ppt-tpl-plan-item { flex: 0 0 auto; max-width: 200px; }
+}
+
+/* 空状态下的「从模板做 PPT」入口：与对话提示并列的创作动作 */
+.empty-action {
+  margin-top: 18px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 22px;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 140, 255, .35);
+  background: rgba(79, 140, 255, .08);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .14s, border-color .14s;
+}
+.empty-action:hover { background: rgba(79, 140, 255, .16); border-color: var(--accent); }
+.empty-action span { font-size: 10.5px; font-weight: 400; color: var(--text-2); }
+
+/* 缩略图：真实画面预览（后端已把图片换成占位块，体积可控） */
+.ppt-thumb { align-items: stretch; }
+.ppt-thumb-body { gap: 3px; }
+.ppt-thumb-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border);
+}
+.ppt-thumb-preview svg { width: 100%; height: 100%; display: block; }
+.ppt-thumb.on .ppt-thumb-preview,
+.ppt-thumb.active .ppt-thumb-preview { border-color: rgba(79, 140, 255, .55); }
+.ppt-thumb-tags { display: flex; flex-wrap: wrap; gap: 3px; min-height: 0; }
+.ppt-thumb-draft {
+  font-size: 9px; padding: 0 4px; border-radius: 3px;
+  background: rgba(79, 140, 255, .16); color: var(--accent);
+}
+
+/* 重排模式：源内容结构预览 */
+.ppt-tpl-page-tags { margin-left: auto; display: flex; gap: 3px; }
+.ppt-tpl-tag {
+  font-size: 9px; padding: 1px 6px; border-radius: 3px;
+  background: var(--bg-3); color: var(--text-2);
+}
+.ppt-tpl-tag.t { background: rgba(63,185,80,.14); color: var(--green); }
+.ppt-tpl-tag.c { background: rgba(167,139,250,.16); color: #a78bfa; }
+.ppt-tpl-tag.i { background: rgba(210,153,34,.14); color: var(--yellow); }
+.ppt-tpl-paras {
+  font-size: 11.5px; color: var(--text-1); line-height: 1.75;
+  max-height: 120px; overflow-y: auto;
+}
+.ppt-tpl-paras .more { color: var(--text-2); font-size: 10.5px; }
+
+/* 演讲者备注折叠条（B4）：头部下方、画布上方，不挤占三栏 */
+.ppt-note-bar {
+  display: flex; align-items: flex-end; gap: 10px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--bg-1); flex-shrink: 0;
+}
+.ppt-note-label {
+  font-size: 11px; color: var(--text-2); white-space: nowrap;
+  padding-bottom: 8px;
+}
+.ppt-note-bar textarea {
+  flex: 1; font-size: 12px; line-height: 1.6; padding: 6px 10px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-0); color: var(--text-0);
+  font-family: inherit; resize: vertical; min-height: 44px;
+}
+.ppt-note-bar textarea:focus { outline: none; border-color: var(--accent); }
+
+/* 规划单页预览（B1）：SVG 内联渲染，等比缩到编辑器宽度 */
+.ppt-tpl-preview {
+  border-bottom: 1px solid var(--border);
+  background: #fff; line-height: 0;
+  max-height: 210px; overflow: hidden;
+}
+.ppt-tpl-preview svg { width: 100%; height: auto; max-height: 210px; object-fit: contain; }
+.ppt-tpl-preview-loading {
+  font-size: 10.5px; color: var(--text-2); padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 单页重写条（B3） */
+.ppt-tpl-rewrite {
+  display: flex; gap: 8px; padding: 8px 10px;
+  border-bottom: 1px solid var(--border); background: var(--bg-2);
+}
+.ppt-tpl-rewrite input {
+  flex: 1; font-size: 11.5px; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-0); color: var(--text-0);
+  font-family: inherit;
+}
+.ppt-tpl-rewrite input:focus { outline: none; border-color: var(--accent); }

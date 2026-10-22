@@ -3,7 +3,7 @@
 //
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type WatchSourceInfo } from "./api";
+import { api, type WatchSourceInfo, type PptAnnotation } from "./api";
 import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
@@ -15,6 +15,8 @@ import PendingQueue from "./components/PendingQueue";
 import PhoneConnectModal from "./components/PhoneConnectModal";
 import CoreModal from "./components/CoreModal";
 import FileViewer from "./components/FileViewer";
+import PptEditor from "./components/PptEditor";
+import PptTemplatePicker from "./components/PptTemplatePicker";
 import ProjectPicker from "./components/ProjectPicker";
 import SettingsModal from "./components/SettingsModal";
 import Sidebar, { type SidebarTab } from "./components/Sidebar";
@@ -28,6 +30,8 @@ import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 import { apiUrl, authHeaders, isElectron, UNAUTHORIZED_EVENT } from "./lib/connection";
 import { connectEventStream, SSE_CLOSED, type EventStream } from "./lib/sse";
+import { resolveChatTab } from "./lib/chatTabTarget";
+import { buildPptApplyPrompt } from "./lib/pptApplyPrompt";
 import { useIsMobile } from "./hooks/useIsMobile";
 
 interface StreamingState {
@@ -275,6 +279,8 @@ export default function App() {
   // 当前任务的 agent 身份（发消息时记录）：llm:stream 流式 chunk 创建
   // 文本 WorkItem 时打标，让气泡图标按产生该内容的 agent 显示
   const currentAgentRef = useRef<string>("build");
+  /** PPT 编辑器「应用改动」回传通道：send 定义在下方，用 ref 桥接依赖顺序。 */
+  const sendRef = useRef<((prompt: string) => Promise<void>) | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
   // 刷新合并（400ms）：任务执行中每次 write_file/execute_command 都会命中
@@ -855,6 +861,12 @@ export default function App() {
   // 打开文件页签：目标判定见 lib/fileOpen.ts（markdown 优先系统默认程序，
   // 失败静默回退内置查看器；其余文本内置、非文本桌面走系统/浏览器提示下载）
   const openFileTab = useCallback(async (filePath: string, opts?: { forceBuiltin?: boolean }) => {
+    // .pptx 走图形化编辑器页签，而不是文本查看器/系统默认程序：
+    // 这里是人改 PPT 的入口，交给系统打开就等于放弃界面编辑能力。
+    if (/\.pptx$/i.test(filePath) && !opts?.forceBuiltin) {
+      void openPptxTab(filePath);
+      return;
+    }
     const bridge = window.liteWork;
     const target = resolveOpenTarget(filePath, {
       hasBridge: !!bridge?.openFile,
@@ -904,6 +916,105 @@ export default function App() {
     setSidebarTab("files");
   }, []);
 
+  /** 打开 PPT 编辑器页签：导入 pptx 建 roundtrip 工作区后占满主区域。
+   *  独立成页签（kind="ppt"）而非气泡富块的原因见 components/PptEditor.tsx
+   *  顶部注释：气泡最多约 623px，装不下 1280×720 的幻灯片。
+   */
+  const openPptxTab = useCallback(async (filePath: string) => {
+    const name = baseName(filePath) || filePath;
+    try {
+      const r = await api.pptOpen(filePath);
+      setTabs((prev) => {
+        const existing = prev.find((t) => t.kind === "ppt" && t.pptSource === filePath);
+        if (existing) {
+          setActiveTabId(existing.id);
+          return prev.map((t) => (t.id === existing.id ? { ...t, pptProject: r.project } : t));
+        }
+        const tab: TabItem = {
+          id: nextTabId(), kind: "ppt", title: name,
+          pptProject: r.project, pptSource: filePath,
+        };
+        setActiveTabId(tab.id);
+        return [...prev, tab];
+      });
+    } catch (e) {
+      // 409 = ppt-master 技能不可用（后端已给可读的修复建议），直接转述；
+      // 其余错误保持原来的「无法打开」前缀
+      const msg = (e as Error).message;
+      window.alert(/^409/.test(msg)
+        ? `PPT 编辑器不可用\n\n${msg.replace(/^409\s*/, "")}`
+        : `无法打开演示文稿：${msg}`);
+    }
+  }, []);
+
+  /** 打开「从模板做 PPT」页签：选版式 → 说需求 → AI 排页 → 生成并进编辑器。 */
+  const openTemplateTab = useCallback(() => {
+    setTabs((prev) => {
+      const existing = prev.find((t) => t.kind === "ppt-tpl" && !t.pptSource);
+      if (existing) { setActiveTabId(existing.id); return prev; }
+      const tab: TabItem = { id: nextTabId(), kind: "ppt-tpl", title: "从模板做 PPT" };
+      setActiveTabId(tab.id);
+      return [...prev, tab];
+    });
+  }, []);
+
+  /** 对已有 pptx 套用模板重排（右键菜单入口）。
+   *
+   *  与「从模板新建」的区别：这里是「读旧内容 → 选新设计 → 重排」，
+   *  源文件记在 pptSource 上，模板页签据此走重排流程。
+   *  同一源文件重复触发时复用已有页签，避免堆叠。
+   */
+  const openRestyleTab = useCallback((sourcePath: string) => {
+    setTabs((prev) => {
+      const existing = prev.find(
+        (t) => t.kind === "ppt-tpl" && t.pptSource === sourcePath);
+      if (existing) { setActiveTabId(existing.id); return prev; }
+      const name = baseName(sourcePath) || sourcePath;
+      const tab: TabItem = {
+        id: nextTabId(), kind: "ppt-tpl",
+        title: `重排：${name}`, pptSource: sourcePath,
+      };
+      setActiveTabId(tab.id);
+      return [...prev, tab];
+    });
+  }, []);
+
+  /** 模板生成完成：把模板页签替换成该演示文稿的编辑器页签。
+   *
+   *  不新开一个页签，而是原地替换——用户的心智是「我在做这份 PPT」，
+   *  生成完那一瞬间应该看到成品，而不是多出一个标签。
+   */
+  const onTemplateCreated = useCallback(
+    (tplTabId: string, r: { project: string; output: string; slides: number }) => {
+      const name = r.output.split("/").pop() ?? r.output;
+      setTabs((prev) => {
+        const next: TabItem[] = prev.map((t) =>
+          t.id === tplTabId
+            ? { ...t, kind: "ppt" as const, title: name, pptProject: r.project, pptSource: r.output }
+            : t);
+        const created = next.find((t) => t.id === tplTabId);
+        if (created) setActiveTabId(created.id);
+        return next;
+      });
+      setTreeRevision((v) => v + 1);
+    },
+    [],
+  );
+
+  /** 「应用改动」：把标注清单编码成一条消息回传给会话，由 Agent 执行。
+   *
+   *  形状与邮件草稿的 handleEmailDraftConfirm 一致——界面上收集结构化意图，
+   *  作为普通 chat 消息回传，不新增后端通道。确定性改动已在编辑器内直接
+   *  落盘，这里只处理需要判断的标注。
+   */
+  const handlePptApply = useCallback(
+    (payload: { project: string; source: string; annotations: PptAnnotation[] }) => {
+      // send 定义在后面（依赖 chat 状态），经 ref 桥接避免依赖顺序；未绑定前忽略
+      const fn = sendRef.current;
+      if (fn) void fn(buildPptApplyPrompt(payload));
+    },
+    [],
+  );
   const closeTab = useCallback(
     (id: string) => {
       setTabs((prev) => {
@@ -2784,15 +2895,29 @@ export default function App() {
         void runWorktreeCommand(prompt);
         return;
       }
-      let sid = activeTabId ? tabsRef.current.find((t) => t.id === activeTabId)?.sessionId : null;
+      // 非对话页签（文件查看 / PPT 编辑器 / 模板页签）里发起的对话必须先落回
+      // 对话页签：那些页签**没有 sessionId 槽位**，旧实现把新建的 session 绑在
+      // 它们身上 → 任务真的跑起来了，但 activeSessionId 只认 kind==="chat"，
+      // 界面上看不到任何对话 —— 用户视角就是「点了没反应」。
+      const chatTab = resolveChatTab(tabsRef.current, activeTabId, nextTabId);
+      if (chatTab.create) {
+        const created = chatTab.create;
+        setTabs((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, created]));
+      }
+      if (chatTab.tabId !== activeTabId) {
+        setActiveTabId(chatTab.tabId);
+        pushLog("💬 已切回对话页签执行（当前页签不是对话）");
+      }
+      const chatTabId = chatTab.tabId;
+      let sid = tabsRef.current.find((t) => t.id === chatTabId)?.sessionId;
       // 会话态走 getChat（chatStatesRef 最新）/ draft 走对应 ref：避免 useCallback
       // 闭包捕获旧值导致「切换模型/推理强度后发送仍带旧档位」的回归
       const selectedModel = activeSessionId
         ? (getChat(activeSessionId).modelOverride ?? null)
-        : (activeTabId ? draftModelsRef.current[activeTabId] ?? null : null);
+        : (draftModelsRef.current[chatTabId] ?? null);
       const reasoningEffort = activeSessionId
         ? (getChat(activeSessionId).reasoningEffort ?? "")
-        : (activeTabId ? draftReasoningRef.current[activeTabId] ?? "" : "");
+        : (draftReasoningRef.current[chatTabId] ?? "");
       let createdSession = false;
       if (!sid) {
         // 当前 tab 尚无 session（newChatTab 的占位），首次发送时创建并绑定到该 tab
@@ -2804,7 +2929,7 @@ export default function App() {
         // 否则首条消息后档位丢失、会话内后续消息回到供应商默认
         if (reasoningEffort) patchChat(session_id, { reasoningEffort });
         setTabs((prev) => prev.map((t) =>
-          t.id === activeTabId ? { ...t, sessionId: session_id, modelOverride: selectedModel } : t
+          t.id === chatTabId ? { ...t, sessionId: session_id, modelOverride: selectedModel } : t
         ));
         if (selectedModel) {
           // 必须把后端确认的 override 写回会话状态，否则 Composer 读 currentChat.modelOverride
@@ -2813,7 +2938,7 @@ export default function App() {
           patchChat(session_id, { modelOverride: resp.override, effectiveModel: resp.effective });
         }
         // 暂存的协作模式随 session 创建写入（首条消息即按该模式编排）
-        const draftCollab = draftCollabModes[activeTabId];
+        const draftCollab = draftCollabModes[chatTabId];
         if (draftCollab) {
           try {
             await api.setSessionCollab(session_id, draftCollab);
@@ -2938,7 +3063,9 @@ export default function App() {
   // 引用变化都会让全部历史轮次重渲染。此前这里写的是内联箭头函数，每次 App
   // 渲染都是新引用 → 流式期间整棵聊天树全量重渲染。统一收口到 useCallback。
   const handleSend = useCallback((p: string) => void send(p), [send]);
-
+  // PPT 编辑器「应用改动」经 ref 取 send（send 定义在上方，但编辑器回调
+  // 需要稳定引用，避免每次渲染换掉 PptEditor 的 props）
+  useEffect(() => { sendRef.current = send; }, [send]);
   // 「＋ 新建任务」（任务 Tab 入口）：打开向导弹窗。
   const requestNewTask = useCallback(() => setNewTaskOpen(true), []);
 
@@ -3442,6 +3569,7 @@ export default function App() {
         coreMode={coreMode}
         coreLabel={coreLabel}
         onFileOpen={(p, opts) => void openFileTab(p, opts)}
+        onTemplateRestyle={openRestyleTab}
         onDirOpen={(p) => void openDirInSystem(p)}
       />
       </ErrorBoundary>
@@ -3462,9 +3590,28 @@ export default function App() {
           onSelect={(id) => setActiveTabId(id)}
           onClose={closeTab}
           sseStates={tabSseStates}
+          onOpenTemplate={openTemplateTab}
         />
         {activeTab?.kind === "file" ? (
           <FileViewer tab={activeTab} />
+        ) : activeTab?.kind === "ppt" ? (
+          <ErrorBoundary name="PPT 编辑器">
+            <PptEditor
+              key={activeTab.pptProject}
+              project={activeTab.pptProject ?? ""}
+              source={activeTab.title}
+              onRequestApply={handlePptApply}
+            />
+          </ErrorBoundary>
+        ) : activeTab?.kind === "ppt-tpl" ? (
+          <ErrorBoundary name="PPT 模板">
+            <PptTemplatePicker
+              key={activeTab.pptSource ?? "new"}
+              sourcePath={activeTab.pptSource}
+              onCancel={() => closeTab(activeTab.id)}
+              onCreated={(r) => void onTemplateCreated(activeTab.id, r)}
+            />
+          </ErrorBoundary>
         ) : (
           <>
             {/* 多 Agent 协作状态条（有派生记录时出现）：点击跳转右侧 Agents 看板 */}
@@ -3509,6 +3656,7 @@ export default function App() {
               currentAgent={currentAgent}
               unfinished={currentChat.unfinished}
               onContinue={() => void send(CONTINUE_PROMPT)}
+              onOpenTemplate={openTemplateTab}
               worktreeEnabled={currentChat.worktreeEnabled}
               worktreeStatus={currentChat.worktreeStatus ?? null}
               worktreeConflicts={currentChat.worktreeConflicts ?? []}

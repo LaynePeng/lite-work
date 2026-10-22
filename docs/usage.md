@@ -5,6 +5,9 @@ lite-work 支持多种运行形态：**桌面应用（Electron）**、**纯浏�
 
 > 项目内的推荐组织方式（`AGENTS.md` + `素材/` + `产出物/` 版本归档）见
 > `docs/project-structure.md`，配套内置技能 `project-init` 可一键初始化。
+>
+> PPT 能力（从模板出稿、套用模板重排、图形化编辑器、标注交给 AI）见
+> `docs/ppt-guide.md`。
 
 ## 1. 桌面应用（完整体验，推荐）
 

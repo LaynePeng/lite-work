@@ -16,7 +16,9 @@ env:
 jobs:
   macos:
     name: Build macOS DMG
-    runs-on: macos-14
+    # 标准 label（macos-15）本身就是 arm64 镜像，与产物 macos-arm64 一致；
+    # 带 -large/-intel 后缀的是 x64，用错会打出 x64 DMG。macos-14 将于 2026-11-02 退役。
+    runs-on: macos-15
     steps:
       - name: Check out release tag
         uses: actions/checkout@v7

@@ -25,7 +25,7 @@ function shortSha(sha?: string): string {
 
 // ---------------------------------------------------------------- 目录树
 
-function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSession }: { workspace: string; revision: number; onFileOpen?: (path: string, opts?: OpenFileOptions) => void; onDirOpen?: (path: string) => void; onOpenWorktreeSession?: (sessionId: string) => void }) {
+function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSession, onTemplateRestyle }: { workspace: string; revision: number; onFileOpen?: (path: string, opts?: OpenFileOptions) => void; onDirOpen?: (path: string) => void; onOpenWorktreeSession?: (sessionId: string) => void; onTemplateRestyle?: (path: string) => void }) {
   const [dirs, setDirs] = useState<Map<string, TreeEntry[]>>(new Map());
   const [open, setOpen] = useState<Set<string>>(new Set([""]));
   const [branch, setBranch] = useState<string | null>(null);
@@ -521,6 +521,17 @@ function FileTree({ workspace, revision, onFileOpen, onDirOpen, onOpenWorktreeSe
                   }}
                 >
                   👁 用内置查看
+                </button>
+              )}
+              {/\.pptx$/i.test(menu.path) && (
+                <button
+                  className="context-menu-item"
+                  onClick={() => {
+                    onTemplateRestyle?.(menu.path);
+                    setMenu(null);
+                  }}
+                >
+                  ✨ 套用模板重排
                 </button>
               )}
               <button className="context-menu-item danger" onClick={() => removeFile(menu.path, menu.name)}>
@@ -1093,6 +1104,7 @@ export default function Sidebar({
   coreMode,
   coreLabel,
   onFileOpen,
+  onTemplateRestyle,
   onDirOpen,
 }: {
   sessions: SessionInfo[];
@@ -1157,6 +1169,8 @@ export default function Sidebar({
   coreMode?: "local" | "remote";
   coreLabel?: string;
   onFileOpen?: (path: string, opts?: OpenFileOptions) => void;
+  /** 「套用模板重排」：对已有 pptx 换设计（pptx 右键菜单） */
+  onTemplateRestyle?: (path: string) => void;
   onDirOpen?: (path: string) => void;
 }) {
   // 当前项目显示名：路径末段（兼容 / 与 \）；未打开项目时由 App 层保证不进入 sessions 视图
@@ -1463,7 +1477,7 @@ export default function Sidebar({
           />
         )}
 
-        {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} onOpenWorktreeSession={onOpenWorktreeSession} />}
+        {tab === "files" && <FileTree workspace={workspace} revision={treeRevision} onFileOpen={onFileOpen} onDirOpen={onDirOpen} onOpenWorktreeSession={onOpenWorktreeSession} onTemplateRestyle={onTemplateRestyle} />}
 
         {tab === "rules" && <RulesPanel workspace={workspace} hasProject={!!workspace && workspace !== "未打开项目"} />}
 

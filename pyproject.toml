@@ -24,6 +24,9 @@ dependencies = [
     "openpyxl>=3.1",
     "python-pptx>=0.6.21",
     "reportlab>=4.0",
+    # ppt-master 的生图/图库脚本全部 import requests（19 个模块），
+    # 主程序本身用 httpx；缺它会让「AI 配图」在打包态直接崩（实测）
+    "requests>=2.31",
     "pandas>=2.0",
     "matplotlib>=3.7",
     # 专利技能（patent-disclosure-skill v4.8.0 随包依赖）：公式→Word 可编辑、docx→md、

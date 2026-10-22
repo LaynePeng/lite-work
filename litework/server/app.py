@@ -26,6 +26,7 @@ from .routers import (
     create_llm_router,
     create_meta_router,
     create_office_router,
+    create_ppt_router,
     create_push_router,
     create_schedules_router,
     create_security_router,
@@ -181,6 +182,7 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     fast_app.include_router(create_agents_router(ctx))
     fast_app.include_router(create_workspace_router(ctx))
     fast_app.include_router(create_office_router(ctx))
+    fast_app.include_router(create_ppt_router(ctx))
     fast_app.include_router(create_schedules_router(ctx))
     fast_app.include_router(create_push_router(ctx))
     # ------------------------------------------------------------ 静态前端

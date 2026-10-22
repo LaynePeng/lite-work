@@ -737,10 +737,10 @@ export type FilePreviewResponse = {
   slides: { title: string; bullets: string[] }[];
 };
 
-// Tab 项：对话 或 文件
+// Tab 项：对话 / 文件 / PPT 编辑器 / PPT 模板
 export interface TabItem {
   id: string;
-  kind: "chat" | "file";
+  kind: "chat" | "file" | "ppt" | "ppt-tpl";
   title: string;
   // chat tab
   sessionId?: string;
@@ -750,6 +750,9 @@ export interface TabItem {
   fileLanguage?: string;
   fileContent?: string;
   fileDiff?: string;
+  // ppt tab（kind="ppt"）：ppt_edit 工具 op=open 返回的工作区名 + 源文件
+  pptProject?: string;
+  pptSource?: string;
 }
 
 /** /api/approvals/pending 返回的单条挂起审批（SSE 重连/轮询兜底补卡用）。

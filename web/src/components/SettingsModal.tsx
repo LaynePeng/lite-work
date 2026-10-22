@@ -2925,9 +2925,10 @@ export default function SettingsModal({
                   ["market", "插件/技能市场"],
                   ["mcp", "MCP 子进程"],
                   ["shell", "Agent 执行的命令"],
+                  ["media", "PPT 配图（生图/图库）"],
                 ].map(([key, label]) => (
                   <label key={key} className="settings-check" title={
-                    key === "mcp" || key === "shell"
+                    key === "mcp" || key === "shell" || key === "media"
                       ? "以 HTTP_PROXY/HTTPS_PROXY 环境变量注入子进程；内网地址请加进直连列表"
                       : undefined
                   }>

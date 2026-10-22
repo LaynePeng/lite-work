@@ -52,6 +52,7 @@ TOOL_DOMAIN: Dict[str, str] = {
     "docx_replace": "office", "docx_read": "office",
     "xlsx_create": "office", "xlsx_format": "office", "xlsx_replace": "office", "xlsx_read": "office",
     "pptx_create": "office", "pptx_format": "office", "pptx_read": "office",
+    "ppt_edit": "office",
     "pdf_create": "office", "pdf_read": "office",
     "data_analyze": "office", "chart_make": "office",
     "ocr_image": "office", "ocr_document": "office", "ocr_pptx": "office",

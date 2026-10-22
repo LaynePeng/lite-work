@@ -803,7 +803,12 @@ const AGENT_WELCOME: Record<string, { title: string; sub: string; hints: [string
   },
 };
 
-function EmptyState({ currentAgent, onSend }: { currentAgent: string; onSend: (p: string) => void }) {
+function EmptyState({ currentAgent, onSend, onOpenTemplate }: {
+  currentAgent: string;
+  onSend: (p: string) => void;
+  /** 打开「从模板做 PPT」：与对话并列的创作入口 */
+  onOpenTemplate?: () => void;
+}) {
   const w = AGENT_WELCOME[currentAgent] ?? AGENT_WELCOME.build;
   return (
     <div className="empty-state">
@@ -815,6 +820,12 @@ function EmptyState({ currentAgent, onSend }: { currentAgent: string; onSend: (p
           <button key={label} onClick={() => onSend(prompt)}>{label}</button>
         ))}
       </div>
+      {onOpenTemplate && (
+        <button className="empty-action" onClick={onOpenTemplate}>
+          ✨ 从模板做 PPT
+          <span>选版式、填内容，生成后直接微调</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -864,6 +875,7 @@ export default function ChatView({
   foldTurns = FOLD_THRESHOLD,
   foldMessages = FOLD_MESSAGES,
   onStickChange,
+  onOpenTemplate,
 }: {
   sessionId: string;
   sessionTitle: string;
@@ -909,6 +921,8 @@ export default function ChatView({
   foldMessages?: number;
   /** 贴底状态变化（true=停在底部）：供 Composer 做状态驱动的快捷键提示 */
   onStickChange?: (stick: boolean) => void;
+  /** 空状态里的「从模板做 PPT」入口（未传则不显示） */
+  onOpenTemplate?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -1063,7 +1077,7 @@ export default function ChatView({
     <div className="chat-view">
       {turns.length === 0 && !streaming ? (
         <div className="chat-scroll">
-          <EmptyState currentAgent={currentAgent} onSend={onSend} />
+          <EmptyState currentAgent={currentAgent} onSend={onSend} onOpenTemplate={onOpenTemplate} />
         </div>
       ) : (
         <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
@@ -1404,6 +1418,17 @@ export function QuestionBar({
   const active = pendingQuestions[activeQuestionIdx] ?? pendingQuestions[0];
   const multi = !!active.multiSelect && active.options.length > 0;
 
+  /** 这次「提交」该送出什么：多选时勾选项优先，其次是手写内容；
+   *  单选时就是手写内容。空串 = 还不能提交（按钮禁用）。 */
+  const submitValue = (): string => {
+    if (multi && picked.length > 0) {
+      const typed = customAnswer.trim();
+      // 勾选项 + 手写补充一起送，避免用户写了却被勾选项覆盖掉
+      return typed ? `${picked.join("；")}；${typed}` : picked.join("；");
+    }
+    return customAnswer.trim();
+  };
+
   return (
     <div className="question-bar">
       <div className="question-bar-header">
@@ -1456,42 +1481,54 @@ export function QuestionBar({
                 </button>
               );
             })}
-            <button
-              className="btn-approve btn-submit-picked"
-              disabled={picked.length === 0}
-              onClick={() => {
-                onAnswerQuestion(active.id, picked.join("；"));
-                setPicked([]);
-              }}
-            >
-              提交所选{picked.length > 0 ? `（${picked.length}）` : ""}
-            </button>
           </div>
         )}
-        <div className="question-custom-row">
+        {/* 统一提交行：单选（输入框 + 提交）与多选（勾选 + 提交）外观一致。
+            此前多选的「提交所选」是塞在选项卡容器里的 .btn-approve（绿色审批
+            按钮），和单选的「提交回答」并列成两个长相/位置都不同的按钮，
+            用户每次都要判断「该点哪个」。现在都是同一行、同一颗按钮。
+            多选也保留自定义输入：勾选项之外的答案常常需要手写（「C 和 D」），
+            只是勾了就用勾的、没勾就用输入的。 */}
+        {multi && (
+          <div className="question-picked-row">
+            {picked.length > 0 ? (
+              <span className="question-picked-hint">
+                已选 {picked.length} 项：{picked.join("、")}
+              </span>
+            ) : (
+              <span className="question-picked-hint">勾选上方选项，或直接输入自定义回答</span>
+            )}
+          </div>
+        )}
+        <div className="question-submit-row">
           <input
-            className="form-input"
-            placeholder="输入自定义回答…"
+            className="form-input question-custom-input"
+            placeholder={multi
+              ? (picked.length > 0 ? "勾选已足够可留空；补充其他答案…" : "输入自定义回答…")
+              : (active.options.length > 0 ? "都不合适？输入自定义回答…" : "输入回答…")}
             value={customAnswer}
             onChange={(e) => setCustomAnswer(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && customAnswer.trim()) {
-                onAnswerQuestion(active.id, customAnswer.trim());
-                setCustomAnswer("");
-              }
+              if (e.key !== "Enter") return;
+              const text = submitValue();
+              if (!text) return;
+              onAnswerQuestion(active.id, text);
+              setCustomAnswer("");
+              setPicked([]);
             }}
           />
           <button
-            className="btn-approve"
-            disabled={!customAnswer.trim()}
+            className="btn-question-submit"
+            disabled={!submitValue()}
             onClick={() => {
-              if (customAnswer.trim()) {
-                onAnswerQuestion(active.id, customAnswer.trim());
-                setCustomAnswer("");
-              }
+              const text = submitValue();
+              if (!text) return;
+              onAnswerQuestion(active.id, text);
+              setCustomAnswer("");
+              setPicked([]);
             }}
           >
-            提交回答
+            提交
           </button>
         </div>
       </div>

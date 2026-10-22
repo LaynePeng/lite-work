@@ -25,6 +25,200 @@ const NETWORK_TIMEOUT = 120000;
 // 用与联网类同级的余量，避免「后端还在摘要、前端先中断」。
 const COMPACT_TIMEOUT = 180000;
 
+/** PPT 编辑器：导入/导出要跑 ppt-master 的 Python 脚本（大 deck 可到分钟级）。 */
+const PPT_TIMEOUT = 180000;
+const PPT_EXPORT_TIMEOUT = 600000;
+/** 规划：后端单次 LLM 调用上限 180s，前端留同样余量（超时前端先断会看不到兜底页）。 */
+const PPT_PLAN_TIMEOUT = 200000;
+/** 配图：生图单张十几秒起，多张并发（后端限 3 并发），整单给足余量。 */
+const PPT_IMAGE_TIMEOUT = 600000;
+
+/** PPT 编辑器数据模型（与后端 tools/ppt_edit.py 的 outline 输出一致）。 */
+export interface PptElement {
+  id: string;
+  kind: string;
+  semantic?: string;
+  /** [x, y, width, height]，画布像素（96dpi 基准） */
+  frame: [number, number, number, number] | null;
+  placeholder?: string;
+  annotation?: string;
+  text?: string[];
+  font_size?: number | null;
+  fill?: string | null;
+  align?: string | null;
+  image?: string;
+  table?: { rows: { text: string }[][]; header_rows?: number; column_widths?: number[] };
+  chart?: { type?: string; categories?: string[];
+            series: { name: string; values: number[] }[] };
+}
+
+export interface PptSlide {
+  slide: number;
+  viewBox: [number, number, number, number] | null;
+  elements: PptElement[];
+}
+
+export interface PptOutline {
+  project: string;
+  total: number;
+  slides: PptSlide[];
+}
+
+export interface PptAnnotation {
+  slide: number;
+  element_id: string;
+  note: string;
+  text: string[];
+}
+
+/** 从已有 pptx 抽出的一页内容（重排到模板用）。 */
+export interface PptExtractedSlide {
+  slide: number;
+  title: string;
+  paragraphs: string[];
+  /** 后端初判的版式类型，仅供 Agent 参考 */
+  layout_guess: string;
+  has_table: boolean;
+  has_chart: boolean;
+  has_picture: boolean;
+  table: string[][];
+  chart: { categories: string[]; series: { name: string; values: number[] }[] }[];
+}
+
+/** 模板版式里的一页（带可填充占位符）。 */
+export interface PptTemplatePage {
+  file: string;
+  slug: string;
+  label: string;
+  placeholders: string[];
+}
+
+/** 版式套件：真正可填充出稿的模板。 */
+export interface PptTemplateLayout {
+  suite: string;
+  label: string;
+  summary: string;
+  canvas_format: string;
+  page_count: number;
+  pages: PptTemplatePage[];
+}
+
+/** 品牌配色：只提供主色与适用场景，不产出页面。 */
+export interface PptTemplateBrand {
+  key: string;
+  label: string;
+  summary: string;
+  primary_color: string;
+}
+
+/** 设计风格：给 Agent 的排版/叙述规范，不参与机械填充。 */
+export interface PptTemplateStyle {
+  key: string;
+  label: string;
+  summary: string;
+  keywords: string[];
+}
+
+export interface PptTemplateLibrary {
+  layouts: PptTemplateLayout[];
+  brands: PptTemplateBrand[];
+  styles: PptTemplateStyle[];
+  /** ppt-master 技能可用性；技能缺失时 layouts 为空，必须靠它区分原因 */
+  available?: PptSkillAvailability;
+}
+
+/** ppt-master 内置技能的可用性（缺失时前端提示修复安装，而非显示空模板库）。 */
+export interface PptSkillAvailability {
+  /** 三项齐全才 true：技能目录 / 模板资产 / 转换脚本 */
+  ready: boolean;
+  /** 定位到的技能目录（null = 根本没找到） */
+  skill_dir: string | null;
+  /** 可用版式套件数 */
+  layouts: number;
+  /** 转换脚本是否就位 */
+  scripts: boolean;
+  /** 缺失原因（人话） */
+  reason: string;
+  /** 怎么修（给用户看的可执行建议） */
+  hint: string;
+}
+
+/** 生成请求：选套件 + 每页的占位符取值。 */
+export interface PptTemplateSpec {
+  suite: string;
+  brand?: string;
+  style?: string;
+  /** 深色变体（色板替换，布局同构） */
+  theme?: "light" | "dark";
+  pages: { page: string; values: Record<string, string> }[];
+}
+
+/** 规划结果里的一页（`/api/ppt/plan` 返回；可直接喂给 pptCreate）。 */
+export interface PptPlanPage {
+  /** 模板页 slug（如 title_slide） */
+  page: string;
+  /** 中文版式名（后端给的展示名） */
+  label: string;
+  /** 占位符 → 文案 */
+  values: Record<string, string>;
+  /** 图片位 → 英文画面描述（仅开配图时由模型给出） */
+  image_prompts?: Record<string, string>;
+}
+
+/** 生图后端（凭据复用已配置的聊天供应商，不额外填 key）。 */
+export interface PptImageBackend {
+  backend: string;
+  label: string;
+  /** 提供凭据的环境变量名（诊断用） */
+  key_env: string;
+  /** true = 凭据来自已配置的聊天供应商（用户无需额外配置） */
+  from_llm_provider: boolean;
+}
+
+/** 图库来源（零密钥，没生图模型时的兜底）。 */
+export interface PptStockProvider {
+  provider: string;
+  label: string;
+  /** true = 不需要任何 API Key */
+  zero_config: boolean;
+  /** true = 不用在页面上署名（CC0/公版） */
+  no_attribution: boolean;
+}
+
+/** 配图能力总览：生图 / 图库 / 都没有。 */
+export interface PptImageInfo {
+  /** generate=能用生图模型；stock=只能用开放图库；none=都没有 */
+  mode: "generate" | "stock" | "none";
+  can_generate: boolean;
+  can_stock: boolean;
+  backends: PptImageBackend[];
+  providers: PptStockProvider[];
+  default_backend: string;
+}
+/** 规划请求：一句话需求或旧稿 → 逐页方案。 */
+export interface PptPlanRequest {
+  suite: string;
+  brief?: string;
+  audience?: string;
+  page_hint?: number;
+  source_path?: string;
+  /** 模型不可用时返回兜底骨架页（默认 true） */
+  fallback?: boolean;
+  /** 是否让模型为带图版式写配图提示词 */
+  with_images?: boolean;
+}
+
+export interface PptPlanResponse {
+  ok: boolean;
+  pages: PptPlanPage[];
+  /** true = 模型没给出可用方案，这是按版式排出的骨架（文案待填） */
+  fallback: boolean;
+  /** 降级原因（fallback 时给用户看） */
+  error: string | null;
+  /** 配图信息（with_images 时返回） */
+  images?: PptImageInfo | null;
+}
+
 /** 安装任务进度快照（/api/install/jobs/{id}）。 */
 export interface InstallJobStatus {
   id: string;
@@ -166,6 +360,118 @@ async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Pro
 
 export const api = {
   status: () => req<ServerStatus>("/api/status"),
+
+  // ---- PPT 编辑器（/api/ppt/*）----
+  // 与 Agent 的 ppt_edit 工具共用同一份实现：界面上的确定性改动直接落盘，
+  // 不经过模型转述。
+  pptOpen: (path: string, reimport = false) =>
+    req<{ project: string; slides: number; source: string; reused?: boolean }>("/api/ppt/open", {
+      method: "POST", body: JSON.stringify({ path, reimport }),
+    }, PPT_TIMEOUT),
+  pptOutline: (project: string, slide?: number) =>
+    req<PptOutline>(`/api/ppt/outline?project=${encodeURIComponent(project)}` +
+      (slide ? `&slide=${slide}` : ""), undefined, PPT_TIMEOUT),
+  pptSlide: (project: string, slide: number) =>
+    req<{ svg: string; slide: number; path: string }>(
+      `/api/ppt/slide?project=${encodeURIComponent(project)}&slide=${slide}`,
+      undefined, PPT_TIMEOUT),
+  pptThumbs: (project: string) =>
+    req<{ slides: { slide: number; viewBox: string; svg: string }[] }>(
+      `/api/ppt/thumbs?project=${encodeURIComponent(project)}`, undefined, PPT_TIMEOUT),
+  pptEdit: (payload: { project: string; slide: number; element_id: string;
+                       changes: Record<string, unknown> }) =>
+    req<{ applied: string[]; element: PptElement | null }>("/api/ppt/edit", {
+      method: "POST", body: JSON.stringify(payload),
+    }, PPT_TIMEOUT),
+  pptAnnotate: (payload: { project: string; slide: number; element_id: string; note: string }) =>
+    req<{ message: string }>("/api/ppt/annotate", {
+      method: "POST", body: JSON.stringify(payload),
+    }, PPT_TIMEOUT),
+  pptAnnotations: (project: string) =>
+    req<{ count: number; items: PptAnnotation[] }>(
+      `/api/ppt/annotations?project=${encodeURIComponent(project)}`,
+      undefined, PPT_TIMEOUT),
+  pptExport: (project: string, output?: string, format?: "pptx" | "pdf") =>
+    req<{ output: string; summary: string; format?: string; pdf_error?: string }>(
+      "/api/ppt/export", {
+        method: "POST",
+        body: JSON.stringify({ project, ...(output ? { output } : {}),
+                               ...(format ? { format } : {}) }),
+      }, PPT_EXPORT_TIMEOUT),
+  /** 增删页 / 换版式（A4）。 */
+  pptAddSlide: (payload: { project: string; index?: number; layout?: string;
+                           suite?: string; copy_from?: number;
+                           values?: Record<string, string> }) =>
+    req<{ ok: boolean; slide: number; slides: number }>("/api/ppt/slide-ops", {
+      method: "POST", body: JSON.stringify({ op: "add", ...payload }),
+    }, PPT_TIMEOUT),
+  pptRemoveSlide: (payload: { project: string; slide: number }) =>
+    req<{ ok: boolean; slides: number }>("/api/ppt/slide-ops", {
+      method: "POST", body: JSON.stringify({ op: "remove", ...payload }),
+    }, PPT_TIMEOUT),
+  pptChangeLayout: (payload: { project: string; slide: number; layout: string;
+                               suite?: string }) =>
+    req<{ ok: boolean; carried: string[]; missing: string[];
+          warning: string | null }>("/api/ppt/slide-ops", {
+      method: "POST", body: JSON.stringify({ op: "change_layout", ...payload }),
+    }, PPT_TIMEOUT),
+  /** 演讲者备注（B4）。 */
+  pptNotes: (project: string) =>
+    req<{ notes: { slide: number; note: string }[] }>(
+      `/api/ppt/notes?project=${encodeURIComponent(project)}`, undefined, PPT_TIMEOUT),
+  pptSetNote: (payload: { project: string; slide: number; note: string }) =>
+    req<{ ok: boolean; cleared: boolean }>("/api/ppt/set_note", {
+      method: "POST", body: JSON.stringify(payload),
+    }, PPT_TIMEOUT),
+  /** 单页预览（B1）：返回填好文案的 SVG。 */
+  pptPreview: (payload: { suite: string; page: string;
+                          values: Record<string, string>;
+                          table?: unknown; chart?: unknown }) =>
+    req<{ ok: boolean; svg: string; overflow: string[] }>("/api/ppt/preview", {
+      method: "POST", body: JSON.stringify(payload),
+    }, PPT_TIMEOUT),
+  /** 单页重写（B3）：只改这一页文案。 */
+  pptRewritePage: (payload: { suite: string; page: string;
+                              values: Record<string, string>;
+                              instruction: string }) =>
+    req<{ ok: boolean; rewrite: boolean; values: Record<string, string> }>(
+      "/api/ppt/plan", {
+        method: "POST",
+        body: JSON.stringify({ suite: payload.suite, rewrite: {
+          page: payload.page, values: payload.values,
+          instruction: payload.instruction } }),
+      }, PPT_PLAN_TIMEOUT),
+  pptExtract: (path: string) =>
+    req<{ source: string; total: number; slides: PptExtractedSlide[] }>(
+      "/api/ppt/extract", { method: "POST", body: JSON.stringify({ path }) }, PPT_EXPORT_TIMEOUT),
+  pptTemplates: () =>
+    req<PptTemplateLibrary>("/api/ppt/templates", undefined, PPT_TIMEOUT),
+  pptCreate: (
+    template: PptTemplateSpec,
+    filename?: string,
+    images?: { spec: Record<string, string>; backend?: string; mode?: "generate" | "stock" },
+  ) =>
+    req<{ output: string; project: string; slides: number; warnings: string[] }>(
+      "/api/ppt/create",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          template,
+          ...(filename ? { filename } : {}),
+          ...(images ? { images: images.spec } : {}),
+          ...(images?.backend ? { image_backend: images.backend } : {}),
+          ...(images?.mode ? { image_mode: images.mode } : {}),
+        }),
+      },
+      // 配图要跑生图（每张十几秒），整单留足余量
+      images ? PPT_IMAGE_TIMEOUT : PPT_EXPORT_TIMEOUT),
+  /** 提示词/旧稿 → 逐页方案（一次模型调用；不落盘）。 */
+  pptPlan: (payload: PptPlanRequest) =>
+    req<PptPlanResponse>("/api/ppt/plan",
+      { method: "POST", body: JSON.stringify(payload) }, PPT_PLAN_TIMEOUT),
+  /** 可用的生图后端（凭据复用已配置的聊天供应商）。 */
+  pptImages: () =>
+    req<PptImageInfo & { enabled: boolean }>("/api/ppt/images", undefined, PPT_TIMEOUT),
   // ---- 盯梢 / 定时计划（/api/schedules）----
   schedules: () => req<{ schedules: ScheduleInfo[] }>("/api/schedules"),
   watchSources: () => req<{ sources: WatchSourceInfo[] }>("/api/watch/sources"),

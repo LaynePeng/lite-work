@@ -212,9 +212,11 @@ class WebFetchPlugin(ToolPlugin):
 
     def __init__(self, cache_dir: Optional[str] = None, cache_ttl: float = 3600,
                  proxy_mounts: Optional[Dict[str, Any]] = None,
-                 ssl_verify: bool = True) -> None:
+                 ssl_verify: bool = True,
+                 proxy_url: str = "") -> None:
         self._tools = WebFetchTools(cache_dir=cache_dir, cache_ttl=cache_ttl,
-                                     proxy_mounts=proxy_mounts, ssl_verify=ssl_verify)
+                                     proxy_mounts=proxy_mounts, ssl_verify=ssl_verify,
+                                     proxy_url=proxy_url)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()
@@ -265,6 +267,29 @@ class OfficePlugin(ToolPlugin):
         from .office import OfficeTools  # 延迟导入：见文件头说明
 
         self._tools = OfficeTools(workspace)
+
+    def get_tools(self) -> List[ToolDefinition]:
+        return self._tools.get_tools()
+
+    async def execute(self, name: str, args: Dict[str, Any]) -> str:
+        return await self._tools.execute(name, args)
+
+
+class PptEditPlugin(ToolPlugin):
+    """PPT 图形化编辑（ppt_edit）：roundtrip 工作区 + 元素级改动。
+
+    与 office-plugin 分开：office.py 是社区 office-plugin 的同源副本，
+    主仓库侧的 PPT 编辑能力不能夹带进去（AGENTS.md §6）。
+    """
+
+    name = "ppt-edit-plugin"
+    version = "0.1.0"
+    description = "PPT 图形化编辑：导入 pptx、按元素改内容、标注、回写导出"
+
+    def __init__(self, workspace: str) -> None:
+        from .ppt_edit import PptEditTools
+
+        self._tools = PptEditTools(workspace)
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()

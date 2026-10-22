@@ -114,6 +114,9 @@ npm run build:web                                    # 一次性构建前端（w
 > **API Key**：首次启动后在设置界面选择供应商并填写（存储于 `~/.lite-work/config.json`），也支持 `DEEPSEEK_API_KEY` 等环境变量兜底。
 >
 > 更多执行方式（远程 Core、仅后端 API、serve 参数、鉴权细节、日志排障）见 **[执行方式指南](docs/usage.md)**。
+>
+> PPT 相关能力（从模板出稿、套用模板重排、图形化编辑器、标注交 AI）见
+> **[PPT 使用手册](docs/ppt-guide.md)**。
 
 **测试**（后端 pytest / 前端 vitest）：
 

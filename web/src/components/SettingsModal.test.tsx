@@ -5,6 +5,9 @@
 // 整页空白。回归背景：原先 模型/MCP 同处一个 Promise.all + 静默 catch，
 // 任一失败（如 MCP 状态挂掉）就让模型页 load 不出来且没有任何提示。
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsModal from "./SettingsModal";
@@ -240,5 +243,31 @@ describe("SettingsModal · 思考模式推理回传", () => {
       model_hints: ["mimo"],
       exclude_providers: ["sglm"],
     });
+  });
+});
+
+describe("SettingsModal · 代理出网面清单", () => {
+  // 回归点：配图（media）走 skills 里的 requests 子进程，只能靠 HTTP_PROXY 注入。
+  // 设置页的 scope 清单是**手写数组**，后端加 scope 时极易漏配 —— 漏了就意味着
+  // 用户在界面上永远勾不到「PPT 配图走代理」。
+  const src = readFileSync(resolve(process.cwd(), "src/components/SettingsModal.tsx"), "utf-8");
+
+  it("七个出网面都在界面上（含 media = PPT 配图）", () => {
+    const expected: [string, string][] = [
+      ["llm", "LLM API 调用"],
+      ["webfetch", "Agent 联网工具"],
+      ["meta", "models.dev 元数据"],
+      ["market", "插件/技能市场"],
+      ["mcp", "MCP 子进程"],
+      ["shell", "Agent 执行的命令"],
+      ["media", "PPT 配图"],
+    ];
+    for (const [key, label] of expected) {
+      expect(src, `缺少 scope ${key}`).toContain(`["${key}", "${label}`);
+    }
+  });
+
+  it("media 的 tooltip 说明是环境变量注入（与后端实现一致）", () => {
+    expect(src).toMatch(/key === "media"[\s\S]{0,120}HTTP_PROXY/);
   });
 });
