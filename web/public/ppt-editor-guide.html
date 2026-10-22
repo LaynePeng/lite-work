@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPT 图形化编辑 · 使用指南</title>
+<style>
+  :root{
+    --bg-0:#0d1117; --bg-1:#161b22; --bg-2:#1c2330; --bg-3:#21283a;
+    --border:#262e3f; --text-0:#e6edf3; --text-1:#a8b3c0; --text-2:#6e7a8c;
+    --accent:#4f8cff; --green:#3fb950; --red:#f85149; --yellow:#d29922;
+    --purple:#a78bfa;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg-0); color:var(--text-0);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7; font-size:15px; padding-bottom:80px;
+  }
+  .wrap{max-width:980px;margin:0 auto;padding:0 24px}
+
+  /* ---------- 封面 ---------- */
+  header{
+    padding:64px 0 44px; text-align:center;
+    border-bottom:1px solid var(--border); margin-bottom:44px;
+    background:radial-gradient(ellipse 80% 120% at 50% 0%,rgba(79,140,255,.13),transparent 70%);
+  }
+  header .badge{
+    display:inline-block; font-size:12px; letter-spacing:.5px;
+    color:var(--accent); border:1px solid rgba(79,140,255,.35);
+    background:rgba(79,140,255,.1); padding:3px 12px; border-radius:20px; margin-bottom:18px;
+  }
+  h1{font-size:34px; font-weight:700; letter-spacing:-.5px; margin-bottom:12px}
+  h1 .grad{
+    background:linear-gradient(135deg,#4f8cff,#a78bfa);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  header p{color:var(--text-1); font-size:15px}
+
+  /* ---------- 章节 ---------- */
+  section{margin:52px 0}
+  h2{
+    font-size:21px; font-weight:650; margin-bottom:8px;
+    display:flex; align-items:center; gap:11px;
+  }
+  h2 .num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:27px; height:27px; border-radius:8px; font-size:13px; font-weight:700;
+    background:linear-gradient(135deg,#4f8cff,#8b5cf6); color:#fff; flex-shrink:0;
+  }
+  h2 + .sub{color:var(--text-2); font-size:13.5px; margin-bottom:20px; padding-left:38px}
+  h3{font-size:15.5px; font-weight:600; margin:24px 0 10px; color:var(--text-0)}
+  p{color:var(--text-1); margin:9px 0}
+  strong{color:var(--text-0); font-weight:600}
+
+  /* ---------- 卡片 ---------- */
+  .card{
+    background:var(--bg-1); border:1px solid var(--border);
+    border-radius:11px; padding:20px 22px; margin:16px 0;
+  }
+  .card.accent{border-color:rgba(79,140,255,.3); background:rgba(79,140,255,.055)}
+  .card.warn{border-color:rgba(210,153,34,.3); background:rgba(210,153,34,.055)}
+
+  /* ---------- 步骤 ---------- */
+  .steps{counter-reset:st; margin:20px 0}
+  .step{
+    position:relative; padding:0 0 26px 52px;
+    border-left:2px solid var(--border); margin-left:14px;
+  }
+  .step:last-child{border-left-color:transparent; padding-bottom:0}
+  .step::before{
+    counter-increment:st; content:counter(st);
+    position:absolute; left:-15px; top:0;
+    width:28px; height:28px; border-radius:50%;
+    background:var(--bg-3); border:2px solid var(--accent); color:var(--accent);
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; font-weight:700;
+  }
+  .step h3{margin-top:0; margin-bottom:7px}
+  .step p{margin:6px 0}
+
+  /* ---------- 界面示意图 ---------- */
+  .mock{
+    background:var(--bg-1); border:1px solid var(--border); border-radius:10px;
+    overflow:hidden; margin:20px 0;
+  }
+  .mock-bar{
+    display:flex; align-items:center; gap:7px; padding:9px 13px;
+    background:var(--bg-2); border-bottom:1px solid var(--border); font-size:12px;
+  }
+  .dot{width:10px;height:10px;border-radius:50%}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+  .mock-tabs{display:flex; gap:2px; margin-left:12px}
+  .mock-tab{
+    font-size:11.5px; padding:3px 12px; border-radius:5px 5px 0 0;
+    color:var(--text-2);
+  }
+  .mock-tab.on{background:var(--bg-1); color:var(--text-0); border:1px solid var(--border); border-bottom-color:var(--bg-1)}
+  .mock-body{display:flex; height:290px}
+
+  .m-rail{
+    width:132px; border-right:1px solid var(--border); background:var(--bg-1);
+    padding:8px 6px; display:flex; flex-direction:column; gap:5px; flex-shrink:0;
+  }
+  .m-thumb{display:flex; gap:5px; align-items:center; padding:4px 5px; border-radius:5px; border:1px solid transparent}
+  .m-thumb.on{background:rgba(79,140,255,.1); border-color:var(--accent)}
+  .m-thumb-n{font-size:9.5px; color:var(--text-2); width:11px; text-align:right}
+  .m-thumb.on .m-thumb-n{color:var(--accent); font-weight:700}
+  .m-thumb-b{flex:1; height:26px; border-radius:2px; background:var(--bg-2); border:1px solid var(--border); position:relative; overflow:hidden}
+  .m-thumb.on .m-thumb-b{border-color:rgba(79,140,255,.5); background:#1a2436}
+  .m-thumb-b i{position:absolute; left:3px; right:3px; top:4px; height:3px; background:#3a4763; border-radius:1px}
+  .m-thumb-b i.b{top:11px; height:2px; right:14px; background:#2b3550}
+
+  .m-canvas{flex:1; background:#0a0e15; display:flex; align-items:center; justify-content:center; padding:14px}
+  .m-slide{
+    width:290px; height:163px; background:#fff; border-radius:3px; position:relative;
+    box-shadow:0 4px 20px rgba(0,0,0,.55);
+  }
+  .m-slide-t{position:absolute; left:16px; top:14px; font-size:12px; font-weight:700; color:#1f2937}
+  .m-slide-b{position:absolute; left:16px; top:38px; right:16px; font-size:7.5px; color:#4b5563; line-height:2.05}
+  .m-sel{
+    position:absolute; left:11px; top:9px; right:11px; height:26px;
+    border:1.5px solid var(--accent); border-radius:2px; pointer-events:none;
+  }
+  .m-sel::before,.m-sel::after{
+    content:""; position:absolute; width:5px; height:5px; background:var(--accent); border-radius:1px;
+  }
+  .m-sel::before{right:-3px; top:-3px}
+  .m-sel::after{right:-3px; bottom:-3px}
+  .m-label{
+    position:absolute; right:14px; bottom:10px; font-size:8px; color:var(--accent);
+    background:rgba(79,140,255,.14); padding:1px 6px; border-radius:3px;
+  }
+
+  .m-insp{
+    width:168px; border-left:1px solid var(--border); background:var(--bg-1);
+    display:flex; flex-direction:column; flex-shrink:0;
+  }
+  .m-insp-h{padding:6px 9px; border-bottom:1px solid var(--border); font-size:10.5px; font-weight:600; display:flex; justify-content:space-between}
+  .m-insp-h code{font-size:8px; color:var(--text-2); font-weight:400}
+  .m-tabs{display:flex; border-bottom:1px solid var(--border); font-size:9.5px}
+  .m-tabs span{flex:1; text-align:center; padding:4px 0; color:var(--text-2); border-bottom:1.5px solid transparent}
+  .m-tabs span.on{color:var(--text-0); border-bottom-color:var(--accent)}
+  .m-insp-b{padding:8px 9px; display:flex; flex-direction:column; gap:5px}
+  .m-lbl{font-size:8.5px; color:var(--text-2)}
+  .m-in{height:16px; border:1px solid var(--border); border-radius:3px; background:var(--bg-0); font-size:8.5px; color:var(--text-1); padding:0 5px; display:flex; align-items:center}
+  .m-in.f{border-color:var(--accent); color:var(--text-0)}
+  .m-2col{display:grid; grid-template-columns:1fr 1fr; gap:4px}
+
+  /* ---------- 标注流程 ---------- */
+  .flow{display:flex; gap:10px; align-items:stretch; flex-wrap:wrap; margin:20px 0}
+  .flow-item{
+    flex:1; min-width:150px; background:var(--bg-1); border:1px solid var(--border);
+    border-radius:9px; padding:14px 15px; position:relative;
+  }
+  .flow-item .n{
+    width:20px; height:20px; border-radius:6px; background:rgba(79,140,255,.15);
+    color:var(--accent); font-size:11px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; margin-bottom:8px;
+  }
+  .flow-item h4{font-size:13px; margin-bottom:4px; color:var(--text-0)}
+  .flow-item p{font-size:11.5px; color:var(--text-2); margin:0; line-height:1.6}
+  .flow-arrow{align-self:center; color:var(--text-2); font-size:17px; flex-shrink:0}
+
+  /* ---------- 对比表 ---------- */
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:13.5px}
+  th,td{text-align:left; padding:10px 13px; border:1px solid var(--border)}
+  th{background:var(--bg-2); font-weight:600; color:var(--text-0); font-size:12.5px}
+  td{color:var(--text-1)}
+  td:first-child{color:var(--text-0); font-weight:500; white-space:nowrap}
+  code{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    background:var(--bg-3); padding:1.5px 5px; border-radius:4px;
+    font-size:12px; color:var(--accent);
+  }
+
+  /* ---------- 提示框 ---------- */
+  .tip{display:flex; gap:11px; padding:13px 16px; border-radius:9px; margin:16px 0; font-size:13.5px}
+  .tip.i{background:rgba(79,140,255,.08); border-left:3px solid var(--accent)}
+  .tip.w{background:rgba(210,153,34,.08); border-left:3px solid var(--yellow)}
+  .tip.g{background:rgba(63,185,80,.08); border-left:3px solid var(--green)}
+  .tip .ico{font-size:15px; flex-shrink:0; line-height:1.5}
+  .tip p{margin:0; color:var(--text-1)}
+
+  /* ---------- 能力网格 ---------- */
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:13px; margin:18px 0}
+  .gcard{
+    background:var(--bg-1); border:1px solid var(--border); border-radius:9px;
+    padding:15px 16px;
+  }
+  .gcard .ico{font-size:19px; margin-bottom:7px}
+  .gcard h4{font-size:13.5px; margin-bottom:5px; color:var(--text-0)}
+  .gcard p{font-size:12px; color:var(--text-2); margin:0; line-height:1.65}
+
+  .tag{
+    display:inline-block; font-size:10.5px; padding:1.5px 8px; border-radius:20px;
+    background:var(--bg-3); color:var(--text-2); margin-right:5px;
+  }
+  .tag.g{background:rgba(63,185,80,.14); color:var(--green)}
+  .tag.a{background:rgba(79,140,255,.14); color:var(--accent)}
+  .tag.y{background:rgba(210,153,34,.14); color:var(--yellow)}
+
+  footer{
+    margin-top:64px; padding-top:26px; border-top:1px solid var(--border);
+    text-align:center; color:var(--text-2); font-size:12.5px;
+  }
+  @media(max-width:720px){
+    .m-rail{display:none}
+    .m-insp{width:140px}
+    h1{font-size:26px}
+    .wrap{padding:0 16px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="badge">lite-work v2.0.2 · 新增能力</div>
+    <h1>PPT <span class="grad">图形化编辑</span></h1>
+    <p>打开一份已有的 PPT，点点鼠标就能改 —— 不用重做，不用写代码</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 1 -->
+  <section>
+    <h2><span class="num">1</span>这个功能解决什么问题</h2>
+    <p class="sub">为什么不是"让 AI 重新生成一份"</p>
+
+    <p>让 AI 重做一份 PPT 很容易，但你精心调过的版式、配色、字体就全没了。
+      这个功能反过来：<strong>原样保留你的设计，只改你点中的那部分</strong>。</p>
+
+    <div class="grid">
+      <div class="gcard">
+        <div class="ico">🎯</div>
+        <h4>点哪改哪</h4>
+        <p>标题、正文、表格、图表都能单独选中修改，不会碰到旁边的东西</p>
+      </div>
+      <div class="gcard">
+        <div class="ico">🛡</div>
+        <h4>没改的页原样保留</h4>
+        <p>导出时未改动的页字节级还原，连一个空格都不会变</p>
+      </div>
+      <div class="gcard">
+        <div class="ico">📊</div>
+        <h4>表格图表仍是原生</h4>
+        <p>改完还是 PowerPoint 里能继续编辑的表格和图表，不是贴图</p>
+      </div>
+      <div class="gcard">
+        <div class="ico">💬</div>
+        <h4>说不清就写一句话</h4>
+        <p>"这行太挤，精简成三个要点"—— 交给 AI 判断着改</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section>
+    <h2><span class="num">2</span>怎么打开</h2>
+    <p class="sub">从侧栏文件树点一下就行</p>
+
+    <div class="steps">
+      <div class="step">
+        <h3>在左侧文件树里找到你的 .pptx</h3>
+        <p>和平时找文件一样。如果没有，先把 PPT 拖进项目文件夹。</p>
+      </div>
+      <div class="step">
+        <h3>点它</h3>
+        <p>不会用系统自带的 PowerPoint 打开，而是<strong>在中间开一个编辑页签</strong>。
+          首次打开需要导入转换，等几秒（大文件可能十几秒）。</p>
+      </div>
+      <div class="step">
+        <h3>看到三栏布局就成功了</h3>
+        <p>左边缩略图、中间幻灯片、右边属性面板。</p>
+      </div>
+    </div>
+
+    <div class="tip i">
+      <span class="ico">💡</span>
+      <p>右侧原来那个"工具面板"会自动收起 —— 因为这是编辑页签，不是对话页签。
+        想要它回来，切回对话页签即可。</p>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section>
+    <h2><span class="num">3</span>界面长这样</h2>
+    <p class="sub">三栏各管一件事</p>
+
+    <div class="mock">
+      <div class="mock-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <div class="mock-tabs">
+          <span class="mock-tab">💬 对话</span>
+          <span class="mock-tab on">📊 季度复盘.pptx</span>
+        </div>
+      </div>
+      <div class="mock-body">
+        <div class="m-rail">
+          <div class="m-thumb on"><span class="m-thumb-n">1</span><div class="m-thumb-b"><i></i><i class="b"></i></div></div>
+          <div class="m-thumb"><span class="m-thumb-n">2</span><div class="m-thumb-b"><i></i><i class="b"></i></div></div>
+          <div class="m-thumb"><span class="m-thumb-n">3</span><div class="m-thumb-b"><i></i><i class="b"></i></div></div>
+          <div class="m-thumb"><span class="m-thumb-n">4</span><div class="m-thumb-b"><i></i><i class="b"></i></div></div>
+        </div>
+        <div class="m-canvas">
+          <div class="m-slide">
+            <div class="m-slide-t">季度经营回顾</div>
+            <div class="m-slide-b">• 营收 1.24 亿，同比 +18%<br>• 毛利率 42.3%<br>• 客户数 3,820 家</div>
+            <div class="m-sel"></div>
+            <div class="m-label">已选中标题</div>
+          </div>
+        </div>
+        <div class="m-insp">
+          <div class="m-insp-h"><span>文本</span><code>shape-2</code></div>
+          <div class="m-tabs"><span class="on">属性</span><span>标注</span></div>
+          <div class="m-insp-b">
+            <div class="m-lbl">内容</div>
+            <div class="m-in f">季度经营回顾</div>
+            <div class="m-2col">
+              <div class="m-lbl">字号</div><div class="m-lbl">颜色</div>
+              <div class="m-in">44 pt</div><div class="m-in">#000000</div>
+            </div>
+            <div class="m-lbl">对齐</div>
+            <div class="m-2col">
+              <div class="m-in" style="justify-content:center">左</div>
+              <div class="m-in" style="border-color:var(--accent);background:var(--accent);color:#fff;justify-content:center">中</div>
+            </div>
+            <div class="m-lbl">X / Y</div>
+            <div class="m-2col"><div class="m-in">48</div><div class="m-in">29</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table>
+      <tr><th>区域</th><th>作用</th><th>怎么用</th></tr>
+      <tr><td>左：幻灯片轨</td><td>看全貌、跳页</td><td>点缩略图。有标注的页会标黄</td></tr>
+      <tr><td>中：画布</td><td>看实际效果、选元素</td><td>点任意元素出现蓝框</td></tr>
+      <tr><td>右：检查器</td><td>改属性 / 写标注</td><td>选中后才出现，按 Esc 收起</td></tr>
+    </table>
+
+    <div class="tip i">
+      <span class="ico">⌨️</span>
+      <p><code>←</code> <code>→</code> 翻页，<code>Esc</code> 取消选中。
+        右侧面板只在选中元素时滑出，浏览时画布保持最大宽度。</p>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section>
+    <h2><span class="num">4</span>两种改法：直接改 vs 写标注</h2>
+    <p class="sub">这是理解整个功能的关键</p>
+
+    <h3>① 属性页 —— 直接改，立刻生效</h3>
+    <p>选中元素后切到「<strong>属性</strong>」页。适合你<strong>明确知道要改成什么</strong>的情况：</p>
+
+    <table>
+      <tr><th>元素类型</th><th>能改什么</th></tr>
+      <tr><td>📝 文本</td><td>内容、字号（磅）、颜色、左中右对齐、位置和尺寸</td></tr>
+      <tr><td>🔲 表格</td><td>点单元格直接改文字（增删行列请用标注）</td></tr>
+      <tr><td>📈 图表</td><td>改每个数据点的数值（增删系列请用标注）</td></tr>
+      <tr><td>🖼 图片</td><td>换图（回车确认）、调位置尺寸</td></tr>
+    </table>
+
+    <div class="tip g">
+      <span class="ico">⚡</span>
+      <p>属性页的改动<strong>不经过 AI</strong>，直接写进文件。所以不存在"AI 理解错了我"
+        这种事 —— 你说改 44 磅，就是 44 磅。</p>
+    </div>
+
+    <h3>② 标注页 —— 说一句话，交给 AI</h3>
+    <p>适合<strong>需要判断、要重新排版</strong>的情况。选中元素 → 切「标注」→ 写一句话 → 保存标注。</p>
+
+    <div class="card">
+      <p style="margin-top:0"><strong>标注写得好的例子：</strong></p>
+      <p style="font-size:13.5px;color:var(--text-1)">
+        ✓「这行太挤，精简成 3 个要点」<br>
+        ✓「标题换成更口语的说法」<br>
+        ✓「把这个表格拆成两张，按区域分」<br>
+        ✓「配图换成更商务的风格」
+      </p>
+      <p style="margin-bottom:0;font-size:13.5px;color:var(--text-2)">
+        ✗「改一下」（太模糊，AI 只能猜）
+      </p>
+    </div>
+
+    <div class="flow">
+      <div class="flow-item">
+        <div class="n">1</div>
+        <h4>选中 + 写</h4>
+        <p>点元素，切「标注」，写意图，保存</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">
+        <div class="n">2</div>
+        <h4>继续标别的</h4>
+        <p>可以一次标很多处，底部计数器会累加</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">
+        <div class="n">3</div>
+        <h4>点「应用改动」</h4>
+        <p>标注被打包成一条消息发给 AI</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">
+        <div class="n">4</div>
+        <h4>AI 逐条执行</h4>
+        <p>回到对话页签能看到它做了哪些改动</p>
+      </div>
+    </div>
+
+    <div class="tip w">
+      <span class="ico">⚠️</span>
+      <p>标注<strong>不会马上生效</strong>。它只是记下"你想怎么改"，
+        必须点右上角「应用改动 (N)」才会真正执行。</p>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section>
+    <h2><span class="num">5</span>完整走一遍</h2>
+    <p class="sub">拿一份季度复盘 PPT 举例</p>
+
+    <div class="steps">
+      <div class="step">
+        <h3>改标题文字</h3>
+        <p>点标题 → 属性页 → 内容框改成「2026 Q1 经营回顾」→ 点「应用」。
+          画布立刻更新。</p>
+      </div>
+      <div class="step">
+        <h3>改数字</h3>
+        <p>点表格 → 属性页显示整张表 → 点「4200」那个格子改成「4380」→ 失焦自动保存。</p>
+      </div>
+      <div class="step">
+        <h3>标一处需要 AI 判断的</h3>
+        <p>点正文段落 → 标注页 → 写「三行太挤，精简成两个要点，保留数字」→ 保存标注。</p>
+      </div>
+      <div class="step">
+        <h3>点「应用改动 (1)」</h3>
+        <p>自动切到对话页签，AI 收到标注清单，用工具逐条落实。</p>
+      </div>
+      <div class="step">
+        <h3>点「导出」</h3>
+        <p>生成 <code>季度复盘_edited.pptx</code>，就在项目根目录。</p>
+      </div>
+    </div>
+
+    <div class="tip g">
+      <span class="ico">✅</span>
+      <p>不放心的话，导出后用 PowerPoint 打开检查 —— 没改过的页和原文件一模一样。</p>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section>
+    <h2><span class="num">6</span>几个要知道的细节</h2>
+    <p class="sub">避免踩坑</p>
+
+    <div class="card accent">
+      <h3 style="margin-top:0">字号为什么显示 pt 而不是 px</h3>
+      <p style="margin-bottom:0">面板里显示的是 PowerPoint 的磅值（pt），和你在 PowerPoint
+        里看到的数字一致。内部换算比例是 3:4，你不用管。</p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">改动存在哪里</h3>
+      <p style="margin-bottom:0">存在 <code>中间产物/ppt-edit/你的文件名/</code> 里，
+        不动你原来的 pptx。所以<strong>原文件始终安全</strong>，随便改。
+        只有点「导出」才生成新文件。</p>
+    </div>
+
+    <div class="card warn">
+      <h3 style="margin-top:0">重复打开会沿用之前的改动</h3>
+      <p style="margin-bottom:0">如果关掉页签再打开同一个文件，<strong>之前的编辑还在</strong>
+        （防止手滑丢工作）。想从零开始，需要显式重新导入。</p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">哪些事做不了</h3>
+      <p style="margin-bottom:0">
+        <span class="tag y">需标注</span>增删表格行列、增删图表系列<br>
+        <span class="tag y">需标注</span>整页重新排版<br>
+        <span class="tag">不支持</span>旁白音频、转场动画、从零生成（用 pptx_create）
+      </p>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section>
+    <h2><span class="num">7</span>和 AI 对话方式的关系</h2>
+    <p class="sub">两个入口，同一份实现</p>
+
+    <p>你也可以完全不动界面，直接在对话里说：</p>
+    <div class="card">
+      <p style="margin:0;font-size:13.5px">
+        「把 季度复盘.pptx 第 2 页的标题改成 XXX，然后导出」<br>
+        「表格里华东的营收改成 4380」
+      </p>
+    </div>
+    <p>AI 会调用同一个 <code>ppt_edit</code> 工具做同样的事。
+      <strong>界面改动和对话改动落到同一份文件</strong>，不会打架。</p>
+
+    <div class="tip i">
+      <span class="ico">🧭</span>
+      <p>简单判断：<strong>知道确切值 → 用界面</strong>（快、准）；
+        <strong>需要判断怎么改 → 用标注</strong>（AI 帮你想）；
+        <strong>批量/脚本化 → 用对话</strong>。</p>
+    </div>
+  </section>
+
+  <footer>
+    lite-work v2.0.2 · PPT 图形化编辑<br>
+    编辑结果保存在 <code>中间产物/ppt-edit/</code>，导出文件在项目根目录
+  </footer>
+
+</div>
+</body>
+</html>
