@@ -1,0 +1,18 @@
+# ppt-master 核心依赖（lite-work 导入技能时自动 pip 安装；SVG→PPTX 主链路所需）
+# 注意：本文件是精简版，完整可选依赖清单见 scripts/README.md 与上游仓库
+python-pptx>=0.6.21
+XlsxWriter>=3.0.0
+skia-pathops>=0.9.2
+uharfbuzz>=0.50.0
+PyYAML>=6.0
+Pillow>=9.0.0
+
+# ── 可选依赖（按功能现场 pip install，不随导入安装）──
+# PDF 转源（pdf_to_md.py）:            PyMuPDF>=1.23.0
+# 文档转源（doc_to_md.py）:            mammoth / markdownify / ebooklib / nbconvert
+# Excel 转源（excel_to_md.py）:        openpyxl>=3.1.0
+# AI 生图（image_gen.py）:             google-genai>=1.0.0（OpenAI 兼容后端仅需 requests）
+# 网页转源（web_to_md.py）:            requests / beautifulsoup4 / curl_cffi
+# 旁白音频（notes_to_audio.py）:       edge-tts>=7.2.8
+# SVG 编辑器（svg_editor/server.py）:  flask>=3.0.0
+# 水印处理（gemini_watermark_remover.py）: numpy>=1.20.0
