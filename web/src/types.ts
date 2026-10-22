@@ -106,6 +106,8 @@ export interface ToolDef {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  /** 职责域（edit/execute/read/…；多级工具分组展示用，旧后端无此字段） */
+  domain?: string;
 }
 
 // 目录树条目（/api/workspace/tree-json）

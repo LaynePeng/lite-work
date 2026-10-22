@@ -27,7 +27,7 @@ class RecAdapter(MockLLMAdapter):
         return await super().chat_stream(messages, tools, events)
 
 
-WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff",
+WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff", "edit_files",
                "execute_command", "git_commit", "spawn_sub_agent"}
 
 

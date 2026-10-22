@@ -142,6 +142,36 @@ class EditorTools:
                 },
             ),
             ToolDefinition(
+                name="edit_files",
+                description="批量精确编辑（复合工具 ★）：一次调用完成多个文件的多个补丁，"
+                            "多文件重构/成组修改用它，比逐个 apply_search_replace 少 N-1 轮。"
+                            "先全部校验（search 块存在性）再依次应用，某条失败默认停止（stop_on_error）",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "edits": {
+                            "type": "array",
+                            "description": "编辑条目列表（建议 ≤10 条；同文件多条按序应用）",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "filePath": {"type": "string", "description": "文件相对路径"},
+                                    "mode": {"type": "string", "enum": ["search_replace", "unified_diff"],
+                                             "description": "补丁格式，默认 search_replace"},
+                                    "searchBlock": {"type": "string", "description": "mode=search_replace：被替换的完整原始代码（含原缩进）"},
+                                    "replaceBlock": {"type": "string", "description": "mode=search_replace：新代码片段"},
+                                    "diff": {"type": "string", "description": "mode=unified_diff：Unified Diff 补丁文本"},
+                                },
+                                "required": ["filePath"],
+                            },
+                        },
+                        "stop_on_error": {"type": "boolean", "default": True,
+                                          "description": "某条失败即停止后续（默认 true，保证原子性弱化语义）"},
+                    },
+                    "required": ["edits"],
+                },
+            ),
+            ToolDefinition(
                 name="apply_unified_diff",
                 description="应用标准 Unified Diff 补丁（@@ -oldStart,oldLen +newStart,newLen @@ 格式）",
                 parameters={
@@ -160,6 +190,8 @@ class EditorTools:
         ]
 
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
+        if name == "edit_files":
+            return self._edit_files(args)
         rel_path = args.get("filePath", "")
         raw = os.path.expanduser(rel_path)
         full_path = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(self.workspace, raw))
@@ -205,3 +237,86 @@ class EditorTools:
         if len(body) > 4000:
             body = body[:4000] + "\n...(diff 过长已截断)"
         return f"{head}\n\n{body}"
+
+    # ------------------------------------------------------------ 复合工具
+
+    _EDIT_FILES_MAX = 20  # 单次条目上限（防误用巨列表爆上下文）
+
+    def _edit_files(self, args: Dict[str, Any]) -> str:
+        """批量编辑：先逐条校验（读文件 + 补丁试算），全部通过才落盘。
+
+        两阶段的意义：避免「前 3 条已写盘、第 4 条失败」留下半截状态——
+        校验失败时磁盘零改动，调用方修好补丁重试即可（与单条工具的
+        失败语义一致）。同文件多条按序应用（后一条的 search 针对前一条
+        的结果），因此校验也串行模拟执行。
+        """
+        edits = args.get("edits") or []
+        if not isinstance(edits, list) or not edits:
+            return "[Edit Files Error]: edits 不能为空"
+        if len(edits) > self._EDIT_FILES_MAX:
+            return f"[Edit Files Error]: 单次最多 {self._EDIT_FILES_MAX} 条（本次 {len(edits)} 条）"
+        stop_on_error = bool(args.get("stop_on_error", True))
+        access = args.get("_approved_external_access", "")
+
+        # 阶段一：校验 + 试算（内存态，不落盘）
+        pending: List[Tuple[str, str, str]] = []  # (rel_path, full_path, new_content)
+        sources: Dict[str, str] = {}
+        errors: List[str] = []
+        for i, edit in enumerate(edits, 1):
+            rel_path = str(edit.get("filePath") or "")
+            if not rel_path:
+                errors.append(f"#{i}: filePath 为空")
+                if stop_on_error:
+                    break
+                continue
+            raw = os.path.expanduser(rel_path)
+            full_path = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(self.workspace, raw))
+            inside = full_path == self.workspace or full_path.startswith(self.workspace + os.sep)
+            if not inside and access != "write":
+                errors.append(f"#{i} {rel_path}: 项目外写入未获授权")
+                if stop_on_error:
+                    break
+                continue
+            if full_path not in sources:
+                if not os.path.exists(full_path):
+                    errors.append(f"#{i} {rel_path}: 文件不存在")
+                    if stop_on_error:
+                        break
+                    continue
+                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                    sources[full_path] = f.read()
+            source = sources[full_path]
+            mode = str(edit.get("mode") or "search_replace")
+            if mode == "search_replace":
+                ok, result, reason = self._replacer.replace_block(
+                    source, str(edit.get("searchBlock") or ""), str(edit.get("replaceBlock") or ""))
+            elif mode == "unified_diff":
+                ok, result, reason = self._patcher.apply_patch(source, str(edit.get("diff") or ""))
+            else:
+                ok, result, reason = False, "", f"未知 mode: {mode}"
+            if not ok:
+                errors.append(f"#{i} {rel_path}: {reason}")
+                if stop_on_error:
+                    break
+                continue
+            sources[full_path] = result
+            pending.append((rel_path, full_path, result))
+
+        # 阶段二：全过才落盘（stop_on_error 模式下有错则零落盘）
+        if errors and stop_on_error:
+            return ("[Edit Files Aborted]: 校验失败，磁盘未改动（重试请修正以下条目）\n"
+                    + "\n".join(f"- {e}" for e in errors))
+        written = 0
+        summary_lines: List[str] = []
+        for rel_path, full_path, content in pending:
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            written += 1
+            summary_lines.append(f"[OK] {rel_path}")
+        head = f"[Edit Files Success]: {written}/{len(edits)} 条已应用"
+        if errors:
+            head += f"（{len(errors)} 条失败被跳过：stop_on_error=false）"
+        if not pending:
+            return "[Edit Files Error]: 没有可应用的条目\n" + "\n".join(f"- {e}" for e in errors)
+        return head + "\n" + "\n".join(summary_lines) + (
+            "\n失败明细:\n" + "\n".join(f"- {e}" for e in errors) if errors else "")

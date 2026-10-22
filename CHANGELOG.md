@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 新增（多级工具第一期：edit_files 复合工具 + 工具面板分级展示）
+
+- **edit_files 批量精确编辑（复合工具 ★）**：一次调用完成多文件多补丁，
+  多文件重构从 N 轮压到 1 轮（性能诊断：重任务 59~72 次
+  apply_search_replace 基本一轮一个 patch，每轮 5-15s 往返）。两阶段
+  语义——先全部校验（search 块存在性试算）再落盘，校验失败磁盘零改动；
+  同文件多条按序应用；`stop_on_error=false` 可跳过坏条目。设计参考
+  Muse 多级工具思路（L1 复合 / L0 原语保留），详见
+  `docs/multi-level-tools-design.md`。已接入 `TOOL_DOMAIN`（edit 域）、
+  `WRITE_TOOLS`（写串行语义）、`_FUSION_TOOLS`、`WRITE_SCOPE_TOOLS`；
+- **工具面板分级展示**：`/api/tools` 响应新增 `domain` 字段（职责域标注），
+  工具 Tab 按「编辑 → 执行 → 阅读 → Git 写 → 联网 → 文档办公 → 协作 →
+  交互 → 计划 → 其他」分组渲染，组头可折叠（常用组默认展开）；复合工具
+  （edit_files / read_manual）带 ★ 徽标。旧后端无 domain 字段时全部落
+  「其他」组兜底，不破坏兼容；
+
 ### 变更（性能第一版：轮次延迟 + 内存）
 
 - **System Prompt「内容展示偏好」段精简 84%**：7517 字符 → 1184 字符（约省

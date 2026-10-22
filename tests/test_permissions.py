@@ -93,7 +93,7 @@ def test_legacy_tools_permissions_infer_domains():
 
 # ---------------------------------------------------------------- 各 Agent 工具面
 
-WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff",
+WRITE_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff", "edit_files",
                "execute_command", "git_commit"}
 
 

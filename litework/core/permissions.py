@@ -41,6 +41,7 @@ TOOL_DOMAIN: Dict[str, str] = {
     # edit
     "write_file": "edit", "delete_file": "edit",
     "apply_search_replace": "edit", "apply_unified_diff": "edit",
+    "edit_files": "edit",
     # execute
     "execute_command": "execute",
     # git_write

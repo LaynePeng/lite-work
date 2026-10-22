@@ -79,7 +79,8 @@ def sub_agent_excludes(depth: int, max_depth: int = 2) -> List[str]:
 # 声明 allowed_dirs 的写域 agent：读全开 + 写文件工具（写/删受 IsolationPlugin 约束；
 # shell 命令无法静态判定写目标，不授予，由父 Agent 执行）
 WRITE_SCOPE_TOOLS = list(ROLE_TOOLS["explorer"] or []) + [
-    "write_file", "apply_search_replace", "apply_unified_diff", "delete_file",
+    "write_file", "apply_search_replace", "apply_unified_diff", "edit_files",
+    "delete_file",
 ]  # 共享任务工具已含于 explorer 白名单
 
 

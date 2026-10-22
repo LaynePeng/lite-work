@@ -527,9 +527,9 @@ describe("ToolPanel · 本轮 token 速度（变体 B 速度条 + 趋势图）",
 
 describe("ToolPanel · 工具 tab 指标整合（W3）", () => {
   const TOOLS = [
-    { name: "read_file", description: "读文件" },
-    { name: "write_file", description: "写文件" },
-    { name: "docx_create", description: "创建文档" },
+    { name: "read_file", description: "读文件", domain: "read" },
+    { name: "write_file", description: "写文件", domain: "edit" },
+    { name: "docx_create", description: "创建文档", domain: "office" },
   ];
 
   const METRICS = {
@@ -622,6 +622,58 @@ describe("ToolPanel · 工具 tab 指标整合（W3）", () => {
     const calls = (api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length;
     await new Promise((r) => setTimeout(r, 100));
     expect((api.metricsTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+  });
+
+  it("多级工具分级展示：按职责域分组，复合工具带 ★，组头可折叠", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const { container } = render(
+      <ToolPanel
+        contextStats={STATS}
+        mcpServers={[]}
+        tools={[
+          { name: "edit_files", description: "批量编辑", domain: "edit" },
+          { name: "apply_search_replace", description: "单补丁", domain: "edit" },
+          { name: "read_manual", description: "手册", domain: "read" },
+          { name: "execute_command", description: "命令", domain: "execute" },
+        ]}
+        todos={[]}
+        activeTab="tools"
+      />
+    );
+    await waitFor(() => expect(container.textContent).toContain("调用 60 次"));
+    // 域组头按既定顺序出现：编辑 → 执行 → 阅读
+    const titles = Array.from(container.querySelectorAll(".tm-section-title"))
+      .map((el) => el.textContent ?? "");
+    const editIdx = titles.findIndex((t) => t.startsWith("编辑（"));
+    const execIdx = titles.findIndex((t) => t.startsWith("执行（"));
+    const readIdx = titles.findIndex((t) => t.startsWith("阅读（"));
+    expect(editIdx).toBeGreaterThanOrEqual(0);
+    expect(execIdx).toBeGreaterThan(editIdx);
+    expect(readIdx).toBeGreaterThan(execIdx);
+    // 复合工具带 ★ 徽标
+    expect(container.querySelector(".tm-composite")).toBeTruthy();
+    // 无 domain 的后端不会出现未知组（组按 TOOL_DOMAINS 过滤）
+    expect(container.textContent).not.toContain("其他（");
+  });
+
+  it("旧后端（无 domain 字段）：全部落「其他」组，仍能渲染", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const { container } = render(
+      <ToolPanel
+        contextStats={STATS}
+        mcpServers={[]}
+        tools={[
+          { name: "read_file", description: "读文件" },
+          { name: "write_file", description: "写文件" },
+        ]}
+        todos={[]}
+        activeTab="tools"
+      />
+    );
+    await waitFor(() => expect(container.textContent).toContain("调用 60 次"));
+    // 无 domain → misc →「其他」组兜底
+    expect(container.textContent).toContain("其他（2）");
+    expect(container.textContent).toContain("read_file");
   });
 });
 

@@ -48,7 +48,7 @@ current_tool_call: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
 
 # 写类工具：auto 模式下写类工具串行执行、只读工具并行执行（顺序依赖风险，如 write A + read A）
 WRITE_TOOLS = frozenset({
-    "write_file", "apply_search_replace", "apply_unified_diff",
+    "write_file", "apply_search_replace", "apply_unified_diff", "edit_files",
     "execute_command", "git_commit", "git_push",
 })
 
@@ -893,7 +893,7 @@ class AgentLoop:
             f"{receipt}"
         )
 
-    _FUSION_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff"}
+    _FUSION_TOOLS = {"write_file", "apply_search_replace", "apply_unified_diff", "edit_files"}
     _FUSION_MAX_COMMANDS = 4
     _FUSION_OUTPUT_LIMIT = 2_000   # 单条 then 命令输出的截断长度
 

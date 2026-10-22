@@ -59,8 +59,11 @@ def create_router(ctx: ServerContext) -> APIRouter:
             if agent_id
             else app.build_registry()
         )
+        # 域标注（多级工具的分组展示：编辑/执行/阅读/…；未映射 → misc）
+        from ...core.permissions import domain_of
         return [
-            {"name": t.name, "description": t.description, "parameters": t.parameters}
+            {"name": t.name, "description": t.description, "parameters": t.parameters,
+             "domain": domain_of(t.name)}
             for t in registry.get_tools()
         ]
 

@@ -2463,6 +2463,18 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   color: var(--text-2);
   padding-left: 12px;
 }
+.tm-composite {
+  color: var(--yellow, #d29922);
+  font-size: 10px;
+  margin-left: 3px;
+}
+.tm-domain {
+  margin-bottom: 6px;
+}
+.tm-domain .tm-section-title {
+  cursor: pointer;
+  padding: 2px 0;
+}
 .tm-expand {
   background: none;
   border: none;

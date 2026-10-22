@@ -439,11 +439,27 @@ function McpPanel({ servers }: { servers: MCPServerStatus[] }) {
 
 // ---------------------------------------------------------------- 工具面板
 
-function ToolsPanel({ tools }: { tools: { name: string; description: string }[] }) {
+// 域顺序与标签（多级工具分级展示：按职责域分组，复合工具带 ★）
+const TOOL_DOMAINS: { key: string; label: string }[] = [
+  { key: "edit", label: "编辑" },
+  { key: "execute", label: "执行" },
+  { key: "read", label: "阅读" },
+  { key: "git_write", label: "Git 写" },
+  { key: "web", label: "联网" },
+  { key: "office", label: "文档办公" },
+  { key: "collab", label: "协作" },
+  { key: "interactive", label: "交互" },
+  { key: "plan", label: "计划" },
+  { key: "misc", label: "其他" },
+];
+const COMPOSITE_TOOLS = new Set(["edit_files", "read_manual"]);
+
+function ToolsPanel({ tools }: { tools: { name: string; description: string; domain?: string }[] }) {
   // 指标：激活工具 tab 时拉取 + 每 30s 轮询（低频数据，不需要 5s）
   const [metrics, setMetrics] = useState<ToolMetricsSummary | null>(null);
-  const [showAll, setShowAll] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [collapsedDomains, setCollapsedDomains] = useState<Set<string>>(
+    () => new Set(["read", "web", "office", "collab", "interactive", "plan", "misc"]));
 
   useEffect(() => {
     let alive = true;
@@ -459,14 +475,24 @@ function ToolsPanel({ tools }: { tools: { name: string; description: string }[] 
   const withMetrics = (tools ?? []).map((t) => ({
     name: t.name,
     description: t.description,
+    domain: t.domain ?? "misc",
     m: metrics?.tools?.[t.name],
   }));
-  const sorted = [...withMetrics].sort((a, b) => (b.m?.calls ?? -1) - (a.m?.calls ?? -1));
-  const visible = showAll ? sorted : sorted.slice(0, 8);
   const worst = (metrics?.worst_tools ?? []).filter((w) => w.errors > 0 || w.cancelled > 0);
   const worstShown = worst.slice(0, 3);
   const skillEntries = Object.entries(metrics?.skills ?? {})
     .sort((a, b) => b[1].uses - a[1].uses);
+
+  // 按域分组（组内按调用量降序）；旧后端无 domain 字段 → 全落 misc，仍能渲染
+  const byDomain = new Map<string, typeof withMetrics>();
+  for (const row of withMetrics) {
+    const list = byDomain.get(row.domain) ?? [];
+    list.push(row);
+    byDomain.set(row.domain, list);
+  }
+  for (const list of byDomain.values()) {
+    list.sort((a, b) => (b.m?.calls ?? -1) - (a.m?.calls ?? -1));
+  }
 
   if (!tools || tools.length === 0) {
     return <div className="tool-panel-empty">暂无已注册工具（发起对话后显示）</div>;
@@ -499,23 +525,37 @@ function ToolsPanel({ tools }: { tools: { name: string; description: string }[] 
         </div>
       )}
 
-      {/* 全部工具：有数据带 次数·成功率，无数据灰淡 */}
+      {/* 全部工具：按职责域分组（多级工具分级展示），组头可折叠 */}
       <div className="tm-section">
-        <div className="tm-section-title">全部工具（{tools.length}）</div>
-        {visible.map(({ name, description, m }) => (
-          <div key={name}
-               className={`tm-row ${m ? "" : "tm-unused"}`}
-               title={m ? `${description}\n${m.calls} 次调用 · ${m.errors} 失败 · 平均 ${m.avg_ms ?? "—"}ms` : description}>
-            <span className={`tm-dot ${m ? rateTone(m.success_rate) : "tm-dot-off"}`} />
-            <span className="tm-name">{name}</span>
-            <span className="tm-nums">{m ? `${m.calls}·${(m.success_rate * 100).toFixed(0)}%` : "—"}</span>
-          </div>
-        ))}
-        {sorted.length > 8 && (
-          <button className="tm-expand" onClick={() => setShowAll((v) => !v)}>
-            {showAll ? "收起" : `展开全部 ${sorted.length} 个`}
-          </button>
-        )}
+        {TOOL_DOMAINS.filter((d) => byDomain.has(d.key)).map((d) => {
+          const rows = byDomain.get(d.key) ?? [];
+          const collapsed = collapsedDomains.has(d.key);
+          const shown = collapsed ? rows.slice(0, 4) : rows;
+          return (
+            <div key={d.key} className="tm-domain">
+              <button className="tm-section-title tm-collapsible"
+                      onClick={() => setCollapsedDomains((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(d.key)) next.delete(d.key); else next.add(d.key);
+                        return next;
+                      })}>
+                {d.label}（{rows.length}）{collapsed ? " ▸" : " ▾"}
+              </button>
+              {shown.map(({ name, description, m }) => (
+                <div key={name}
+                     className={`tm-row ${m ? "" : "tm-unused"}`}
+                     title={`${COMPOSITE_TOOLS.has(name) ? "复合工具：一次调用完成多个操作\n" : ""}${m ? `${description}\n${m.calls} 次调用 · ${m.errors} 失败 · 平均 ${m.avg_ms ?? "—"}ms` : description}`}>
+                  <span className={`tm-dot ${m ? rateTone(m.success_rate) : "tm-dot-off"}`} />
+                  <span className="tm-name">{name}{COMPOSITE_TOOLS.has(name) && <span className="tm-composite">★</span>}</span>
+                  <span className="tm-nums">{m ? `${m.calls}·${(m.success_rate * 100).toFixed(0)}%` : "—"}</span>
+                </div>
+              ))}
+              {collapsed && rows.length > 4 && (
+                <div className="tm-more">… 还有 {rows.length - 4} 个（点组头展开）</div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* 技能使用：默认折叠 */}
@@ -1207,7 +1247,7 @@ export default function ToolPanel({
   /** 流式生成中的实时速度（llm:progress 估算值，随 SSE 到达） */
   liveSpeed?: LiveSpeedStats | null;
   mcpServers: MCPServerStatus[];
-  tools: { name: string; description: string }[];
+  tools: { name: string; description: string; domain?: string }[];
   todos: TodoItem[];
   agentBoard?: SubAgentProgress[];
   orchestrator?: { agentId: string; running: boolean };

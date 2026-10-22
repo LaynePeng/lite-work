@@ -503,6 +503,7 @@ class TaskHandle:
     # 具备写能力的工具集合：接手 Agent 的白名单与之有交集（且未被 deny）
     # 即视为「可写型」，切换文案据此选择方向指引（对齐 sub_agent.WRITE_SCOPE_TOOLS）
     _WRITE_TOOLS = frozenset({
+        "edit_files",
         "write_file", "apply_search_replace", "apply_unified_diff",
         "delete_file", "execute_command",
     })
