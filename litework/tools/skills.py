@@ -271,17 +271,9 @@ def _should_upgrade_builtin_skill(builtin_dir: Path, target: Path, marker: Path)
 def _is_broken_builtin_copy(builtin_dir: Path, target: Path) -> bool:
     """目标副本是不是「旧版同步脚本装下的坏件」。
 
-    只认一个**专属特征**：frontmatter 首行是 `---name: xxx`（`---` 与首个键
-    之间缺换行）。这是旧版 sync 脚本拼接 bug 的唯一产物形态，正常手写技能
-    不会长这样。
-
-    为什么不能放宽成「读不到 triggers 就接管」：用户完全可能手写一个不靠
-    triggers 的同名技能（自定义版），那种绝不该被内置版覆盖——放宽条件会
-    误伤（test_sync_builtin_skills_to_user 第 4 步就锁着这个场景）。
-
-    额外保险：
-    - 内置版必须有 triggers（否则该技能不依赖自动注入，接管无意义）；
-    - 两边 name 若都解析得出，必须一致。
+    只认专属特征：frontmatter 首行是 `---name: xxx`（`---` 后缺换行）。
+    不能放宽成「读不到 triggers 就接管」——用户可能手写不靠 triggers 的
+    同名技能，放宽会误伤（test_sync_builtin_skills_to_user 第 4 步锁着）。
     """
     try:
         new_text = (builtin_dir / "SKILL.md").read_text(encoding="utf-8")
@@ -291,7 +283,6 @@ def _is_broken_builtin_copy(builtin_dir: Path, target: Path) -> bool:
 
     lines = old_text.splitlines()
     first_line = lines[0].strip() if lines else ""
-    # 专属特征：首行是 `---<内容>` 而不是单独的 `---`
     if not first_line.startswith("---") or first_line == "---":
         return False
 
@@ -312,19 +303,13 @@ def _is_broken_builtin_copy(builtin_dir: Path, target: Path) -> bool:
 
 
 def sync_builtin_skills_to_user() -> int:
-    """把内置技能同步安装到 ~/.agents/skills/（用户级标准位置）。
+    """把内置技能同步安装到 ~/.agents/skills/（幂等，启动时执行）。
 
-    为什么必须装到用户目录：内置位置（开发态=仓库 skills/、打包态=
-    _internal/skills/）对 Agent 不稳定——换机器/升级应用后路径漂移，
-    SKILL.md 里的脚本相对路径无从解析。用户级目录 ~/.agents/skills/
-    持久稳定且 SkillsTools 原生扫描。
+    装到用户目录而非内置位置：内置路径随机器/升级漂移，SKILL.md 里的
+    脚本相对路径会失效。
 
-    同步策略（幂等，启动时执行）：
-    - 目标不存在 → 安装；
-    - 目标带 .litework-builtin 标记（我们装的）→ 版本变化时覆盖升级；
-    - 用户自有的同名技能（无标记）→ 不动；
-    - 例外：无标记但**元数据损坏**（读不到 triggers，而内置版有）→ 接管
-      （见 `_is_broken_builtin_copy`，修旧版同步脚本留下的坏件）。
+    策略：目标不存在→安装；带 .litework-builtin 标记→按技能 semver 升级；
+    无标记→不动（例外见 `_is_broken_builtin_copy`）。
     返回本次安装/升级的技能数。
     """
     import shutil as _shutil
@@ -349,11 +334,6 @@ def sync_builtin_skills_to_user() -> int:
                 # 我们装的：按「技能自身 semver」决定是否覆盖（见 helper 说明）
                 need_install = _should_upgrade_builtin_skill(skill_dir, target, marker)
             else:
-                # 无 marker 通常是「用户自有技能」，按约定不覆盖。但有一类例外：
-                # 旧版同步脚本（frontmatter 拼接缺换行）装下的副本既没有 marker
-                # 也无法解析出 triggers——这种技能永远不会被自动触发，属于坏件。
-                # 仅当「内置版能解析出 triggers 且目标副本解析不出」时才接管，
-                # 避免误伤真正由用户手写（本就不带 triggers）的自有技能。
                 need_install = _is_broken_builtin_copy(skill_dir, target)
             # 用户自有同名技能（无标记）→ 不覆盖
             if not need_install:

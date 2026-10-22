@@ -31,37 +31,22 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600  # 缓存 7 天
 
 
 def _flatten(data: Dict[str, Any]) -> Dict[str, dict]:
-    """把 models.dev 的 provider→models→model_id 结构拍平成 "provider/model_id" → entry。
+    """拍平成 "provider/model_id" → entry，并保留裸 model_id 兜底键。
 
-    必须以「供应商 + 模型」为键：同一个模型 ID 在 models.dev 里往往有几十家
-    供应商在售且价格差异极大（如 deepseek-v4-flash 有 30+ 家，单价从 0 到 0.3
-    不等）。早期实现只存裸 model_id，后遍历到的供应商会覆盖前面的，结果定价
-    随机取到某个转售商的价（缓存命中价甚至差 20 倍）。
-
-    同时保留裸 model_id 兜底键（首个命中者，顺序稳定）：上下文窗口是「模型级」
-    属性（各家一致），未知供应商（自定义中转）也应当能查到；定价则仅在
-    provider 精确匹配缺失时退化使用，属粗略参考。
-
-    裸名键只在模型名不含 "/" 时写入：不少供应商用「厂商/模型」形式的 id
-    （如 tokengo 的 "deepseek/deepseek-v4-flash"），该 id 本身就是合法裸键，
-    会与官方 "deepseek" 供应商的限定键同名——先到先得（setdefault）会把
-    官方价/窗口顶掉。
+    必须按供应商限定：同一模型有几十家转售、价格差异极大。
+    裸名键只在模型名不含 "/" 时写入（供应商 id 本身可能就是 "厂商/模型" 形式）。
     """
     flat: Dict[str, dict] = {}
-    # 裸名键的选优：同名模型有几十家转售，`setdefault` 是「谁先遍历到用谁」，
-    # 而 dict 顺序取决于上游 JSON 的排列——结果就是随机取到某个转售商的价
-    # （甚至 0 价，如 sensenova 提供的 kimi-k3 标 0；moonshotai 官方是 3/15）。
-    # 因此裸名键单独收：官方厂商优先，无官方时取首个有有效定价的。
+    # 裸名键单独选优：setdefault 是「谁先遍历到用谁」，而遍历顺序取决于上游
+    # JSON 排列，会随机取到转售商价（甚至 0 价）。
     bare: Dict[str, dict] = {}
     bare_rank: Dict[str, int] = {}
 
-    def _rank(model_id: str, provider: str, entry: dict) -> int:
-        """越小越优先：官方厂商 = 0；有**非零**定价 = 1；其余 = 2。
+    def _rank(provider: str, entry: dict) -> int:
+        """越小越优先：官方厂商 0 / 非零定价 1 / 其余 2。
 
-        为什么把 0 价排除在"有效定价"之外：转售商常把未定价的模型标 0
-        （sensenova 的 kimi-k3 就是 0），它虽然能通过 `_entry_pricing`
-        的字段校验，却代表"这家没提供价格"而不是"免费"。官方标 0 是
-        真的免费模型，因此官方始终排第一档，不受此影响。
+        0 价不算「有效定价」：转售商常把未定价模型标 0（而非免费）；
+        官方标 0 是真的免费，仍在第 0 档。
         """
         if provider.lower() in OFFICIAL_VENDOR_IDS:
             return 0
@@ -83,18 +68,13 @@ def _flatten(data: Dict[str, Any]) -> Dict[str, dict]:
             flat.setdefault(f"{provider}/{model_id}", entry)
             if "/" in model_id:
                 continue
-            r = _rank(model_id, provider, entry)
+            r = _rank(provider, entry)
             if model_id not in bare or r < bare_rank[model_id]:
                 bare[model_id] = entry
                 bare_rank[model_id] = r
 
-    # 裸名键合并：**定价**取最优候选（官方优先，避免转售商 0 价），
-    # **context_window 等模型级属性**保留首个命中（各家一致，且不该被
-    # 官方条目覆盖——例：tinfoil 的 deepseek-v4-flash 标 1M 窗口，
-    # 官方 deepseek 标 128k，两者都"对"，但裸名键此前约定用首个）。
-    # 裸名键 = 「首个命中的整条记录」+「最优候选的 cost」。
-    # 为什么不是整体换成最优候选：窗口等模型级属性在裸名键上一直沿用首个命中
-    # （有测试锁定该语义），只有定价需要纠正——转售商常把未定价模型标 0。
+    # 裸名键 = 首个命中的整条记录 + 最优候选的 cost。
+    # 窗口等模型级属性沿用首个命中（有测试锁定该语义），只有定价需要纠正。
     first_hit: Dict[str, dict] = {}
     for provider, meta in (data or {}).items():
         if not isinstance(meta, dict):

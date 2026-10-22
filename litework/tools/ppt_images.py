@@ -1,27 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 lite-work contributors
 
-"""PPT 配图生成：调用生图大模型产出**位图**（照片/插画/3D），不是 SVG 图形。
+"""PPT 配图：调用生图模型产出位图（照片/插画/3D），并提供零密钥图库兜底。
 
-为什么单独一层而不是直接用 ppt-master 的 image_gen.py：
-- 那个脚本靠 `.env` / 环境变量读密钥（`GEMINI_API_KEY` 等），而 lite-work 的
-  密钥在 config.json 的 llm.providers 里 —— 用户不该为了配图再填一遍；
-  这里把已配置的供应商凭据**映射**到对应 backend 的环境变量上。
-- 生图是花额度、耗十几秒的操作，需要「哪些后端可用」的前置探测与
-  可读的失败原因，而不是让 Agent 对着脚本的英文报错猜。
-
-凭据映射（供应商 → ppt-master backend）：
-
-| lite-work 供应商 | backend     | 环境变量                          |
-| ---------------- | ----------- | --------------------------------- |
-| openai           | openai      | OPENAI_API_KEY                    |
-| qwen             | qwen        | QWEN_API_KEY / DASHSCOPE_API_KEY  |
-| glm              | zhipu       | ZHIPU_API_KEY                     |
-| kimi             | （无对应）  | —（生图后端不含 Moonshot）        |
-
-其余后端（gemini / bfl / ideogram / stability / volcengine / tencent /
-fal / minimax / modelscope / openrouter / replicate / siliconflow）只能通过
-环境变量或 `~/.ppt-master/.env` 配置——它们不是 lite-work 的聊天供应商。
+不直接暴露 ppt-master 的 image_gen.py：那个脚本从 `.env` 读密钥，
+而 lite-work 的密钥在 config.json 的 llm.providers —— 这里把已配置的
+聊天供应商凭据映射成对应 backend 的环境变量，用户不必填两遍。
+凭据映射见 `PROVIDER_BACKEND_MAP`；其余后端只能靠环境变量配置。
 """
 from __future__ import annotations
 
@@ -83,16 +68,9 @@ def _script(name: str) -> str:
 def _apply_proxy(env: Dict[str, str], proxy_config: Optional[Dict[str, Any]]) -> None:
     """把用户配置的代理注入子进程环境（media scope）。
 
-    为什么必须做：生图/图库脚本用 `requests`，而 requests 只认
-    `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 环境变量（它不像 httpx 那样能
-    从调用参数传代理）。不注入 = 子进程**绕过用户配置的代理直连**，
-    在需要代理的网络里表现为「图库连不上」「生图超时」——这正是最初的漏配。
-
-    两个方向都要处理：
-    - 配了代理且 media scope 勾选 → 写入四个大小写变体 + NO_PROXY；
-    - **没配代理 → 主动清掉继承来的代理变量**。否则用户的 shell 里若有
-      `HTTPS_PROXY`，应用里明明「关闭代理」了、配图却还在偷偷走代理
-      （与 llm/webfetch 的 trust_env=False 行为保持一致）。
+    requests 只认 HTTP_PROXY/HTTPS_PROXY 环境变量（不能像 httpx 传参），
+    不注入就会绕过代理直连。反向也要处理：没配代理时清掉继承来的变量，
+    保证「关掉就是直连」（与 llm/webfetch 的 trust_env=False 一致）。
     """
     from ..core.proxy import proxy_config as read_proxy, proxy_env
 
@@ -110,15 +88,11 @@ def _apply_proxy(env: Dict[str, str], proxy_config: Optional[Dict[str, Any]]) ->
 
 
 def _ensure_requests(env: Dict[str, str]) -> Dict[str, str]:
-    """给技能解释器补上 `requests`（生图/图库脚本全依赖它）。
+    """给技能解释器补上 requests（生图/图库脚本全依赖它）。
 
-    为什么需要：skills 脚本跑在**随包技能解释器**（skill-python）里，那是裸
-    CPython。打包态靠 sitecustomize 把 `_internal` 挂进 sys.path 借用主程序
-    收集的第三方包；**开发态没有 `_internal`**，于是 `import requests` 直接
-    ModuleNotFoundError（实测：本机 venv 有 requests，但 skill-python 没有）。
-
-    这里把「当前进程能 import 到的 requests 所在目录」塞进 PYTHONPATH，
-    开发态/打包态都能自愈，不必要求用户装两份依赖。
+    技能跑在随包 skill-python（裸 CPython）里：打包态靠 sitecustomize 挂
+    _internal，开发态没有 → import 失败。这里把当前进程能 import 到的
+    requests 目录塞进 PYTHONPATH，两种形态都能自愈。
     """
     existing = env.get("PYTHONPATH", "")
     try:
@@ -137,17 +111,9 @@ def _skill_env(
     llm_providers: Optional[Dict[str, Dict[str, Any]]] = None,
     proxy_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
-    """构造子进程环境：供应商密钥映射 + 代理注入。
+    """构造子进程环境：供应商密钥映射 + 代理注入（详见 `_apply_proxy`）。
 
-    两件事必须都做对，否则配图在真实环境里会失败：
-
-    1. **密钥**：生图后端读 `OPENAI_API_KEY` 等环境变量，而 lite-work 的密钥
-       在 config.json 的 llm.providers —— 不映射就得让用户填两遍；
-    2. **代理**：这些脚本用的是 `requests`，靠 `HTTP_PROXY`/`HTTPS_PROXY`
-       环境变量走代理。不注入就会**绕过用户配置的代理直连**，在需要代理的
-       网络下表现为「图库连不上 / 生图超时」（实测漏了这个）。
-
-    `proxy_config` 传 `app.config`，按 `media` scope 取代理设置。
+    `proxy_config` 传 `app.config`，按 media scope 取代理设置。
     """
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"

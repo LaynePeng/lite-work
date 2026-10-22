@@ -1,18 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 lite-work contributors
 //
-// 输入卡顿的回归防线。
-//
-// 症状：打字时明显卡顿。成因是两条渲染路径叠加——
-// 1. App 的流式刷新每 80ms 调一次 patchChat，产生新 chatStates → 整个 App
-//    树重渲染（含 Composer）。Composer 的 text 状态在自己内部，本不该跟着
-//    父树一起重渲染。
-// 2. Composer 之前没包 memo，且父组件传的回调是内联箭头（每次渲染换新引用），
-//    所以连 memo 也会失效。
-//
-// 这里锁住：① Composer 必须是 memo 包装（父树重渲染时能跳过）；
-// ② 放大态测高必须走 rAF（读 scrollHeight 会强制同步 reflow，
-//    放在按键路径上就是卡顿源）。
+// 输入卡顿回归防线：Composer 必须是 memo（App 流式刷新每 80ms 会让父树
+// 重渲染）；放大态测高必须走 rAF（读 scrollHeight 强制同步 reflow）。
+// 父组件传的回调必须是稳定引用，否则 memo 失效。
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";

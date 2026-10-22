@@ -1376,15 +1376,10 @@ class PptEditTools:
     def _extract_slot_values(self, svg: str, keys: List[str]) -> Dict[str, str]:
         """按目标模板占位符顺序，从旧页文本对位提取现值。
 
-        两个世界的数据形态不同：
-        - 模板页（create_from_template 直出）：文本在 `*-carrier` id 的
-          <text> 里，顺序 = 占位符顺序；
-        - roundtrip 导入页：文本散在 `<g id="shape-N">` 里、**没有 carrier
-          id**（实测），只能按「带文本的顶层组出现顺序」对位——它与
-          outline（编辑器看到的元素序）一致。
-
-        顺序对位在换不同版式时可能语义错位（三点页换双栏页），但错位
-        的内容用户在编辑器里能看到再调，好过整页清空。
+        两种页面形态不同：模板直出页的文本在 `*-carrier` 的 <text> 里（顺序
+        即占位符顺序）；roundtrip 导入页的文本散在 `<g id="shape-N">`、没有
+        carrier id。语义错位（三点页换双栏页）用户能在编辑器里再调，
+        好过整页清空。
         """
         if not keys:
             return {}

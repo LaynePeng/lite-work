@@ -409,18 +409,9 @@ def _text_width(text: str, font_size: float) -> float:
 def wrap_text(text: str, max_width: float, font_size: float) -> List[str]:
     """把一段文字按 max_width 折成多行（含 CJK 禁则与语义断点）。
 
-    规则取自上流 ppt-master 的 text_measure.py（v6.7.2），但**不引入它的
-    uharfbuzz 依赖**——只复刻断行策略，字宽仍用本模块的估算：
-
-    1. **禁则（_NO_LINE_START）**：闭合标点（，。；：！？）」】""' 等）不得
-       出现在行首——直接断字会把「，」挤到下一行开头，是最刺眼的排版瑕疵；
-       对应地，开括号（（《「【"'）不得留在行尾；
-    2. **优先断点（_PREFERRED_BREAK_PUNCTUATION）**：，。；： 是语义停顿，
-       优先在这些位置换行，而不是把词从中间切开；
-    3. **回退阈值**：只有当标点断点能让该行达到贪心填充的 75% 以上时才采用，
-       否则宁可继续贪心填满——避免为了断在标点而留下明显短行。
-
-    西文仍在空格处断（单词超宽才硬切），`\\n` 视为强制换行。
+    规则复刻自上游 ppt-master 的 text_measure.py，不引入其 uharfbuzz 依赖：
+    闭合标点不得在行首、开括号不得在行尾；，。；： 优先作断点，但需达到
+    贪心行 75% 才采用（否则留短行）。西文按空格断，`\\n` 强制换行。
     """
     if max_width <= 0 or font_size <= 0:
         return [text]
@@ -618,20 +609,11 @@ def _fill_images(svg: str, values: Dict[str, str],
                  workspace: Optional[str] = None) -> str:
     """把 `IMAGE_n` 值写进第 n 个图片位的 `<image href>`。
 
-    为什么要单独一条通道：模板里的图片位是 `<image>`（带 1×1 透明占位图），
-    占位符替换（`{{TEXT}}`）碰不到它——21 个带图版式此前**永远出不了图**。
+    按 `<image>` 出现顺序编号，而不是匹配 `data-pptx-placeholder="picture"`：
+    `prepare_page_svg` 会先剥掉该元数据（flat 模式要求），按 placeholder 匹配
+    会一个都命中不了。模板里 `<image>` 与图片槽严格一一对应。
 
-    按 `<image>` 出现顺序编号，而**不是**匹配 `data-pptx-placeholder="picture"`：
-    `prepare_page_svg` 会先剥掉 flat 模式禁止的图片槽元数据（否则质检报错），
-    那时按 placeholder 匹配一个都命中不了（踩过）。模板里 `<image>` 与图片槽
-    严格一一对应（21 个模板实测），按顺序分配是安全的。
-
-    值支持三种形态：
-    - `data:` URI：直接写进 href；
-    - 工作区相对/绝对路径：读文件转 data URI（导出时由 ppt-master 落成媒体）；
-    - `http(s)://` URL：原样写 href（导出阶段下载）。
-
-    索引从 1 开始，与 `_image_slots()` 的 key 一致。
+    值可以是 `data:` URI、文件路径（转 data URI）或 http(s) URL。
     """
     wanted: Dict[int, str] = {}
     for key, raw in values.items():
@@ -976,24 +958,17 @@ def fill_page_svg_checked(svg: str, values: Dict[str, str],
 
 def fill_page_svg(svg: str, values: Dict[str, str],
                   workspace: Optional[str] = None) -> str:
-    """用给定值替换 {{PLACEHOLDER}}。
+    """用给定值替换 {{PLACEHOLDER}}，含自动折行/缩排与图片位填充。
 
-    未提供值的占位符替换为空串（而不是留着 `{{X}}`——那会被当成正文导出）。
+    未提供值的占位符替换为空串（留着会被当正文导出）。
 
-    多行值转成 `<tspan dy>` 软换行：DrawingML 的段落模型里，纯文本中的 `\\n`
-    会被折叠成空格（导出后实测「要点一 要点二 要点三」挤成一行），只有
-    tspan 分组才会被 converter 折叠成硬换行（`\\x0b`）。模板正文占位符
-    （CONTENT_AREA / BODY_TEXT 等）天然是多要点，这里必须按行拆分。
-    每个 tspan 显式带 x：converter 把带 x/dy 的 tspan 视为独立行，
-    缺 x 时会退回父 text 的基线导致整行右移。
+    多行值转 `<tspan dy>` 软换行：纯文本里的 `\\n` 会被 DrawingML 折叠成空格，
+    只有 tspan 分组才成硬换行。每个 tspan 必须显式带 x，否则整行右移。
 
-    `IMAGE_n` 键走图片通道（见 `_fill_images`）：值可以是工作区相对路径、
-    绝对路径或 `data:` URI，替换掉图片位里的 1×1 占位图。
+    `IMAGE_n` 走图片通道（见 `_fill_images`）。
 
-    **自动排版**：按占位符的 `data-pptx-bounds` 实测可用宽高，先折行、再按
-    字号阶梯缩排。用户不必手写 `\\n`——AI 生成的长文案会自动排进版面，
-    而不是像以前那样水平溢出导致整份稿子导不出来。
-    `overflows` 输出仍放不下的占位符（调用方据此给用户明确提示）。
+    排版按 `data-pptx-bounds` 实测宽高折行 + 字号阶梯缩排，避免长文案溢出。
+    仍放不下的槽位记入 `_FILL_OVERFLOW`（见 `fill_page_svg_checked`）。
     """
     # bounds 来自 prepare_page_svg 的缓存（它剥离元数据前抓的）；
     # 直接传原始未清理 svg 时仍能就地抓取（向后兼容）。
