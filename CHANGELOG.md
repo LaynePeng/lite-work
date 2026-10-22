@@ -108,6 +108,21 @@
   `ModuleNotFoundError`（打包态靠 sitecustomize 借 `_internal` 才勉强可用）。
   已把 `requests` 加入依赖，并在生图/检索子进程的 `PYTHONPATH` 里自愈补齐。
 
+### 修复（models.dev · 按名回退取价选中渠道条目）
+
+- **`kimi-k2.6` / `glm-5.2` 等模型按名回退查价时取到聚合渠道价**：本程序
+  provider 名与 models.dev 对不上时（`kimi` vs `moonshotai`、`glm` vs `zhipuai`、
+  `custom_*`），`_official_model_index` 按「官方厂商段 + 键段数最少、先到先得」
+  选条目。`OFFICIAL_VENDOR_IDS` 白名单同时含聚合渠道（alibaba / alibaba-cn …），
+  官方段命中≠第一方：`alibaba-cn/kimi-k2.6` 段数与 `moonshotai/kimi-k2.6` 相同
+  且排序更靠前 → 选中 CNY 折算价 0.929/3.858，且该条目缺 `cache_read`，缓存
+  命中价静默掉回 config 默认值（0.006，是 DeepSeek 的价）。现改为四级排序：
+  **键首段是官方厂商 > `canonical_model_id` 自指 > 段数 > 遍历顺序**。
+  关键教训：canonical 不能单独作判据——不少官方条目（openai/gpt-4o、
+  anthropic/claude-opus-4-7）canon 为 None，而网关条目（orcarouter 系）反而
+  带指向官方的 canonical，单独用会把 706 个模型改选到网关。全量数据实测：
+  880 个模型不变、29 个官方度提升、0 退化；kimi 四模型与官方站价格逐项一致。
+
 ### 修复（代理 · 配图与 webfetch 兜底路径）
 
 - **配图的子进程没走代理**：生图/图库脚本用 `requests`，它只认

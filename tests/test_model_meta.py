@@ -165,6 +165,55 @@ def test_gateway_provider_falls_back_to_official_vendor_by_model_name(tmp_path):
     assert svc.get_pricing("totally-unknown-model", provider_id="custom_123") is None
 
 
+def test_same_segment_count_prefers_canonical_official_entry(tmp_path):
+    """官方条目排序：首段官方 > canonical 自指 > 段数，不能被渠道顶掉。
+
+    两个真实缺陷（按名回退查价时）：
+    - `alibaba-cn/kimi-k2.6` 与 `moonshotai/kimi-k2.6` 首段都在官方白名单、
+      段数相同、排序靠前——「段数+先到先得」会选中它的 CNY 折算价，且缺
+      cache_read（缓存命中价静默掉回 config 默认值）；
+    - canonical_model_id 单独作判据更糟：不少官方条目（openai/gpt-4o 等）
+      canon 为 None，而网关（orcarouter/openai/gpt-4o）反而带指向官方的
+      canonical——全量实测 706 个模型会被改选到网关条目。
+    正确排序：首段官方 0/1 → canonical 自指 0/1/2 → 段数 → 遍历顺序。
+    """
+    cache = tmp_path / "models.dev.json"
+    cache.write_text(json.dumps({
+        # 顺序在前：聚合渠道（官方段命中、段数相同、canonical 指向官方）
+        "alibaba-cn": {"models": {"kimi-k2.6": {
+            "canonical_model_id": "moonshotai/kimi-k2.6",
+            "cost": {"input": 0.929, "output": 3.858},
+            "limit": {"context": 262_144}}}},
+        # 官方第一方：canonical 自指
+        "moonshotai": {"models": {"kimi-k2.6": {
+            "canonical_model_id": "moonshotai/kimi-k2.6",
+            "cost": {"input": 0.95, "output": 4.0, "cache_read": 0.16},
+            "limit": {"context": 262_144}}}},
+        # 无 canonical 的第三方渠道：优先级最低
+        "somegateway": {"models": {"moonshotai/kimi-k2.6": {
+            "cost": {"input": 1.27, "output": 5.33}}}},
+        # 网关把官方厂商放中段：canonical 指向官方，但首段是网关本体——
+        # 不得挤掉 canon 为 None 的真官方条目
+        "orcarouter": {"models": {"openai/gpt-4o": {
+            "canonical_model_id": "openai/gpt-4o",
+            "cost": {"input": 9.9, "output": 19.9}}}},
+        "openai": {"models": {"gpt-4o": {
+            "cost": {"input": 2.5, "output": 10.0, "cache_read": 1.25}}}},
+    }), encoding="utf-8")
+    svc = ModelMetaService(str(cache))
+
+    # 本程序 provider id 是 kimi（models.dev 里叫 moonshotai）→ 走按名回退
+    pricing = svc.get_pricing("kimi-k2.6", provider_id="kimi")
+    assert pricing["input_per_mtok"] == 0.95
+    assert pricing["output_per_mtok"] == 4.0
+    assert pricing["cache_hit_per_mtok"] == 0.16     # 渠道条目缺这个价，不得丢字段
+
+    # 首段官方优先：真官方（canon=None）不被带指向性 canonical 的网关顶掉
+    gpt = svc.get_pricing("gpt-4o", provider_id="custom_x")
+    assert gpt["input_per_mtok"] == 2.5              # openai 官方，非 orcarouter 的 9.9
+    assert gpt["cache_hit_per_mtok"] == 1.25
+
+
 def test_model_meta_status_reports_cache(tmp_path):
     """设置页要能看出「有没有缓存 / 索引了多少模型 / 多久前同步」。"""
     empty = ModelMetaService(str(tmp_path / "missing.json"))
