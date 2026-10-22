@@ -7,6 +7,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "dev": "concurrently -k -n core,web,app -c blue,green,magenta \"npm run dev:core\" \"npm run dev:web\" \"npm run dev:electron\"",
+    "postinstall": "npm install --prefix web",
     "dev:core": "node scripts/dev-core.mjs",
     "dev:web": "npm --prefix web run dev",
     "dev:electron": "node scripts/dev-electron.mjs",
