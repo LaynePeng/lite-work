@@ -72,12 +72,24 @@ def parse_frontmatter(text: str) -> Dict[str, Any]:
     支持扁平 `key: value`、一层嵌套 map（`metadata:` 下缩进键值）
     与多行块标量（`|` 字面块 / `>` 折叠块，作为字符串值收集）。
     未知字段由调用方决定取舍。
+
+    容错：首行允许是 `---name: xxx`（`---` 与首个键之间缺换行）。
+    这种损坏形态来自旧版同步脚本的拼接 bug，曾导致 frontmatter 整体解析
+    失败 → triggers/version 全读不到 → 技能永远无法被自动触发。这里把
+    首行拆成 `---` + `name: xxx` 继续解析，让已损坏的旧副本也能恢复可用。
     """
     if not text.startswith("---"):
         return {}
     lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    if not lines:
         return {}
+    first = lines[0].strip()
+    if first != "---":
+        # `---key: value` → 拆出首个键值，等价于补回缺失的换行
+        rest = first[3:].strip()
+        if not rest or ":" not in rest:
+            return {}
+        lines = ["---", rest] + lines[1:]
     meta: Dict[str, Any] = {}
     current_key: Optional[str] = None
     i, n = 1, len(lines)
@@ -256,6 +268,49 @@ def _should_upgrade_builtin_skill(builtin_dir: Path, target: Path, marker: Path)
         return True
 
 
+def _is_broken_builtin_copy(builtin_dir: Path, target: Path) -> bool:
+    """目标副本是不是「旧版同步脚本装下的坏件」。
+
+    只认一个**专属特征**：frontmatter 首行是 `---name: xxx`（`---` 与首个键
+    之间缺换行）。这是旧版 sync 脚本拼接 bug 的唯一产物形态，正常手写技能
+    不会长这样。
+
+    为什么不能放宽成「读不到 triggers 就接管」：用户完全可能手写一个不靠
+    triggers 的同名技能（自定义版），那种绝不该被内置版覆盖——放宽条件会
+    误伤（test_sync_builtin_skills_to_user 第 4 步就锁着这个场景）。
+
+    额外保险：
+    - 内置版必须有 triggers（否则该技能不依赖自动注入，接管无意义）；
+    - 两边 name 若都解析得出，必须一致。
+    """
+    try:
+        new_text = (builtin_dir / "SKILL.md").read_text(encoding="utf-8")
+        old_text = (target / "SKILL.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    lines = old_text.splitlines()
+    first_line = lines[0].strip() if lines else ""
+    # 专属特征：首行是 `---<内容>` 而不是单独的 `---`
+    if not first_line.startswith("---") or first_line == "---":
+        return False
+
+    builtin_meta = parse_frontmatter(new_text)
+    if not str(builtin_meta.get("triggers") or "").strip():
+        return False
+
+    old_meta = parse_frontmatter(old_text)
+    builtin_name = str(builtin_meta.get("name") or "").strip()
+    old_name = str(old_meta.get("name") or "").strip()
+    if builtin_name and old_name and builtin_name != old_name:
+        return False
+
+    logger.warning(
+        "[Skills] 接管损坏的内置技能副本：%s（frontmatter 首行缺换行，"
+        "旧版同步脚本产物）", target)
+    return True
+
+
 def sync_builtin_skills_to_user() -> int:
     """把内置技能同步安装到 ~/.agents/skills/（用户级标准位置）。
 
@@ -267,7 +322,9 @@ def sync_builtin_skills_to_user() -> int:
     同步策略（幂等，启动时执行）：
     - 目标不存在 → 安装；
     - 目标带 .litework-builtin 标记（我们装的）→ 版本变化时覆盖升级；
-    - 用户自有的同名技能（无标记）→ 不动。
+    - 用户自有的同名技能（无标记）→ 不动；
+    - 例外：无标记但**元数据损坏**（读不到 triggers，而内置版有）→ 接管
+      （见 `_is_broken_builtin_copy`，修旧版同步脚本留下的坏件）。
     返回本次安装/升级的技能数。
     """
     import shutil as _shutil
@@ -291,6 +348,13 @@ def sync_builtin_skills_to_user() -> int:
             elif marker.is_file():
                 # 我们装的：按「技能自身 semver」决定是否覆盖（见 helper 说明）
                 need_install = _should_upgrade_builtin_skill(skill_dir, target, marker)
+            else:
+                # 无 marker 通常是「用户自有技能」，按约定不覆盖。但有一类例外：
+                # 旧版同步脚本（frontmatter 拼接缺换行）装下的副本既没有 marker
+                # 也无法解析出 triggers——这种技能永远不会被自动触发，属于坏件。
+                # 仅当「内置版能解析出 triggers 且目标副本解析不出」时才接管，
+                # 避免误伤真正由用户手写（本就不带 triggers）的自有技能。
+                need_install = _is_broken_builtin_copy(skill_dir, target)
             # 用户自有同名技能（无标记）→ 不覆盖
             if not need_install:
                 continue

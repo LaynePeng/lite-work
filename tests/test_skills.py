@@ -11,6 +11,7 @@ import pytest
 from litework.core.system_prompt import SystemPromptBuilder
 from litework.tools.skills import (
     SkillsTools,
+    _is_broken_builtin_copy,
     parse_frontmatter,
 )
 
@@ -496,3 +497,99 @@ def test_engine_preinstall_worker_invokes_install(tmp_path, monkeypatch):
     # 全局锁已释放
     lock = fake_home / ".agents" / "skills" / AgentApp.ENGINE_PREINSTALL_LOCK
     assert not lock.exists(), "预装锁未清理"
+
+
+# ---------------------------------------------------------------- frontmatter 容错
+
+class TestFrontmatterTolerance:
+    """`---name: xxx`（缺换行）必须仍能解析。
+
+    来源：旧版同步脚本的拼接 bug 产出 `---name: ppt-master` 首行，导致
+    parse_frontmatter 判定「不以 --- 开头」直接返回 {} → triggers/version
+    全部读不到 → 技能永远无法被自动触发（真实踩过）。
+    """
+
+    def test_missing_newline_after_dashes(self):
+        text = (
+            "---name: demo\n"
+            "description: 演示技能\n"
+            "triggers: aaa,bbb\n"
+            "---\n\n# body\n"
+        )
+        meta = parse_frontmatter(text)
+        assert meta.get("name") == "demo"
+        assert meta.get("triggers") == "aaa,bbb"
+
+    def test_normal_frontmatter_still_parses(self):
+        text = "---\nname: demo\ntriggers: x\n---\n# body\n"
+        meta = parse_frontmatter(text)
+        assert meta.get("name") == "demo" and meta.get("triggers") == "x"
+
+    def test_garbage_first_line_returns_empty(self):
+        # `---` 后既不是换行也不是键值（纯乱码）→ 仍返回空，不瞎猜
+        assert parse_frontmatter("---oops\nname: x\n---\n") == {}
+        assert parse_frontmatter("not a frontmatter\n") == {}
+
+
+class TestBrokenBuiltinCopyTakeover:
+    """无 marker 但元数据损坏的用户副本应被内置版接管（而非永久保护）。"""
+
+    def _skill(self, root, name, frontmatter):
+        d = root / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            f"---\n{frontmatter}\n---\n\n# {name}\n", encoding="utf-8")
+        return d
+
+    def _broken_skill(self, root, name):
+        """复刻旧版 sync 的坏件形态：首行 `---name: demo`（缺换行）。"""
+        d = root / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            f"---name: {name}\ndescription: demo\n---\n\n# {name}\n",
+            encoding="utf-8")
+        return d
+
+    def test_broken_copy_is_taken_over(self, tmp_path):
+        """首行缺换行的坏件（旧版 sync 产物）→ 允许接管。"""
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        b = self._skill(builtin, "demo", "name: demo\ntriggers: aa,bb")
+        u = self._broken_skill(user, "demo")
+
+        assert _is_broken_builtin_copy(b, u) is True
+
+    def test_standard_skill_without_triggers_is_kept(self, tmp_path):
+        """标准 frontmatter 但没 triggers（用户手写）→ 不接管（防误伤）。"""
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        b = self._skill(builtin, "demo", "name: demo\ntriggers: aa,bb")
+        u = self._skill(user, "demo", "name: demo")
+        assert _is_broken_builtin_copy(b, u) is False
+
+    def test_user_skill_without_triggers_is_kept(self, tmp_path):
+        """内置版也没有 triggers → 不是本机制的目标，不接管。"""
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        b = self._skill(builtin, "demo", "name: demo")
+        u = self._skill(user, "demo", "name: demo")
+        assert _is_broken_builtin_copy(b, u) is False
+
+    def test_user_skill_with_own_triggers_is_kept(self, tmp_path):
+        """用户副本有自己的 triggers（正常技能）→ 绝不接管。"""
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        b = self._skill(builtin, "demo", "name: demo\ntriggers: aa")
+        u = self._skill(user, "demo", "name: demo\ntriggers: zz")
+        assert _is_broken_builtin_copy(b, u) is False
+
+    def test_different_name_is_kept(self, tmp_path):
+        """同名目录但 name 不同（用户自建）→ 不接管。"""
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        b = self._skill(builtin, "demo", "name: demo\ntriggers: aa")
+        u = self._skill(user, "demo", "name: my-own-thing")
+        assert _is_broken_builtin_copy(b, u) is False
+
+    def test_missing_files_is_safe(self, tmp_path):
+        assert _is_broken_builtin_copy(tmp_path / "no", tmp_path / "no2") is False
