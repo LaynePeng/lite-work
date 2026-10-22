@@ -165,7 +165,8 @@ def test_fingerprint_matches_custom_gateway_model(tmp_path):
     # pro 与别名
     assert p.lookup("deepseek/deepseek-v4.1-pro")["model_key"] == "deepseek-v4-pro"
     assert p.lookup("deepseek-v4-flash")["model_key"] == "deepseek-flash"
-    assert p.lookup("Kimi-K3")["model_key"] == "kimi-k3"
+    # kimi 不再由插件给价（改用 models.dev）→ 返回 None 交回主程序
+    assert p.lookup("Kimi-K3") is None
     # 不认识 → None（交回主程序走 models.dev / config）
     assert p.lookup("gpt-4o") is None
     assert p.lookup("") is None
@@ -200,25 +201,11 @@ def test_plugin_sync_writes_cache_and_failure_keeps_old(tmp_path, monkeypatch):
     p = _plugin()
     p.configure(str(tmp_path))
 
-    class _Resp:
-        status_code = 200
-        text = KIMI_MD
-
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
+    # kimi 源已下线（改用 models.dev）→ 明确报「未知源」，而非静默成功
     res = p.sync("kimi")
-    assert res["ok"] is True and res["models"] == 2
-    assert (tmp_path / "pricing_cache.json").exists()
-    assert p.lookup("kimi-k3")["source"] == "official:kimi"
-
-    # 解析失败 → 报错且保留旧缓存（不让坏页面把好数据冲掉）
-    class _Bad:
-        status_code = 200
-        text = "<html>改版了</html>"
-
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Bad())
-    res2 = p.sync("kimi")
-    assert res2["ok"] is False and "解析失败" in res2["error"]
-    assert p.lookup("kimi-k3")["source"] == "official:kimi"
+    assert res["ok"] is False
+    assert "未知定价源" in res["error"]
+    assert not (tmp_path / "pricing_cache.json").exists()
 
     # 未知源 → 明确报错
     assert p.sync("nope")["ok"] is False
@@ -228,7 +215,8 @@ def test_plugin_status_stale_flag(tmp_path):
     p = _plugin()
     p.configure(str(tmp_path))
     st = {s["id"]: s for s in p.status()}
-    assert set(st) >= {"deepseek", "kimi"}
+    # kimi 已改用 models.dev，不再作为插件数据源出现
+    assert set(st) == {"deepseek"}
     # 无缓存 → stale（前端提示「建议同步」），但有内置快照兜底
     assert st["deepseek"]["stale"] is True
     assert st["deepseek"]["snapshot_date"]
@@ -456,6 +444,6 @@ def test_plugins_builtin_lists_pricing_plugin(tmp_path):
     assert "pricing-plugin" in items
     entry = items["pricing-plugin"]
     assert entry["kind"] == "tool"
-    assert entry["version"] == "1.0.0"
+    assert entry["version"] == "1.0.1"
     assert entry["tools"] == []
     assert entry["builtin"] is True

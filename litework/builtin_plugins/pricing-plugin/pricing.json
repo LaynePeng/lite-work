@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "官方定价数据源与快照。改价：改本文件（或重新同步：设置 → 综合设置 → 同步）。主程序不含任何价目表。",
+  "note": "官方定价数据源与快照。改价：改本文件（或重新同步：设置 → 综合设置 → 同步）。主程序不含任何价目表。kimi 不再单独维护官方源——models.dev 的 moonshotai 条目价格与官方站一致（已验证 k3/k2.7-code/k2.7-code-highspeed/k2.6 四项），只有 DeepSeek 因分时计费（高峰/空闲半价）需要专源解析。",
   "ttl_seconds": 604800,
   "sources": {
     "deepseek": {
@@ -21,26 +21,6 @@
         "deepseek-v4-pro": {
           "peak": {"input_per_mtok": 1.32, "output_per_mtok": 3.96, "cache_hit_per_mtok": 0.044},
           "off_peak": {"input_per_mtok": 0.66, "output_per_mtok": 1.98, "cache_hit_per_mtok": 0.022}
-        }
-      }
-    },
-    "kimi": {
-      "label": "Kimi 官方定价（国际站）",
-      "url": "https://platform.kimi.ai/docs/pricing/chat.md",
-      "parser": "kimi",
-      "snapshot_date": "2026-09-17",
-      "models": {
-        "kimi-k3": {
-          "peak": {"cache_hit_per_mtok": 0.3, "input_per_mtok": 3.0, "output_per_mtok": 15.0}
-        },
-        "kimi-k2.7-code": {
-          "peak": {"cache_hit_per_mtok": 0.19, "input_per_mtok": 0.95, "output_per_mtok": 4.0}
-        },
-        "kimi-k2.7-code-highspeed": {
-          "peak": {"cache_hit_per_mtok": 0.38, "input_per_mtok": 1.9, "output_per_mtok": 8.0}
-        },
-        "kimi-k2.6": {
-          "peak": {"cache_hit_per_mtok": 0.16, "input_per_mtok": 0.95, "output_per_mtok": 4.0}
         }
       }
     }

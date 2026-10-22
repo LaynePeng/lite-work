@@ -106,8 +106,19 @@ class PricingProvider(Plugin):
     # 由 AgentApp 在发现「用户目录覆盖同名内置」时置位（与 collab 插件同口径）
     _is_local_override: bool = False
 
-    def configure(self, config_dir: str) -> None:
-        """注入配置目录（同步缓存的落盘位置）；主程序装载后调用一次。"""
+    #: 出网代理（主程序按 config["proxy"] 的 scope=meta 注入）。
+    #: 定价源抓的是各家官网文档页，与 models.dev 同属「元数据拉取」——
+    #: 需要代理的网络里，不注入就会出现「models.dev 能同步、各家官方源全失败」。
+    proxy_url: str = ""
+    #: TLS 校验开关（config["proxy"]["ssl_verify"]，企业 MITM 代理场景用）
+    ssl_verify: bool = True
+
+    def configure(self, config_dir: str, proxy_url: str = "",
+                  ssl_verify: bool = True) -> None:
+        """注入配置目录与出网参数；主程序装载后调用一次。
+
+        proxy_url 留空 = 直连（与 httpx 的 proxy=None 语义一致）。
+        """
 
     def lookup(self, model_id: str) -> Optional[Dict[str, Any]]:
         """按模型名给价（自行判断是否认识该模型）；不认识返回 None。"""

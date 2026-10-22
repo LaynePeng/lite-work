@@ -1177,7 +1177,16 @@ class AgentApp:
             candidates = local + [p for p in load_pricing_builtin()
                                   if p.name not in shadowed]
             if candidates:
-                candidates[0].configure(self.config_dir)
+                from .core.proxy import proxy_for, ssl_verify_for
+
+                # 定价源与 models.dev 同属元数据拉取，共用 scope=meta 的代理：
+                # 此前只有 models.dev 注入，各家官方定价源在需要代理的网络里
+                # 全部失败（表现为「同步失败」但不说原因）。
+                candidates[0].configure(
+                    self.config_dir,
+                    proxy_url=proxy_for(self.config, "meta") or "",
+                    ssl_verify=ssl_verify_for(self.config),
+                )
                 self._pricing_provider = candidates[0]
         except Exception:
             logger.warning("[App] 定价插件装载失败，回退 models.dev/config 定价",

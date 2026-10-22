@@ -48,6 +48,29 @@ def _flatten(data: Dict[str, Any]) -> Dict[str, dict]:
     官方价/窗口顶掉。
     """
     flat: Dict[str, dict] = {}
+    # 裸名键的选优：同名模型有几十家转售，`setdefault` 是「谁先遍历到用谁」，
+    # 而 dict 顺序取决于上游 JSON 的排列——结果就是随机取到某个转售商的价
+    # （甚至 0 价，如 sensenova 提供的 kimi-k3 标 0；moonshotai 官方是 3/15）。
+    # 因此裸名键单独收：官方厂商优先，无官方时取首个有有效定价的。
+    bare: Dict[str, dict] = {}
+    bare_rank: Dict[str, int] = {}
+
+    def _rank(model_id: str, provider: str, entry: dict) -> int:
+        """越小越优先：官方厂商 = 0；有**非零**定价 = 1；其余 = 2。
+
+        为什么把 0 价排除在"有效定价"之外：转售商常把未定价的模型标 0
+        （sensenova 的 kimi-k3 就是 0），它虽然能通过 `_entry_pricing`
+        的字段校验，却代表"这家没提供价格"而不是"免费"。官方标 0 是
+        真的免费模型，因此官方始终排第一档，不受此影响。
+        """
+        if provider.lower() in OFFICIAL_VENDOR_IDS:
+            return 0
+        pricing = _entry_pricing(entry)
+        if pricing and (pricing.get("input_per_mtok", 0) > 0
+                        or pricing.get("output_per_mtok", 0) > 0):
+            return 1
+        return 2
+
     for provider, meta in (data or {}).items():
         if not isinstance(meta, dict):
             continue
@@ -55,12 +78,54 @@ def _flatten(data: Dict[str, Any]) -> Dict[str, dict]:
         if not isinstance(models, dict):
             continue
         for model_id, entry in models.items():
-            if isinstance(entry, dict):
-                flat.setdefault(f"{provider}/{model_id}", entry)
-                if "/" not in model_id:
-                    flat.setdefault(model_id, entry)
-    return flat
+            if not isinstance(entry, dict):
+                continue
+            flat.setdefault(f"{provider}/{model_id}", entry)
+            if "/" in model_id:
+                continue
+            r = _rank(model_id, provider, entry)
+            if model_id not in bare or r < bare_rank[model_id]:
+                bare[model_id] = entry
+                bare_rank[model_id] = r
 
+    # 裸名键合并：**定价**取最优候选（官方优先，避免转售商 0 价），
+    # **context_window 等模型级属性**保留首个命中（各家一致，且不该被
+    # 官方条目覆盖——例：tinfoil 的 deepseek-v4-flash 标 1M 窗口，
+    # 官方 deepseek 标 128k，两者都"对"，但裸名键此前约定用首个）。
+    # 裸名键 = 「首个命中的整条记录」+「最优候选的 cost」。
+    # 为什么不是整体换成最优候选：窗口等模型级属性在裸名键上一直沿用首个命中
+    # （有测试锁定该语义），只有定价需要纠正——转售商常把未定价模型标 0。
+    first_hit: Dict[str, dict] = {}
+    for provider, meta in (data or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        models = meta.get("models")
+        if not isinstance(models, dict):
+            continue
+        for model_id, entry in models.items():
+            if isinstance(entry, dict) and "/" not in model_id:
+                first_hit.setdefault(model_id, entry)
+
+    for model_id, best in bare.items():
+        base = first_hit.get(model_id)
+        if base is None:
+            flat[model_id] = best
+            continue
+        if base is best:
+            flat[model_id] = best
+            continue
+        merged = dict(base)
+        for key, value in best.items():
+            # 窗口是「模型级」属性：各家标注口径不同（官方 128k / 转售 1M），
+            # 裸名键沿用首个命中，不因官方条目覆盖。models.dev 里字段名是 `limit`
+            # （内含 context/input），不是 `context_window`——早先判错字段名，
+            # 导致窗口被官方条目顶掉（踩过）。
+            if key in ("limit", "context_window"):
+                continue
+            if key == "cost" or key not in merged:
+                merged[key] = value
+        flat[model_id] = merged
+    return flat
 
 def _candidates(model_id: str, provider_id: str = "") -> list:
     """查找候选键：provider 限定名优先，裸模型名兜底（兼容手写/历史缓存文件）。"""

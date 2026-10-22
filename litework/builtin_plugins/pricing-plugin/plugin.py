@@ -177,7 +177,7 @@ class OfficialPricingPlugin(ToolPlugin, PricingProvider):
     """
 
     name = "pricing-plugin"
-    version = "1.0.0"
+    version = "1.0.1"
     description = ("官方定价数据源：DeepSeek 分时价（高峰/空闲半价）与 Kimi 国际站价，"
                    "按模型指纹计费（自定义中转也能认出）。价格表在 pricing.json，"
                    "手动同步、不自动联网。")
@@ -206,9 +206,16 @@ class OfficialPricingPlugin(ToolPlugin, PricingProvider):
             logger.exception("[Pricing] pricing.json 读取失败，定价插件不可用")
             self._data = {}
 
-    def configure(self, config_dir: str) -> None:
+    def configure(self, config_dir: str, proxy_url: str = "",
+                  ssl_verify: bool = True) -> None:
         self.config_dir = config_dir
         self._cache = None
+        # 出网代理与 TLS 校验：定价源抓的是各家官网文档页，与 models.dev 同属
+        # 「元数据拉取」。主程序按 config["proxy"] 的 scope=meta 注入——
+        # 此前只有 models.dev 走了代理，各家官方源在需要代理的网络里全部失败
+        # （用户看到「同步失败」但不知道是网络）。
+        self.proxy_url = proxy_url
+        self.ssl_verify = ssl_verify
 
     def _cache_path(self) -> Optional[str]:
         if not self.config_dir:
@@ -344,8 +351,13 @@ class OfficialPricingPlugin(ToolPlugin, PricingProvider):
         try:
             import httpx
 
+            # trust_env=False：代理唯一事实源是 config["proxy"]（scope=meta），
+            # 不读环境变量——否则应用里「关掉代理」仍会走 shell 的 HTTPS_PROXY。
             resp = httpx.get(sdef["url"], timeout=20, follow_redirects=True,
-                             headers=_FETCH_HEADERS)
+                             headers=_FETCH_HEADERS,
+                             proxy=self.proxy_url or None,
+                             trust_env=False,
+                             verify=self.ssl_verify)
             if resp.status_code != 200:
                 return {"ok": False, "error": f"HTTP {resp.status_code}"}
             models = parser(resp.text)
