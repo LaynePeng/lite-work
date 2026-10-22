@@ -107,25 +107,33 @@ def _write_skill(root, name: str, frontmatter: str) -> None:
     (d / "SKILL.md").write_text(f"---\n{frontmatter}\n---\n\n# {name}\n", encoding="utf-8")
 
 
-def test_not_for_suppresses_trigger(tmp_path):
-    """`not-for` 命中 → 该技能不被自动注入（提升命中率的负向触发）。"""
+def test_not_for_suppresses_trigger(tmp_path, monkeypatch):
+    """`not-for` 命中 → 该技能不被自动注入（提升命中率的负向触发）。
+
+    内置技能根恒可见（随包分发的 ppt-master 等也参与匹配），所以断言只针对
+    本用例写入的 presentation，不能假设 "命中列表 == [presentation]"。
+    """
     root = tmp_path / ".agents" / "skills"
     root.mkdir(parents=True)
     _write_skill(root, "presentation",
                  "name: presentation\ntriggers: ppt,幻灯片\nnot-for: 表格,excel")
     tools = SkillsTools(str(tmp_path))
 
+    def hits(text: str, mode: str = "substring") -> list:
+        return [s["name"] for s in tools.match_skills(text, mode=mode)]
+
     skills = {s["name"]: s for s in tools.list_skills()}
     assert skills["presentation"]["not_for"] == "表格,excel"
 
-    # 正向：正常触发
-    assert [s["name"] for s in tools.match_skills("帮我做个 ppt")] == ["presentation"]
-    # 负向：命中 not-for → 抑制
-    assert tools.match_skills("把 ppt 里的表格改成 excel 格式") == []
+    # 正向：presentation 被命中（此时可能还有内置 ppt-master 一起命中，
+    # 那是真实的产品行为；本用例只关心 not-for 的抑制效果）
+    assert "presentation" in hits("帮我做个 ppt")
+    # 负向：命中 not-for → presentation 被抑制
+    assert "presentation" not in hits("把 ppt 里的表格改成 excel 格式")
     # 高级模式同样生效（注意：advanced 用 \b 词边界，CJK 连写没有边界，
     # 所以正向用 latin 触发词 ppt；not-for 是子串匹配，中文照样抑制）
-    assert tools.match_skills("把 ppt 里的表格改一下", mode="advanced") == []
-    assert [s["name"] for s in tools.match_skills("做个 ppt", mode="advanced")] == ["presentation"]
+    assert "presentation" not in hits("把 ppt 里的表格改一下", mode="advanced")
+    assert "presentation" in hits("做个 ppt", mode="advanced")
 
 
 # ---------------------------------------------------------------- 循环集成
@@ -220,3 +228,38 @@ def test_metrics_endpoint_empty_is_ok(tmp_path):
     with TestClient(fast) as client:
         body = client.get("/api/metrics/tools").json()
         assert body["tool_count"] == 0 and body["worst_tools"] == []
+
+
+# ---------------------------------------------------------------- 内置技能可触发
+
+def test_builtin_presentation_skill_not_shadowed(tmp_path):
+    """内置技能必须能被 triggers 命中：presentation 与 ppt-master 各有分工。
+
+    回归背景：ppt-master 以「随包内置技能」发布后，其 triggers 与 presentation
+    的宽泛词（PPT/ppt/幻灯片…）完全重叠 → 用户说「做个 PPT」同时注入两个技能。
+    社区的修法是把 presentation 收窄为「初稿意图词」（PPT初稿/快速PPT/…），
+    让 ppt-master 承接专业版。这里锁住该分工不被改回去。
+    """
+    from litework.tools.skills import SkillsTools
+
+    tools = SkillsTools(str(tmp_path))
+    by_name = {s["name"]: s for s in tools.list_skills()}
+
+    assert "presentation" in by_name
+    assert "ppt-master" in by_name
+    pres_trig = by_name["presentation"]["triggers"]
+    pm_trig = by_name["ppt-master"]["triggers"]
+    assert pres_trig, "presentation 必须有 triggers（否则无法自动注入）"
+    assert pm_trig, "ppt-master 必须有 triggers"
+
+    # 分工：宽泛的 ppt 归 ppt-master，初稿意图词归 presentation
+    assert "ppt" in [t.strip().lower() for t in pm_trig.split(",")]
+    pres_words = [t.strip().lower() for t in pres_trig.split(",") if t.strip()]
+    assert "ppt" not in pres_words, (
+        "presentation 不应保留裸 'ppt' 触发词——会与 ppt-master 双注入")
+    assert any(("初稿" in w) or ("快速" in w) or ("大纲" in w) for w in pres_words), (
+        "presentation 应只承接初稿类意图")
+
+    # 实际匹配
+    assert "ppt-master" in [s["name"] for s in tools.match_skills("用 ppt-master 做份演示")]
+    assert "presentation" in [s["name"] for s in tools.match_skills("快速PPT")]

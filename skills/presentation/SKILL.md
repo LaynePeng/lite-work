@@ -1,13 +1,14 @@
 ---
 name: presentation
-description: 演示文稿制作：把主题/大纲/文档内容转成 PPT 初稿（python-pptx 生成 .pptx）
-triggers: PPT,ppt,幻灯片,演示文稿,presentation
+description: 演示文稿快速初稿：把主题/大纲/文档内容转成 PPT 初稿（python-pptx 生成 .pptx，零额外依赖；专业版设计与美化用 ppt-master）
+triggers: PPT初稿,快速PPT,简单PPT,PPT大纲,ppt初稿
 version: "1.0.1"
 ---
 
 # 演示文稿技能
 
-当用户要求制作 PPT 时，按以下流程执行：
+当用户要求快速产出 PPT 初稿时，按以下流程执行（专业级设计/美化/模板请改用
+ppt-master 技能）：
 
 ## 步骤
 
