@@ -292,14 +292,23 @@ class ModelMetaService:
         自定义中转/网关（custom_*、自建代理）在 models.dev 里没有 provider 条目，
         只能按模型名找第一方厂商的数据。同名模型在索引里有几十家转售（价格任意），
         这里只认**官方厂商段**（deepseek / z-ai / moonshotai / openai …）的键，
-        并在多条命中时取「最接近官方」的（键段数最少，如 `z-ai/x` 优于
-        `gateway/z-ai/x`）——避免取到转售价。
+        排序（小者优先）：① 键**首段**是官方厂商（`google/x` 优于
+        `orcarouter/google/x`——网关键把官方厂商放中段，首段才是它的本体）；
+        ② `canonical_model_id` 自指；③ 键段数少；④ 遍历顺序（可复现）。
+
+        为什么 canonical 只作次级键：它是上游的「同模型归并键」——官方条目
+        自指、网关条目指向官方、**不少官方条目为空**（openai/gpt-4o、
+        anthropic/claude-opus-4-7 均 None）。单独作判据会把带指向性 canonical
+        的网关（orcarouter 系普遍如此）排到 canon 为 None 的真官方前面
+        （全量实测 706 个模型会被改选到网关条目）。①+② 叠加后，「选了网关
+        但存在官方候选」的模型数为 0——剩余选网关的都是 models.dev 本就
+        无官方收录的模型，属合理兜底。
         """
         cached = getattr(self, "_official_idx", None)
         if cached is not None:
             return cached
         index = self._load_cache() or {}
-        best: Dict[str, tuple] = {}  # model_lower -> (段数, entry)
+        best: Dict[str, tuple] = {}  # model_lower -> (排序键, entry)
         for key, entry in index.items():
             segs = key.split("/")
             if len(segs) < 2:
@@ -309,12 +318,24 @@ class ModelMetaService:
             model = segs[-1].strip().lower()
             if not model:
                 continue
-            n = len(segs)
+            rank = (0 if segs[0].lower() in OFFICIAL_VENDOR_IDS else 1,
+                    self._canonical_rank(key, entry), len(segs))
             cur = best.get(model)
-            if cur is None or n < cur[0]:
-                best[model] = (n, entry)
+            if cur is None or rank < cur[0]:
+                best[model] = (rank, entry)
         self._official_idx = {m: e for m, (_, e) in best.items()}
         return self._official_idx
+
+    @staticmethod
+    def _canonical_rank(key: str, entry: Any) -> int:
+        """models.dev `canonical_model_id` → 官方度（0 自指 / 1 指向他人 / 2 无）。
+
+        只作**次级**排序键（首段判定之后），理由见 `_official_model_index`。
+        """
+        canonical = (entry or {}).get("canonical_model_id") if isinstance(entry, dict) else None
+        if not isinstance(canonical, str) or not canonical.strip():
+            return 2
+        return 0 if canonical.strip().lower() == key.strip().lower() else 1
 
     @staticmethod
     def _model_basename(model_id: str) -> str:
