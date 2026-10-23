@@ -116,10 +116,14 @@ describe("打开项目后的默认落点", () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByPlaceholderText(/下达任务/)).toBeTruthy());
     expect(__mocks.getSession).not.toHaveBeenCalled();
-    const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
-    expect(titles).toEqual(["新会话"]);
+    // 输入框与「新会话」页签可能不同帧就绪（慢速 CI 上页签 effect 晚于
+    // 输入框渲染）——都收进 waitFor，避免时序 flaky
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/下达任务/)).toBeTruthy();
+      const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
+      expect(titles).toEqual(["新会话"]);
+    });
   });
 
   it("带意图但项目没有历史会话：退化为新建空对话（不报错、不长草）", async () => {
