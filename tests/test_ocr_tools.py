@@ -9,9 +9,9 @@ import os
 
 import pytest
 
-from litework.tools.ocr import _HAS_RAPIDOCR, OCRTools
+from litework.tools.ocr import OCRTools, _rapidocr_available
 
-pytestmark = pytest.mark.skipif(not _HAS_RAPIDOCR, reason="rapidocr-onnxruntime 未安装")
+pytestmark = pytest.mark.skipif(not _rapidocr_available(), reason="rapidocr-onnxruntime 未安装")
 
 
 def _render_text_png(path: str, text: str) -> str:
@@ -60,11 +60,11 @@ async def test_ocr_image_errors(tmp_path):
 
 async def test_ocr_document_pdf(tmp_path):
     """pymupdf 渲染 PDF 页 → OCR（pymupdf 缺失时跳过）。"""
-    from litework.tools.ocr import _HAS_PYMUPDF
-    if not _HAS_PYMUPDF:
-        pytest.skip("pymupdf 未安装")
+    from litework.tools.ocr import _pymupdf
 
-    import pymupdf
+    pymupdf = _pymupdf()
+    if pymupdf is None:
+        pytest.skip("pymupdf 未安装")
 
     uploads = tmp_path / "素材"
     uploads.mkdir(exist_ok=True)

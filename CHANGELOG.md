@@ -37,6 +37,31 @@
   每轮白白重新解析 3MB JSON。现在 `created_at` 由调用方显式传入
   （AgentLoop 落盘路径已带上），需要保留原值的元数据更新走
   `update_metadata`（那里本来就要 load）；
+- **后端：已完成任务的内存回收（TaskHandle.release / TaskManager.reap）**：
+  实测泄漏——TaskHandle 只在 SSE 流正常收尾时被 `cleanup` 摘掉，「界面已关 /
+  客户端断网 / 盯梢定时任务」这类没有活跃订阅者的路径永久驻留
+  `kernel.ctx.messages`（整份会话历史）+ 58 个工具 handler 闭包 + 插件实例，
+  每次任务残留约 55MB，十几次任务后端内存吃满。现在：任务结束后按
+  「无活跃订阅者即释放重对象」即时释放（release），90s TTL 后从表内摘除，
+  上限 20 条防无界增长；`TaskManager.start` 顺手 reap + 服务期 30s 周期
+  reap 双保险。释放后 handle 保留 shell，迟到的 SSE 订阅者仍能立刻收到
+  `[DONE]`（不是 404）。回归：`tests/test_task_reclaim.py`（5 用例，
+  含「运行中任务绝不被回收」「迟到订阅者语义」两条不变量）；
+- **前端：会话状态释放（dropChat / resetChats）**：`chatStates` 按会话缓存
+  整份 messages（长会话几 MB）且只增不减——关页签后仍驻留，开开关关十几次
+  渲染进程白占几十上百 MB。现在关页签（无同会话其它页签且任务不在跑）、
+  删除会话、切换项目时同步释放 messages / streaming / SSE refs / 定时器；
+  重开会话时重新拉取历史。回归：`web/src/App.dropChat.test.tsx`；
+- **office/ocr 重库惰性导入（office-plugin v1.7.0 / ocr-plugin v1.2.0）**：
+  pandas / matplotlib / pypdf / pymupdf（约 130MB）与 rapidocr+onnxruntime+cv2
+  （约 157MB）从模块级 import 改为首次调用对应工具时按需加载（访问器模式，
+  非模块级 `__getattr__`——模块内部查全局名不经过它）。此前工具注册表构建
+  （每个任务启动 + /api/tools）无条件加载全部重库，纯编码会话也要付
+  ~190MB。实测：注册表构建后 RSS 264MB → 124MB（-140MB / -53%），工具数
+  不变（59 个）；依赖缺失提示语与调用行为不变。按社区治理流程（AGENTS.md
+  §6.3）先改上游 lite-work-plugins 再同步内置；顺带修复 v1.1.0 ocr 锁/软
+  截止增强只落在内置副本造成的分叉；docx/openpyxl/pptx（约 43MB、几十个
+  入口）留作后续。
 
 ### 新增（PPT · 能力补全——对照 Claude Code pptx skill 的差距清单逐项修复）
 

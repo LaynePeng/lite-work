@@ -67,9 +67,10 @@ def _write_pdf_stub(monkeypatch: pytest.MonkeyPatch, pages: int) -> None:
     fake_doc = mock.Mock()
     fake_doc.__len__ = lambda self: pages
     fake_doc.__getitem__ = lambda self, i: _FakePage()
-    monkeypatch.setattr(ocr, "pymupdf", mock.Mock(open=lambda path: fake_doc))
-    monkeypatch.setattr(ocr, "_HAS_PYMUPDF", True)
-    monkeypatch.setattr(ocr, "_HAS_RAPIDOCR", True)
+    # 惰性导入版：直接注入模块缓存（_pymupdf 访问器与 _rapidocr_available 探测结果）
+    monkeypatch.setattr(ocr, "_pymupdf_mod", mock.Mock(open=lambda path: fake_doc), raising=False)
+    monkeypatch.setattr(ocr, "_pymupdf_probed", True, raising=False)
+    monkeypatch.setattr(ocr, "_RapidOCR", object, raising=False)
 
 
 def test_pdf_soft_deadline_partial_return(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,9 +120,9 @@ def test_pdf_dpi_150(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_doc = mock.Mock()
     fake_doc.__len__ = lambda self: 1
     fake_doc.__getitem__ = lambda self, i: _Page()
-    monkeypatch.setattr(ocr, "pymupdf", mock.Mock(open=lambda p: fake_doc))
-    monkeypatch.setattr(ocr, "_HAS_PYMUPDF", True)
-    monkeypatch.setattr(ocr, "_HAS_RAPIDOCR", True)
+    monkeypatch.setattr(ocr, "_pymupdf_mod", mock.Mock(open=lambda p: fake_doc), raising=False)
+    monkeypatch.setattr(ocr, "_pymupdf_probed", True, raising=False)
+    monkeypatch.setattr(ocr, "_RapidOCR", object, raising=False)
 
     pdf = _fake_file(tmp_path, "doc.pdf")
     with mock.patch.object(ocr, "_ocr_pixmap", return_value="t"):
@@ -153,7 +154,7 @@ def _write_pptx_stub(monkeypatch: pytest.MonkeyPatch, slide_count: int, images_p
     fake_pptx = mock.Mock()
     fake_pptx.Presentation = lambda path: _Prs()
     monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
-    monkeypatch.setattr(ocr, "_HAS_RAPIDOCR", True)
+    monkeypatch.setattr(ocr, "_RapidOCR", object, raising=False)
 
 
 def test_pptx_max_pages_cap(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,6 +217,6 @@ def test_synced_copy_has_no_apache_header() -> None:
 
 
 def test_builtin_wrapper_version_matches_community() -> None:
-    """主仓库包装类版本与社区 manifest 一致（1.1.0）。"""
+    """主仓库包装类版本与社区 manifest 一致（v1.2.0 惰性导入版）。"""
     from litework.tools.plugin import OcrPlugin
-    assert OcrPlugin.version == "1.1.0"
+    assert OcrPlugin.version == "1.2.0"

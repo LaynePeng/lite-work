@@ -227,9 +227,9 @@ class WebFetchPlugin(ToolPlugin):
 
 class OcrPlugin(ToolPlugin):
     name = "ocr-plugin"
-    # 与社区 ocr-plugin v1.1.0 同源：litework/tools/ocr.py 为社区副本
-    # （MIT、无许可证头），版本以社区 manifest 为准
-    version = "1.1.0"
+    # 与社区 ocr-plugin v1.2.0 同源：litework/tools/ocr.py 为社区副本
+    # （MIT、无许可证头），版本以社区 manifest 为准；v1.2.0 重库惰性导入
+    version = "1.2.0"
     description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
 
     def __init__(self, workspace: str) -> None:
@@ -260,7 +260,9 @@ class OfficePlugin(ToolPlugin):
     #        office_render / xlsx_recalculate，soffice 缺失时优雅降级）
     # 1.6.0：与社区 v1.6.0 同源——输出目录与 v2 项目结构对齐：交付物直接写
     #        工作区根目录，中间产物写 中间产物/
-    version = "1.6.0"
+    # 1.7.0：与社区 v1.7.0 同源——pandas/matplotlib/pypdf/pymupdf 惰性导入
+    #        （首次调用对应工具时才加载，模块 import 保持轻量）
+    version = "1.7.0"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:

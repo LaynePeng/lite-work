@@ -16,13 +16,16 @@ soffice 缺失时返回安装指引并优雅降级（设计参考 dsh-libreoffic
 v1.6.0 变更：输出目录约定与 lite-work 新项目结构对齐——交付物默认直接写
 工作区根目录（不再套 产出物/ 目录），中间产物（文档内嵌图表、渲染预览）
 写 中间产物/ 顶层目录；存量项目的 产出物/ 目录保留原地不迁移。
+v1.7.0 变更：重库惰性导入——pandas / matplotlib / pypdf / pymupdf（合计
+约 130MB）从模块级 import 改为首次调用对应工具时按需加载（访问器模式，
+见「依赖检查」段注释）。纯编码/聊天会话不再为用不到的办公库付内存。
 
 所有依赖包已包含在主依赖中（pyproject.toml dependencies），
 `pip install -e .` 时自动安装。
 """
 # 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
 # plugins/office-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本，
-# 当前同步版本：社区 office-plugin v1.6.0（含 v1.5.0 LibreOffice 增强层）。
+# 当前同步版本：社区 office-plugin v1.7.0（v1.6.0 + 重库惰性导入）。
 # 主仓库侧机械适配（仅此一处差异，勿扩散）：
 # - _ensure_ignored：把 素材/中间产物/归档 追加到项目 .gitignore（主仓库
 #   commit 历史，社区版无此函数）。
@@ -49,8 +52,6 @@ logger = logging.getLogger("litework.tools.office")
 _HAS_DOCX: bool = False
 _HAS_OPENPYXL: bool = False
 _HAS_PPTX: bool = False
-_HAS_PANDAS: bool = False
-_HAS_MATPLOTLIB: bool = False
 
 try:
     from docx import Document as _DocxDoc
@@ -76,41 +77,93 @@ try:
 except ImportError:
     _PptxPresentation = None  # type: ignore
 
-try:
-    import pandas as _pd
+# —— 惰性导入的重库（v1.7.0）：pandas / matplotlib / pypdf / pymupdf 仅被
+# 6 个方法入口使用（data_analyze / chart_make / pdf_read / office_render 等），
+# 但 import 合计约 130MB。工具注册表构建（每个任务启动 + /api/tools）都会
+# import 本模块——不惰性则每个进程无条件付出这笔内存，纯编码会话永远用不到。
+# 访问器模式而非 PEP 562 __getattr__：模块内部函数查全局名走 globals dict，
+# 不经过模块级 __getattr__，惰性必须由函数调用承载。docx/openpyxl/pptx
+# 的入口太多（几十处），收益/风险比不划算，保持 eager。
+_pd_mod: Any = None
+_pd_probed = False
 
-    _HAS_PANDAS = True
-except ImportError:
-    _pd = None  # type: ignore
 
-try:
-    import matplotlib
-    matplotlib.use("Agg")  # 非交互后端，服务器安全
-    import matplotlib.pyplot as _plt
+def _pd():
+    """按需加载 pandas；不可用时返回 None（探测一次并缓存）。"""
+    global _pd_mod, _pd_probed
+    if not _pd_probed:
+        _pd_probed = True
+        try:
+            import pandas
 
-    _HAS_MATPLOTLIB = True
-except ImportError:
-    _plt = None  # type: ignore
+            _pd_mod = pandas
+        except ImportError:
+            _pd_mod = None
+    return _pd_mod
 
-_HAS_PYPDF: bool = False
-try:
-    import pypdf as _pypdf
-    _HAS_PYPDF = True
-except ImportError:
-    _pypdf = None  # type: ignore
+
+_plt_mod: Any = None
+_plt_probed = False
+
+
+def _plt():
+    """按需加载 matplotlib.pyplot（含 Agg 后端设定）；不可用返回 None。"""
+    global _plt_mod, _plt_probed
+    if not _plt_probed:
+        _plt_probed = True
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")  # 非交互后端，服务器安全
+            import matplotlib.pyplot
+
+            _plt_mod = matplotlib.pyplot
+        except ImportError:
+            _plt_mod = None
+    return _plt_mod
+
+
+_pypdf_mod: Any = None
+_pypdf_probed = False
+
+
+def _pypdf():
+    """按需加载 pypdf；不可用返回 None。"""
+    global _pypdf_mod, _pypdf_probed
+    if not _pypdf_probed:
+        _pypdf_probed = True
+        try:
+            import pypdf
+
+            _pypdf_mod = pypdf
+        except ImportError:
+            _pypdf_mod = None
+    return _pypdf_mod
+
 
 # pymupdf：主程序已捆绑（AGENTS.md），用于 office_render 的 PDF→PNG 渲染。
 # 新版包名是 pymupdf，fitz 是其旧别名（有弃用警告），两个都试。
-_HAS_PYMUPDF: bool = False
-try:
-    import pymupdf as _fitz
-    _HAS_PYMUPDF = True
-except ImportError:
-    try:
-        import fitz as _fitz  # type: ignore
-        _HAS_PYMUPDF = True
-    except ImportError:
-        _fitz = None  # type: ignore
+_fitz_mod: Any = None
+_fitz_probed = False
+
+
+def _fitz():
+    """按需加载 pymupdf；不可用返回 None。"""
+    global _fitz_mod, _fitz_probed
+    if not _fitz_probed:
+        _fitz_probed = True
+        try:
+            import pymupdf
+
+            _fitz_mod = pymupdf
+        except ImportError:
+            try:
+                import fitz  # type: ignore
+
+                _fitz_mod = fitz
+            except ImportError:
+                _fitz_mod = None
+    return _fitz_mod
 
 
 def _missing_dep_msg(pkg: str, tools: str) -> str:
@@ -152,6 +205,7 @@ def _ensure_output_dir(workspace: str, subdir=None):
     return out_dir
 
 
+
 def _ensure_ignored(workspace: str) -> None:
     """把 素材/ 与 中间产物/、归档/ 追加到项目 .gitignore（仅 git 仓库；幂等）。
 
@@ -182,7 +236,6 @@ def _ensure_ignored(workspace: str) -> None:
                 f.write(f"{n}/\n")
     except OSError:
         pass
-
 
 def _safe_filename(name: str) -> str:
     """清理文件名，移除不安全字符。"""
@@ -2764,7 +2817,8 @@ class OfficeTools:
     # ------------------------------------------------------------ 数据分析
 
     def _data_analyze(self, args: Dict[str, Any]) -> str:
-        if not _HAS_PANDAS:
+        pd_mod = _pd()
+        if pd_mod is None:
             return _missing_dep_msg("pandas", "data_analyze")
 
         data_str = args.get("data", "")
@@ -2789,11 +2843,11 @@ class OfficeTools:
                 if ext in (".xlsx", ".xls"):
                     if not _HAS_OPENPYXL and ext == ".xlsx":
                         return _missing_dep_msg("openpyxl", "data_analyze（xlsx）")
-                    df = _pd.read_excel(resolved, sheet_name=sheet)
+                    df = pd_mod.read_excel(resolved, sheet_name=sheet)
                 elif ext == ".csv":
-                    df = _pd.read_csv(resolved)
+                    df = pd_mod.read_csv(resolved)
                 elif ext == ".json":
-                    df = _pd.read_json(resolved)
+                    df = pd_mod.read_json(resolved)
                 else:
                     return f"[Office Error]: 不支持的文件类型 {ext}（支持 .xlsx/.xls/.csv/.json）"
             except Exception as exc:
@@ -2806,16 +2860,16 @@ class OfficeTools:
             try:
                 data_json = json.loads(data_str)
                 if isinstance(data_json, list):
-                    df = _pd.DataFrame(data_json)
+                    df = pd_mod.DataFrame(data_json)
                 elif isinstance(data_json, dict):
-                    df = _pd.DataFrame([data_json])
+                    df = pd_mod.DataFrame([data_json])
             except (json.JSONDecodeError, ValueError):
                 pass
 
         # 尝试解析为 CSV
         if df is None and data_str:
             try:
-                df = _pd.read_csv(io.StringIO(data_str))
+                df = pd_mod.read_csv(io.StringIO(data_str))
             except Exception:
                 pass
 
@@ -2899,7 +2953,8 @@ class OfficeTools:
     # ------------------------------------------------------------ 图表
 
     def _chart_make(self, args: Dict[str, Any]) -> str:
-        if not _HAS_MATPLOTLIB:
+        plt_mod = _plt()
+        if plt_mod is None:
             return _missing_dep_msg("matplotlib", "chart_make（需同时安装 pandas）")
 
         data_str = args.get("data", "")
@@ -2917,9 +2972,9 @@ class OfficeTools:
         except json.JSONDecodeError as e:
             return f"[Office Error]: data 不是有效的 JSON: {e}"
 
-        _plt.rcParams["figure.dpi"] = 120
-        _plt.rcParams["font.size"] = 11
-        _plt.rcParams["axes.unicode_minus"] = False
+        plt_mod.rcParams["figure.dpi"] = 120
+        plt_mod.rcParams["font.size"] = 11
+        plt_mod.rcParams["axes.unicode_minus"] = False
 
         # 中文字体适配：按平台选常见中文字体，避免标签显示为方框
         if not self._cjk_font_applied:
@@ -2931,13 +2986,13 @@ class OfficeTools:
                         font_manager.FontProperties(family=font), fallback_to_default=False
                     )
                     if matches:
-                        _plt.rcParams["font.family"] = font
+                        plt_mod.rcParams["font.family"] = font
                         break
                 except Exception:
                     continue
             self._cjk_font_applied = True
 
-        fig, ax = _plt.subplots(figsize=(10, 6))
+        fig, ax = plt_mod.subplots(figsize=(10, 6))
 
         labels = data.get("labels", [])
         datasets = data.get("datasets", [])
@@ -2984,13 +3039,13 @@ class OfficeTools:
             ax.set_ylabel(y_label)
 
         if chart_type not in ("pie",):
-            _plt.xticks(rotation=30, ha="right")
-        _plt.tight_layout()
+            plt_mod.xticks(rotation=30, ha="right")
+        plt_mod.tight_layout()
 
         out_dir = _ensure_output_dir(self.workspace)
         filepath = os.path.join(out_dir, filename)
-        _plt.savefig(filepath, bbox_inches="tight")
-        _plt.close(fig)
+        plt_mod.savefig(filepath, bbox_inches="tight")
+        plt_mod.close(fig)
 
         return f"[Office OK]: 已生成图表 → {filepath}"
 
@@ -3112,7 +3167,8 @@ class OfficeTools:
 
     def _office_render(self, args: Dict[str, Any]) -> str:
         """把 PDF/Office 文档的指定页渲染成 PNG 图片（PDF 输入无需 LibreOffice）。"""
-        if not _HAS_PYMUPDF:
+        fitz_mod = _fitz()
+        if fitz_mod is None:
             return _missing_dep_msg("pymupdf", "office_render")
         rel_path = str(args.get("input_path") or args.get("path") or "").strip()
         if not rel_path:
@@ -3157,7 +3213,7 @@ class OfficeTools:
                         return "[Office Error]: LibreOffice 未产出 PDF 中间文件"
                     pdf_path = os.path.join(tmpdir, cands[0])
 
-            doc = _fitz.open(pdf_path)
+            doc = fitz_mod.open(pdf_path)
             try:
                 total = len(doc)
                 pages = self._parse_pages(args.get("pages") or "1", total)
@@ -3427,7 +3483,8 @@ class OfficeTools:
         return f"[Office OK]: 已读取 {os.path.basename(resolved)} ({len(prs.slides)} 页)\n\n" + "\n".join(parts)
 
     def _pdf_read(self, args: Dict[str, Any]) -> str:
-        if not _HAS_PYPDF:
+        pypdf_mod = _pypdf()
+        if pypdf_mod is None:
             return "[Office Tools] 需要安装 pypdf 才能使用 pdf_read 工具。\n请运行: pip install pypdf"
         rel_path = str(args.get("path") or "").strip()
         if not rel_path:
@@ -3438,7 +3495,7 @@ class OfficeTools:
             return f"[Office Error]: {exc}"
         max_pages = max(1, min(200, int(args.get("max_pages") or 50)))
         try:
-            reader = _pypdf.PdfReader(resolved)
+            reader = pypdf_mod.PdfReader(resolved)
         except Exception as exc:
             return f"[Office Error]: 无法打开 PDF: {exc}"
         total = len(reader.pages)

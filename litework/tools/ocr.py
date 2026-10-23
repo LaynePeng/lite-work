@@ -1,6 +1,8 @@
 # 由 lite-work-plugins（上游事实源）同步内置：源码见社区仓库
 # plugins/ocr-plugin/plugin.py；本文件为截掉社区分发包装类后的内置副本。
-# v1.1.0 与社区同源（引擎串行锁 + 页级软截止 + pptx 页数上限 + dpi 150）。
+# v1.2.0 与社区同源（引擎串行锁 + 页级软截止 + pptx 页数上限 + dpi 150
+# + 重库惰性导入）。主仓库历史：v1.1.0 的锁/软截止增强曾只落在内置副本
+# （违反 §6.3），v1.2.0 起回归「上游为源」——本文件不含社区版没有的任何逻辑。
 """OCR 工具：把图片 / PDF 页面 / PPT 内嵌图片中的文字提取出来。
 
 - ocr_image   : 直接识别单张图片（png/jpg/bmp/tiff/webp 等）
@@ -10,9 +12,13 @@
 
 OCR 引擎：rapidocr-onnxruntime（纯 pip 安装、离线可用、内置中英文模型，
 无需系统级 Tesseract/poppler）。依赖缺失时返回可操作提示。
+v1.2.0：重库惰性导入——rapidocr（+onnxruntime/cv2，实测 import 约 157MB）
+与 pymupdf（约 31MB）只在首次调用 OCR 工具时加载。工具定义是纯数据，
+模块导入必须保持轻量：Agent 注册表构建（每个任务启动 + /api/tools）都会
+import 本模块，不惰性则每个进程无条件付出 ~190MB。访问器模式而非
+PEP 562 __getattr__：模块内部函数查全局名走 globals dict，不经过模块级
+__getattr__，惰性必须由函数调用承载。
 """
-# 本仓库（lite-work-plugins）为源；需要作为 lite-work 内置时按需同步回
-# litework/tools/ocr.py（社区独立分发版）。
 from __future__ import annotations
 
 import logging
@@ -26,29 +32,47 @@ from litework.core.types import ToolDefinition
 
 logger = logging.getLogger("litework.tools.ocr")
 
-# ---------------------------------------------------------------- 依赖检查
+# ---------------------------------------------------------------- 依赖检查（惰性）
 
-_HAS_RAPIDOCR: bool = False
-_HAS_PYMUPDF: bool = False
+_RapidOCR: Any = None  # 类对象，首次 _get_engine() 时 import
+_pymupdf_mod: Any = None
+_pymupdf_probed = False
 
-try:
-    from rapidocr_onnxruntime import RapidOCR
 
-    _HAS_RAPIDOCR = True
-except ImportError:
-    pass
+def _rapidocr_available() -> bool:
+    """rapidocr 是否可导入（探测一次并缓存；不触发加载——真正加载在 _get_engine）。
 
-try:
-    import pymupdf  # 新版包名（旧名 fitz 已弃用）
+    import 一次即已付费，所以这里直接 import 探测：可用时 import 本身就是
+    「加载完成」，不可用时缓存失败结论不再重试。
+    """
+    global _RapidOCR
+    if _RapidOCR is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR as _cls
 
-    _HAS_PYMUPDF = True
-except ImportError:
-    try:
-        import fitz as pymupdf  # type: ignore[no-redef]
+            _RapidOCR = _cls
+        except ImportError:
+            _RapidOCR = False  # 哨兵：False = 已探测且缺失（与 None=未探测区分）
+    return bool(_RapidOCR)
 
-        _HAS_PYMUPDF = True
-    except ImportError:
-        pass
+
+def _pymupdf():
+    """按需加载 pymupdf（新版包名，旧名 fitz 是弃用别名），缓存探测结果。"""
+    global _pymupdf_mod, _pymupdf_probed
+    if not _pymupdf_probed:
+        _pymupdf_probed = True
+        try:
+            import pymupdf
+
+            _pymupdf_mod = pymupdf
+        except ImportError:
+            try:
+                import fitz as pymupdf  # type: ignore[no-redef]
+
+                _pymupdf_mod = pymupdf
+            except ImportError:
+                _pymupdf_mod = None
+    return _pymupdf_mod
 
 # 单例：RapidOCR 模型加载约数百 MB 内存，进程内复用
 _OCR_ENGINE: Any = None
@@ -69,7 +93,7 @@ _OCR_SOFT_DEADLINE_S = 100.0
 def _get_engine():
     global _OCR_ENGINE
     if _OCR_ENGINE is None:
-        _OCR_ENGINE = RapidOCR()
+        _OCR_ENGINE = _RapidOCR() if _RapidOCR else None
     return _OCR_ENGINE
 
 
@@ -213,7 +237,7 @@ class OCRTools:
     # ------------------------------------------------------------ 图片
 
     def _ocr_image(self, args: Dict[str, Any]) -> str:
-        if not _HAS_RAPIDOCR:
+        if not _rapidocr_available():
             return _missing_ocr_msg()
         rel_path = str(args.get("path") or "").strip()
         if not rel_path:
@@ -236,9 +260,10 @@ class OCRTools:
     # ------------------------------------------------------------ PDF
 
     def _ocr_document(self, args: Dict[str, Any]) -> str:
-        if not _HAS_RAPIDOCR:
+        if not _rapidocr_available():
             return _missing_ocr_msg()
-        if not _HAS_PYMUPDF:
+        pymupdf = _pymupdf()
+        if pymupdf is None:
             return _missing_pdf_msg()
         rel_path = str(args.get("path") or "").strip()
         if not rel_path:
@@ -284,7 +309,7 @@ class OCRTools:
     # ------------------------------------------------------------ PPTX（带位置）
 
     def _ocr_pptx(self, args: Dict[str, Any]) -> str:
-        if not _HAS_RAPIDOCR:
+        if not _rapidocr_available():
             return _missing_ocr_msg()
         rel_path = str(args.get("path") or "").strip()
         if not rel_path:
@@ -396,5 +421,3 @@ def _ocr_pixmap(pix) -> str:
             os.remove(tmp)
         except OSError:
             pass
-
-
