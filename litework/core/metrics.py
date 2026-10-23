@@ -63,7 +63,7 @@ class ToolMetrics:
             "type": "tool",
             "tool": str(tool),
             "outcome": outcome if outcome in OUTCOMES else "ok",
-            "duration_ms": round(float(duration_ms), 1) if duration_ms else None,
+            "duration_ms": round(float(duration_ms), 1) if duration_ms is not None else None,
             # 任务级归属：本次任务加载过的技能（不精确，但足以看出"某技能带来哪些调用"）
             "skills": [str(s) for s in (skills or [])],
             "agent_id": agent_id or "",

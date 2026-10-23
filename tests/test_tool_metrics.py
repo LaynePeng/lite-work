@@ -177,6 +177,12 @@ async def test_loop_records_tool_and_skill_metrics(tmp_path):
     assert tools[1]["skills"] == ["ppt-master"]
     data = summarize(events)
     assert data["tools"]["read_file"]["success_rate"] == 0.0
+    # 耗时必须写入指标：此前 _record_tool_metrics 未透传 duration_ms，
+    # 导致 tool_events.jsonl 里恒为 null，「哪个工具慢」无法回溯（实测踩过）。
+    # 注：慢工具/长尾只能靠这里的数据量化，故与 outcome 同等重要。
+    for t in tools:
+        assert isinstance(t["duration_ms"], (int, float)), f"{t['tool']} 缺耗时"
+    assert data["tools"]["read_file"]["avg_ms"] is not None
 
 
 async def test_loop_without_metrics_is_noop(tmp_path):

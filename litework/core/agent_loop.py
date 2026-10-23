@@ -205,6 +205,10 @@ class AgentLoop:
         self._loaded_skills: List[str] = []
         # 本轮已回填的工具结果（检测"外部内容+高危动作"组合用）
         self._recent_tool_results: List[str] = []
+        # 本轮各工具调用的实测耗时（call.id → ms）：_execute_tool_call_inner 里
+        # 算出来后暂存，供 _record_tool_metrics 写入指标——此前耗时只用于
+        # tool:after_execute 事件，指标里恒为 null，导致「哪个工具慢」无法回溯。
+        self._tool_durations: Dict[str, float] = {}
         # 轨迹写入器（trajectory_enabled=false 时为 None，零开销）
         self.trajectory = trajectory
         self._turn_count = 0
@@ -492,6 +496,9 @@ class AgentLoop:
 
                 # 工具/技能指标：记录成败与归属（只计数，不落正文）
                 self._record_tool_metrics(tool_calls, results)
+                # 本轮耗时已消费，清掉防长任务下无界增长
+                for call in tool_calls:
+                    self._tool_durations.pop(call.id, None)
 
                 # 轨迹：工具调用落盘（trajectory 为 None 时零开销）
                 if self.trajectory is not None:
@@ -1096,6 +1103,7 @@ class AgentLoop:
             stats["tool_calls"] += 1
 
         duration_ms = int((time.time() - start_time) * 1000)
+        self._tool_durations[call.id] = float(duration_ms)
 
         # 4. afterTool 管道（结果修饰）：post-processing hook 不能无限等待——
         # 卡住的 hook 会把整条工具链挂死（tool:after_execute 永不发出，前端
@@ -1330,6 +1338,7 @@ class AgentLoop:
             try:
                 self.metrics.record_tool(
                     call.name, classify_outcome(result or ""),
+                    duration_ms=self._tool_durations.get(call.id),
                     skills=list(self._loaded_skills), session_id=session_id,
                 )
             except Exception:  # noqa: BLE001 - 指标是旁路：绝不因它影响任务
