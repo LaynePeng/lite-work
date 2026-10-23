@@ -487,6 +487,27 @@ export default function App() {
     });
   }, []);
 
+  /** 丢弃某会话的整份前端状态（页签关闭 / 会话被删 / 切换项目时）。 */
+  const dropChat = useCallback((sid: string) => {
+    setChatStates((prev) => {
+      if (!(sid in prev)) return prev;
+      const next = { ...prev };
+      delete next[sid];
+      chatStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /** 清空全部会话状态（切项目）：同时清掉 ref 与各 Map，避免 ref 侧残留旧历史。 */
+  const resetChats = useCallback(() => {
+    setChatStates({});
+    chatStatesRef.current = {};
+    streamingRefs.current.clear();
+    lastEventTimesRef.current.clear();
+    taskIdsRef.current.clear();
+    stopRequestedRef.current.clear();
+  }, []);
+
   // ------------------------------------------------------------ 当前活跃 Tab
 
   // 会话 tab 的 SSE 连接状态点（名字右侧红绿黄）：任务运行中才有值
@@ -1017,6 +1038,29 @@ export default function App() {
   );
   const closeTab = useCallback(
     (id: string) => {
+      // 关闭页签时释放该会话的前端状态：messages 是整份会话历史（长会话几 MB），
+      // 一直挂在 chatStates 里不会自己消失——开开关关十几次标签，渲染进程就
+      // 白占几十上百 MB。任务仍在跑的会话不丢（跑完还要收尾提示）。
+      const closing = tabsRef.current.find((t) => t.id === id);
+      const sid = closing?.kind === "chat" ? closing.sessionId : undefined;
+      if (sid) {
+        const stillOpen = tabsRef.current.some(
+          (t) => t.id !== id && t.kind === "chat" && t.sessionId === sid);
+        if (!stillOpen && !chatStatesRef.current[sid]?.running) {
+          closeStream(sid);
+          streamingRefs.current.delete(sid);
+          lastEventTimesRef.current.delete(sid);
+          // 直接清定时器（cancelStreamFlush 定义在本函数之后，避免前向引用）
+          const timer = flushTimersRef.current.get(sid);
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            flushTimersRef.current.delete(sid);
+          }
+          taskIdsRef.current.delete(sid);
+          stopRequestedRef.current.delete(sid);
+          dropChat(sid);
+        }
+      }
       setTabs((prev) => {
         if (prev.length <= 1) return prev; // 至少保留一个
         const idx = prev.findIndex((t) => t.id === id);
@@ -1029,7 +1073,7 @@ export default function App() {
         return next;
       });
     },
-    [activeTabId]
+    [activeTabId, closeStream, dropChat]
   );
 
   const newChatTab = useCallback(() => {
@@ -1323,8 +1367,7 @@ export default function App() {
             notifyElectronWorkspace(res.workspace);
             pushLog(`📂 已切换到项目: ${res.workspace}`);
             closeStream();
-            setChatStates({});
-            chatStatesRef.current = {};
+            resetChats();
             await refreshSessions(res.workspace);
           }
         } catch (e) {
@@ -1345,6 +1388,12 @@ export default function App() {
     async (id: string) => {
       try {
         await api.deleteSession(id);
+        // 会话已删除：前端缓存与流一并释放（否则删掉的会话历史继续驻留内存）
+        closeStream(id);
+        streamingRefs.current.delete(id);
+        taskIdsRef.current.delete(id);
+        lastEventTimesRef.current.delete(id);
+        dropChat(id);
         setTabs((prev) => {
           const next = prev.filter((t) => t.sessionId !== id);
           if (next.length === 0) {
@@ -1362,7 +1411,7 @@ export default function App() {
         /* ignore */
       }
     },
-    [activeTabId, refreshSessionViews, newChatTab]
+    [activeTabId, refreshSessionViews, newChatTab, closeStream, dropChat]
   );
 
   /** 批量删除会话：后端批量删除后同步页签（被删会话的页签一并关闭）与会话列表。 */
@@ -1371,6 +1420,14 @@ export default function App() {
       try {
         await api.deleteSessionsBatch(ids);
         const idSet = new Set(ids);
+        // 被删会话的前端状态与流一并释放
+        for (const sid of ids) {
+          closeStream(sid);
+          streamingRefs.current.delete(sid);
+          taskIdsRef.current.delete(sid);
+          lastEventTimesRef.current.delete(sid);
+          dropChat(sid);
+        }
         setTabs((prev) => {
           const next = prev.filter((t) => !t.sessionId || !idSet.has(t.sessionId));
           if (next.length === 0) {
@@ -1388,7 +1445,7 @@ export default function App() {
         /* ignore（与单删风格一致） */
       }
     },
-    [activeTabId, refreshSessionViews, newChatTab]
+    [activeTabId, refreshSessionViews, newChatTab, closeStream, dropChat]
   );
 
   const openProject = useCallback(async () => {
@@ -1506,8 +1563,7 @@ export default function App() {
           pushLog(`📂 已切换到项目: ${res.workspace}`);
           setTimeout(() => setSuccess(null), 4000);
           closeStream();
-          setChatStates({});
-          chatStatesRef.current = {};
+          resetChats();
 
           // 切换项目后自动进入该项目最近一条会话；没有历史才新建空对话
           await openLatestSessionOrNewChat(res.workspace);
@@ -1544,8 +1600,7 @@ export default function App() {
         setSuccess(`已打开: ${res.workspace}`);
         setTimeout(() => setSuccess(null), 4000);
         closeStream();
-        setChatStates({});
-        chatStatesRef.current = {};
+        resetChats();
         // 与其它「打开项目」入口一致：进入该项目最近一条会话（无历史才新建空对话）
         await openLatestSessionOrNewChat(res.workspace);
       }
@@ -1568,8 +1623,7 @@ export default function App() {
       setProjectsView("sessions");
       void refreshRecentProjects();
       closeStream();
-      setChatStates({});
-      chatStatesRef.current = {};
+      resetChats();
       // 新建会话并开启隔离工作树（任务将在独立分支+目录中执行）
       const { session_id } = await api.createSession();
       const r = await api.setSessionWorktree(session_id, true);
@@ -3108,8 +3162,7 @@ export default function App() {
           notifyElectronWorkspace(res.workspace);
           pushLog(`📂 已切换到落盘位置: ${res.workspace}`);
           closeStream();
-          setChatStates({});
-          chatStatesRef.current = {};
+          resetChats();
           await refreshSessions(res.workspace);
         }
       }
@@ -3163,7 +3216,7 @@ export default function App() {
       pushLog(`✗ 新建任务失败: ${(e as Error).message}`);
     }
   }, [api, openSessionTab, patchChat, refreshSessions, selectSession, pushLog,
-      status?.workspace, setStatus, notifyElectronWorkspace, closeStream, setChatStates]);
+      status?.workspace, setStatus, notifyElectronWorkspace, closeStream, resetChats]);
 
   // 任务卡「⏭ 续」：进入该会话并自动续推（复用 AUTO_CONTINUE 同款 prompt 与发送管线）。
   const continueSession = useCallback(async (sid: string, title?: string) => {

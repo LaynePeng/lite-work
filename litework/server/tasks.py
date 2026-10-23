@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
@@ -77,6 +78,11 @@ class TaskHandle:
         self.running = False
         self.done = False
         self.subscription = None
+        # 结束时刻（monotonic）：TaskManager 据此按 TTL 回收已完成的 handle
+        self.finished_at: Optional[float] = None
+        # 已回收（重引用已被释放）：保留 shell 供 SSE 迟到订阅者读到 done 语义，
+        # 但不再持有 kernel/registry/loop 那套几十 MB 的对象图
+        self.released = False
         # 由 TaskManager 在构造后回填的动态属性（此处先声明类型，供类型检查
         # 与静态分析可见；默认值与回填前的读取语义一致）
         self.agent_id: str = ""
@@ -377,6 +383,7 @@ class TaskHandle:
         finally:
             self.running = False
             self.done = True
+            self.finished_at = time.monotonic()
             # AI 合并任务收尾：校验合并是否真正完成（分支已并入主分支、无进行中的合并），
             # 成功则自动清理 worktree 与分支；仍有冲突则保留现场并提示用户
             if self.merge_worktree:
@@ -396,6 +403,40 @@ class TaskHandle:
                             q.get_nowait()
                         except asyncio.QueueEmpty:
                             break
+
+    def release(self) -> None:
+        """释放任务的重对象（kernel / registry / loop / 事件归档），保留可查询的 shell。
+
+        为什么必须显式释放：一次任务的 `kernel.ctx.messages` 就是整个会话历史
+        （大会话 800+ 条、几 MB），另加 58 个工具 handler 闭包、LLM 适配器、
+        插件实例。此前 TaskHandle 只在 SSE 流正常收尾时被 `TaskManager.cleanup`
+        摘掉；而「没有前端连 SSE」的路径（任务在界面关掉后才结束、客户端断网、
+        盯梢/定时任务）会永久留在 `TaskManager.tasks` 里——实测每次任务残留
+        ~55MB，跑十几次任务后端就吃满内存。
+
+        释放后 handle 仍是可查询的 shell（done/released 语义保留），只是不再
+        持有所属会话的上下文——已完成的任务本就不再需要它（历史已落盘）。
+        """
+        if self.released:
+            return
+        self.released = True
+        self._retained.clear()
+        self.retained_requests.clear()
+        # 事件总线上的监听器闭包捕获了 self（handle），显式解绑避免循环引用
+        # 拖到 gc 循环回收（asyncio/异常栈常把 handle 钉在 traceback 里）
+        try:
+            kernel = self.kernel
+            if kernel is not None:
+                kernel.events._listeners.clear()
+                kernel.ctx.messages.clear()
+                kernel._plugins.clear()
+        except Exception:
+            logger.debug("[Task %s] 释放内核引用失败（忽略）", self.task_id, exc_info=True)
+        self.kernel = None
+        self.registry = None
+        self.loop = None  # type: ignore[assignment]
+        self.task = None
+        self.pending_inputs.clear()
 
     def stop(self) -> None:
         """先置协作式中止信号，再强杀挂起的 asyncio 任务（LLM 流卡住时靠它解套）。"""
@@ -668,6 +709,12 @@ class TaskManager:
         if cap > 0 and self.active_count() >= cap:
             raise TaskLimitError(
                 f"并发任务已达上限 {cap}（max_running_tasks），请等现有任务结束后再试")
+        # 顺手回收上一批已完成任务的重对象：新任务开始是最自然的回收时机
+        # （无后台定时任务也能保持内存平稳；异常不影响启动）
+        try:
+            self.reap()
+        except Exception:
+            logger.warning("[TaskManager] 回收已完成任务失败（忽略）", exc_info=True)
         task_id = uuid.uuid4().hex[:12]
         # 隔离工作树模式：会话开启时，任务在独立 worktree 中执行（复用已存在的）。
         # 例外：merge_worktree（AI 合并任务）必须落在**主工作区**——它要把分支
@@ -858,7 +905,9 @@ class TaskManager:
     def active_for_session(self, session_id: str) -> Optional[TaskHandle]:
         """该会话当前正在运行的任务（供 /api/chat 排队补充指令）。"""
         for handle in self.tasks.values():
-            if handle.running and not handle.stopping and handle.kernel.session_id == session_id:
+            if (handle.running and not handle.stopping
+                    and handle.kernel is not None
+                    and handle.kernel.session_id == session_id):
                 return handle
         return None
 
@@ -871,6 +920,48 @@ class TaskManager:
 
     def cleanup(self, task_id: str) -> None:
         self.tasks.pop(task_id, None)
+
+    #: 已完成任务在 tasks 表里的保留时长（秒）：留给 SSE 迟到订阅者读 [DONE]，
+    #: 过期即释放重对象并从表里摘除
+    FINISHED_TTL_SECONDS = 90
+    #: 已完成任务的最大保留条数：多端并发/长时间运行时防止表无界增长
+    FINISHED_KEEP_MAX = 20
+
+    def reap(self) -> int:
+        """回收已结束任务的重对象（TTL + 条数上限），返回本次释放/移除的条数。
+
+        泄漏场景：TaskHandle 原先只在 SSE 流收尾时被 `cleanup` 摘掉——
+        「界面已关/客户端断网/盯梢定时任务」这类没有活跃订阅者的路径永远不会
+        走到那里，handle 连同整个会话上下文（实测每次任务 ~55MB）永久驻留。
+
+        分两级释放：先 `release()` 摘掉 kernel/registry/loop 那套对象图（handle
+        shell 留着，迟到的 /api/tasks/{id}/events 仍能立刻收到 [DONE] 而不是 404），
+        TTL 到期后再从 tasks 表摘除。
+        """
+        now = time.monotonic()
+        finished = [(tid, h) for tid, h in self.tasks.items() if h.done]
+        released = 0
+        # 第一级：立即释放重对象（kernel/registry/loop）。只要没有还等着读事件的
+        # 订阅者队列就放——残留的 shell 仍能对迟到的 subscribe 应答 [DONE]。
+        for tid, handle in finished:
+            if handle.released:
+                continue
+            if not handle._subscribers or handle.subscribers_drained:
+                handle.release()
+                released += 1
+        for tid, handle in finished:
+            expired = (handle.finished_at is not None
+                       and now - handle.finished_at > self.FINISHED_TTL_SECONDS)
+            if expired:
+                self.tasks.pop(tid, None)
+                released += 1
+        # 条数上限：超限时优先摘已释放的旧 handle（保留最近结束的供界面收尾）
+        if len(self.tasks) > self.FINISHED_KEEP_MAX:
+            victims = [tid for tid, h in self.tasks.items() if h.released]
+            for tid in victims[: len(self.tasks) - self.FINISHED_KEEP_MAX]:
+                self.tasks.pop(tid, None)
+                released += 1
+        return released
 
     def active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.running)

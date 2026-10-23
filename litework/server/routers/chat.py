@@ -159,6 +159,9 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def _broadcast_approval_resolved(approval_id: str, approved: bool) -> None:
         """向所有活跃任务的 kernel 广播审批结果（UI 按 id 匹配关闭卡片）。"""
         for handle in list(tasks.tasks.values()):
+            # 已释放 shell（任务完成且过了 TTL）：kernel 已摘引用，跳过
+            if handle.kernel is None:
+                continue
             try:
                 await handle.kernel.events.emit("approval:resolved", {
                     "id": approval_id, "approved": approved, "by": "user",

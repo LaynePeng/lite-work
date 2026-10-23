@@ -43,6 +43,10 @@ logger = logging.getLogger("litework.server")
 
 VERSION = __version__
 
+# 已完成任务的重对象回收间隔（秒）：任务结束后的 kernel/registry/loop 会占到
+# 几十 MB，没有活跃 SSE 订阅者时靠这个循环放掉（见 TaskManager.reap）
+_TASK_REAP_INTERVAL_SECONDS = 30.0
+
 # CORS 白名单：默认覆盖开发态 vite；额外来源经 LITEWORK_CORS_ORIGINS 追加
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
@@ -122,9 +126,26 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             app.reclaim_orphan_tasks()
         except Exception:  # noqa: BLE001 - 启动路径绝不允许因此中断
             logger.warning("[Startup] 回收遗留后台命令失败", exc_info=True)
+        # 已完成任务的定期回收：没有新任务启动时（界面关掉、断网、盯梢任务结束后
+        # 长时间空闲）也要把已结束 handle 的重对象放掉，否则内存只增不减。
+        # 与 TaskManager.start 里的顺手回收互补，异常不影响服务。
+        async def _reap_finished_tasks() -> None:
+            while True:
+                await asyncio.sleep(_TASK_REAP_INTERVAL_SECONDS)
+                try:
+                    tasks.reap()
+                except Exception:  # noqa: BLE001 - 回收失败不该杀掉循环
+                    logger.warning("[Reap] 回收已完成任务失败", exc_info=True)
+
+        reap_task = asyncio.create_task(_reap_finished_tasks())
         try:
             yield
         finally:
+            reap_task.cancel()
+            try:
+                await reap_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
             # 停机必须显式回收调度循环：否则 asyncio 任务残留会让
             # 「服务已退出」与「任务仍在跑」并存（测试里表现为调度器未回收）。
             try:

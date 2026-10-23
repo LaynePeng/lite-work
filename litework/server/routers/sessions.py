@@ -587,6 +587,8 @@ def create_router(ctx: ServerContext) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(result.get("error", "未知 agent")))
         # 广播给所有活跃任务的 kernel（UI 按 agentId + by 匹配更新看板卡片）
         for handle in list(tasks.tasks.values()):
+            if handle.kernel is None:
+                continue
             try:
                 await handle.kernel.events.emit(
                     "agent:closed", {"agentId": agent_id, "by": "user"})
