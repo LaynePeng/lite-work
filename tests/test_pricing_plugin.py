@@ -167,6 +167,8 @@ def test_fingerprint_matches_custom_gateway_model(tmp_path):
     assert p.lookup("deepseek-v4-flash")["model_key"] == "deepseek-flash"
     # kimi 不再由插件给价（改用 models.dev）→ 返回 None 交回主程序
     assert p.lookup("Kimi-K3") is None
+    assert p.lookup("kimi-k2.7-code") is None
+    assert p.lookup("moonshot/kimi-k2.6") is None
     # 不认识 → None（交回主程序走 models.dev / config）
     assert p.lookup("gpt-4o") is None
     assert p.lookup("") is None
@@ -221,6 +223,52 @@ def test_plugin_status_stale_flag(tmp_path):
     assert st["deepseek"]["stale"] is True
     assert st["deepseek"]["snapshot_date"]
     assert p.lookup("deepseek-flash") is not None
+
+
+def test_removed_source_leaves_no_fingerprint(tmp_path):
+    """源下线时必须连指纹一起删，否则会读残留旧缓存（回归：kimi 恒报定价过期）。
+
+    历史行为：kimi 源在 v1.0.1 移除，但 fingerprints/aliases 仍指向 "kimi"。
+    用户目录里 v1.0.0 同步过的 pricing_cache.json 里有 kimi 条目，查找照样
+    命中 → 拿到一份再也不会更新的价格，年龄持续增长 → 前端「⚠ 定价数据
+    已过期」永远消不掉，而且点同步也修不好（kimi 已不是可同步的源）。
+    """
+    import pathlib as _pathlib
+
+    data = json.loads((_pathlib.Path(__file__).resolve().parent.parent
+                       / "litework/builtin_plugins/pricing-plugin/pricing.json"
+                       ).read_text(encoding="utf-8"))
+    declared = set((data.get("sources") or {}).keys())
+    strays = [item for item in data.get("fingerprints") or [] if item[2] not in declared]
+    assert not strays, f"指纹指向未声明的数据源: {strays}"
+    # aliases 的目标必须在指纹里存在（否则是死条目）
+    keys = {item[1] for item in data.get("fingerprints") or []}
+    dead = {k: v for k, v in (data.get("aliases") or {}).items() if v not in keys}
+    assert not dead, f"别名指向不存在的模型键: {dead}"
+
+
+def test_stale_kimi_cache_is_ignored(tmp_path):
+    """旧版残留的 kimi 同步缓存不得再被读取（即使插件数据文件写错也不影响）。
+
+    双保险：① 数据文件已删 kimi 指纹；② 插件按「指纹的源必须已声明」过滤。
+    这里直接构造一份残留缓存的用户目录，确认插件不命中、主程序落回 models.dev。
+    """
+    import time
+
+    import litework.builtin_plugins  # noqa: F401  确保内置包可发现
+
+    (tmp_path / "pricing_cache.json").write_text(json.dumps({"sources": {"kimi": {
+        "fetched_at": time.time() - 30 * 86400,
+        "url": "https://platform.kimi.ai/docs/pricing/chat.md",
+        "models": {"kimi-k3": {"peak": {"cache_hit_per_mtok": 0.3,
+                                        "input_per_mtok": 3.0,
+                                        "output_per_mtok": 15.0}}},
+    }}}), encoding="utf-8")
+
+    p = _plugin()
+    p.configure(str(tmp_path))
+    assert p.lookup("kimi-k3") is None, "kimi 已下线，不得读残留缓存"
+    assert [s["id"] for s in p.status()] == ["deepseek"]
 
 
 def test_local_plugin_overrides_builtin(tmp_path):
@@ -444,6 +492,6 @@ def test_plugins_builtin_lists_pricing_plugin(tmp_path):
     assert "pricing-plugin" in items
     entry = items["pricing-plugin"]
     assert entry["kind"] == "tool"
-    assert entry["version"] == "1.0.1"
+    assert entry["version"] == "1.0.2"
     assert entry["tools"] == []
     assert entry["builtin"] is True

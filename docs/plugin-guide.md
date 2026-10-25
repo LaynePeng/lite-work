@@ -25,6 +25,12 @@ lite-work 采用 **Cordis 风格插件架构**（空间解耦）：内核 `Kerne
 > `config.pricing_check_ttl_days` 判定（0 = 永不过期），并与 models.dev 共用同一项设置。
 > 插件无需（也不应）读取主程序 config：照旧返回 `stale` 只会被当作它自身的默认口径，
 > 主程序用「年龄 + 用户配置」复算后对外输出。
+>
+> **源下线要连指纹一起删**：`pricing.json` 的 `fingerprints` / `aliases` 只能指向
+> `sources` 里已声明的数据源 id。只删源、留指纹会让 `lookup()` 命中去用户目录里
+> 残留的旧同步缓存——价拿得到、年龄一直涨且无法再同步，前端便恒报「定价数据已过期」
+> （kimi 源移除时踩过）。插件另按「源必须已声明」过滤作兜底，回归测试见
+> `tests/test_pricing_plugin.py::test_removed_source_leaves_no_fingerprint`。
 
 ## 2. 安装位置与加载机制
 

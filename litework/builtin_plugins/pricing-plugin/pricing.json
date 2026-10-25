@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "官方定价数据源与快照。改价：改本文件（或重新同步：设置 → 综合设置 → 同步）。主程序不含任何价目表。kimi 不再单独维护官方源——models.dev 的 moonshotai 条目价格与官方站一致（已验证 k3/k2.7-code/k2.7-code-highspeed/k2.6 四项），只有 DeepSeek 因分时计费（高峰/空闲半价）需要专源解析。",
+  "note": "官方定价数据源与快照。改价：改本文件（或重新同步：设置 → 综合设置 → 同步）。主程序不含任何价目表。kimi 不再单独维护官方源——models.dev 的 moonshotai 条目价格与官方站一致（已验证 k3/k2.7-code/k2.7-code-highspeed/k2.6 四项），只有 DeepSeek 因分时计费（高峰/空闲半价）需要专源解析。注意：fingerprints / aliases 只能指向 sources 里已声明的源——源下线时必须同步删掉它的指纹，否则会去读残留的旧同步缓存并报「定价数据已过期」。",
   "ttl_seconds": 604800,
   "sources": {
     "deepseek": {
@@ -27,11 +27,7 @@
   },
   "fingerprints": [
     ["^deepseek.*(?:[-_./]|^)pro(?:$|[-_.0-9])", "deepseek-v4-pro", "deepseek"],
-    ["^deepseek", "deepseek-flash", "deepseek"],
-    ["^kimi[-_.]?k2[-_.]?7[-_.]?code[-_.]?highspeed", "kimi-k2.7-code-highspeed", "kimi"],
-    ["^kimi[-_.]?k2[-_.]?7[-_.]?code", "kimi-k2.7-code", "kimi"],
-    ["^kimi[-_.]?k2[-_.]?6", "kimi-k2.6", "kimi"],
-    ["^kimi[-_.]?k3(?:$|[-_.0-9])", "kimi-k3", "kimi"]
+    ["^deepseek", "deepseek-flash", "deepseek"]
   ],
   "aliases": {
     "deepseek-v4-flash": "deepseek-flash",
@@ -42,9 +38,6 @@
     "deepseek-v3": "deepseek-flash",
     "deepseek-v3.2": "deepseek-flash",
     "deepseek-v4.1-pro": "deepseek-v4-pro",
-    "deepseek-pro": "deepseek-v4-pro",
-    "kimi-k2-7-code": "kimi-k2.7-code",
-    "kimi-k2-7-code-highspeed": "kimi-k2.7-code-highspeed",
-    "kimi-k2-6": "kimi-k2.6"
+    "deepseek-pro": "deepseek-v4-pro"
   }
 }

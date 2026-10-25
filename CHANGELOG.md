@@ -167,6 +167,22 @@
   `ModuleNotFoundError`（打包态靠 sitecustomize 借 `_internal` 才勉强可用）。
   已把 `requests` 加入依赖，并在生图/检索子进程的 `PYTHONPATH` 里自愈补齐。
 
+### 修复（定价 · kimi 恒报「定价数据已过期」）
+
+- **kimi 删了官方源却留着模型指纹**：v1.0.1 把 kimi 源从 `pricing.json` 的
+  `sources` 移除（改用 models.dev 的 moonshotai 条目，价格一致），但
+  `fingerprints` / `aliases` 里 4 条 kimi 指纹没删。结果 `lookup()` 依旧命中
+  `"kimi"` 源 —— 该源已不存在，命中不了内置快照，只能读用户目录里旧版同步
+  出来的 `pricing_cache.json`：价拿得到、年龄一直涨、且 kimi 已不是可同步的源
+  （点同步报「未知定价源」）。前端于是恒显「⚠ 定价数据已过期，成本估算可能
+  偏差」，无论怎么同步都消不掉。修法：删掉 4 条 kimi 指纹与 3 条 kimi 别名；
+  插件另加一道防线——`_iter_fingerprints()` 跳过指向未声明数据源的指纹，避免
+  数据文件再写错时重演。新增回归：
+  `test_removed_source_leaves_no_fingerprint`（指纹/别名必须引用已声明源）+
+  `test_stale_kimi_cache_is_ignored`（残留 kimi 缓存不再被读取）。
+  插件版本 1.0.1 → 1.0.2，已在 lite-work-plugins 社区仓修复后同步内置副本
+  （AGENTS.md §6）。
+
 ### 修复（models.dev · 按名回退取价选中渠道条目）
 
 - **`kimi-k2.6` / `glm-5.2` 等模型按名回退查价时取到聚合渠道价**：本程序

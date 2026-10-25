@@ -339,7 +339,7 @@ export interface ContextPricing {
   input_per_mtok: number;
   output_per_mtok: number;
   cache_hit_per_mtok: number;
-  /** 价格来源：official:deepseek / snapshot:kimi / models.dev / override / config */
+  /** 价格来源：official:deepseek / snapshot:deepseek / models.dev / override / config */
   source?: string;
   /** 价格数据年龄（秒）；内置快照/回退价为 null */
   source_age_seconds?: number | null;

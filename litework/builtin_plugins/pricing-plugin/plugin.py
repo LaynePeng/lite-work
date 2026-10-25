@@ -7,7 +7,11 @@
 #
 # 数据源（均为静态文本，无需 JS 渲染）：
 # - DeepSeek: 官方定价页英文版（USD，peak / off-peak 两档都列）
-# - Kimi:     国际站文档 .md 端点（USD）
+#
+# Kimi 不再单独维护官方源：models.dev 的 moonshotai 条目与官方站价格一致，
+# 由主程序按模型名回退取价。因此本文件的 fingerprints / aliases **不得**再引用
+# 「kimi」这类已下线的源 id——残留指纹会去读用户目录里旧版同步出来的缓存条目，
+# 结果拿到一份没人能再更新的价格，前端一直报「定价数据已过期」（踩过）。
 from __future__ import annotations
 
 import json
@@ -177,10 +181,10 @@ class OfficialPricingPlugin(ToolPlugin, PricingProvider):
     """
 
     name = "pricing-plugin"
-    version = "1.0.1"
-    description = ("官方定价数据源：DeepSeek 分时价（高峰/空闲半价）与 Kimi 国际站价，"
-                   "按模型指纹计费（自定义中转也能认出）。价格表在 pricing.json，"
-                   "手动同步、不自动联网。")
+    version = "1.0.2"
+    description = ("官方定价数据源：DeepSeek 分时价（高峰/空闲半价），按模型指纹计费"
+                   "（自定义中转也能认出）。Kimi 等其余模型走 models.dev。"
+                   "价格表在 pricing.json，手动同步、不自动联网。")
 
     def get_tools(self) -> List[ToolDefinition]:
         return []
@@ -271,11 +275,24 @@ class OfficialPricingPlugin(ToolPlugin, PricingProvider):
         return None
 
     def _iter_fingerprints(self):
+        """遍历可用的模型指纹；指向**未声明数据源**的条目一律跳过。
+
+        指纹的第三个字段是数据源 id，源下线后必须连指纹一起删。旧版本遗留的
+        指纹（如已移除的 kimi 源）会让 lookup 命中用户目录里那份再也不会更新的
+        同步缓存——价格拿得到、年龄永远增长，前端恒报「定价数据已过期」。
+        这里按「源必须已声明」过滤，作为数据文件写错的最后一道防线。
+        """
+        declared = set(self._source_ids())
         for item in self._data.get("fingerprints") or []:
             if not isinstance(item, (list, tuple)) or len(item) < 3:
                 continue
+            source_id = str(item[2])
+            if source_id not in declared:
+                logger.debug("[Pricing] 指纹 %r 指向未声明的数据源 %r，已跳过",
+                             item[0], source_id)
+                continue
             try:
-                yield re.compile(str(item[0]), re.I), str(item[1]), str(item[2])
+                yield re.compile(str(item[0]), re.I), str(item[1]), source_id
             except re.error:
                 logger.warning("[Pricing] 无效的模型指纹正则: %r", item[0])
 

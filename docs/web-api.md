@@ -215,7 +215,7 @@ UI 可以完整恢复看板与上下文面板。
 | LLM | `GET /api/llm/providers` / `GET,POST /api/llm/config` | 供应商元数据与配置 |
 | | `POST /api/llm/test` | 测连接（返回 ok/消息/延迟） |
 | | `GET /api/model-meta` | 定价数据源状态：`{models_dev, provider, sources[], check_ttl_days}`（是否有缓存 / 多久前 / 是否过期，过期前端提示手动同步）。`stale` 由主程序按 `config.pricing_check_ttl_days` 复算（0=永不过期 → 恒 false），插件源与 models.dev 共用这一判定 |
-| | `POST /api/model-meta/refresh` `{source}` | 手动同步**单个**源（`models_dev` 或定价插件声明的官方源如 `deepseek`/`kimi`）；前端逐源调用以呈现同步步骤 |
+| | `POST /api/model-meta/refresh` `{source}` | 手动同步**单个**源（`models_dev` 或定价插件声明的官方源如 `deepseek`）；前端逐源调用以呈现同步步骤。源清单以 `GET /api/model-meta` 的 `sources[]` 为准，不要硬编码 |
 | 安全 | `GET,POST /api/security`、`GET,POST /api/mcp` | 安全规则 / MCP 服务配置 |
 | 技能 | `GET /api/skills` 等 | 技能列表/加载/权限 |
 | Agent | `GET /api/agents` 等 | 多 Agent 看板/协作模式选择器 |
