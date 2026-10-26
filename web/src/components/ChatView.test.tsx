@@ -42,6 +42,46 @@ function makeMsgs(): Msg[] {
   ] as unknown as Msg[];
 }
 
+// ---------------------------------------------------------------- 气泡时间戳
+
+describe("气泡时间戳", () => {
+  const fixedNow = new Date(2026, 9, 25, 14, 32, 19); // 本地 2026-10-25 14:32:19
+  const today = new Date(2026, 9, 25, 9, 5, 3).getTime();   // 今天 → 只显示时分秒
+  const otherDay = new Date(2026, 9, 24, 23, 58, 41).getTime(); // 跨天 → 带月-日
+
+  it("用户与助手气泡下方各显示时间（到秒）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    try {
+      const messages = [
+        { role: "user", content: "把 pricing 里 kimi 的指纹删掉", ts: today },
+        { role: "assistant", content: "已删除 4 条指纹。", ts: otherDay },
+      ] as unknown as Msg[];
+      render(<ChatView {...baseProps} messages={messages} streaming={null} />);
+      expect(screen.getByText("09:05:03")).toBeTruthy();
+      expect(screen.getByText("10-24 23:58:41")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("老消息（无 ts）不显示时间，不伪造当前时间", () => {
+    const messages = [{ role: "user", content: "老消息" }] as unknown as Msg[];
+    const { container } = render(<ChatView {...baseProps} messages={messages} streaming={null} />);
+    expect(container.querySelector(".msg-time")).toBeNull();
+  });
+
+  it("系统消息不渲染气泡也不显示时间", () => {
+    const messages = [
+      { role: "system", content: "系统提示", ts: today },
+      { role: "user", content: "你好", ts: today },
+    ] as unknown as Msg[];
+    const { container } = render(<ChatView {...baseProps} messages={messages} streaming={null} />);
+    // 只有用户那一条有时间戳
+    expect(container.querySelectorAll(".msg-time")).toHaveLength(1);
+  });
+});
+
 // ---------------------------------------------------------------- 滚动行为
 
 // jsdom 无真实布局（scrollHeight/clientHeight 恒为 0）：

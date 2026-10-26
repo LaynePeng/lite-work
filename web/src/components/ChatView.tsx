@@ -12,6 +12,7 @@ import AppIcon from "./AppIcon";
 import type { Msg, SubAgentProgress, ToolCardInfo, WorkItem, WorktreeStatus } from "../types";
 import { buildTurnsCached, type RenderTurn, type TurnsCache } from "../lib/turnsBuilder";
 import { agentIconOf } from "../lib/agentMeta";
+import { formatMsgTime, formatMsgTimeFull } from "../lib/msgTime";
 import { api } from "../api";
 import {
   BoardBlock,
@@ -46,6 +47,20 @@ function AgentAvatar({ agent, size = 26 }: { agent?: string; size?: number }) {
       {agentIconOf(agent)}
     </div>
   );
+}
+
+/** 气泡外下方的时间戳（到秒）。
+ *
+ * 位置在气泡**外面**而非气泡内：助手气泡里可能有很长的富块（图表/表格），
+ * 贴在气泡内底部会让时间离消息顶部很远，视觉上对不上是哪条消息的时间。
+ *
+ * ts 缺失（本字段之前落盘的老消息）→ 整块不渲染，而不是伪造当前时间。
+ */
+function MessageTime({ ts }: { ts?: number }) {
+  const text = formatMsgTime(ts);
+  if (!text) return null;
+  const full = formatMsgTimeFull(ts);
+  return <div className="msg-time" title={full ? `发送于 ${full}` : undefined}>{text}</div>;
 }
 
 function ToolIcon({ name }: { name: string }) {
@@ -640,9 +655,13 @@ function WorkItems({ items, sessionId, streaming = false, onEmailDraftConfirm }:
           return (
             <div className="msg-row assistant timeline-text" key={item.id}>
               <AgentAvatar agent={item.agent} />
-              <div className="bubble assistant-bubble">
-                <Markdown text={item.content} streaming={streaming} />
-                {streaming && item.id === items[items.length - 1]?.id && <span className="cursor"><span /></span>}
+              <div className="msg-col">
+                <div className="bubble assistant-bubble">
+                  <Markdown text={item.content} streaming={streaming} />
+                  {streaming && item.id === items[items.length - 1]?.id && <span className="cursor"><span /></span>}
+                </div>
+                {/* 流式中的条目尚无落盘 ts：不显示（避免用当前时刻反复刷新） */}
+                <MessageTime ts={item.ts} />
               </div>
             </div>
           );
@@ -683,9 +702,12 @@ function MessageBubble({ message, onEmailDraftConfirm }: {
   if (message.role === "user") {
     return (
       <div className="msg-row user">
-        <div className="bubble user-bubble">
-          {message.queued && <span className="queued-badge" title="已提交，Agent 将在当前任务下一回合处理">已入队 ⏳</span>}
-          <Markdown text={message.content ?? ""} />
+        <div className="msg-col right">
+          <div className="bubble user-bubble">
+            {message.queued && <span className="queued-badge" title="已提交，Agent 将在当前任务下一回合处理">已入队 ⏳</span>}
+            <Markdown text={message.content ?? ""} />
+          </div>
+          <MessageTime ts={message.ts} />
         </div>
       </div>
     );
@@ -693,13 +715,16 @@ function MessageBubble({ message, onEmailDraftConfirm }: {
   return (
     <div className="msg-row assistant">
       <AgentAvatar agent={message.agent} />
-      <div className="bubble assistant-bubble">
-        {message.content && (
-          <Markdown
-            text={message.content}
-            onEmailDraftConfirm={(edits) => onEmailDraftConfirm?.(edits)}
-          />
-        )}
+      <div className="msg-col">
+        <div className="bubble assistant-bubble">
+          {message.content && (
+            <Markdown
+              text={message.content}
+              onEmailDraftConfirm={(edits) => onEmailDraftConfirm?.(edits)}
+            />
+          )}
+        </div>
+        <MessageTime ts={message.ts} />
       </div>
     </div>
   );
@@ -745,8 +770,11 @@ const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm }
           {turn.assistant && turn.assistant.content && (
             <div className="msg-row assistant">
               <AgentAvatar agent={turn.assistant.agent} />
-              <div className="bubble assistant-bubble">
-                <Markdown text={turn.assistant.content} onEmailDraftConfirm={onEmailDraftConfirm} />
+              <div className="msg-col">
+                <div className="bubble assistant-bubble">
+                  <Markdown text={turn.assistant.content} onEmailDraftConfirm={onEmailDraftConfirm} />
+                </div>
+                <MessageTime ts={turn.assistant.ts} />
               </div>
             </div>
           )}

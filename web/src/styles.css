@@ -3028,6 +3028,34 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   justify-content: flex-end;
 }
 
+/* 气泡 + 其下时间戳的纵向容器（时间在气泡外，见 MessageTime 注释） */
+.msg-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 76%;
+}
+
+.msg-col.right {
+  align-items: flex-end;
+}
+
+.msg-col > .bubble {
+  max-width: 100%;
+}
+
+/* 气泡外下方时间戳（到秒）。tabular-nums 固定数字宽度，避免刷新时抖动 */
+.msg-time {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
 .bubble {
   max-width: 76%;
   border-radius: var(--radius);

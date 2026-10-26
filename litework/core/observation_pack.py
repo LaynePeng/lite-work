@@ -220,6 +220,7 @@ def project_observations(
             projected[i] = Message(
                 role=message.role, name=message.name,
                 tool_call_id=message.tool_call_id, content=placeholder,
+                ts=message.ts,
             )
             saved += removed
             packed += 1

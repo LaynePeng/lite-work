@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextvars
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -12,6 +13,16 @@ from typing import Any, Callable, Dict, List, Optional
 # ---------------------------------------------------------------- 消息类型
 
 Role = str  # "system" | "user" | "assistant" | "tool"
+
+
+def now_ms() -> int:
+    """当前 Unix 毫秒（消息 ts / 会话时间戳统一口径）。
+
+    集中一处便于测试打桩（monkeypatch litework.core.types.now_ms），
+    也避免各调用点各写一遍 int(time.time() * 1000)。
+    """
+    return int(time.time() * 1000)
+
 
 # 当前任务/会话的请求头模板上下文（custom_headers 的 {var} 插值数据源）。
 # 由 AgentLoop.run_task 在每个任务开始时设置；适配器 _headers() 读取后展开模板。
@@ -56,6 +67,15 @@ class Message:
     # 产生该消息的 Agent id（仅 assistant 消息由 AgentLoop 打标；None = 旧快照/无标记）。
     # 用于会话内 Agent 切换检测：新 Agent 接手时知道历史操作是谁做的。
     agent: Optional[str] = None
+    # 消息产生时刻（Unix 毫秒；前端气泡右下角显示到秒）。None = 本字段之前
+    # 落盘的老消息，前端不显示时间而不是伪造当前时间。
+    #
+    # 为什么放后端而不是前端打点：前端气泡时间会被三种情况弄错——切页签重挂载、
+    # 刷新后从 /api/sessions/<id> 重拉历史（全部盖成拉取时刻）、任务结束重拉快照
+    # 覆盖流式期间的本地消息。时间必须在消息诞生时定死并随会话落盘。
+    #
+    # 与 agent 同样的纪律：内部字段，不出网（见 openai_compat._wire_message）。
+    ts: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"role": self.role, "content": self.content}
@@ -67,11 +87,14 @@ class Message:
             d["tool_call_id"] = self.tool_call_id
         if self.agent:
             d["agent"] = self.agent
+        if self.ts:
+            d["ts"] = self.ts
         return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Message":
         tcs = data.get("tool_calls")
+        ts = data.get("ts")
         return cls(
             role=data.get("role", "user"),
             content=data.get("content"),
@@ -79,6 +102,9 @@ class Message:
             tool_calls=[ToolCall.from_dict(t) for t in tcs] if tcs else None,
             tool_call_id=data.get("tool_call_id"),
             agent=data.get("agent"),
+            # 只认正数：历史快照可能没有该字段，手改的脏值（字符串/bool）按缺失处理
+            ts=int(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool)
+            and ts > 0 else None,
         )
 
 

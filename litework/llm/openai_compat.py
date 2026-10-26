@@ -182,12 +182,14 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         多数供应商容忍，但部分网关直接拒绝（opencode zen go 实测 HTTP 400：
         `messages[N]: "name" is not supported by this endpoint`）；tool 消息
         与 assistant(tool_calls) 的关联由 tool_call_id 承担，wire 上不需要
-        name。`agent` 是会话内 Agent 打标，同样不该出网。落盘/事件仍走
-        Message.to_dict()，不受影响。
+        name。`agent` 是会话内 Agent 打标，`ts` 是气泡时间戳，同样不该出网
+        （严格网关对未知字段直接 400）。落盘/事件仍走 Message.to_dict()，
+        不受影响。
         """
         d = m.to_dict()
         d.pop("name", None)
         d.pop("agent", None)
+        d.pop("ts", None)
         return d
 
     @staticmethod

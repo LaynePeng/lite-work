@@ -21,7 +21,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from .token_counter import TokenCounter
-from .types import Message
+from .types import Message, now_ms
 
 logger = logging.getLogger("litework.context")
 
@@ -54,6 +54,7 @@ def patch_dangling_tool_calls(messages: List[Message]) -> List[Message]:
                 name=call.name,
                 tool_call_id=call.id,
                 content="[Interrupted]: 任务在此处被中止，该工具调用未执行或结果未知。",
+                ts=now_ms(),
             ))
             by_id[call.id] = messages[i + 1]
     return messages

@@ -1240,6 +1240,7 @@ export default function App() {
               worktreeEnabled: false,
               messages: [...(snap?.messages ?? []), {
                 role: "assistant",
+                ts: Date.now(),
                 content: "⚠ 本会话的隔离工作树已不存在（可能已合并 / 丢弃 / 被清理），已自动关闭隔离模式。\n\n如需继续在隔离工作树中工作，请重新 `/worktree on`。",
               }],
             });
@@ -1963,7 +1964,7 @@ export default function App() {
             .filter((i) => i.type === "tool" && i.card.subagent)
             .map((i) => (i.type === "tool" ? i.card.subagent! : null))
             .filter((s): s is SubAgentProgress => s !== null);
-          const finalMsg: Msg = { role: "assistant", content: cur?.items.filter((i) => i.type === "text").map((i) => i.content).join("\n\n") || ev.data.content };
+          const finalMsg: Msg = { role: "assistant", ts: Date.now(), content: cur?.items.filter((i) => i.type === "text").map((i) => i.content).join("\n\n") || ev.data.content };
           patchChat(sid, {
             messages: [...getChat(sid).messages, finalMsg],
             stats: ev.data.stats,
@@ -2483,7 +2484,7 @@ export default function App() {
       const arg = raw.replace(/^\/goal\s*/i, "").trim();
       const say = (content: string) => {
         const cur = getChat(sid);
-        patchChat(sid, { messages: [...(cur.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+        patchChat(sid, { messages: [...(cur.messages ?? []), { role: "user", content: raw, ts: Date.now() }, { role: "assistant", content, ts: Date.now() }] });
       };
       if (!arg) {
         const cur = getChat(sid).goal;
@@ -2520,7 +2521,7 @@ export default function App() {
       const arg = raw.replace(/^\/loop\s*/i, "").trim().toLowerCase();
       const chat = getChat(sid);
       const say = (content: string) => {
-        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw, ts: Date.now() }, { role: "assistant", content, ts: Date.now() }] });
       };
       if (arg === "off" || arg === "stop" || arg === "关闭") {
         patchChat(sid, { loopEnabled: false, loopCount: 0 });
@@ -2552,7 +2553,7 @@ export default function App() {
       const arg = raw.replace(/^\/continue\s*/i, "").trim().toLowerCase();
       const chat = getChat(sid);
       const say = (content: string) => {
-        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw, ts: Date.now() }, { role: "assistant", content, ts: Date.now() }] });
       };
       if (arg === "off" || arg === "stop" || arg === "关闭") {
         patchChat(sid, { autoContinue: false, autoContinueCount: 0 });
@@ -2597,7 +2598,7 @@ export default function App() {
         if (sidNow) {
           const chat = getChat(sidNow);
           patchChat(sidNow, {
-            messages: [...(chat.messages ?? []), { role: "assistant", content: text }],
+            messages: [...(chat.messages ?? []), { role: "assistant", content: text, ts: Date.now() }],
           });
         } else {
           setSuccess(text);
@@ -2690,7 +2691,7 @@ export default function App() {
       }
       const chat = getChat(sid);
       const say = (content: string) => {
-        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw }, { role: "assistant", content }] });
+        patchChat(sid, { messages: [...(chat.messages ?? []), { role: "user", content: raw, ts: Date.now() }, { role: "assistant", content, ts: Date.now() }] });
       };
       if (sub === "off" || sub === "关闭") {
         await api.setSessionWorktree(sid, false).catch(() => {});
@@ -2811,6 +2812,7 @@ export default function App() {
       worktreeConflicts: [],
       messages: [...(cur.messages ?? []), {
         role: "user",
+        ts: Date.now(),
         content: `🤖 让 AI 合并隔离工作树分支 \`${branch}\`（执行 git merge，遇冲突逐个解决后完成合并提交）。`,
       }],
     });
@@ -2896,7 +2898,7 @@ export default function App() {
         return;
       }
       const focus = raw.replace(/^\/compact\s*/i, "").trim();
-      patchChat(sid, { messages: [...(getChat(sid).messages ?? []), { role: "user", content: raw }], error: null });
+      patchChat(sid, { messages: [...(getChat(sid).messages ?? []), { role: "user", content: raw, ts: Date.now() }], error: null });
       pushLog("🗜️ 正在压缩会话上下文…");
       const r = await compactNow(sid, focus);
       if (r) {
@@ -2904,6 +2906,7 @@ export default function App() {
         patchChat(sid, {
           messages: [...cur.messages, {
             role: "assistant",
+            ts: Date.now(),
             content: `🗜️ 上下文已压缩：${r.before_tokens} → ${r.after_tokens} tokens（释放 ${r.removed_tokens}，折叠 ${r.turns_compacted} 轮、保留最近 ${r.keep_turns} 轮）。`,
           }],
         });
@@ -3015,7 +3018,7 @@ export default function App() {
         return;
       } else {
         patchChat(sid, {
-          messages: [...(base.messages ?? []), { role: "user", content: prompt }],
+          messages: [...(base.messages ?? []), { role: "user", content: prompt, ts: Date.now() }],
           error: null,
           running: true,
         });
@@ -3063,7 +3066,7 @@ export default function App() {
     if (!q) return;
     // 乐观上屏（带 queued 标记）
     patchChat(sid, {
-      messages: [...(q.messages ?? []), { role: "user", content: item, queued: true }],
+      messages: [...(q.messages ?? []), { role: "user", content: item, queued: true, ts: Date.now() }],
       error: null,
     });
     void api.chat(sid, item, currentAgent, q.reasoningEffort ?? "").then((resp) => {

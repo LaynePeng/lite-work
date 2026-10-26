@@ -33,7 +33,7 @@ from .token_counter import TokenCounter
 from .truncator import truncate_tool_output
 from .gate import aggregate as _gate_aggregate  # noqa: F401 (re-export for tests)
 from .provenance import contains_untrusted, extract_untrusted_sources, provenance_note, should_escalate
-from .types import Message, ToolCall, ToolDefinition, header_context
+from .types import Message, ToolCall, ToolDefinition, header_context, now_ms
 from ..llm.pricing_provider import is_off_peak_now
 from ..llm.stream_meter import StreamMeter, use_stream_meter
 from ..tools.todos import current_session_id, current_root_session_id
@@ -372,7 +372,7 @@ class AgentLoop:
                     direct = None
                 if isinstance(direct, dict) and str(direct.get("content") or "").strip():
                     direct_text = str(direct["content"])
-                    direct_msg = Message(role="assistant", content=direct_text)
+                    direct_msg = Message(role="assistant", content=direct_text, ts=now_ms())
                     messages.append(direct_msg)
                     await self.kernel.events.emit("message:added",
                                                   {"message": direct_msg.to_dict()})
@@ -405,7 +405,9 @@ class AgentLoop:
                         processed, tools, meter)
                 except AgentLoop._LLMCallFailure as failure:
                     logger.warning("[AgentLoop] LLM 调用失败: %s", failure.message)
-                    messages.append(Message(role="assistant", content=f"[LLM Error]: {failure.message}"))
+                    messages.append(Message(role="assistant",
+                                            content=f"[LLM Error]: {failure.message}",
+                                            ts=now_ms()))
                     return await self._finish(f"[LLM Error]: {failure.message}", messages, stats, store_snapshot)
 
                 # 阶段三：状态更新（usage 累加 + 本轮速度 + 上下文水位推送）
@@ -418,6 +420,7 @@ class AgentLoop:
                         messages.append(Message(
                             role="user",
                             content="模型返回了空响应。请继续当前任务，并明确给出下一步工具调用或最终结果。",
+                            ts=now_ms(),
                         ))
                         continue
                     self.state.status = AgentStatus.FAILED_MAX_TURNS
@@ -434,6 +437,8 @@ class AgentLoop:
                     tool_calls=tool_calls if tool_calls else None,
                     # 打上产生该消息的 Agent 身份（Agent 切换检测的数据基础）
                     agent=getattr(self.kernel, "orchestrator_agent_id", None),
+                    # 气泡时间戳：流式期间前端已有本地时间，这里定死落盘值
+                    ts=now_ms(),
                 )
                 messages.append(assistant_message)
                 await self.kernel.events.emit("message:added", {"message": assistant_message.to_dict()})
@@ -569,7 +574,7 @@ class AgentLoop:
         messages[:] = repair_tool_call_pairs(messages)
 
         # 2. 用户消息入链
-        user_message = Message(role="user", content=prompt)
+        user_message = Message(role="user", content=prompt, ts=now_ms())
         messages.append(user_message)
         await self.kernel.events.emit("message:added", {"message": user_message.to_dict()})
 
@@ -842,6 +847,7 @@ class AgentLoop:
                 name=call.name,
                 tool_call_id=call.id,
                 content=content,
+                ts=now_ms(),
             )
             messages.append(tool_result)
             await self.kernel.events.emit("message:added", {"message": tool_result.to_dict()})
@@ -1165,7 +1171,7 @@ class AgentLoop:
                 text = str(self.injected_inputs.popleft()).strip()
                 if not text:
                     continue
-                injected = Message(role="user", content=f"[用户补充指令] {text}")
+                injected = Message(role="user", content=f"[用户补充指令] {text}", ts=now_ms())
                 messages.append(injected)
                 await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
                 logger.info("[AgentLoop] 已注入用户补充指令（%d 字符）", len(text))
@@ -1177,7 +1183,7 @@ class AgentLoop:
                 text = str(self.agent_inbox.popleft()).strip()
                 if not text:
                     continue
-                injected = Message(role="user", content=f"[来自其他 Agent 的消息] {text}")
+                injected = Message(role="user", content=f"[来自其他 Agent 的消息] {text}", ts=now_ms())
                 messages.append(injected)
                 await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
                 logger.info("[AgentLoop] 已注入 agent 间消息（%d 字符）", len(text))
@@ -1199,7 +1205,7 @@ class AgentLoop:
             return False
         notes = manager.drain_notifications()
         for text in notes:
-            injected = Message(role="user", content=text)
+            injected = Message(role="user", content=text, ts=now_ms())
             messages.append(injected)
             await self.kernel.events.emit("message:added", {"message": injected.to_dict()})
             logger.info("[AgentLoop] 已注入子 Agent 完成通知（%d 字符）", len(text))

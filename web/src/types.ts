@@ -47,6 +47,9 @@ export interface Msg {
   queued?: boolean; // 任务运行中提交、待注入的补充指令（仅前端标记）
   /** 产生该消息的 Agent id（后端 AgentLoop 打标；历史消息可能缺失） */
   agent?: string;
+  /** 消息产生时刻（Unix 毫秒，后端落盘；气泡外下方显示到秒）。
+   *  本字段之前落盘的老消息没有该值 → 不显示时间（不伪造当前时间）。 */
+  ts?: number;
 }
 
 // Agent 维护的任务 TODO 清单（todo_write 工具全量覆盖）
@@ -690,7 +693,7 @@ export interface ToolCardInfo {
 
 // 按 SSE / 会话消息原始顺序排列的工作时间线
 export type WorkItem =
-  | { type: "text"; id: string; content: string; agent?: string }
+  | { type: "text"; id: string; content: string; agent?: string; ts?: number }
   | { type: "tool"; id: string; card: ToolCardInfo }
   | { type: "activity"; id: string; tools: ToolCardInfo[] };
 
