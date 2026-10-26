@@ -10577,6 +10577,14 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 .mobile-app .chat-view { min-width: 0; }
 .mobile-app .bubble { max-width: calc(100vw - 76px); }
 .mobile-app .msg-row.assistant .bubble.assistant-bubble { flex: 1 1 0; min-width: 0; max-width: 100%; }
+/* 时间戳容器（.msg-col）承担了原 .bubble 的宽度约束，移动端必须同口径跟进：
+   ① .msg-col 接替 .bubble 的视口相对上限与 flex-basis 0（不参与 content
+      sizing）；② 桌面 .msg-col 的 align-items:flex-start 会让气泡按内容宽度
+      收缩，而移动端助手气泡的既有行为是拉满剩余宽度 → 显式 width:100%。
+   实测 390px 屏回归：助手气泡 450 → 391，助手长文本 450 → 365。 */
+.mobile-app .msg-col { max-width: calc(100vw - 76px); }
+.mobile-app .msg-row.assistant .msg-col { flex: 1 1 0; min-width: 0; max-width: 100%; }
+.mobile-app .msg-row.assistant .msg-col > .bubble { width: 100%; }
 .mobile-app .user-bubble,
 .mobile-app .assistant-bubble { padding: 10px 12px; }
 /* 富块：宽表格 / 看板 / 对比 / 卡片网格一律可横向滚动或单列堆叠 */

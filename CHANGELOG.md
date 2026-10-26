@@ -42,6 +42,16 @@
   Message 时丢失 `ts` 的隐患。新增回归：后端 `tests/test_message_ts.py`
   （落盘往返、脏值丢弃、wire 剥离、真实跑一轮任务的端到端断言）、
   前端 `lib/msgTime.test.ts` + `ChatView`「气泡时间戳」3 例；
+- **移动端回归（同批修复）**：气泡被包进新的 `.msg-col` 后，移动端
+  「助手气泡拉满剩余宽度」的规则失效——它原本针对 `.msg-row` 的**直接**
+  子项。用真实 Chrome（CDP）在 390px 视口实测：助手气泡 450 → 391px、
+  长文本 450 → 365px，被压窄。补三条同口径规则：`.mobile-app .msg-col`
+  接替视口相对上限、`.msg-row.assistant .msg-col` 接替 `flex:1 1 0`、
+  气泡显式 `width:100%`（桌面 `.msg-col` 是 `align-items:flex-start`，
+  气泡按内容收缩）。修复后桌面与移动端测量值均与改动前**逐项一致**
+  （241/450/450，右边界 490）。jsdom 无布局引擎，故按项目既有的
+  「样式契约」方式（同 `Composer.test.tsx` 的 `composer-zoomed`）
+  加 2 例断言 CSS 规则存在性。
 
 ### 新增（多级工具第一期：edit_files 复合工具 + 工具面板分级展示）
 

@@ -4,6 +4,8 @@
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import ChatView, { QuestionBar } from "./ChatView";
 import type { Msg } from "../types";
@@ -79,6 +81,38 @@ describe("气泡时间戳", () => {
     const { container } = render(<ChatView {...baseProps} messages={messages} streaming={null} />);
     // 只有用户那一条有时间戳
     expect(container.querySelectorAll(".msg-time")).toHaveLength(1);
+  });
+});
+
+// jsdom 无布局引擎（测不出宽度），故按项目既有的「样式契约」方式断言 CSS 规则
+// 存在性（同 Composer.test.tsx 的 composer-zoomed 用例）。
+describe("气泡时间戳 · 样式契约", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf-8");
+
+  const ruleOf = (selector: string): string => {
+    const i = css.indexOf(selector + " {");
+    expect(i, `缺少 ${selector} 规则`).toBeGreaterThan(-1);
+    return css.slice(i, css.indexOf("}", i));
+  };
+
+  it("时间戳在气泡外：容器纵向排布，时间不挤压气泡", () => {
+    const col = ruleOf(".msg-col");
+    expect(col).toMatch(/flex-direction:\s*column/);
+    expect(ruleOf(".msg-time")).toMatch(/tabular-nums/);
+  });
+
+  it("移动端：msg-col 接替气泡的宽度约束，助手气泡仍拉满剩余宽度", () => {
+    // 回归：气泡被包进 .msg-col 后，移动端「助手气泡拉满」的规则失效——
+    // 实测 390px 屏助手气泡 450 → 391、长文本 450 → 365（被压窄）。
+    // 三个锚点必须与 .bubble 那套同口径存在。
+    expect(ruleOf(".mobile-app .msg-col")).toMatch(/max-width/);
+    const rowCol = ruleOf(".mobile-app .msg-row.assistant .msg-col");
+    expect(rowCol).toMatch(/flex:\s*1 1 0/);
+    expect(rowCol).toMatch(/min-width:\s*0/);
+    // 桌面 .msg-col 是 align-items:flex-start（气泡按内容收缩），移动端助手
+    // 气泡要拉满 → 必须显式 width:100%
+    expect(ruleOf(".mobile-app .msg-row.assistant .msg-col > .bubble"))
+      .toMatch(/width:\s*100%/);
   });
 });
 
