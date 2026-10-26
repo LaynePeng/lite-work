@@ -1782,9 +1782,12 @@ export default function App() {
           // 已累积内容，否则连续 chunk 会基于旧 state 互相覆盖并缺字。
           const cur = streamingRefs.current.get(sid) ?? getChat(sid).streaming ?? { items: [] };
           const last = cur.items[cur.items.length - 1];
+          // ts 只在新建 text 条目时打一次，后续 chunk 走 { ...last } 继承——
+          // 每个 chunk 都取 Date.now() 会让时间戳随流式不停往后跳。
+          // 这条时间只在流式期显示；任务结束重拉快照会被后端落盘值覆盖。
           const items: WorkItem[] = last?.type === "text"
             ? [...cur.items.slice(0, -1), { ...last, content: last.content + ev.data.chunk }]
-            : [...cur.items, { type: "text" as const, id: `s${Date.now()}-${Math.random()}`, content: ev.data.chunk, agent: currentAgentRef.current }];
+            : [...cur.items, { type: "text" as const, id: `s${Date.now()}-${Math.random()}`, content: ev.data.chunk, agent: currentAgentRef.current, ts: Date.now() }];
           streamingRefs.current.set(sid, { ...cur, items });
           scheduleStreamFlush(sid);
           break;

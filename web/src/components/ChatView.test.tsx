@@ -82,6 +82,47 @@ describe("气泡时间戳", () => {
     // 只有用户那一条有时间戳
     expect(container.querySelectorAll(".msg-time")).toHaveLength(1);
   });
+
+  it("工具轮的中间文本（带 tool_calls 的 assistant）也显示时间", () => {
+    // 回归：此前流式 text 条目不打 ts，中间陈述（后面紧跟工具卡的那句）
+    // 在生成完成后才随快照补上时间——用户看到的是「我的消息和最终回复有时间，
+    // 中间陈述没有」。
+    const messages = [
+      { role: "user", content: "读取配置", ts: today },
+      {
+        role: "assistant", content: "我先看一下文件。", ts: otherDay,
+        tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+      { role: "tool", name: "read_file", tool_call_id: "c1", content: "内容", ts: otherDay },
+      { role: "assistant", content: "读完了。", ts: otherDay },
+    ] as unknown as Msg[];
+    const { container } = render(<ChatView {...baseProps} messages={messages} streaming={null} />);
+    // 中间文本那句必须能查到时间，而不是只有用户/最终回复
+    const times = [...container.querySelectorAll(".msg-time")].map((e) => e.textContent);
+    expect(times).toContain("10-24 23:58:41");
+    // 中间陈述 + 最终回复（用户那条是今天）共 2 条跨天时间
+    expect(times.filter((t) => t === "10-24 23:58:41")).toHaveLength(2);
+  });
+
+  it("流式中的中间文本也显示时间（不等任务结束）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    try {
+      const messages = [{ role: "user", content: "开始", ts: today }] as unknown as Msg[];
+      const { container } = render(
+        <ChatView
+          {...baseProps}
+          messages={messages}
+          streaming={{ items: [{ type: "text" as const, id: "stream", content: "我先看一下", ts: today }] }}
+        />
+      );
+      // 用户 1 条 + 流式中间文本 1 条
+      expect(container.querySelectorAll(".msg-time")).toHaveLength(2);
+      expect([...container.querySelectorAll(".msg-time")].map((e) => e.textContent)).toEqual(["09:05:03", "09:05:03"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // jsdom 无布局引擎（测不出宽度），故按项目既有的「样式契约」方式断言 CSS 规则

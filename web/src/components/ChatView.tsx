@@ -660,7 +660,7 @@ function WorkItems({ items, sessionId, streaming = false, onEmailDraftConfirm }:
                   <Markdown text={item.content} streaming={streaming} />
                   {streaming && item.id === items[items.length - 1]?.id && <span className="cursor"><span /></span>}
                 </div>
-                {/* 流式中的条目尚无落盘 ts：不显示（避免用当前时刻反复刷新） */}
+                {/* 流式期用本地打点（App.tsx llm:stream），任务结束重拉快照被后端 ts 覆盖 */}
                 <MessageTime ts={item.ts} />
               </div>
             </div>
