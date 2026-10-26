@@ -2,11 +2,17 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "../api";
+import {
+  BoardBlock, CardsBlock, ChartBlock, CompareBlock, DiagramBlock,
+  InteractiveBlock, KpiBlock, LayoutBlock, MermaidBlock, ProgressBlock,
+  TableBlock, TimelineBlock, tryParseRichBlock,
+  type RichSegment,
+} from "./RichBlocks";
 import type { ToolMetricsSummary } from "../api";
 import { notificationLabel, notificationTone, type WatchNotification as WatchNotice } from "../hooks/useWatchNotifications";
 import type { WatchSourceInfo } from "../api";
@@ -1430,7 +1436,14 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
     );
   }
 
-  // 非 JSON → Markdown 渲染
+  // 非 JSON → Markdown 渲染（富围栏支持）。
+  //
+  // 此前面板只传 remarkPlugins 渲染 Markdown，插件输出 ```chart / ```board /
+  // ```kpi 等富围栏时会退化成纯文本代码块——聊天区（ChatView）同名内容却
+  // 能渲染成原生组件，两条通道行为不一致。这里给面板接上同一套富块：
+  // 分段（md 段 / 富块段）→ md 段仍走 ReactMarkdown，富块段交给
+  // RichBlocks 的原生组件。面板 5 秒轮询刷新，分段用 useMemo 缓存。
+  const segs = useMemo(() => splitPanelSegments(markdown), [markdown]);
   return (
     <div className="plugin-panel-md" style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.7 }}>
       <div style={{
@@ -1448,11 +1461,77 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
           {pluginPanelBusy ? "…" : "↻ 刷新"}
         </button>
       </div>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {markdown || "加载中…"}
-      </ReactMarkdown>
+      {segs.length === 0
+        ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown || "加载中…"}</ReactMarkdown>
+        : segs.map((seg, i) => (
+          <PanelSegment key={i} seg={seg} />
+        ))}
     </div>
   );
+}
+
+/** 面板内容的段：md 文本段 + 富块段（含 mermaid；html 段面板不启用——
+ *  面板是插件输出的轻量信息位，内联 iframe 预览的交互/安全面都不适合这里）。 */
+type PanelSeg = { kind: "md"; text: string } | { kind: "mermaid"; code: string } | RichSegment;
+
+/** 把面板 Markdown 切成 md 段与富块段（与 ChatView.splitSegments 同规则，但面板不流式）。
+ *  围栏扫描遵循 CommonMark：3+ 反引号开栏，等长关闭栏独占一行；未闭合围栏
+ *  整段留给 Markdown（面板无流式，半截 JSON 不猜测）。 */
+function splitPanelSegments(text: string): PanelSeg[] {
+  const t = text ?? "";
+  const segs: PanelSeg[] = [];
+  let last = 0;
+  const re = /(`{3,})([\w+-]*)[ \t]*\r?\n?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const openTok = m[1];
+    const lang = (m[2] ?? "").toLowerCase();
+    const closeRe = new RegExp(`^[ \t]*\`{${openTok.length},}[ \t]*$`, "m");
+    const rest = t.slice(re.lastIndex);
+    const cm = closeRe.exec(rest);
+    if (!cm) continue;                       // 未闭合：留给 Markdown
+    const closeStart = re.lastIndex + cm.index;
+    const end = closeStart + cm[0].length;
+    const body = t.slice(re.lastIndex, closeStart).trim();
+    let seg: PanelSeg | null = null;
+    if (lang === "mermaid") {
+      if (body) seg = { kind: "mermaid", code: body };
+    } else if (lang !== "email-draft") {
+      // email-draft 是「确认发送」交互组件，不适合 5 秒轮询的面板：留给
+      // Markdown 显示源码，用户到聊天区完成确认。
+      seg = tryParseRichBlock(lang, body);   // RICH_LANGS 之外返回 null → 留给 Markdown
+    }
+    if (seg) {
+      if (m.index > last) segs.push({ kind: "md", text: t.slice(last, m.index) });
+      segs.push(seg);
+      last = end;
+    }
+    re.lastIndex = end;
+  }
+  if (last < t.length) segs.push({ kind: "md", text: t.slice(last) });
+  return segs;
+}
+
+/** 单段渲染：md 段走 ReactMarkdown；富块段交给原生组件。 */
+function PanelSegment({ seg }: { seg: PanelSeg }) {
+  switch (seg.kind) {
+    case "chart": return <ChartBlock spec={seg.spec} />;
+    case "cards": return <CardsBlock spec={seg.spec} />;
+    case "kpi": return <KpiBlock spec={seg.spec} />;
+    case "timeline": return <TimelineBlock spec={seg.spec} />;
+    case "table": return <TableBlock spec={seg.spec} />;
+    case "compare": return <CompareBlock spec={seg.spec} />;
+    case "board": return <BoardBlock spec={seg.spec} />;
+    case "progress": return <ProgressBlock spec={seg.spec} />;
+    case "interactive": return <InteractiveBlock spec={seg.spec} />;
+    case "diagram": return <DiagramBlock spec={seg.spec} />;
+    case "layout": return <LayoutBlock spec={seg.spec} />;
+    case "mermaid": return <MermaidBlock code={seg.code} />;
+    case "md": return <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>;
+    // email-draft 在 splitPanelSegments 已排除，理论上到不了；类型上仍在
+    // RichSegment 联合里，这里兜底显示源码而不是崩。
+    default: return <ReactMarkdown remarkPlugins={[remarkGfm]}>{"```email-draft\n" + JSON.stringify(seg, null, 2) + "\n```"}</ReactMarkdown>;
+  }
 }
 
   // 通用插件 UI 协议：右栏动态 tab —— 插件在 contributes.panels 里声明即出现

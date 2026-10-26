@@ -428,6 +428,86 @@ describe("ToolPanel · Agents 看板（手动取消 + 实时输出详情）", ()
     expect(container.textContent).toContain("已采信");
     vi.restoreAllMocks();
   });
+
+  it("插件面板返回富围栏（kpi/board/progress）时渲染成原生组件而非源码", async () => {
+    // 此前面板的 ReactMarkdown 没传 components，```kpi 等富围栏被当普通代码块
+    // 显示纯 JSON 源码（聊天区却能渲染成组件）——两条通道行为不一致。
+    const plugin = {
+      name: "astock-plugin", path: "plugins/astock-plugin", is_dir: true, tools: [],
+      description: "A股", version: "1.1.0", source: "github", kind: "tool",
+      contributes: { panels: [{ id: "portfolio", title: "持仓" }] },
+      status: { state: "running", reason: "" },
+    } as never;
+    const md = [
+      "**持仓总览**",
+      "",
+      "```kpi",
+      JSON.stringify({ items: [
+        { label: "总资产", value: "15,201.95", delta: "+6.00", trend: "up" },
+        { label: "可用资金", value: "7,749.95", trend: "flat" },
+      ] }),
+      "```",
+      "",
+      "```progress",
+      JSON.stringify({ items: [
+        { label: "仓位", value: 49, note: "上限 35%" },
+        { label: "距止损", value: 100 },
+      ] }),
+      "```",
+    ].join("\n");
+    vi.spyOn(api, "plugins").mockResolvedValue({ plugins: [plugin] } as never);
+    vi.spyOn(api, "pluginPanel").mockResolvedValue({
+      name: "astock-plugin", panel: "portfolio", title: "持仓", markdown: md,
+    } as never);
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="plugin:astock-plugin:portfolio" />
+    );
+    await waitFor(() => expect(api.pluginPanel).toHaveBeenCalled());
+    // md 段照常渲染
+    expect(container.textContent).toContain("持仓总览");
+    // kpi 块：标签与数值出现（渲染成组件，而不是 JSON 源码文本）
+    expect(container.textContent).toContain("总资产");
+    expect(container.textContent).toContain("15,201.95");
+    // progress 块
+    expect(container.textContent).toContain("仓位");
+    expect(container.textContent).toContain("距止损");
+    // 关键：富围栏不该以源码形式整段出现
+    expect(container.textContent).not.toContain('{"items"');
+    vi.restoreAllMocks();
+  });
+
+  it("插件面板富围栏 JSON 非法时降级为 Markdown 代码块（不崩）", async () => {
+    const plugin = {
+      name: "p2", path: "plugins/p2", is_dir: true, tools: [],
+      description: "", version: "1.0.0", source: "local", kind: "tool",
+      contributes: { panels: [{ id: "panel", title: "面板" }] },
+      status: { state: "running", reason: "" },
+    } as never;
+    const md = [
+      "前置文字",
+      "",
+      "```kpi",
+      "{ 这不是合法 JSON",
+      "```",
+      "",
+      "后置文字",
+    ].join("\n");
+    vi.spyOn(api, "plugins").mockResolvedValue({ plugins: [plugin] } as never);
+    vi.spyOn(api, "pluginPanel").mockResolvedValue({
+      name: "p2", panel: "panel", title: "面板", markdown: md,
+    } as never);
+    const { container } = render(
+      <ToolPanel contextStats={null} mcpServers={[]} tools={[]} todos={[]}
+        activeTab="plugin:p2:panel" />
+    );
+    await waitFor(() => expect(api.pluginPanel).toHaveBeenCalled());
+    // 前后 md 段正常渲染，坏 JSON 原样显示（不抛错、不吞内容）
+    expect(container.textContent).toContain("前置文字");
+    expect(container.textContent).toContain("后置文字");
+    expect(container.textContent).toContain("这不是合法 JSON");
+    vi.restoreAllMocks();
+  });
 });
 
 // ---------------------------------------------------------------- 本轮 token 速度
