@@ -142,6 +142,7 @@ def _skill_python() -> str:
 def _run_script(script: str, args: List[str], cwd: Optional[str] = None) -> Tuple[int, str]:
     """跑 ppt-master 脚本，返回 (returncode, 输出)。超时杀整棵进程树。"""
     from .proc_utils import kill_process_tree, posix_spawn_kwargs
+    from .skills import isolate_skill_env
 
     skill = _skill_dir()
     path = os.path.join(skill, "scripts", script)
@@ -150,6 +151,8 @@ def _run_script(script: str, args: List[str], cwd: Optional[str] = None) -> Tupl
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # 钉死包来源：不读 ~/.local/... 的用户级 site-packages（见 isolate_skill_env）
+    isolate_skill_env(env)
     proc = subprocess.Popen(
         [_skill_python(), path] + args,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

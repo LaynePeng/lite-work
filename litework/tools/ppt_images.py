@@ -153,9 +153,11 @@ def _spawn_env(
     否则现造一份（含 requests 补齐 + 代理注入）——保证**直接调用**
     生图/检索函数时也不会绕开代理。
     """
-    if env is not None:
-        return dict(env)
-    return _skill_env(None, proxy_config)
+    from .skills import isolate_skill_env
+
+    out = dict(env) if env is not None else _skill_env(None, proxy_config)
+    # 两条分支都要过：钉死包来源，不读 ~/.local/... 的用户级 site-packages
+    return isolate_skill_env(out)
 
 
 def _run(args: List[str], env: Optional[Dict[str, str]],

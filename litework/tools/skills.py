@@ -207,25 +207,59 @@ def use_builtin_skill_python() -> Optional[Path]:
 
     做两件事（幂等）：
     - `LITEWORK_SKILL_PYTHON` 指向该解释器，SKILL.md 里可用它显式调用；
-    - **打包态**把解释器所在 bin 前置进 PATH —— 技能脚本里的 `python3 ...` 直接
+    - 把该解释器所在 bin **前置进 PATH** —— 技能脚本里的 `python3 ...` 直接
       命中它，从而与用户系统 Python 的版本/已装包无关，离线可用。
 
-    开发态默认不动 PATH（仍走系统 python3，保持 npm run dev 的既有行为）；
-    需要验证打包行为时设 `LITEWORK_SKILL_PYTHON_FORCE=1`。
-    未随包分发（旧包）时返回 None，行为与旧版一致。
+    开发态也前置（关键）：SKILL.md 的 7 个技能都写着裸 `python3 ...`，而开发态
+    的 PATH 首位是系统 python3（`/usr/local/bin` 或 Homebrew/MacPorts），它读
+    `~/.local/...` 与自身 site-packages —— 本机装过的包会被悄悄用上，换台机器
+    就 ModuleNotFoundError。前置 venv 解释器后 dev 与打包态语义一致。
+    解释器不可用（如 release/ 只剩裸壳）时退回 venv 解释器，不再放任裸 python3。
+    老开关 `LITEWORK_SKILL_PYTHON_FORCE=1` 保留（强制前置，供验证打包行为）。
     """
     exe = _builtin_skill_python()
     if exe is None:
         return None
-    os.environ.setdefault("LITEWORK_SKILL_PYTHON", str(exe))
-    force = os.environ.get("LITEWORK_SKILL_PYTHON_FORCE") == "1"
-    if not (getattr(sys, "frozen", False) or force):
-        return exe
-    bindir = str(exe.parent)
+    target = exe
+    if not (getattr(sys, "frozen", False)
+            or os.environ.get("LITEWORK_SKILL_PYTHON_FORCE") == "1"):
+        # 开发态：随包解释器往往是构建缓存里的裸壳（无第三方库），前置它等于
+        # 让 `python3` 变成坏解释器；改用当前 venv 解释器，语义与打包态对齐。
+        target = Path(sys.executable)
+    # 指向**实际可用**的解释器（开发态即 venv python）——SKILL.md 承诺「可用它
+    # 显式调用」，指向裸壳会让照文档写的脚本 import 失败。
+    os.environ.setdefault("LITEWORK_SKILL_PYTHON", str(target))
+    bindir = str(target.parent)
     parts = os.environ.get("PATH", "").split(os.pathsep)
     if bindir not in parts:
         os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
-    return exe
+    return target
+
+
+def isolate_skill_env(env: "Dict[str, str]") -> "Dict[str, str]":
+    """把技能子进程的包来源钉死在「随包/venv 依赖」上，杜绝读用户级 site-packages。
+
+    为什么必须做：Python 默认把**用户级 site-packages**
+    （`~/.local/lib/pythonX.Y/site-packages`）加进 sys.path，随包技能解释器
+    （裸 CPython，`ENABLE_USER_SITE=True`）由它决定 import 结果。后果是典型的
+    **「在我机器上能跑」**：开发机 `pip3 install --user` 装过某个包，技能脚本
+    就悄悄从用户目录拿到它；换一台干净机器（或 CI、或用户机器）同一个脚本
+    直接 `ModuleNotFoundError`——而打包产物里其实有这个包，只是被 user site
+    的同名包顶掉了（实测：打包版 `import latex2mathml` 解析到
+    `~/.local/...`，尽管 `_internal` 里也有）。
+
+    `PYTHONNOUSERSITE=1` 让解释器跳过 user site（作用等价于 `-s` /
+    `-I`），依赖只剩「随包解释器的 site-packages + sitecustomize 注入的
+    `_internal`」两条**确定**来源，本机与他人机器行为一致。
+
+    ⚠️ 只用于**技能脚本**子进程：它会让 `pip install --user` 直接报错
+    （`User site-packages are disabled`）。交互式 shell（execute_command）
+    不能设，否则用户/Agent 的 `pip install --user` 会被打断。
+
+    调用方须在构造子进程 env 后调用；返回值同 env（原位改，便于链式）。
+    """
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
 
 
 # 内置技能安装到用户级目录的标记文件（内容为安装时的产品版本）

@@ -4,6 +4,36 @@
 
 ## [未发布]
 
+### 修复（技能子进程读用户级 site-packages → 「在我机器上能跑」）
+
+- **换台机器就跑不通的隐患**：随包技能解释器是**裸 CPython**，
+  `ENABLE_USER_SITE=True`，于是 `~/.local/lib/pythonX.Y/site-packages`
+  （python-build-standalone 口径的用户目录）会被放进 sys.path。开发机上
+  `pip3 install --user` 装过的包会被技能脚本悄悄读到——本机全绿，同事
+  clone 下来、CI、用户安装包运行时同一个脚本直接 `ModuleNotFoundError`。
+  实测复现：在用户目录放一个假包，打包版解释器 `import` 得到它，加隔离后
+  `ModuleNotFoundError`（`latex2mathml` 就是真实例子——它同时存在于
+  `_internal` 与用户目录，实测解析到**用户目录**那份）。
+- **三条防线**（`tests/test_skill_isolation.py` 逐条守护）：
+  1. 技能子进程带 `PYTHONNOUSERSITE=1`（新增 `isolate_skill_env()`，
+     收口 ppt_edit 的 `_run_script` 与 ppt_images 的 `_spawn_env`
+     两条分支）；依赖只剩「随包解释器 site-packages + sitecustomize 注入的
+     `_internal`」两条确定来源；
+  2. 随包 `sitecustomize.py` 主动把 user site 移出 `sys.path` 并置
+     `ENABLE_USER_SITE=False`（兜住不经上述路径、直接调解释器的脚本；
+     同时保留 `_internal` 注入）；
+  3. `use_builtin_skill_python()` 开发态也把解释器前置进 PATH——SKILL.md
+     里 7 个技能都写裸 `python3 ...`，此前开发态命中的是系统 python3
+     （自身 site-packages + 用户目录）。开发态前置 **venv** 解释器（随包
+     缓存常是裸壳，前置它等于让 `python3` 变坏），`LITEWORK_SKILL_PYTHON`
+     也改指这个**实际可用**的解释器（此前指向裸壳，与「SKILL.md 可用它
+     显式调用」的承诺不符）；打包态与 `LITEWORK_SKILL_PYTHON_FORCE=1`
+     行为不变。
+- **刻意不隔离的地方**：`execute_command` 的交互 shell **不设**
+  `PYTHONNOUSERSITE`——实测设了之后 `pip install --user` 直接报
+  `ERROR: Can not perform a '--user' install.`，会打断用户/Agent 的正常
+  安装。该边界有专门测试锁定。
+
 ### 修复（PPT · 开发态误用「裸 CPython」技能解释器，全部导出失败）
 
 - **16 个 PPT 测试/功能在开发态全挂**（`test_ppt_edit` / `test_ppt_plan` /

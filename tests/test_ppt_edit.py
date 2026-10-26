@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -192,6 +193,57 @@ class TestInterpreter:
         assert mod._skill_python_usable(sys.executable) is True
         assert mod._skill_python_usable(sys.executable) is True
         assert len(calls) == 1, "同一解释器只探测一次"
+
+
+class TestSkillEnvIsolation:
+    """技能子进程不得读用户级 site-packages（否则「在我机器上能跑」）。
+
+    Python 默认把 ~/.local/lib/pythonX.Y/site-packages 放进 sys.path，随包技能
+    解释器是裸 CPython（ENABLE_USER_SITE=True）→ 开发机 `pip3 install --user`
+    装过的包会悄悄被技能脚本读到，换台干净机器同一个脚本直接 ModuleNotFoundError。
+    """
+
+    def test_helper_sets_pythonnousersite(self):
+        from litework.tools.skills import isolate_skill_env
+
+        env = {"PATH": "/usr/bin"}
+        out = isolate_skill_env(env)
+        assert out["PYTHONNOUSERSITE"] == "1"
+        assert out is env, "原位改（便于链式调用）"
+        assert env["PATH"] == "/usr/bin", "不得动其它环境变量"
+
+    def test_run_script_env_is_isolated(self, monkeypatch):
+        """_run_script 传给子进程的 env 必须带 PYTHONNOUSERSITE。"""
+        from litework.tools import ppt_edit as mod
+
+        captured = {}
+
+        class FakeProc:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return (b"ok", None)
+
+        def fake_popen(cmd, **kw):
+            captured["env"] = kw.get("env")
+            captured["cmd"] = cmd
+            return FakeProc()
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(mod, "_skill_dir", lambda: str(Path(__file__).parent))
+        monkeypatch.setattr(mod.os.path, "isfile", lambda _p: True)
+        mod._run_script("svg_to_pptx.py", [])
+
+        assert captured["env"]["PYTHONNOUSERSITE"] == "1"
+
+    def test_ppt_images_spawn_env_is_isolated(self):
+        """配图链路（ppt_images）同样必须带 PYTHONNOUSERSITE，两条分支都要。"""
+        from litework.tools import ppt_images as img
+
+        # 分支一：调用方给了 env
+        assert img._spawn_env({"PATH": "/x"}, None)["PYTHONNOUSERSITE"] == "1"
+        # 分支二：现造 env（_skill_env 路径）
+        assert img._spawn_env(None, None)["PYTHONNOUSERSITE"] == "1"
 
 
 class TestElementKinds:
