@@ -352,6 +352,14 @@ class WatchSourceRegistry:
                 if spec is None or spec.loader is None:
                     continue
                 mod = importlib.util.module_from_spec(spec)
+                # 多文件插件（如 astock-plugin：plugin.py + astock_*.py 兄弟模块）
+                # 的裸 import 依赖插件目录在 sys.path——工具插件加载器
+                # （tools/plugin_loader._load_module）就是这么做的；盯梢源加载
+                # 此前漏了这步，多文件插件的 WatchSource 一直注册失败
+                # （ModuleNotFoundError，工具能加载但盯梢源静默丢失）。
+                _src_dir = os.path.dirname(os.path.abspath(module_file))
+                if _src_dir not in sys.path:
+                    sys.path.insert(0, _src_dir)
                 sys.modules[mod_name] = mod
                 spec.loader.exec_module(mod)
             except Exception:  # noqa: BLE001 - 单个插件失败不影响其他
