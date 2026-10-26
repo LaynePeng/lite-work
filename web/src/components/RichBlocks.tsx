@@ -48,9 +48,15 @@ function useCompact(): boolean {
  *  放大副本统一加前缀，两边互不干扰。 */
 function prefixSvgIds(html: string, prefix: string): string {
   try {
-    const doc = new DOMParser().parseFromString(html, "image/svg+xml");
-    const svg = doc.documentElement;
-    if (!svg || svg.nodeName === "parsererror") return html;
+    // 用 text/html（宽松）而不是 image/svg+xml（XML 严格）解析：
+    // mermaid 的输出常含 HTML 实体（&nbsp; 等）与 <br>，XML 严格模式会
+    // parsererror → 静默退回原样 → 灯箱里与气泡**未加前缀的同名 id**
+    // （<style>#mmd-xxx …> / <marker id>）冲突，表现为「气泡正常、
+    // 双击最大化后图挂掉」。text/html 下 querySelector/序列化同样可用，
+    // 且 HTML 解析器对实体/标签宽松，不会因这些内容失败。
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const svg = doc.body.firstElementChild;
+    if (!svg || svg.nodeName.toLowerCase() !== "svg") return html;
     const map = new Map<string, string>();
     svg.querySelectorAll("[id]").forEach((el) => {
       const old = el.getAttribute("id")!;

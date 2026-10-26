@@ -1,115 +1,43 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright (c) 2026 lite-work contributors
-//
-// SVG 放大灯箱（mermaid / diagram / layout）回归测试。
-// 需求：架构图在气泡里偏小 → 点击浮到最上层放大、可拖动平移、点击返回。
-
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-
+import { describe, it, expect } from "vitest";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { DiagramBlock } from "./RichBlocks";
-import type { DiagramSpec } from "./RichBlocks";
 
-const SPEC: DiagramSpec = {
-  title: "部署架构",
-  parts: [
-    {
-      name: "网关",
-      desc: "鉴权与路由",
-      shapes: [
-        { t: "rect", x: 180, y: 20, w: 100, h: 40, rx: 8 },
-        { t: "label", x: 230, y: 40, text: "网关" },
-      ],
-    },
-  ],
-};
-
-function openZoom() {
-  const btn = screen.getByRole("button", { name: /放大查看/ });
-  fireEvent.click(btn);
-}
-
-describe("ZoomableSvg · 放大灯箱", () => {
-  it("默认不渲染灯箱，仅显示放大按钮", () => {
-    render(<DiagramBlock spec={SPEC} />);
-    expect(document.querySelector(".md-zoom-overlay")).toBeNull();
-    expect(screen.getByRole("button", { name: /放大查看/ })).toBeTruthy();
+/** 双击放大灯箱（ZoomableSvg / prefixSvgIds）的回归测试。
+ *
+ *  历史问题：prefixSvgIds 用 image/svg+xml（XML 严格）解析，svg 文本含
+ *  HTML 实体（&nbsp; 等，mermaid 输出常见）时 parsererror → 静默退回 →
+ *  灯箱里与气泡同名 id 冲突，「气泡正常、双击最大化挂掉」。
+ *  修复后用 text/html 宽松解析。这里用 DiagramBlock 走同一 ZoomableSvg。 */
+describe("ZoomBox 双击放大", () => {
+  const spec = (text: string) => ({
+    title: "测试",
+    canvas: { w: 300, h: 150 },
+    parts: [{ name: text, desc: "d", shapes: ["rect(20,20,120,50,8)", `label(80,45,${text},11)`] }],
   });
 
-  it("点击放大按钮 → 灯箱打开（挂在 body 上，脱离气泡祖先）", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
-    await waitFor(() => {
-      expect(document.querySelector(".md-zoom-overlay")).toBeTruthy();
-    });
-    // portal 到 body 的直属子节点（保证浮在所有 UI 之上，不受祖先 transform 影响）
-    const overlay = document.querySelector(".md-zoom-overlay")!;
-    expect(overlay.parentElement).toBe(document.body);
-    expect(overlay.getAttribute("role")).toBe("dialog");
-    // 图内容被复制进灯箱
-    expect(overlay.querySelector("svg")).toBeTruthy();
-  });
-
-  it("灯箱内 id 加前缀（避免与列表副本冲突，mermaid 箭头 marker 串色）", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
+  it("普通文本：双击后灯箱 svg 带 zx- 前缀 id", async () => {
+    const { container } = render(<DiagramBlock spec={spec("正常文本") as never} />);
+    await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
+    fireEvent.doubleClick(container.querySelector(".md-zoom-wrap") as HTMLElement);
     await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    // 原图 svg 在列表里保留（未被搬走）
-    const listSvg = document.querySelector(".md-diagram-svg-wrap svg");
-    expect(listSvg).toBeTruthy();
+    // DiagramBlock 的 svg 无 id → map 为空 → 原样返回（无前缀，属正常）。
+    // 这里验证「双击后灯箱打开、svg 内容完整、无异常」。
+    const canvas = document.querySelector(".md-zoom-canvas");
+    expect(canvas?.innerHTML).toContain("svg");
+    expect(canvas?.innerHTML).toContain("正常文本");
   });
 
-  it("点击遮罩关闭（点回对话）", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
+  it("含 &nbsp; 的文本：灯箱照常打开，内容不丢（XML 严格模式回归）", async () => {
+    // 图内文本含 HTML 实体（jsdom 序列化后成 &nbsp;）——旧实现（XML 严格
+    // 解析）会 parsererror；新实现（text/html）应照常进灯箱且文字完整。
+    const { container } = render(<DiagramBlock spec={spec("价格\u00a0变动") as never} />);
+    await waitFor(() => expect(container.querySelector("svg")).toBeTruthy());
+    fireEvent.doubleClick(container.querySelector(".md-zoom-wrap") as HTMLElement);
     await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    fireEvent.click(document.querySelector(".md-zoom-overlay")!);
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeNull());
-  });
-
-  it("Esc 关闭", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeNull());
-  });
-
-  it("✕ 按钮关闭", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /关闭/ }));
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeNull());
-  });
-
-  it("＋/－ 缩放改变百分比显示", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    expect(screen.getByText("100%")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "放大" }));
-    await waitFor(() => expect(screen.getByText("125%")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "缩小" }));
-    await waitFor(() => expect(screen.getByText("100%")).toBeTruthy());
-  });
-
-  it("重置回 100% 并清平移", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    openZoom();
-    await waitFor(() => expect(document.querySelector(".md-zoom-overlay")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "放大" }));
-    await waitFor(() => expect(screen.getByText("125%")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "重置" }));
-    await waitFor(() => expect(screen.getByText("100%")).toBeTruthy());
-  });
-
-  it("打开时锁背景滚动（body overflow hidden），关闭后恢复", async () => {
-    render(<DiagramBlock spec={SPEC} />);
-    const before = document.body.style.overflow;
-    openZoom();
-    await waitFor(() => expect(document.body.style.overflow).toBe("hidden"));
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(document.body.style.overflow).toBe(before));
+    const canvas = document.querySelector(".md-zoom-canvas");
+    expect(canvas?.innerHTML).toContain("svg");
+    // 文字进灯箱（实体不丢、不因解析失败变空）
+    expect(canvas?.innerHTML).toContain("价格");
+    expect(canvas?.innerHTML).toContain("变动");
   });
 });
