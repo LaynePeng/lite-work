@@ -1301,12 +1301,53 @@ export default function ToolPanel({
 
 /** 渲染插件面板内容：JSON（lite-tree 通用决策树）→ 决策树；非 JSON → Markdown。
  *
- *  **memo 化（防闪烁）**：面板每 5s 轮询，每次 `setPluginPanelBusy(true→false)`
- *  都会触发重渲染。此前未 memo，busy 一变整棵面板树跟着重渲染——
- *  ReactMarkdown 全量重新解析、富块 spec 重建，KPI 卡/进度条每 5s 闪一下。
- *  memo 后：markdown 引用不变（内容未变）→ 完全跳过重渲染；内容真变了
- *  （行情数字变动）才刷新，局部 DOM 更新，不再整树重建。 */
-const PluginPanelContent = memo(function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
+ *  **防闪烁结构（三层，缺一不可）**：
+ *  1. Markdown 主体只收 markdown（不含 busy）——busy 每 5s 轮询必变
+ *     true→false，留在 props 里会击穿 memo（第一版修复漏了这层，仍闪）；
+ *  2. loadPluginPanel 内容相同不 setState → markdown 引用稳定；
+ *  3. LiteTreePanel 同样 memo：JSON 字符串内容相同 → 引用稳定 → 跳过。
+ *  busy 的消费者（刷新按钮 "…" 态）留在轻量 Frame 层，重渲染只波及按钮。 */
+function PluginPanelFrame({ markdown, pluginPanelBusy, onRefresh }: {
+  markdown: string;
+  pluginPanelBusy: boolean;
+  onRefresh: () => void;
+}) {
+  // lite-tree JSON 由专用组件渲染（自带头部状态行与内嵌刷新按钮）
+  const isLiteTree = useMemo(() => {
+    try {
+      const parsed = JSON.parse(markdown);
+      return !!(parsed && parsed.type === "lite-tree");
+    } catch { return false; }
+  }, [markdown]);
+  if (isLiteTree) {
+    return <LiteTreePanel markdown={markdown} pluginPanelBusy={pluginPanelBusy} onRefresh={onRefresh} />;
+  }
+  return (
+    <div className="plugin-panel-md" style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.7 }}>
+      <div style={{
+        display: "flex", justifyContent: "flex-end",
+        borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10,
+      }}>
+        <button
+          disabled={pluginPanelBusy}
+          onClick={onRefresh}
+          style={{
+            appearance: "none", border: "none", background: "transparent",
+            color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
+            fontSize: 11.5, cursor: "pointer", padding: "2px 6px",
+          }}>
+          {pluginPanelBusy ? "…" : "↻ 刷新"}
+        </button>
+      </div>
+      <PluginPanelBody markdown={markdown} />
+    </div>
+  );
+}
+
+/** lite-tree 分支：自带头部与刷新按钮（busy 语义与 markdown 分支不同，
+ *  刷新按钮在头部行内）。内容为 JSON 字符串，每 5s 轮询内容相同则引用
+ *  稳定 + memo → 不闪。 */
+const LiteTreePanel = memo(function LiteTreePanel({ markdown, pluginPanelBusy, onRefresh }: {
   markdown: string;
   pluginPanelBusy: boolean;
   onRefresh: () => void;
@@ -1326,147 +1367,130 @@ const PluginPanelContent = memo(function PluginPanelContent({ markdown, pluginPa
     const parsed = JSON.parse(markdown);
     if (parsed && parsed.type === "lite-tree") treeData = parsed;
   } catch { /* 非 JSON，走 Markdown */ }
+  if (!treeData) return null;
 
-  if (treeData) {
-    const s = treeData.status;
-    const trees = treeData.trees;                 // 后端已保证「最新在前」
-    const toneColor = (tone?: string) =>
-      tone === "ok" ? "var(--green)" : tone === "warn" ? "var(--yellow)"
-        : tone === "danger" ? "var(--red)" : tone === "info" ? "var(--accent)"
-          : tone === "alt" ? "var(--accent-2)" : "var(--text-2)";
-    // 选项语义色（决策树 schema 的 tone 字段）
-    const probTone = (tone?: string) =>
-      tone === "danger" ? "var(--red)" : tone === "ok" ? "var(--green)"
-        : tone === "warn" ? "var(--yellow)" : tone === "alt" ? "var(--accent-2)"
-          : "var(--text-2)";
+  const s = treeData.status;
+  const trees = treeData.trees;                 // 后端已保证「最新在前」
+  const toneColor = (tone?: string) =>
+    tone === "ok" ? "var(--green)" : tone === "warn" ? "var(--yellow)"
+      : tone === "danger" ? "var(--red)" : tone === "info" ? "var(--accent)"
+        : tone === "alt" ? "var(--accent-2)" : "var(--text-2)";
+  // 选项语义色（决策树 schema 的 tone 字段）
+  const probTone = (tone?: string) =>
+    tone === "danger" ? "var(--red)" : tone === "ok" ? "var(--green)"
+      : tone === "warn" ? "var(--yellow)" : tone === "alt" ? "var(--accent-2)"
+        : "var(--text-2)";
 
-    // 内容更新时滚动固定到顶（最新在前，新内容也始终在最上可见）
-    const listRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-      // jsdom 没有 scrollTo：可选调用，真实环境里把滚动固定到顶（新内容在最上）
-      try { listRef.current?.scrollTo?.({ top: 0 }); } catch { /* 测试环境忽略 */ }
-    }, [treeData]);
+  // 内容更新时滚动固定到顶（最新在前，新内容也始终在最上可见）
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // jsdom 没有 scrollTo：可选调用，真实环境里把滚动固定到顶（新内容在最上）
+    try { listRef.current?.scrollTo?.({ top: 0 }); } catch { /* 测试环境忽略 */ }
+  }, [treeData]);
 
-    return (
-      <div style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.55, height: "100%", display: "flex", flexDirection: "column" }}>
-        {/* 头部：状态 + 计数 + 刷新（同一行，刷新为小图标） */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-          <span style={{ color: toneColor(s.tone), fontWeight: 700, fontSize: 12.5 }}>{s.text}</span>
-          <span style={{ color: "var(--text-2)", fontSize: 11.5 }}>{(s.meta ?? []).join(" · ")}</span>
-          <span style={{ color: "var(--text-2)", fontSize: 11 }}>· {treeData.total} 条</span>
-          <button
-            disabled={pluginPanelBusy}
-            onClick={onRefresh}
-            title="刷新"
-            style={{
-              marginLeft: "auto", appearance: "none", border: "1px solid var(--border)",
-              background: "var(--bg-1)", color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
-              fontSize: 13, lineHeight: 1, cursor: "pointer", padding: "3px 7px", borderRadius: 6,
-              flexShrink: 0,
-            }}>
-            {pluginPanelBusy ? "…" : "⟳"}
-          </button>
-        </div>
-
-        {/* 判定时间线：最新在最上，每条是一张紧凑卡片 */}
-        <div ref={listRef} style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: 2 }}>
-          {trees.length === 0 ? (
-            <div style={{ color: "var(--text-2)", fontSize: 12.5, padding: "26px 0", textAlign: "center" }}>
-              暂无判断记录。发起对话后，每次判断会实时显示在这里。
-            </div>
-          ) : (
-            trees.map((tree, ti) => (
-              <div key={ti} style={{
-                border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-0)",
-                padding: "12px 13px", marginBottom: 14,
-              }}>
-                {tree.title && <div style={{ fontSize: 11, color: "var(--text-2)", letterSpacing: .4, marginBottom: 8 }}>{tree.title}</div>}
-                {tree.context && <div style={{ fontSize: 11.5, color: "var(--text-1)", wordBreak: "break-word", marginBottom: 2 }}>{tree.context}</div>}
-                {tree.question && (
-                  <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.6, marginBottom: 10 }}>{tree.question}</div>
-                )}
-
-                {/* 选项分支：每行=标签+比例条+%，选中=线加粗着色+行深色+✓ */}
-                <div style={{ marginLeft: 8, position: "relative" }}>
-                  {(tree.options ?? []).map((o, oi) => {
-                    const tc = probTone(o.tone);
-                    return (
-                      <div key={oi} style={{ position: "relative" }}>
-                        <i style={{
-                          position: "absolute", left: -12, top: 0, bottom: 0, width: 12,
-                          borderLeft: `${o.chosen ? 4 : 2}px solid ${o.chosen ? tc : "var(--border)"}`,
-                          borderBottom: `${o.chosen ? 4 : 2}px solid ${o.chosen ? tc : "var(--border)"}`,
-                          borderBottomLeftRadius: 8,
-                        }} />
-                        <div style={{
-                          display: "flex", alignItems: "center", gap: 9,
-                          padding: "6px 9px", borderRadius: 8, marginBottom: 5,
-                          background: o.chosen ? "var(--bg-2)" : "var(--bg-1)",
-                          border: `${o.chosen ? 1.5 : 1}px solid ${o.chosen ? tc : "var(--border)"}`,
-                        }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{o.label}</span>
-                          <span style={{ flex: 1, height: 7, borderRadius: 4, background: "var(--bg-2)", overflow: "hidden" }}>
-                            <i style={{ display: "block", height: "100%", width: `${Math.min(100, o.prob * 100)}%`, background: tc }} />
-                          </span>
-                          <span className="mono" style={{ fontSize: 12, fontWeight: 700, minWidth: 40, textAlign: "right", color: o.chosen ? tc : "var(--text-2)" }}>
-                            {Math.round(o.prob * 100)}%
-                          </span>
-                          <span style={{ fontSize: 12, color: tc }}>{o.chosen ? "✓" : ""}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* 置信 / 阈值 / 采信 */}
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 9,
-                  borderTop: "1px dashed var(--border)", fontSize: 11.5, color: "var(--text-2)",
-                }}>
-                  置信 <span className="mono" style={{ fontWeight: 700, color: "var(--text-1)" }}>{tree.confidence?.toFixed(2)}</span>
-                  {tree.threshold != null && <span>· 阈值 {tree.threshold.toFixed(2)}</span>}
-                  <span style={{ marginLeft: "auto", fontWeight: 600, color: tree.accepted ? "var(--green)" : "var(--yellow)" }}>
-                    {tree.accepted ? "已采信" : "未采信"}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* 底部说明 */}
-        <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--border)", fontSize: 10.5, color: "var(--text-2)" }}>
-          仅存本进程内存，重启清空 · 5 秒自动刷新
-        </div>
-      </div>
-    );
-  }
-
-  // 非 JSON → Markdown 渲染（富围栏支持）。
-  //
-  // 此前面板只传 remarkPlugins 渲染 Markdown，插件输出 ```chart / ```board /
-  // ```kpi 等富围栏时会退化成纯文本代码块——聊天区（ChatView）同名内容却
-  // 能渲染成原生组件，两条通道行为不一致。这里给面板接上同一套富块：
-  // 分段（md 段 / 富块段）→ md 段仍走 ReactMarkdown，富块段交给
-  // RichBlocks 的原生组件。面板 5 秒轮询刷新，分段用 useMemo 缓存。
-  const segs = useMemo(() => splitPanelSegments(markdown), [markdown]);
   return (
-    <div className="plugin-panel-md" style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.7 }}>
-      <div style={{
-        display: "flex", justifyContent: "flex-end",
-        borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10,
-      }}>
+    <div style={{ padding: "12px 14px", fontSize: 13, lineHeight: 1.55, height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* 头部：状态 + 计数 + 刷新（同一行，刷新为小图标） */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <span style={{ color: toneColor(s.tone), fontWeight: 700, fontSize: 12.5 }}>{s.text}</span>
+        <span style={{ color: "var(--text-2)", fontSize: 11.5 }}>{(s.meta ?? []).join(" · ")}</span>
+        <span style={{ color: "var(--text-2)", fontSize: 11 }}>· {treeData.total} 条</span>
         <button
           disabled={pluginPanelBusy}
           onClick={onRefresh}
+          title="刷新"
           style={{
-            appearance: "none", border: "none", background: "transparent",
-            color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
-            fontSize: 11.5, cursor: "pointer", padding: "2px 6px",
+            marginLeft: "auto", appearance: "none", border: "1px solid var(--border)",
+            background: "var(--bg-1)", color: pluginPanelBusy ? "var(--text-2)" : "var(--text-1)",
+            fontSize: 13, lineHeight: 1, cursor: "pointer", padding: "3px 7px", borderRadius: 6,
+            flexShrink: 0,
           }}>
-          {pluginPanelBusy ? "…" : "↻ 刷新"}
+          {pluginPanelBusy ? "…" : "⟳"}
         </button>
       </div>
+
+      {/* 判定时间线：最新在最上，每条是一张紧凑卡片 */}
+      <div ref={listRef} style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: 2 }}>
+        {trees.length === 0 ? (
+          <div style={{ color: "var(--text-2)", fontSize: 12.5, padding: "26px 0", textAlign: "center" }}>
+            暂无判断记录。发起对话后，每次判断会实时显示在这里。
+          </div>
+        ) : (
+          trees.map((tree, ti) => (
+            <div key={ti} style={{
+              border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-0)",
+              padding: "12px 13px", marginBottom: 14,
+            }}>
+              {tree.title && <div style={{ fontSize: 11, color: "var(--text-2)", letterSpacing: .4, marginBottom: 8 }}>{tree.title}</div>}
+              {tree.context && <div style={{ fontSize: 11.5, color: "var(--text-1)", wordBreak: "break-word", marginBottom: 2 }}>{tree.context}</div>}
+              {tree.question && (
+                <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.6, marginBottom: 10 }}>{tree.question}</div>
+              )}
+
+              {/* 选项分支：每行=标签+比例条+%，选中=线加粗着色+行深色+✓ */}
+              <div style={{ marginLeft: 8, position: "relative" }}>
+                {(tree.options ?? []).map((o, oi) => {
+                  const tc = probTone(o.tone);
+                  return (
+                    <div key={oi} style={{ position: "relative" }}>
+                      <i style={{
+                        position: "absolute", left: -12, top: 0, bottom: 0, width: 12,
+                        borderLeft: `${o.chosen ? 4 : 2}px solid ${o.chosen ? tc : "var(--border)"}`,
+                        borderBottom: `${o.chosen ? 4 : 2}px solid ${o.chosen ? tc : "var(--border)"}`,
+                        borderBottomLeftRadius: 8,
+                      }} />
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 9,
+                        padding: "6px 9px", borderRadius: 8, marginBottom: 5,
+                        background: o.chosen ? "var(--bg-2)" : "var(--bg-1)",
+                        border: `${o.chosen ? 1.5 : 1}px solid ${o.chosen ? tc : "var(--border)"}`,
+                      }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{o.label}</span>
+                        <span style={{ flex: 1, height: 7, borderRadius: 4, background: "var(--bg-2)", overflow: "hidden" }}>
+                          <i style={{ display: "block", height: "100%", width: `${Math.min(100, o.prob * 100)}%`, background: tc }} />
+                        </span>
+                        <span className="mono" style={{ fontSize: 12, fontWeight: 700, minWidth: 40, textAlign: "right", color: o.chosen ? tc : "var(--text-2)" }}>
+                          {Math.round(o.prob * 100)}%
+                        </span>
+                        <span style={{ fontSize: 12, color: tc }}>{o.chosen ? "✓" : ""}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 置信 / 阈值 / 采信 */}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 9,
+                borderTop: "1px dashed var(--border)", fontSize: 11.5, color: "var(--text-2)",
+              }}>
+                置信 <span className="mono" style={{ fontWeight: 700, color: "var(--text-1)" }}>{tree.confidence?.toFixed(2)}</span>
+                {tree.threshold != null && <span>· 阈值 {tree.threshold.toFixed(2)}</span>}
+                <span style={{ marginLeft: "auto", fontWeight: 600, color: tree.accepted ? "var(--green)" : "var(--yellow)" }}>
+                  {tree.accepted ? "已采信" : "未采信"}
+                </span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 底部说明 */}
+      <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--border)", fontSize: 10.5, color: "var(--text-2)" }}>
+        仅存本进程内存，重启清空 · 5 秒自动刷新
+      </div>
+    </div>
+  );
+});
+
+/** 面板 Markdown 主体：**只依赖 markdown**（不含 busy/onRefresh——它们每 5s
+ *  轮询必变，留在 props 会击穿 memo，这是第一版防闪修复漏掉的一环）。
+ *  markdown 引用稳定（内容相同不 setState）+ memo → 渲染完全跳过，零闪烁；
+ *  内容真变化（行情数字变动）时局部 DOM 更新。 */
+const PluginPanelBody = memo(function PluginPanelBody({ markdown }: { markdown: string }) {
+  const segs = useMemo(() => splitPanelSegments(markdown), [markdown]);
+  return (
+    <div>
       {segs.length === 0
         ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown || "加载中…"}</ReactMarkdown>
         : segs.map((seg, i) => (
@@ -1663,7 +1687,7 @@ const PanelSegment = memo(function PanelSegment({ seg }: { seg: PanelSeg }) {
                       />
                   : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
                     ? (
-                      <PluginPanelContent
+                      <PluginPanelFrame
                         markdown={pluginPanelMd[panelTab] ?? ""}
                         pluginPanelBusy={pluginPanelBusy}
                         onRefresh={() => {
