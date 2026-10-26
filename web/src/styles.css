@@ -9802,13 +9802,20 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   }
 }
 
-.md-rich,
-.md-chart {
+/* 入场动画：仅限聊天区（.md 容器内）。**插件面板里禁用**——面板每 5s
+ * 轮询，React 重挂载富块时 animation 会重放（卡片先消失再滑入，
+ * `backwards` 填充让 opacity 从 0 开始），表现为「卡片带动作地重新
+ * 出现」的持续闪烁。聊天区消息是 immutable 的（渲染一次不再动），
+ * 入场动画只播一次，无此问题。 */
+.md > .md-rich,
+.md > .md-chart {
   animation: rb-enter 0.4s ease-out backwards;
 }
 
-/* 子项交错（60ms 步进；第 6 项起统一收口，长列表不做逐条延迟） */
-:is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > * {
+/* 子项交错（60ms 步进；第 6 项起统一收口，长列表不做逐条延迟）
+ * 同样限定在聊天区 .md 容器内，面板（.plugin-panel-md）不播。 */
+.md > .md-rich :is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *,
+.md > :is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > * {
   animation: rb-enter 0.36s ease-out backwards;
 }
 :is(.md-kpi-grid, .md-cards-grid, .md-board, .md-progress-list, .md-tl, .md-cmp) > *:nth-child(1) { animation-delay: 0s; }
