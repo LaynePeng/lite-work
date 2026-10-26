@@ -49,6 +49,9 @@ _PX_PER_PT = 4.0 / 3.0
 
 _SCRIPT_TIMEOUT = 600.0
 
+# 技能解释器可用性探测缓存（路径 → 能否 import pptx/PIL，见 _skill_python_usable）
+_SKILL_PYTHON_USABLE: Dict[str, bool] = {}
+
 
 class PptEditError(RuntimeError):
     """工具层可读错误：直接作为结果文本返回给 Agent。"""
@@ -80,24 +83,59 @@ def _skill_dir() -> str:
     )
 
 
+def _skill_python_usable(exe: str) -> bool:
+    """该解释器能否导入 ppt-master 脚本的核心第三方依赖（python-pptx / Pillow）。
+
+    为什么要探测：`_builtin_skill_python()` 找的是**构建期缓存目录**
+    （开发态 `release/skill-python/`），它只在打过包之后才内容完整——那些第三方
+    库是靠 `release/backend/.../_internal` 的 sitecustomize 注入的，而
+    `release/` 随时可能被清理或只留了裸 CPython。此时解释器存在但 import 全挂，
+    表现为 `[PPT Error]: 导出失败 ... ModuleNotFoundError: No module named 'pptx'`
+    ——用户看到的是「导出失败」而不是「解释器不可用」，很难查。
+
+    探测失败只降级（回退当前解释器 / 报明确错误），不猜、不静默用错解释器。
+
+    结果按解释器路径缓存：探测是一次子进程启动（实测 ~110ms），而一次导出会
+    多次调用 `_run_script`，不缓存会白加几百毫秒。缓存是进程级——重新打包后
+    重启应用即可，符合「打完包要重启」的既有预期。
+    """
+    cached = _SKILL_PYTHON_USABLE.get(exe)
+    if cached is not None:
+        return cached
+    probe = "import pptx, PIL"  # noqa: F401 —— ppt-master 导出链路的硬依赖
+    try:
+        proc = subprocess.run(
+            [exe, "-c", probe],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+        )
+        ok = proc.returncode == 0
+    except Exception:
+        ok = False
+    _SKILL_PYTHON_USABLE[exe] = ok
+    return ok
+
+
 def _skill_python() -> str:
     """选择跑技能脚本的解释器。
 
     打包态**绝不能**用 sys.executable：frozen 后它指向 lite-work 后端主程序，
     拼上脚本路径等于把 .py 当成子命令传给它，直接报
     `invalid choice: '.../pptx_to_svg.py'`。优先用随包分发的技能解释器
-    （skills.py 的既有约定），开发态再退回当前解释器。
+    （skills.py 的既有约定），但它必须**真的可用**（能导入 pptx/PIL）；
+    不可用时开发态回退当前解释器，打包态报明确错误。
     """
     from .skills import _builtin_skill_python
 
     exe = _builtin_skill_python()
-    if exe is not None:
+    if exe is not None and _skill_python_usable(str(exe)):
         return str(exe)
     if getattr(sys, "frozen", False):
         raise PptEditError(
-            "安装包缺少内置技能解释器（skill-python），无法运行 PPT 转换脚本。"
+            "安装包缺少可用的内置技能解释器（skill-python），无法运行 PPT 转换脚本。"
             "请重新安装完整版本的 lite-work。"
         )
+    # 开发态：随包解释器缺失或依赖不全（如 release/ 只留了裸 CPython），
+    # 回退当前解释器（.venv 里 pptx/Pillow 齐备）。
     return sys.executable
 
 

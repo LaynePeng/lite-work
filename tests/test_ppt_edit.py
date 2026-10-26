@@ -129,6 +129,70 @@ class TestInterpreter:
         with pytest.raises(mod.PptEditError):
             mod._skill_python()
 
+    def test_unusable_skill_python_falls_back_in_dev(self, monkeypatch):
+        """解释器存在但导不进 pptx/PIL（release/ 只留了裸 CPython）→ 开发态回退。
+
+        回归：构建期缓存 `release/skill-python/` 里的裸 CPython 没有第三方库
+        （那些库靠 `_internal` 的 sitecustomize 注入，而缓存目录常在清理后
+        只剩壳）。旧实现只看「文件在不在」，直接用它 → 所有 PPT 导出
+        `ModuleNotFoundError: No module named 'pptx'`。
+        """
+        from litework.tools import ppt_edit as mod
+        import litework.tools.skills as skills_mod
+
+        monkeypatch.setattr(skills_mod, "_builtin_skill_python",
+                            lambda: "/tmp/skill-python/python/bin/python3")
+        monkeypatch.setattr(mod, "_skill_python_usable", lambda _exe: False)
+        assert mod._skill_python() == sys.executable
+
+    def test_unusable_skill_python_raises_when_frozen(self, monkeypatch):
+        """打包态同样不可用 → 明确报错（不能回退到 frozen 后端主程序）。"""
+        from litework.tools import ppt_edit as mod
+        import litework.tools.skills as skills_mod
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(skills_mod, "_builtin_skill_python",
+                            lambda: "/opt/app/_internal/skill-python/bin/python3")
+        monkeypatch.setattr(mod, "_skill_python_usable", lambda _exe: False)
+        with pytest.raises(mod.PptEditError):
+            mod._skill_python()
+
+    def test_usable_skill_python_wins(self, monkeypatch):
+        """随包解释器可用时优先用它（打包态离线自足的关键）。"""
+        from litework.tools import ppt_edit as mod
+        import litework.tools.skills as skills_mod
+
+        monkeypatch.setattr(skills_mod, "_builtin_skill_python",
+                            lambda: "/opt/app/_internal/skill-python/bin/python3")
+        monkeypatch.setattr(mod, "_skill_python_usable", lambda _exe: True)
+        assert mod._skill_python().endswith("skill-python/bin/python3")
+
+    def test_usable_probe_rejects_broken_interpreter(self):
+        """探测用的解释器确实能跑 import（用真实可用/不可用命令各验一次）。"""
+        from litework.tools import ppt_edit as mod
+
+        assert mod._skill_python_usable(sys.executable) is True
+        assert mod._skill_python_usable("/nonexistent/python3") is False
+
+    def test_usable_probe_is_cached(self, monkeypatch):
+        """探测结果按路径缓存：一次导出会多次选解释器，不能每次都起子进程。"""
+        from litework.tools import ppt_edit as mod
+
+        calls = []
+        real_run = mod.subprocess.run
+
+        def counting_run(*a, **kw):
+            calls.append(a[0])
+            return real_run(*a, **kw)
+
+        monkeypatch.setattr(mod, "_SKILL_PYTHON_USABLE", {})
+        monkeypatch.setattr(mod.subprocess, "run", counting_run)
+
+        assert mod._skill_python_usable(sys.executable) is True
+        assert mod._skill_python_usable(sys.executable) is True
+        assert mod._skill_python_usable(sys.executable) is True
+        assert len(calls) == 1, "同一解释器只探测一次"
+
 
 class TestElementKinds:
     """outline 必须正确区分文本/图片/表格，预览图不算图片元素。"""

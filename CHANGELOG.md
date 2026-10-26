@@ -4,6 +4,28 @@
 
 ## [未发布]
 
+### 修复（PPT · 开发态误用「裸 CPython」技能解释器，全部导出失败）
+
+- **16 个 PPT 测试/功能在开发态全挂**（`test_ppt_edit` / `test_ppt_plan` /
+  `test_ppt_plan_api`），报 `[PPT Error]: 导出失败 ... ModuleNotFoundError:
+  No module named 'pptx'`。根因：`_skill_python()` 只判断「随包技能解释器文件
+  在不在」，而 `skills._builtin_skill_python()` 找的 `release/skill-python/`
+  是**构建期缓存目录**——里面的裸 CPython 本身不含第三方库，那些库要靠
+  `release/backend/.../_internal` 的 sitecustomize 注入，而 `release/` 被清理
+  后就只剩空壳。于是开发态每次 PPT 导出都拿这个空壳解释器，必然 import 失败。
+  现在新增 `_skill_python_usable()` 真跑一次 `import pptx, PIL` 探测：
+  可用才用；不可用时开发态回退当前解释器（`.venv` 齐备）、打包态报明确错误
+  （不回退到 frozen 后端主程序）。实测打包产物
+  `_internal/skill-python/bin/python3` 探测通过，打包态行为不变。
+  回归：`test_ppt_edit.py::TestInterpreter` 新增 4 例（回退 / 打包态报错 /
+  可用优先 / 探测函数本身）。
+- 顺带说明：这 16 例在 CI 上是绿的（runner 无 `release/` 缓存 → 直接走
+  `.venv`），属**本地开发态独有**的坑。
+- **开发态解释器不自动切换，也不用重新打包**：`_builtin_skill_python()`
+  返回的空壳只在 `_skill_python()` 内部被拒，探测缓存（进程级，~110ms/次）
+  让同一解释器只探一次。要给「随包解释器」续上第三方库才需重新
+  `npm run package`；只求 PPT 可用则什么都不用做。
+
 ### 新增（对话气泡时间戳）
 
 - **每条气泡外下方显示消息时间（到秒）**：今天只显示 `14:32:07`，跨天带
