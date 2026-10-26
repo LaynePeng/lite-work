@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -1299,8 +1299,14 @@ export default function ToolPanel({
   // 通知角标：只数「值得看」的（无变化这类不提醒，与系统通知口径一致）
   const watchUnread = (watchNotifications ?? []).filter((n) => n.status !== "unchanged").length;
 
-/** 渲染插件面板内容：JSON（lite-tree 通用决策树）→ 决策树；非 JSON → Markdown */
-function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
+/** 渲染插件面板内容：JSON（lite-tree 通用决策树）→ 决策树；非 JSON → Markdown。
+ *
+ *  **memo 化（防闪烁）**：面板每 5s 轮询，每次 `setPluginPanelBusy(true→false)`
+ *  都会触发重渲染。此前未 memo，busy 一变整棵面板树跟着重渲染——
+ *  ReactMarkdown 全量重新解析、富块 spec 重建，KPI 卡/进度条每 5s 闪一下。
+ *  memo 后：markdown 引用不变（内容未变）→ 完全跳过重渲染；内容真变了
+ *  （行情数字变动）才刷新，局部 DOM 更新，不再整树重建。 */
+const PluginPanelContent = memo(function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
   markdown: string;
   pluginPanelBusy: boolean;
   onRefresh: () => void;
@@ -1468,7 +1474,7 @@ function PluginPanelContent({ markdown, pluginPanelBusy, onRefresh }: {
         ))}
     </div>
   );
-}
+});
 
 /** 面板内容的段：md 文本段 + 富块段（含 mermaid；html 段面板不启用——
  *  面板是插件输出的轻量信息位，内联 iframe 预览的交互/安全面都不适合这里）。 */
@@ -1512,8 +1518,9 @@ function splitPanelSegments(text: string): PanelSeg[] {
   return segs;
 }
 
-/** 单段渲染：md 段走 ReactMarkdown；富块段交给原生组件。 */
-function PanelSegment({ seg }: { seg: PanelSeg }) {
+/** 单段渲染：md 段走 ReactMarkdown；富块段交给原生组件。
+ *  memo：markdown 不变时段对象引用稳定，其他段变化不牵连本段重渲染。 */
+const PanelSegment = memo(function PanelSegment({ seg }: { seg: PanelSeg }) {
   switch (seg.kind) {
     case "chart": return <ChartBlock spec={seg.spec} />;
     case "cards": return <CardsBlock spec={seg.spec} />;
@@ -1532,7 +1539,7 @@ function PanelSegment({ seg }: { seg: PanelSeg }) {
     // RichSegment 联合里，这里兜底显示源码而不是崩。
     default: return <ReactMarkdown remarkPlugins={[remarkGfm]}>{"```email-draft\n" + JSON.stringify(seg, null, 2) + "\n```"}</ReactMarkdown>;
   }
-}
+});
 
   // 通用插件 UI 协议：右栏动态 tab —— 插件在 contributes.panels 里声明即出现
   type PluginPanelRef = { plugin: string; id: string; title: string; icon?: string };
@@ -1548,9 +1555,14 @@ function PanelSegment({ seg }: { seg: PanelSeg }) {
     setPluginPanelBusy(true);
     try {
       const r = await api.pluginPanel(plugin, id);
-      setPluginPanelMd((prev) => ({ ...prev, [key]: r.markdown || "（面板为空）" }));
+      const next = r.markdown || "（面板为空）";
+      // **内容相同不 setState**：5s 轮询下盘后数字不变是常态。此前每次都
+      // 写新对象 → memo 失效 → 整棵面板树重渲染（KPI 卡/进度条每 5s 闪）。
+      // 引用不变 + memo 组件 = 渲染完全跳过，视觉零扰动。
+      setPluginPanelMd((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
     } catch (e) {
-      setPluginPanelMd((prev) => ({ ...prev, [key]: `读取失败：${(e as Error).message}` }));
+      const msg = `读取失败：${(e as Error).message}`;
+      setPluginPanelMd((prev) => (prev[key] === msg ? prev : { ...prev, [key]: msg }));
     } finally {
       setPluginPanelBusy(false);
     }
