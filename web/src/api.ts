@@ -302,6 +302,19 @@ export interface ScheduleInfo {
   runs?: { at: number; status: string; detail: string; task_id?: string }[];
 }
 
+/**
+ * 探针字段说明：
+ * - 字符串 = 纯提示（旧写法，内置 file/url/command 仍这样传）；
+ * - 对象 = 结构化描述，`type` 决定 UI 控件（json 走多行 textarea）。
+ */
+export type ProbeFieldSpec =
+  | string
+  | {
+      type?: "text" | "json" | "number" | "boolean";
+      label?: string;
+      hint?: string;
+    };
+
 /** 盯梢数据源描述（内置 command/file/url + 插件提供的）。 */
 export interface WatchSourceInfo {
   name: string;
@@ -310,7 +323,7 @@ export interface WatchSourceInfo {
   description: string;
   version: string;
   probe_interval_hint: number;
-  config_schema: Record<string, string>;
+  config_schema: Record<string, ProbeFieldSpec>;
 }
 
 /** 新建/更新计划的载荷（PATCH 时只传要改的字段）。 */
@@ -564,6 +577,9 @@ export const api = {
     req<{ session_id: string; card_id: string; html: string }>(
       `/api/cards/${encodeURIComponent(sessionId)}/${encodeURIComponent(cardId)}`),
   getSession: (id: string) => req<{ messages: import("./types").Msg[]; metadata?: Record<string, unknown> }>(`/api/sessions/${id}`),
+  /** 该会话当前是否仍有任务在后端运行（切项目/重开页签后补连 SSE 用）。 */
+  sessionActiveTask: (id: string) =>
+    req<{ session_id: string; task_id: string; running: boolean }>(`/api/sessions/${id}/task`),
   /** 任务卡重命名/置顶：字段缺省 = 不改；name 传空串 = 清除自定义名。 */
   patchSession: (id: string, patch: { name?: string; pinned?: boolean }) =>
     req<{ session_id: string; name: string | null; pinned: boolean }>(`/api/sessions/${id}`, {

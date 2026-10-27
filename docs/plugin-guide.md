@@ -248,6 +248,22 @@ class EmailWatch(WatchSource):
 
 装进 `~/.lite-work/plugins/` 后在计划编辑器里即可选到「邮箱」源。
 
+`config_schema` 的值可以两种写法（纯展示用，主程序不校验）：
+
+```python
+config_schema = {
+    "folder": "邮箱文件夹",                              # 纯提示 → 单行 input
+    "rules": {"type": "json", "label": "过滤规则",        # 结构化 → 多行 JSON 编辑器
+              "hint": "数组，每项 {from, contains}"},
+}
+```
+
+`probe_config` 本身是任意 JSON（`Dict[str, Any]`），数组/对象字段务必标
+`type: "json"`，编辑器才会给多行等宽编辑框并把文本解析回真正的结构——
+不标也能用（值本身是对象/数组时自动判定），但显式标注可以顺带给出 `label` /
+`hint`。数字/布尔字段即使不标 `type`，也会按计划里存的原类型还原（不会退化成
+字符串）。
+
 **两条硬约定**：
 
 1. **探针只负责取快照**。`snapshot` 是拿来做指纹比对的原始文本，`summary`

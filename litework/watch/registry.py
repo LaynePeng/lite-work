@@ -115,7 +115,10 @@ class WatchSource:
     probe_interval_hint: int = 300
 
     #: 配置字段说明（纯展示用，主程序不校验）：{"folder": "邮箱文件夹"}
-    config_schema: Dict[str, str] = {}
+    #: 值可以是纯字符串提示，也可以是结构化描述（如
+    #: {"type": "json", "label": "价位规则"}），由前端决定渲染成单行输入还是
+    #: 多行 JSON 编辑器——探针参数本身是任意 JSON（Dict[str, Any]）。
+    config_schema: Dict[str, Any] = {}
 
     async def probe(self, cfg: Dict[str, Any], ctx: ProbeContext) -> ProbeResult:
         """取一次快照。必须实现。异常会被调度器捕获记为 error。"""

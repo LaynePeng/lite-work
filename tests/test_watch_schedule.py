@@ -430,6 +430,37 @@ def test_registry_loads_plugin_source(tmp_path):
     assert res.snapshot == "s"
 
 
+def test_registry_passes_through_structured_config_schema(tmp_path):
+    """config_schema 允许结构化描述（如 {"type": "json"}），describe() 不丢信息。
+
+    探针参数本身是任意 JSON（Dict[str, Any]），插件要描述「这个字段是数组/对象」
+    只能给对象形式；前端据此渲染多行 JSON 编辑器。内置源的纯字符串写法保持可用。
+    """
+    pdir = tmp_path / "plugins" / "watch-astock"
+    pdir.mkdir(parents=True)
+    (pdir / "plugin.py").write_text(
+        "from litework.watch.registry import WatchSource, ProbeResult\n"
+        "class AstockWatch(WatchSource):\n"
+        "    source_kind = 'astock'\n"
+        "    display_name = '股票盯梢'\n"
+        "    config_schema = {\n"
+        "        'min_level': '最低信号级别',\n"
+        "        'rules': {'type': 'json', 'label': '价位规则'},\n"
+        "    }\n"
+        "    async def probe(self, cfg, ctx):\n"
+        "        return ProbeResult(snapshot=str(cfg.get('rules')), summary='x')\n",
+        encoding="utf-8",
+    )
+    reg = WatchSourceRegistry()
+    assert reg.load_from_dir(str(tmp_path / "plugins")) == 1
+    descs = {d["source_kind"]: d for d in reg.describe_all()}
+    schema = descs["astock"]["config_schema"]
+    assert schema["min_level"] == "最低信号级别"                     # 旧写法原样透传
+    assert schema["rules"] == {"type": "json", "label": "价位规则"}   # 结构化描述不丢
+    # 内置源仍是纯字符串（向后兼容）
+    assert descs["file"]["config_schema"]["path"].startswith("工作区相对路径")
+
+
 def test_registry_broken_plugin_isolated(tmp_path):
     pdir = tmp_path / "plugins"
     pdir.mkdir()

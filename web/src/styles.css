@@ -10315,6 +10315,24 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-color: var(--accent);
 }
 
+/* JSON 编辑框：等宽字体 + 高度上限 + 内部滚动。
+   - max-height + overflow-y：多行 JSON 不把整个表单撑长、把后续字段挤出视口；
+   - 显式等宽字体：父类 font: inherit 继承 UI 字体，花括号/引号宽度不一，看不出嵌套；
+   - white-space: pre + overflow-x：保留缩进，长行横向滚动比自动换行更易读；
+   - resize: vertical：仍允许用户手动拉高。 */
+.sched-field > textarea.sched-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  min-height: 120px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+  resize: vertical;
+}
+
 .sched-hint {
   font-size: 10px;
   color: var(--text-2);

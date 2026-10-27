@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { api, type ScheduleInfo, type SchedulePayload, type WatchSourceInfo } from "../api";
+import { api, type ProbeFieldSpec, type ScheduleInfo, type SchedulePayload, type WatchSourceInfo } from "../api";
 
 interface Props {
   /** 当前会话 id：新建计划默认绑到它（结果写回这个会话） */
@@ -21,6 +21,61 @@ interface Props {
   sources: WatchSourceInfo[];
   /** 通知列表刷新（计划被改动后） */
   onChanged?: () => void;
+}
+
+/** 编辑器里持有的一格探针参数：可能是原始结构，也可能是正在编辑的 JSON 文本 */
+type ProbeValue = string | number | boolean | Record<string, unknown> | unknown[];
+
+/**
+ * 打开计划时该字段原本是什么类型。
+ *
+ * 探针参数是任意 JSON，而 input/textarea 里只有文本；不记住原类型，
+ * 数字/布尔会在「文本往返」里退化成字符串（插件读 `cfg["threshold"]` 拿到
+ * "60" 而不是 60，同样是静默失效），数组/对象则连控件都选不对。
+ */
+type ProbeKind = "json" | "number" | "boolean";
+
+/** 把一个字段说明归一成结构化元信息（兼容旧的纯字符串写法）。 */
+function fieldMeta(spec: ProbeFieldSpec | undefined): Exclude<ProbeFieldSpec, string> {
+  if (typeof spec === "string") return { hint: spec };
+  return spec ?? {};
+}
+
+/** 值是否为需要 JSON 编辑器的结构（对象/数组）。 */
+function isStructured(v: unknown): boolean {
+  return v !== null && typeof v === "object";
+}
+
+/**
+ * 旧版前端 bug 把数组/对象拍平后写回的痕迹（"[object Object]"）。
+ *
+ * 这种值已经丢了原始结构，无法自动还原；但要**显式告诉用户**，否则用户会以为
+ * 配置还在、规则却继续静默失效。留空保存即可（空串跳过，不覆盖后端已有值）。
+ */
+function looksCollapsed(v: ProbeValue | undefined): boolean {
+  return typeof v === "string" && v.includes("[object Object]");
+}
+
+/**
+ * 这一格是否该用 JSON 编辑器。
+ *
+ * 三个来源取或：字段声明 `type: "json"`、打开计划时值就是数组/对象
+ * （`kinds`），或当前值已是结构。
+ *
+ * `kinds` 必须参与判定：用户在 textarea 里把内容改成文本后值就变成 string，
+ * 只看当前类型会让控件在编辑过程中从多行 textarea 跳回单行 input，
+ * 光标与内容当场丢失。渲染与保存用同一个判定，否则会出现「按 JSON 编辑、
+ * 却按字符串提交」的不一致。
+ */
+function isJsonField(
+  key: string,
+  v: ProbeValue | undefined,
+  spec: ProbeFieldSpec | undefined,
+  kinds: Record<string, ProbeKind>,
+): boolean {
+  if (fieldMeta(spec).type === "json") return true;
+  if (looksCollapsed(v)) return true;   // 历史损坏值也放进多行框，好让用户重写
+  return kinds[key] === "json" || isStructured(v);
 }
 
 interface FormState {
@@ -33,7 +88,12 @@ interface FormState {
   cron: string;
   prompt: string;
   source: string;             // "" = 纯定时
-  probeConfig: Record<string, string>;
+  // 探针参数是任意 JSON（后端 Dict[str, Any]），不能收窄成 string——
+  // 那会让数组/对象在编辑时被 String() 拍平（"[object Object]"），
+  // 保存时把拍平后的字符串写回后端，依赖该字段的插件静默失效。
+  probeConfig: Record<string, ProbeValue>;
+  /** 打开计划时各字段原本的类型：控件选择与文本→原生值回写均靠它 */
+  probeKinds: Record<string, ProbeKind>;
   permissions: string;
   notifySystem: boolean;
   catch_up: "once" | "all" | "skip";
@@ -50,6 +110,7 @@ const EMPTY_FORM: FormState = {
   prompt: "",
   source: "",
   probeConfig: {},
+  probeKinds: {},
   permissions: "read",
   notifySystem: false,
   catch_up: "once",
@@ -142,12 +203,80 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       prompt: s.prompt,
       source: s.source,
       probeConfig: Object.fromEntries(
-        Object.entries(s.probe_config ?? {}).map(([k, v]) => [k, String(v ?? "")]),
+        Object.entries(s.probe_config ?? {}).map(([k, v]) => {
+          // 对象/数组原样保留，交给渲染层决定怎么显示（JSON.stringify 才不丢结构）
+          if (isStructured(v)) return [k, v as ProbeValue];
+          return [k, v === null || v === undefined ? "" : String(v)];
+        }),
+      ),
+      probeKinds: Object.fromEntries(
+        Object.entries(s.probe_config ?? {}).flatMap(([k, v]) => {
+          if (isStructured(v)) return [[k, "json" as ProbeKind]];
+          if (typeof v === "number") return [[k, "number" as ProbeKind]];
+          if (typeof v === "boolean") return [[k, "boolean" as ProbeKind]];
+          return [];
+        }),
       ),
       permissions: s.permissions,
       notifySystem: (s.notify ?? []).includes("system"),
       catch_up: s.catch_up,
     });
+  };
+
+  /**
+   * 把编辑器里的探针值归一成要提交的 JSON。
+   *
+   * 文本框里只有字符串，直接提交会把数组/对象降级成字符串（原来的 bug），
+   * 也会把数字/布尔退化成字符串。这里按「声明类型 → 打开时原类型」还原；
+   * JSON 非法时报错并**阻止提交**，绝不静默写一个坏值。
+   */
+  const normalizeProbeConfig = (): Record<string, ProbeValue> | null => {
+    if (!form) return null;
+    const out: Record<string, ProbeValue> = {};
+    for (const [k, v] of Object.entries(form.probeConfig)) {
+      const spec = selectedSource?.config_schema?.[k];
+      // 与渲染层同一个判定（isJsonField），否则会出现「按 JSON 编辑、却按字符串提交」
+      const kind: ProbeKind | "text" = isJsonField(k, v, spec, form.probeKinds)
+        ? "json"
+        : (fieldMeta(spec).type ?? form.probeKinds[k] ?? "text");
+
+      if (typeof v !== "string") { out[k] = v; continue; }
+
+      const text = v.trim();
+      if (text === "") continue;   // 空串视为「未配置」，不写空值覆盖原结构
+
+      if (kind === "json") {
+        if (looksCollapsed(v)) {
+          // 已损坏（旧 bug 写回的 "[object Object]"），解析必然失败；
+          // 给一条能照着做的提示：要么填回正确 JSON，要么清空该框（不改动此字段）
+          setErr(`字段「${k}」里是上次保存损坏的内容（[object Object]），`
+            + "请填入正确的 JSON 数组/对象；留空保存则不改动该字段");
+          return null;
+        }
+        try {
+          out[k] = JSON.parse(text) as ProbeValue;
+        } catch {
+          setErr(`字段「${k}」不是合法 JSON，请检查后重试`);
+          return null;   // 阻止提交
+        }
+        continue;
+      }
+      if (kind === "number") {
+        const n = Number(text);
+        if (Number.isFinite(n)) { out[k] = n; continue; }
+        setErr(`字段「${k}」需要是数字`);
+        return null;
+      }
+      if (kind === "boolean") {
+        const t = text.toLowerCase();
+        if (t === "true" || t === "1") { out[k] = true; continue; }
+        if (t === "false" || t === "0") { out[k] = false; continue; }
+        setErr(`字段「${k}」需要是 true / false`);
+        return null;
+      }
+      out[k] = v;
+    }
+    return out;
   };
 
   const save = async () => {
@@ -158,6 +287,10 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       setErr("cron 需要 5 段（分 时 日 月 周），如 0 9 * * *");
       return;
     }
+    // textarea 里是 JSON 文本，必须解析回真正的数组/对象再提交：
+    // 直接把字符串写回后端，插件的 probe_config 解析器会拿不到预期结构（静默失效）。
+    const probeConfig = normalizeProbeConfig();
+    if (probeConfig === null) return;   // JSON 非法，已给出可操作报错，阻止提交
     const payload: SchedulePayload = {
       name: form.name.trim(),
       enabled: form.enabled,
@@ -167,7 +300,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       cron: form.cron.trim(),
       prompt: form.prompt.trim(),
       source: form.source,
-      probe_config: form.probeConfig,
+      probe_config: probeConfig,
       permissions: form.permissions,
       notify: form.notifySystem ? ["in_app", "system"] : ["in_app"],
       catch_up: form.catch_up,
@@ -282,7 +415,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
         <label className="sched-field">
           <span>盯什么</span>
           <select value={form.source} onChange={(e) => {
-            setForm({ ...form, source: e.target.value, probeConfig: {} });
+            setForm({ ...form, source: e.target.value, probeConfig: {}, probeKinds: {} });
           }}>
             <option value="">不盯（定点执行）</option>
             {sources.map((s) => (
@@ -297,16 +430,52 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
             {probeKeys.length === 0 && (
               <div className="sched-hint">该数据源不需要额外参数。</div>
             )}
-            {probeKeys.map((k) => (
-              <label className="sched-field" key={k}>
-                <span>{k}</span>
-                <input value={form.probeConfig[k] ?? ""}
-                  placeholder={selectedSource.config_schema[k]}
-                  onChange={(e) => setForm({
-                    ...form, probeConfig: { ...form.probeConfig, [k]: e.target.value },
-                  })} />
-              </label>
-            ))}
+            {probeKeys.map((k) => {
+              const spec = selectedSource?.config_schema?.[k];
+              const meta = fieldMeta(spec);
+              const cur = form.probeConfig[k];
+              const asJson = isJsonField(k, cur, spec, form.probeKinds);
+              const label = meta.label ?? k;
+
+              // JSON 字段（数组/对象）用多行编辑器：一份价位规则 3 条就 20 多行，
+              // 单行 input 既显示成 [object Object] 也没法编辑。
+              if (asJson) {
+                // 新建时空值显示为空（让 placeholder 提供格式提示），不要把 null 画出来
+                const raw = typeof cur === "string" ? cur
+                  : cur === undefined || cur === null ? ""
+                  : JSON.stringify(cur, null, 2);
+                return (
+                  <label className="sched-field" key={k}>
+                    <span>{label}</span>
+                    <textarea
+                      className="sched-json"
+                      rows={8}
+                      spellCheck={false}
+                      aria-label={label}
+                      value={raw}
+                      placeholder={meta.hint}
+                      onChange={(e) => setForm({
+                        ...form,
+                        probeConfig: { ...form.probeConfig, [k]: e.target.value },
+                      })}
+                    />
+                    {meta.hint && <span className="sched-hint">{meta.hint}</span>}
+                  </label>
+                );
+              }
+
+              return (
+                <label className="sched-field" key={k}>
+                  <span>{label}</span>
+                  <input
+                    value={typeof cur === "string" ? cur : String(cur ?? "")}
+                    placeholder={meta.hint}
+                    onChange={(e) => setForm({
+                      ...form, probeConfig: { ...form.probeConfig, [k]: e.target.value },
+                    })} />
+                </label>
+              );
+            })}
           </>
         )}
 

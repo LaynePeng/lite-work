@@ -4,6 +4,43 @@
 
 ## [未发布]
 
+### 修复（盯梢计划编辑器把 probe_config 的数组/对象字段降级成字符串）
+
+- **现象**：`probe_config` 里是数组/对象的字段（如 astock-plugin 的
+  `rules: [{code, kind, price, op}, ...]`）在计划编辑器里显示成
+  `[object Object],[object Object]`；用户编辑后保存，写回后端的是一段字符串，
+  插件的探针配置解析器拿不到数组 → 规则静默失效（不报错，只是不再生效）。
+- **根因**：前端**单方面**把「任意 JSON」收窄成了字符串。`FormState.probeConfig`
+  声明为 `Record<string, string>`，打开编辑器时用 `String(v)` 转换——`String([])`
+  得空串、`String([{a:1}])` 得 `"[object Object]"`；保存时又把这份损坏的值原样
+  写回。后端 `Schedule.probe_config` 一直是 `Dict[str, Any]`，不是后端限制。
+- **修复**：
+  1. `api.ts` 新增 `ProbeFieldSpec`（字符串＝纯提示，对象＝结构化描述，
+     `type: "json"` 决定控件），`WatchSourceInfo.config_schema` 放宽为
+     `Record<string, ProbeFieldSpec>`，旧纯字符串写法完全兼容；
+  2. 编辑器里的探针值类型放宽为 `ProbeValue`，读入时**对象/数组原样保留**
+     （不再过 `String()`）；
+  3. 结构化字段渲染成多行 `textarea.sched-json`（`rows=8`、显式等宽字体、
+     `max-height: 260px` + 内部双向滚动），纯字符串字段仍是单行 `input`；
+  4. 保存时把 JSON 文本 `JSON.parse` 回数组/对象；**非法 JSON 给出可操作报错并
+     阻止提交**（不再静默提交字符串）；空串视为「未配置」跳过，不清空原结构。
+     顺带把同类问题一起收口：数字/布尔字段（如 `threshold: 60`）也不再退化成
+     字符串 `"60"`——打开计划时记下各字段的原类型，保存时按原类型还原。
+  5. **已被旧 bug 写坏的计划**（值是 `"[object Object]"`）不再被静默原样保存：
+     打开时放进多行框并提示「填入正确 JSON，或留空保存则不改动该字段」，
+     点保存会拦住并说明原因——否则用户会以为配置还在、规则继续静默失效。
+- **后端侧**：`WatchSource.config_schema` 注解 `Dict[str, str]` → `Dict[str, Any]`
+  （插件需要描述「这个字段是数组」只能给对象形式），`describe()` 原样透传，
+  内置 file / url / command 的纯字符串 schema 行为不变。
+- **回归**：`ScheduleManager.test.tsx` 新增 9 例（打开不改结构、原样保存仍是
+  数组、编辑后解析出修改、非法 JSON 拦截且不发请求、编辑中控件不抖动、
+  数字/布尔原类型还原、新建时 type: json 空值渲染、纯字符串源仍用 input、
+  高度上限与内部滚动、等宽字体、损坏值显式报错与清空后跳过）；
+  `test_watch_schedule.py` 新增
+  `test_registry_passes_through_structured_config_schema`（结构化 schema 不丢
+  信息、旧写法与内置源不变）。
+
+
 ### 新增（工具 tab 指标清空）
 
 - **「工具」tab 的调用/技能指标是累计聚合**：此前只有体积保护（JSONL 超 2MB
