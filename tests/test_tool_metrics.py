@@ -236,6 +236,28 @@ def test_metrics_endpoint_empty_is_ok(tmp_path):
         assert body["tool_count"] == 0 and body["worst_tools"] == []
 
 
+def test_metrics_clear_endpoint(tmp_path):
+    """清空指标：删除 JSONL，聚合从零开始（旧失败不再压着成功率）。"""
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    metrics = ToolMetrics(app.tool_metrics_path())
+    metrics.record_tool("write_file", "error")
+    metrics.record_skill("ppt-master")
+
+    fast = create_app(app, token=None)
+    with TestClient(fast) as client:
+        # 清空前有数据
+        assert client.get("/api/metrics/tools").json()["events"] == 2
+        # 清空：ok，且文件已删
+        assert client.post("/api/metrics/tools/clear").json()["ok"] is True
+        assert not os.path.exists(app.tool_metrics_path())
+        # 聚合归零
+        body = client.get("/api/metrics/tools").json()
+        assert body["tool_count"] == 0 and body["skill_count"] == 0
+        assert body["worst_tools"] == []
+        # 再清一次（文件已不存在）幂等不报错
+        assert client.post("/api/metrics/tools/clear").json()["ok"] is True
+
+
 # ---------------------------------------------------------------- 内置技能可触发
 
 def test_builtin_presentation_skill_not_shadowed(tmp_path):

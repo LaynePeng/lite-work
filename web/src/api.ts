@@ -632,6 +632,8 @@ export const api = {
     return req<ToolDef[]>(url);
   },
   metricsTools: () => req<ToolMetricsSummary>("/api/metrics/tools"),
+  metricsToolsClear: () =>
+    req<{ ok: boolean }>("/api/metrics/tools/clear", { method: "POST" }),
   workspaceTree: (path?: string) =>
     req<TreeResponse>(`/api/workspace/tree-json${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   fsList: (path?: string, showHidden = false) =>

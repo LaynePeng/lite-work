@@ -477,6 +477,20 @@ function ToolsPanel({ tools }: { tools: { name: string; description: string; dom
 
   const hasData = metrics !== null && metrics.events > 0;
 
+  // 清空指标：累计计数里旧失败会一直压着成功率和「需要关注」（换模型/换项目
+  // 后已无参考价值）。清的是指标旁路 JSONL，不影响会话与配置；失败静默（下轮
+  // 30s 轮询会带回旧数据，用户可重试）。
+  const [clearing, setClearing] = useState(false);
+  const onClearMetrics = async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      await api.metricsToolsClear();
+      setMetrics(null);
+    } catch { /* 旧后端无此接口等：静默，下轮轮询自然恢复 */ }
+    finally { setClearing(false); }
+  };
+
   // 合并：注册工具清单 ⋈ 指标数据（按调用量降序，未使用的排后面）
   const withMetrics = (tools ?? []).map((t) => ({
     name: t.name,
@@ -506,12 +520,20 @@ function ToolsPanel({ tools }: { tools: { name: string; description: string; dom
 
   return (
     <div className="tm-panel">
-      {/* 总览条：有数据带指标数字，无数据回退旧文案 */}
+      {/* 总览条：有数据带指标数字 + 清空按钮（累计指标从零重新积累） */}
       <div className="tm-overview">
         {hasData ? (
           <>工具 {metrics.tool_count} · 调用 {metrics.events} 次</>
         ) : (
           <>已注册工具（{tools.length}）</>
+        )}
+        {hasData && (
+          <button
+            className="watch-panel-clear tm-clear"
+            disabled={clearing}
+            onClick={() => { void onClearMetrics(); }}
+            title="清空工具/技能调用指标（不影响会话与配置），从零重新积累"
+          >{clearing ? "清空中…" : "清空"}</button>
         )}
       </div>
 

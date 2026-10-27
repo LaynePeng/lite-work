@@ -2390,12 +2390,16 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   gap: 10px;
 }
 .tm-overview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-1);
   padding: 2px 0 4px;
   border-bottom: 1px dashed var(--border);
 }
+.tm-overview .tm-clear { margin-left: auto; font-weight: 400; }
 .tm-section {
   display: flex;
   flex-direction: column;

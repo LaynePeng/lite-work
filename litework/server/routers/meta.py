@@ -111,6 +111,24 @@ def create_router(ctx: ServerContext) -> APIRouter:
         data["enabled"] = bool(app.config.get("tool_metrics", True))
         return data
 
+    @router.post("/api/metrics/tools/clear")
+    async def clear_tool_metrics(request: Request):
+        """清空工具/技能指标（删除 JSONL，让计数从零开始重新积累）。
+
+        指标是累计聚合：历史失败会一直压在成功率和「需要关注」里（换模型/
+        换项目后旧错误已无参考价值）。此接口只清指标旁路数据，不影响会话与配置。
+        """
+        ctx.check_auth(request)
+        import os
+
+        path = app.tool_metrics_path()
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass  # Windows 下文件被占用等：读端容忍缺失，不把清空做成硬失败
+        return {"ok": True}
+
     @router.get("/api/config")
     async def get_config(request: Request):
         ctx.check_auth(request)

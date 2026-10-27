@@ -2,7 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ToolPanel from "./ToolPanel";
 import { api } from "../api";
@@ -268,7 +268,6 @@ describe("ToolPanel · TODOs 面板（竖排脊线看板）", () => {
 
 // ---------------------------------------------------------------- Agents 看板
 
-import { fireEvent } from "@testing-library/react";
 import type { SubAgentProgress } from "../types";
 
 const RUNNING_AGENT: SubAgentProgress = {
@@ -691,6 +690,34 @@ describe("ToolPanel · 工具 tab 指标整合（W3）", () => {
     expect(container.textContent).not.toContain("ppt-master");
     // 但标题上有计数
     expect(container.textContent).toContain("技能使用（2）");
+  });
+
+  it("清空按钮：有数据才出现；点击调 clear 接口，面板回落无数据文案", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue(METRICS);
+    const clear = vi.spyOn(api, "metricsToolsClear").mockResolvedValue({ ok: true });
+    const { container } = renderToolsPanel();
+
+    // 无数据态（events=0）不显示清空按钮
+    await waitFor(() => expect(container.querySelector(".tm-clear")).toBeTruthy());
+    // 点击清空 → 调接口 → 本地指标清空，回到「已注册工具」与提示文案
+    fireEvent.click(container.querySelector(".tm-clear")!);
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.textContent).toContain("运行任务后自动积累"));
+    expect(container.textContent).not.toContain("需要关注");
+    // 清空后按钮随无数据态消失
+    expect(container.querySelector(".tm-clear")).toBeNull();
+  });
+
+  it("无指标数据：不显示清空按钮（没有可清的东西）", async () => {
+    vi.spyOn(api, "metricsTools").mockResolvedValue({
+      tools: {}, skills: {}, tool_count: 0, skill_count: 0,
+      worst_tools: [], events: 0, path: "", enabled: true,
+    });
+    const clear = vi.spyOn(api, "metricsToolsClear");
+    const { container } = renderToolsPanel();
+    await waitFor(() => expect(container.textContent).toContain("已注册工具（3）"));
+    expect(container.querySelector(".tm-clear")).toBeNull();
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it("30s 轮询：组件卸载后清理定时器", async () => {
