@@ -760,6 +760,12 @@ export interface TabItem {
   pptSource?: string;
 }
 
+/** 输入框草稿（Composer 托管给 App）：按页签 id 存，切页签/切非对话页签都不丢。 */
+export interface ComposerDraft {
+  text: string;
+  pasteBlocks: { id: number; text: string; lines: number }[];
+}
+
 /** /api/approvals/pending 返回的单条挂起审批（SSE 重连/轮询兜底补卡用）。
  *
  * session_id：审批归属会话（子 Agent 的审批后端以 root_session_id=主会话上报，

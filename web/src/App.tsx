@@ -25,7 +25,7 @@ import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { WatchToaster } from "./components/WatchToaster";
 import { useResizable } from "./hooks/useResizable";
 import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
-import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 import { apiUrl, authHeaders, isElectron, UNAUTHORIZED_EVENT } from "./lib/connection";
@@ -298,26 +298,24 @@ export default function App() {
   const draftModelsRef = useRef<Record<string, SessionModel | null>>({});
   const draftReasoningRef = useRef<Record<string, string>>({});
 
-  // 当前活跃 tab id 与各「新会话 tab」是否已输入内容（文字/粘贴块，不含气泡：
-  // 未绑定 session 的 tab 不可能有气泡）。打开历史会话时，活跃的空白新会话 tab
-  // 会被原位接管（见 openSessionTab）；已打字的草稿不算空白、另开新 tab。
-  // 只写 ref 不入 state：仅 openSessionTab 读取，无需触发渲染。
+  // 各对话页签的输入草稿（文字/粘贴块）：Composer 托管到 App，按页签 id 存。
+  // 用途有二——① 切页签 / 切到文件页签再回来，草稿不丢不串台；
+  // ② 「空白新会话页签可被历史会话原位接管」的判定（见 openSessionTab）。
+  // 只写 ref 不入 state：没有渲染依赖它（输入框状态仍在 Composer 内部）。
   const activeTabIdRef = useRef("");
-  const draftContentsRef = useRef<Map<string, boolean>>(new Map());
+  const draftsRef = useRef<Map<string, ComposerDraft>>(new Map());
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
-  // Composer 上报「当前新会话 tab 是否已有输入内容」（文字/粘贴块）。
   // 稳定引用（写 ref 不依赖任何 state），避免 Composer 因回调身份变化重渲染。
-  const reportDraftContent = useCallback((hasContent: boolean) => {
-    const id = activeTabIdRef.current;
-    if (!id) return;
-    if (hasContent) draftContentsRef.current.set(id, true);
-    else draftContentsRef.current.delete(id);
+  const trackDraft = useCallback((tabId: string, d: ComposerDraft) => {
+    if (!tabId) return;
+    if (d.text.trim() || d.pasteBlocks.length > 0) draftsRef.current.set(tabId, d);
+    else draftsRef.current.delete(tabId);
   }, []);
-  // 页签关闭时同步清掉内容标记（tab id 不会复用，防 Map 无界增长）
+  // 页签关闭时同步清掉草稿（tab id 不会复用，防 Map 无界增长）
   useEffect(() => {
     const live = new Set(tabs.map((t) => t.id));
-    for (const id of [...draftContentsRef.current.keys()]) {
-      if (!live.has(id)) draftContentsRef.current.delete(id);
+    for (const id of [...draftsRef.current.keys()]) {
+      if (!live.has(id)) draftsRef.current.delete(id);
     }
   }, [tabs]);
 
@@ -517,14 +515,22 @@ export default function App() {
     });
   }, []);
 
-  /** 清空全部会话状态（切项目）：同时清掉 ref 与各 Map，避免 ref 侧残留旧历史。 */
-  const resetChats = useCallback(() => {
-    setChatStates({});
-    chatStatesRef.current = {};
-    streamingRefs.current.clear();
-    lastEventTimesRef.current.clear();
-    taskIdsRef.current.clear();
-    stopRequestedRef.current.clear();
+  /** 丢弃一批会话的前端状态（页签关闭 / 会话被删 / 切项目释放）——一次 setState。 */
+  const dropChats = useCallback((sids: string[]) => {
+    if (sids.length === 0) return;
+    setChatStates((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const sid of sids) {
+        if (sid in next) {
+          delete next[sid];
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      chatStatesRef.current = next;
+      return next;
+    });
   }, []);
 
   // ------------------------------------------------------------ 当前活跃 Tab
@@ -859,6 +865,39 @@ export default function App() {
     for (const s of [...eventSourcesRef.current.keys()]) teardown(s);
   }, []);
 
+  /**
+   * 释放「没有任何页签在显示」的会话状态（切换项目时调用）。
+   *
+   * 历史实现是「切项目 = 清空全部会话状态」：页签仍在，状态却没了——切到别的
+   * 项目再点回原来的对话页签，看到的是空对话、没有消息也没有连接（本轮的第二个
+   * bug）。切换项目只是**浏览位置**变化，已打开的对话页签属于用户的工作现场，
+   * 必须原样保留；真正该释放的只有那些页签已关掉的会话（内存回归的原意）。
+   *
+   * 任务仍在跑的会话即使没有页签也保留：跑完还要收尾（完成提示/SSE 收尾逻辑
+   * 都挂在这份状态上），强行释放会让任务结束后界面无处落账。
+   */
+  const releaseDetachedChats = useCallback(() => {
+    const open = new Set<string>();
+    for (const t of tabsRef.current) {
+      if (t.kind === "chat" && t.sessionId) open.add(t.sessionId);
+    }
+    const stale = Object.keys(chatStatesRef.current).filter(
+      (sid) => !open.has(sid) && !chatStatesRef.current[sid]?.running);
+    for (const sid of stale) {
+      closeStream(sid);
+      streamingRefs.current.delete(sid);
+      lastEventTimesRef.current.delete(sid);
+      taskIdsRef.current.delete(sid);
+      stopRequestedRef.current.delete(sid);
+      const timer = flushTimersRef.current.get(sid);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        flushTimersRef.current.delete(sid);
+      }
+    }
+    dropChats(stale);
+  }, [closeStream, dropChats]);
+
   const openSessionTab = useCallback(
     (sid: string, title?: string) => {
       setTabs((prev) => {
@@ -867,16 +906,22 @@ export default function App() {
           setActiveTabId(existing.id);
           return prev.map((t) => t.id === existing.id ? { ...t, title: title || t.title } : t);
         }
-        // 空白新会话 tab 原位变成该会话的 tab：判定=当前活跃 tab 未绑定 session
-        // （⇒必无气泡）且输入框无文字/粘贴块。有输入过内容的草稿不算「空白」——
-        // 用户已在新会话里打过字，另开新页签而不是踩掉草稿。
+        // 空白新会话 tab 原位变成该会话的 tab。判定「空白」= 未绑定 session
+        // （⇒必无气泡：气泡只随已建会话存在）且输入框无文字/粘贴块——
+        // 草稿是 App 托管的真实内容，不是「曾经打过字」的残留标记，所以清空草稿
+        // 或切到别的页签再回来不会让该页签永久失去被接管的资格。
+        // 优先接管**当前活跃**的空白页签；当前不在空白页签上（例如正在看文件页签，
+        // 或另一个会话）时，退而接管列表里那个空的新会话占位页签——占位页签没有
+        // 任何内容，留着它只会让页签栏多出一个永远不会用的「新会话」。
+        const isBlank = (t: TabItem | undefined) =>
+          t?.kind === "chat" && !t.sessionId && !draftsRef.current.has(t.id);
         const active = prev.find((t) => t.id === activeTabIdRef.current);
-        const blank =
-          active?.kind === "chat" && !active.sessionId &&
-          !draftContentsRef.current.get(active.id);
+        const blank = isBlank(active)
+          ? active
+          : prev.find((t) => isBlank(t) && !t.sessionId);
         if (blank) {
-          setActiveTabId(active.id);
-          return prev.map((t) => t.id === active.id ? { ...t, sessionId: sid, title: title || sid } : t);
+          setActiveTabId(blank.id);
+          return prev.map((t) => t.id === blank.id ? { ...t, sessionId: sid, title: title || sid } : t);
         }
         const tab: TabItem = { id: nextTabId(), kind: "chat", sessionId: sid, title: title || sid };
         setActiveTabId(tab.id);
@@ -1228,13 +1273,30 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [agents, tabs, activeTabId, newChatTab, closeTab, cycleReasoningEffort]);
 
-  const selectSession = useCallback(
-    async (sid: string, title?: string) => {
-      const info = sessions.find((s) => s.session_id === sid);
-      // title 显式传入优先：调用方常常刚刷新过列表，sessions 闭包可能还是旧的（否则会闪成 session id）
-      openSessionTab(sid, title || info?.title || sid);
-      if (!chatStatesRef.current[sid]) {
+  // 正在拉取历史的会话（防重复请求：侧栏点击与「页签激活补拉」可能同时触发）
+  const hydratingRef = useRef<Set<string>>(new Set());
+  // 补连运行中任务的桥（connectTaskStream 定义在本函数之后，避免前向引用）
+  const resumeTaskRef = useRef<(sid: string) => void>(() => {});
+
+  /**
+   * 载入某会话的前端状态（消息/目标/协作模式/工作树/TODO/模型/上下文统计）。
+   *
+   * 幂等：已有状态或已在拉取中直接返回。用于三处——侧栏点开会话、
+   * 页签激活时补拉（状态被释放过 / 切项目后回来）、以及恢复运行中任务。
+   */
+  const ensureSessionLoaded = useCallback(
+    async (sid: string) => {
+      if (!sid || hydratingRef.current.has(sid)) return;
+      if (chatStatesRef.current[sid]) {
+        // 状态还在（切项目后回来最常见）：只补连可能已断开的任务连接
+        resumeTaskRef.current(sid);
+        return;
+      }
+      hydratingRef.current.add(sid);
+      try {
         const snap = await api.getSession(sid);
+        // 拉取期间会话可能已被删掉/被别的路径写入状态：以最新 ref 为准
+        if (chatStatesRef.current[sid]) return;
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
         // 会话目标（/goal）：从 metadata 恢复（跨刷新/重启持续生效）
         if (typeof snap?.metadata?.goal === "string" && snap.metadata.goal) {
@@ -1291,6 +1353,9 @@ export default function App() {
           scheduleSubagentRecordExpiry(sid, initial.subAgentRecords);
         }
         patchChat(sid, { ...EMPTY_CHAT, ...initial });
+        // 后端该会话仍在跑任务（例如切项目时 SSE 被断开后回来）：补连把
+        // 后续事件接上，否则界面永远停在「历史快照」再也不会更新
+        resumeTaskRef.current(sid);
         try {
           // 并行拉取模型覆盖、上下文统计与 TODO 看板，一次 patch 消除两次 patch 之间的显示闪烁
           const [model, ctx, todos] = await Promise.all([
@@ -1318,9 +1383,23 @@ export default function App() {
         } catch {
           // 旧会话或刚创建的会话没有模型覆盖时，沿用系统默认。
         }
+      } catch {
+        // 拉取失败不阻塞界面：下次激活该页签会再试一次
+      } finally {
+        hydratingRef.current.delete(sid);
       }
     },
-    [openSessionTab, patchChat, sessions]
+    [patchChat, scheduleSubagentRecordExpiry]
+  );
+
+  const selectSession = useCallback(
+    async (sid: string, title?: string) => {
+      const info = sessions.find((s) => s.session_id === sid);
+      // title 显式传入优先：调用方常常刚刷新过列表，sessions 闭包可能还是旧的（否则会闪成 session id）
+      openSessionTab(sid, title || info?.title || sid);
+      await ensureSessionLoaded(sid);
+    },
+    [openSessionTab, ensureSessionLoaded, sessions]
   );
 
   /**
@@ -1373,8 +1452,9 @@ export default function App() {
             setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
             notifyElectronWorkspace(res.workspace);
             pushLog(`📂 已切换到项目: ${res.workspace}`);
-            closeStream();
-            resetChats();
+            // 只释放「页签已关掉」的会话（含其连接）；已打开页签的会话状态与
+            // SSE 一律保留——切项目是浏览位置变化，正在跑的对话回来时还得接着看
+            releaseDetachedChats();
             await refreshSessions(res.workspace);
           }
         } catch (e) {
@@ -1388,7 +1468,7 @@ export default function App() {
       }
       await selectSession(sid);
     },
-    [sessions, globalTasks, status?.workspace, selectSession, closeStream, refreshSessions, pushLog, notifyElectronWorkspace]
+    [sessions, globalTasks, status?.workspace, selectSession, closeStream, refreshSessions, pushLog, notifyElectronWorkspace, releaseDetachedChats]
   );
 
   const deleteSession = useCallback(
@@ -1567,8 +1647,7 @@ export default function App() {
           setSuccess(`已切换到项目: ${res.workspace}`);
           pushLog(`📂 已切换到项目: ${res.workspace}`);
           setTimeout(() => setSuccess(null), 4000);
-          closeStream();
-          resetChats();
+          releaseDetachedChats();
 
           // 切换项目后落到新建空对话：历史对话在侧栏单击/双击即可进入
           await openProjectLanding(res.workspace);
@@ -1577,7 +1656,7 @@ export default function App() {
         setErrorPublic((e as Error).message);
       }
     },
-    [pushLog, closeStream, openProjectLanding, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects]
+    [pushLog, closeStream, openProjectLanding, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects, releaseDetachedChats]
   );
 
   // ------------------------------------------------------------ 项目页签：最近项目
@@ -1604,8 +1683,7 @@ export default function App() {
         void refreshRecentProjects();
         setSuccess(`已打开: ${res.workspace}`);
         setTimeout(() => setSuccess(null), 4000);
-        closeStream();
-        resetChats();
+        releaseDetachedChats();
         // 与其它「打开项目」入口一致：落到新建空对话
         await openProjectLanding(res.workspace);
       }
@@ -1615,7 +1693,7 @@ export default function App() {
       // 最常见的失败是「切项目时有任务在跑」的后端 409。
       window.alert(`打开项目失败：${(e as Error).message}`);
     }
-  }, [changeSidebarTab, closeStream, openProjectLanding, notifyElectronWorkspace, refreshRecentProjects]);
+  }, [changeSidebarTab, closeStream, openProjectLanding, notifyElectronWorkspace, refreshRecentProjects, releaseDetachedChats]);
 
   /** 在隔离工作树中打开项目：切换项目 → 新建会话 → 开启 worktree 模式。 */
   const openWorktreeSession = useCallback(async (path: string) => {
@@ -1627,8 +1705,7 @@ export default function App() {
       changeSidebarTab("sessions");
       setProjectsView("sessions");
       void refreshRecentProjects();
-      closeStream();
-      resetChats();
+      releaseDetachedChats();
       // 新建会话并开启隔离工作树（任务将在独立分支+目录中执行）
       const { session_id } = await api.createSession();
       const r = await api.setSessionWorktree(session_id, true);
@@ -1646,7 +1723,7 @@ export default function App() {
     } catch (e) {
       setErrorPublic((e as Error).message);
     }
-  }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, openSessionTab,
+  }, [changeSidebarTab, closeStream, newChatTab, notifyElectronWorkspace, openSessionTab, releaseDetachedChats,
       patchChat, refreshRecentProjects, refreshSessions]);
 
   const removeRecentProject = useCallback(async (path: string) => {
@@ -2421,6 +2498,45 @@ export default function App() {
     [closeStream, handleSSEEvent, patchChat, probeTaskAlive, pullPendingApprovals, pushLog, syncSessionAgents]
   );
 
+  /**
+   * 补连某会话仍在后端运行的任务（切项目后回来 / 重开页签 / 页面恢复）。
+   *
+   * 背景：SSE 连接只活在前端内存，切项目曾把会话状态与连接一并清掉（本轮
+   * 第二个 bug：页签还在、对话却「回不来了」——没有消息、没有连接）；
+   * 即便状态还在，连接也不会自己回来。这里以「后端是否仍有该会话的任务」
+   * 为准补连：已有连接则跳过。
+   */
+  const resumeActiveTask = useCallback(
+    (sid: string) => {
+      if (!sid) return;
+      if (eventSourcesRef.current.has(sid) || streamCtlRef.current.has(sid)) return;
+      // 查询失败（含测试环境里被 restore 掉的桩）不应影响渲染：统一经
+      // Promise.resolve 兜住非 Promise 返回值
+      void Promise.resolve()
+        .then(() => api.sessionActiveTask(sid))
+        .then((r) => {
+          if (!r?.running || !r.task_id) return;
+          // 期间可能已被别的路径接上（发送 / 手动重连）
+          if (eventSourcesRef.current.has(sid) || streamCtlRef.current.has(sid)) return;
+          patchChat(sid, { running: true, sseState: "connecting" });
+          taskIdsRef.current.set(sid, r.task_id);
+          pushLog("↻ 检测到任务仍在运行，已重新连接");
+          connectTaskStream(sid, r.task_id);
+        })
+        .catch(() => { /* 查询失败：保持现状，下次激活页签再试 */ });
+    },
+    [connectTaskStream, patchChat, pushLog]
+  );
+  useEffect(() => { resumeTaskRef.current = resumeActiveTask; }, [resumeActiveTask]);
+
+  // 页签激活即确保会话就绪：状态被释放过（页签关闭后又开、切项目回收）就补拉
+  // 历史，连接断了（切项目 / 重开页签 / 页面恢复）就补连运行中的任务——否则
+  // 界面只会停在「历史快照」，看起来像「这个对话回不来了」。
+  useEffect(() => {
+    if (!activeSessionId) return;
+    void ensureSessionLoaded(activeSessionId);
+  }, [activeSessionId, ensureSessionLoaded]);
+
   // 审批兜底轮询（30s）：审批卡到达前端原本只依赖 SSE approval:request 事件，
   // 断线/刷新窗口内错过即永久丢失（→ 600s 超时静默拒绝，表现为「卡死在不问权限」）。
   // 低频拉取挂起审批，按当前活跃会话 id 过滤补齐（与 SSE 重连兜底同一口径）；
@@ -3154,8 +3270,7 @@ export default function App() {
           setStatus((prev) => (prev ? { ...prev, workspace: res.workspace } : prev));
           notifyElectronWorkspace(res.workspace);
           pushLog(`📂 已切换到落盘位置: ${res.workspace}`);
-          closeStream();
-          resetChats();
+          releaseDetachedChats();
           await refreshSessions(res.workspace);
         }
       }
@@ -3209,7 +3324,7 @@ export default function App() {
       pushLog(`✗ 新建任务失败: ${(e as Error).message}`);
     }
   }, [api, openSessionTab, patchChat, refreshSessions, selectSession, pushLog,
-      status?.workspace, setStatus, notifyElectronWorkspace, closeStream, resetChats]);
+      status?.workspace, setStatus, notifyElectronWorkspace, closeStream, releaseDetachedChats]);
 
   // 任务卡「⏭ 续」：进入该会话并自动续推（复用 AUTO_CONTINUE 同款 prompt 与发送管线）。
   const continueSession = useCallback(async (sid: string, title?: string) => {
@@ -3780,8 +3895,9 @@ export default function App() {
               tabCount={tabs.length}
               scrolledUp={chatScrolledUp}
               stopArmed={escStopArmed}
-              draftTabId={activeTab?.kind === "chat" && !activeTab.sessionId ? activeTab.id : undefined}
-              onDraftContent={reportDraftContent}
+              draftKey={activeTab?.kind === "chat" ? activeTab.id : undefined}
+              draft={activeTab?.kind === "chat" ? draftsRef.current.get(activeTab.id) : undefined}
+              onDraftChange={trackDraft}
             />
             <button className="debug-toggle" onClick={() => setShowDebug(!showDebug)} title="调试日志">
               {showDebug ? "隐藏日志" : "日志"}

@@ -663,6 +663,20 @@ def create_router(ctx: ServerContext) -> APIRouter:
             return {"agents": []}
         return {"agents": manager.list_agents(include_closed=True)}
 
+    @router.get("/api/sessions/{session_id}/task")
+    async def session_active_task(session_id: str, request: Request):
+        """该会话当前正在运行的任务（前端补连用）。
+
+        为什么需要：SSE 连接只活在前端内存里，切项目/重开页签后连接就断了，
+        而任务在后端照跑——没有这个端点，界面只能显示「历史快照」，既看不到
+        后续输出，也无法续上审批卡。返回 running=False 时 task_id 为空。
+        """
+        ctx.check_auth(request)
+        handle = tasks.active_for_session(session_id)
+        if handle is None:
+            return {"session_id": session_id, "task_id": "", "running": False}
+        return {"session_id": session_id, "task_id": handle.task_id, "running": True}
+
     @router.post("/api/compact")
     async def compact_session(payload: CompactRequest, request: Request):
         """手动压缩会话上下文：旧轮次摘要化，最近 N 轮原样保留，立即落盘。"""

@@ -75,8 +75,9 @@ function Composer({
   scrolledUp = false,
   stopArmed = false,
   autoFocus = true,
-  draftTabId,
-  onDraftContent,
+  draftKey,
+  draft,
+  onDraftChange,
 }: {
   disabled?: boolean;
   running: boolean;
@@ -106,15 +107,14 @@ function Composer({
   stopArmed?: boolean;
   /** 挂载即聚焦输入框；移动端传 false（进聊天页不该自动弹软键盘） */
   autoFocus?: boolean;
-  /** 当前若处于未建 session 的新会话 tab：其 id（用于向 App 上报草稿内容） */
-  draftTabId?: string;
-  /** 新会话 tab 的输入内容（文字+粘贴块）变化时上报（true=已有内容） */
-  onDraftContent?: (hasContent: boolean) => void;
+  /** 当前聊天页签的 id：草稿（输入文字/粘贴块）按它隔离暂存，切换页签互不串台 */
+  draftKey?: string;
+  /** 该页签的草稿（App 托管：切页签 / 切到文件页签再到回来都不丢） */
+  draft?: { text: string; pasteBlocks: PasteBlock[] };
+  /** 草稿变化时上报（App 存下来；同时用于「空白页签可被历史会话接管」的判定） */
+  onDraftChange?: (key: string, draft: { text: string; pasteBlocks: PasteBlock[] }) => void;
 }) {
-  const [text, setText] = useState("");
-  // 新会话 tab 的输入内容上报（App 侧判定「空白 tab 可被历史会话原位接管」用）：
-  // 文字与粘贴块任一非空即算有内容。ref 去重避免相同值重复上报。
-  const lastReportRef = useRef(false);
+  const [text, setText] = useState(draft?.text ?? "");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -134,22 +134,45 @@ function Composer({
   // 剪贴板里的长文本（CI 报错、堆栈日志等）自动折叠成输入框上方的「粘贴块」：
   // 输入区只占一行胶囊，点击展开预览、可单独删除；发送时正文原样内联给 Agent
   // （不落盘、不引用文件）。
-  const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([]);
+  const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>(draft?.pasteBlocks ?? []);
   const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
   const pasteSeq = useRef(0);
 
-  useEffect(() => { lastReportRef.current = false; }, [draftTabId]);
+  // ------------------------------------------------------------ 草稿按页签托管
+  // 输入框是单实例（所有对话页签与文件/PPT 页签共处一棵树）：草稿必须由 App
+  // 按页签 id 托管，否则——
+  //   1) 切页签时 text 跟着走：在 A 打的字出现在 B 的输入框里；
+  //   2) 切到文件/PPT 页签时本组件卸载，草稿直接丢失，而 App 侧「该页签有内容」
+  //      的标记留在 ref 里，于是它永远不再被历史会话接管（本轮 bug 1 的根因）。
+  const prevKeyRef = useRef<string>(draftKey ?? "");
+  // 上一次上报的草稿（仅用于去重，避免每次按键都 setState 到 App）
+  const lastSentRef = useRef<string>("");
 
   useEffect(() => {
-    if (!draftTabId || !onDraftContent) return;
-    // 粘贴块独立于输入框文字：粘贴了块即使没打字也算「有内容」，
-    // 切走/清空时同样要上报回落（不残留 true 导致该 tab 永不再被接管）
-    const has = text.trim().length > 0 || pasteBlocks.length > 0;
-    if (has !== lastReportRef.current) {
-      lastReportRef.current = has;
-      onDraftContent(has);
-    }
-  }, [draftTabId, onDraftContent, text, pasteBlocks]);
+    if ((draftKey ?? "") === prevKeyRef.current) return;
+    prevKeyRef.current = draftKey ?? "";
+    // 换页签：载入新页签的草稿（App 是唯一事实源）；无草稿则清空，
+    // 绝不把上一个页签的文字带过来
+    setText(draft?.text ?? "");
+    setPasteBlocks(draft?.pasteBlocks ?? []);
+    setExpandedPaste(null);
+    setShowHistory(false);
+    setHistoryIdx(-1);
+    lastSentRef.current = JSON.stringify([draft?.text ?? "", draft?.pasteBlocks ?? []]);
+    // draft 故意不入依赖：只在「切换页签」这一瞬间取新页签的初始值，
+    // 之后的草稿变化由本组件的编辑流驱动（否则 App 每次 setState 都会回灌覆盖输入）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  // 编辑即上报（文字与粘贴块任一变化都算）：App 据此判定「空白页签可被接管」
+  useEffect(() => {
+    const key = draftKey ?? "";
+    if (!key || !onDraftChange) return;
+    const sig = JSON.stringify([text, pasteBlocks]);
+    if (sig === lastSentRef.current) return;
+    lastSentRef.current = sig;
+    onDraftChange(key, { text, pasteBlocks });
+  }, [draftKey, onDraftChange, text, pasteBlocks]);
 
   // 输入框临时放大：发送前放到约 5 倍高（受视口约束），发送后还原。
   // 不做常驻自适应——底部空间宝贵，长期占半屏会挤掉消息历史。

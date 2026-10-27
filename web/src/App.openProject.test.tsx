@@ -76,6 +76,7 @@ vi.mock("./lib/sse", () => {
 
 const SESSIONS = [
   { session_id: "s_hist", created_at: 1_000, updated_at: 3_000, message_count: 2, title: "历史对话", metadata: { workspace: "/ws" } },
+  { session_id: "s_hist2", created_at: 1_000, updated_at: 2_000, message_count: 4, title: "历史对话2", metadata: { workspace: "/ws" } },
 ];
 
 const tabTitles = () =>
@@ -157,6 +158,70 @@ describe("侧栏点击/双击历史会话：空白新会话 tab 的接管", () =
     await waitFor(() => {
       // 两个页签：草稿 tab 仍是「新会话」，历史会话另开
       expect(tabTitles()).toEqual(["新会话", "历史对话"]);
+    });
+  });
+
+  it("草稿清空后：该页签重新算空白，历史会话仍原位接管（不让占位页签永久失效）", async () => {
+    await renderApp();
+    const ta = await screen.findByPlaceholderText(/下达任务/);
+    await userEvent.type(ta, "临时草稿");
+    await userEvent.clear(ta);
+    // 等草稿上报落地（clear 之后 App 侧应已删掉该页签的草稿）
+    await waitFor(() => expect((ta as HTMLTextAreaElement).value).toBe(""));
+
+    fireEvent.click(screen.getByText("历史对话"));
+
+    await waitFor(() => expect(tabTitles()).toEqual(["历史对话"]));
+  });
+});
+
+// 回归（bug 1）：新会话 tab 里点历史记录，仍然另开了一个页签。
+// 根因是「空白」判定读的是 App 侧的**残留标记**——切到文件/PPT 页签时 Composer
+// 卸载，输入框文字丢失，标记却留在 ref 里；此后该页签永远不算空白。
+// 现在草稿由 App 按页签托管（真实内容而非标记），并支持「当前不在空白页签上时
+// 退而接管列表里的空占位页签」。
+describe("新会话页签与历史记录的落点（bug 1 回归）", () => {
+  beforeEach(() => {
+    __mocks.sessions.mockResolvedValue(SESSIONS);
+    __mocks.getSession.mockResolvedValue({
+      messages: [{ role: "user", content: "历史内容" }],
+      metadata: { workspace: "/ws" },
+    });
+  });
+
+  it("在绑定页签打过字后新建会话：新页签输入框是空的（草稿不串台）", async () => {
+    render(<App />);
+    await screen.findByText("历史对话");
+    // 1. 打开历史会话（绑定 session）并在输入框留一段草稿
+    fireEvent.click(screen.getByText("历史对话"));
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist"));
+    const ta = await screen.findByPlaceholderText(/下达任务/);
+    await userEvent.type(ta, "历史会话里的草稿");
+
+    // 2. 新建会话页签：输入框必须是空的（旧实现会把草稿文字一起带过来）
+    fireEvent.click(screen.getByText("＋ 新建会话"));
+    await waitFor(() => {
+      const input = screen.getByPlaceholderText(/下达任务/) as HTMLTextAreaElement;
+      expect(input.value).toBe("");
+    });
+  });
+
+  it("在绑定页签打过字后新建会话，再点历史记录：接管而不是再开第三个页签", async () => {
+    render(<App />);
+    await screen.findByText("历史对话");
+    fireEvent.click(screen.getByText("历史对话"));
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist"));
+    const ta = await screen.findByPlaceholderText(/下达任务/);
+    await userEvent.type(ta, "历史会话里的草稿");
+
+    fireEvent.click(screen.getByText("＋ 新建会话"));
+    // 新会话占位页签是空白的：点历史会话 2 应原位接管它
+    fireEvent.click(screen.getByText("历史对话2"));
+
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist2"));
+    await waitFor(() => {
+      // 页签仍是两个：历史对话（绑定）+ 历史对话2（接管了空白占位页签）
+      expect(tabTitles()).toEqual(["历史对话", "历史对话2"]);
     });
   });
 });
