@@ -8,6 +8,7 @@
 // 重开会话时 getSession 重新拉取（既验证释放、也验证重开路径完好）。
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 // @ts-expect-error vi.mock 扩展了 ./api 的导出（__mocks/__defaults 仅供本测试使用）
@@ -98,10 +99,12 @@ describe("页签关闭的会话状态释放", () => {
 
     const { unmount } = render(<App />);
 
-    // 1. 新建第二个页签（满足 closeTab 的「至少保留一个」），选中会话A
-    const newTabBtn = await screen.findByTitle(/新建|新会话|新标签/, undefined, { timeout: 3000 });
-    fireEvent.click(newTabBtn);
-    // 侧栏里点开会话A（Mobile 判定外必为桌面布局；侧栏会话项以标题渲染）
+    // 1. 先在启动的空白「新会话」tab 里打字（使其不算空白、不被历史会话接管），
+    //    再点开会话A——它另开新 tab；两个页签并存，满足 closeTab 的「至少保留一个」
+    const ta = await screen.findByPlaceholderText(/下达任务/, undefined, { timeout: 3000 });
+    await userEvent.type(ta, "占位草稿");
+    // 侧栏里点开会话A（Mobile 判定外必为桌面布局；侧栏会话项以标题渲染）：
+    // 草稿 tab 不算空白，会话A 另开新 tab
     const item = await screen.findByText("会话A", undefined, { timeout: 3000 });
     fireEvent.click(item);
     await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_a"));

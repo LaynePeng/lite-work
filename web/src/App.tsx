@@ -71,11 +71,7 @@ export const ESC_STOP_CONFIRM_MS = 2000;
 let tabSeq = 0;
 const nextTabId = () => `tab_${++tabSeq}`;
 
-// 「打开项目」（原生目录对话框）的落点意图：该路径会 `window.location.reload()`，
-// 没法在旧页面里选会话，所以把「打开后进入该项目最近一条会话」写进 localStorage
-// 带过重载边界，由启动时的 effect 消费并立即清除（不影响之后的普通启动）。
-const OPEN_LATEST_SESSION_KEY = "litework.openLatestSession";
-// 「打开项目」整页重载后默认落「文件」页签：同属**跨重载的一次性意图**（非配置），
+// 「打开项目」整页重载后默认落「文件」页签：**跨重载的一次性意图**（非配置），
 // 由启动 effect 消费并立即清除。配置类内容一律走 localStorage 之外（见 UiPrefs）。
 const PENDING_SIDEBAR_TAB_KEY = "litework.pendingSidebarTab";
 const SIDEBAR_TABS: SidebarTab[] = ["sessions", "tasks", "rules", "files", "terminal"];
@@ -301,6 +297,29 @@ export default function App() {
   // 避免 useCallback 闭包依赖漏列导致「切换 effort/模型不生效」的回归
   const draftModelsRef = useRef<Record<string, SessionModel | null>>({});
   const draftReasoningRef = useRef<Record<string, string>>({});
+
+  // 当前活跃 tab id 与各「新会话 tab」是否已输入内容（文字/粘贴块，不含气泡：
+  // 未绑定 session 的 tab 不可能有气泡）。打开历史会话时，活跃的空白新会话 tab
+  // 会被原位接管（见 openSessionTab）；已打字的草稿不算空白、另开新 tab。
+  // 只写 ref 不入 state：仅 openSessionTab 读取，无需触发渲染。
+  const activeTabIdRef = useRef("");
+  const draftContentsRef = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
+  // Composer 上报「当前新会话 tab 是否已有输入内容」（文字/粘贴块）。
+  // 稳定引用（写 ref 不依赖任何 state），避免 Composer 因回调身份变化重渲染。
+  const reportDraftContent = useCallback((hasContent: boolean) => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    if (hasContent) draftContentsRef.current.set(id, true);
+    else draftContentsRef.current.delete(id);
+  }, []);
+  // 页签关闭时同步清掉内容标记（tab id 不会复用，防 Map 无界增长）
+  useEffect(() => {
+    const live = new Set(tabs.map((t) => t.id));
+    for (const id of [...draftContentsRef.current.keys()]) {
+      if (!live.has(id)) draftContentsRef.current.delete(id);
+    }
+  }, [tabs]);
 
   // 移动布局判定（窄屏 + 非 Electron）：手机端「＋ / ✏️ 对话」在未打开项目时
   // 兜底落个人区（见 fallbackPersonalWorkspace）；桌面与宽屏浏览器保持
@@ -841,21 +860,23 @@ export default function App() {
   }, []);
 
   const openSessionTab = useCallback(
-    (sid: string, title?: string, opts?: { reuseDraft?: boolean }) => {
+    (sid: string, title?: string) => {
       setTabs((prev) => {
         const existing = prev.find((t) => t.kind === "chat" && t.sessionId === sid);
         if (existing) {
           setActiveTabId(existing.id);
           return prev.map((t) => t.id === existing.id ? { ...t, title: title || t.title } : t);
         }
-        // reuseDraft：把「还没绑定会话的空对话 tab」直接改造成该会话的 tab，而不是再多开一个
-        // （用于「打开项目后自动进入最近会话」——否则会同时留下一个多余的「新会话」页签）
-        const draft = opts?.reuseDraft
-          ? prev.find((t) => t.kind === "chat" && !t.sessionId)
-          : undefined;
-        if (draft) {
-          setActiveTabId(draft.id);
-          return prev.map((t) => t.id === draft.id ? { ...t, sessionId: sid, title: title || sid } : t);
+        // 空白新会话 tab 原位变成该会话的 tab：判定=当前活跃 tab 未绑定 session
+        // （⇒必无气泡）且输入框无文字/粘贴块。有输入过内容的草稿不算「空白」——
+        // 用户已在新会话里打过字，另开新页签而不是踩掉草稿。
+        const active = prev.find((t) => t.id === activeTabIdRef.current);
+        const blank =
+          active?.kind === "chat" && !active.sessionId &&
+          !draftContentsRef.current.get(active.id);
+        if (blank) {
+          setActiveTabId(active.id);
+          return prev.map((t) => t.id === active.id ? { ...t, sessionId: sid, title: title || sid } : t);
         }
         const tab: TabItem = { id: nextTabId(), kind: "chat", sessionId: sid, title: title || sid };
         setActiveTabId(tab.id);
@@ -1208,10 +1229,10 @@ export default function App() {
   }, [agents, tabs, activeTabId, newChatTab, closeTab, cycleReasoningEffort]);
 
   const selectSession = useCallback(
-    async (sid: string, title?: string, opts?: { reuseDraft?: boolean }) => {
+    async (sid: string, title?: string) => {
       const info = sessions.find((s) => s.session_id === sid);
       // title 显式传入优先：调用方常常刚刷新过列表，sessions 闭包可能还是旧的（否则会闪成 session id）
-      openSessionTab(sid, title || info?.title || sid, opts);
+      openSessionTab(sid, title || info?.title || sid);
       if (!chatStatesRef.current[sid]) {
         const snap = await api.getSession(sid);
         const initial: Partial<ChatSessionState> = { messages: snap?.messages ?? [] };
@@ -1303,28 +1324,13 @@ export default function App() {
   );
 
   /**
-   * 打开项目后的默认落点：该项目**最近一条**会话；没有历史则新建空对话。
-   *
-   * 为什么不做成「落空白新会话」：换项目后停在空白页会让人以为历史丢了、
-   * 也要重新翻侧栏找上次的进度；落到最近一条即可接着上次的上下文继续，
-   * 想开新对话直接发消息（新建会话那条路径不受影响）。
-   *
-   * 取「最近」不依赖接口顺序：后端虽按 updated_at 倒序返回，这里仍显式按
-   * updated_at 取最大值，接口顺序若变也不会选错。
+   * 打开项目后的默认落点：新建空对话 tab（历史会话在侧栏单击/双击进入，
+   * 空白的新会话 tab 会被其原位接管，见 openSessionTab）。
    */
-  const openLatestSessionOrNewChat = useCallback(
-    async (ws: string, opts?: { reuseDraft?: boolean }) => {
-      const list = await refreshSessions(ws);
-      const latest = [...list].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
-      if (latest?.session_id) {
-        pushLog(`↻ 已打开最近会话：${latest.title || latest.session_id}`);
-        await selectSession(latest.session_id, latest.title, opts);
-        return;
-      }
-      newChatTab();
-    },
-    [refreshSessions, selectSession, newChatTab, pushLog]
-  );
+  const openProjectLanding = useCallback(async (ws: string) => {
+    await refreshSessions(ws);
+    newChatTab();
+  }, [refreshSessions, newChatTab]);
 
   // Goals 全局视图模式（P3）：任务 Tab「本项目|全部」切换；「全部」时任务卡
   // 点击 = 热切换到该任务落盘的项目再进会话（复用 openSessionWithProject 管线）
@@ -1461,9 +1467,7 @@ export default function App() {
           // 与浏览器路径 selectProject 的自动检测一致——打开入口不再区分模式）
           // 重载后默认落在「文件」Tab，直接看到新项目目录树（一次性意图，非配置）
           try { localStorage.setItem(PENDING_SIDEBAR_TAB_KEY, "files"); } catch { /* ignore */ }
-          // 「打开项目」后进入该项目最近一条会话：本条路径会整页重载，选不了会话，
-          // 于是把意图写进 localStorage 带过重载边界，由启动 effect 消费并清除。
-          try { localStorage.setItem(OPEN_LATEST_SESSION_KEY, result.workspace ?? ""); } catch { /* ignore */ }
+          // 会话落点：重载后由首次启动 effect 建新会话 tab（见 newChatTab）
           window.location.reload();
         }
       } catch (e) {
@@ -1566,14 +1570,14 @@ export default function App() {
           closeStream();
           resetChats();
 
-          // 切换项目后自动进入该项目最近一条会话；没有历史才新建空对话
-          await openLatestSessionOrNewChat(res.workspace);
+          // 切换项目后落到新建空对话：历史对话在侧栏单击/双击即可进入
+          await openProjectLanding(res.workspace);
         }
       } catch (e) {
         setErrorPublic((e as Error).message);
       }
     },
-    [pushLog, closeStream, openLatestSessionOrNewChat, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects]
+    [pushLog, closeStream, openProjectLanding, patchActiveChat, changeSidebarTab, notifyElectronWorkspace, refreshRecentProjects]
   );
 
   // ------------------------------------------------------------ 项目页签：最近项目
@@ -1602,8 +1606,8 @@ export default function App() {
         setTimeout(() => setSuccess(null), 4000);
         closeStream();
         resetChats();
-        // 与其它「打开项目」入口一致：进入该项目最近一条会话（无历史才新建空对话）
-        await openLatestSessionOrNewChat(res.workspace);
+        // 与其它「打开项目」入口一致：落到新建空对话
+        await openProjectLanding(res.workspace);
       }
     } catch (e) {
       setErrorPublic((e as Error).message);
@@ -1611,7 +1615,7 @@ export default function App() {
       // 最常见的失败是「切项目时有任务在跑」的后端 409。
       window.alert(`打开项目失败：${(e as Error).message}`);
     }
-  }, [changeSidebarTab, closeStream, openLatestSessionOrNewChat, notifyElectronWorkspace, refreshRecentProjects]);
+  }, [changeSidebarTab, closeStream, openProjectLanding, notifyElectronWorkspace, refreshRecentProjects]);
 
   /** 在隔离工作树中打开项目：切换项目 → 新建会话 → 开启 worktree 模式。 */
   const openWorktreeSession = useCallback(async (path: string) => {
@@ -1687,23 +1691,6 @@ export default function App() {
     if (loading || tabsRef.current.length > 0) return;
     newChatTab();
   }, [loading, newChatTab]);
-
-  // 「打开项目」（原生目录对话框）重载后的落点：进入该项目**最近一条**会话。
-  // 该意图以一次性 localStorage 承载（见 openProject），消费即清除；用 ref 保证
-  // StrictMode 双执行下不会重复开页签。没有历史会话时保留上面新建的空对话 tab。
-  const openedLatestRef = useRef(false);
-  useEffect(() => {
-    if (loading || openedLatestRef.current) return;
-    let ws = "";
-    try {
-      ws = localStorage.getItem(OPEN_LATEST_SESSION_KEY) ?? "";
-      if (ws) localStorage.removeItem(OPEN_LATEST_SESSION_KEY);
-    } catch { /* ignore */ }
-    if (!ws) return;
-    openedLatestRef.current = true;
-    // reuseDraft：复用启动时建的空对话 tab，而不是再多开一个
-    void openLatestSessionOrNewChat(ws, { reuseDraft: true });
-  }, [loading, openLatestSessionOrNewChat]);
 
   // 「打开项目」重载后的默认页签（一次性意图，见 openProject）：消费即清除。
   // 它是**非配置**的跨重载交接，故仍走 localStorage；落定后由上面的 ui_prefs
@@ -3793,6 +3780,8 @@ export default function App() {
               tabCount={tabs.length}
               scrolledUp={chatScrolledUp}
               stopArmed={escStopArmed}
+              draftTabId={activeTab?.kind === "chat" && !activeTab.sessionId ? activeTab.id : undefined}
+              onDraftContent={reportDraftContent}
             />
             <button className="debug-toggle" onClick={() => setShowDebug(!showDebug)} title="调试日志">
               {showDebug ? "隐藏日志" : "日志"}

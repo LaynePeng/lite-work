@@ -75,6 +75,8 @@ function Composer({
   scrolledUp = false,
   stopArmed = false,
   autoFocus = true,
+  draftTabId,
+  onDraftContent,
 }: {
   disabled?: boolean;
   running: boolean;
@@ -104,8 +106,15 @@ function Composer({
   stopArmed?: boolean;
   /** 挂载即聚焦输入框；移动端传 false（进聊天页不该自动弹软键盘） */
   autoFocus?: boolean;
+  /** 当前若处于未建 session 的新会话 tab：其 id（用于向 App 上报草稿内容） */
+  draftTabId?: string;
+  /** 新会话 tab 的输入内容（文字+粘贴块）变化时上报（true=已有内容） */
+  onDraftContent?: (hasContent: boolean) => void;
 }) {
   const [text, setText] = useState("");
+  // 新会话 tab 的输入内容上报（App 侧判定「空白 tab 可被历史会话原位接管」用）：
+  // 文字与粘贴块任一非空即算有内容。ref 去重避免相同值重复上报。
+  const lastReportRef = useRef(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -128,6 +137,19 @@ function Composer({
   const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([]);
   const [expandedPaste, setExpandedPaste] = useState<number | null>(null);
   const pasteSeq = useRef(0);
+
+  useEffect(() => { lastReportRef.current = false; }, [draftTabId]);
+
+  useEffect(() => {
+    if (!draftTabId || !onDraftContent) return;
+    // 粘贴块独立于输入框文字：粘贴了块即使没打字也算「有内容」，
+    // 切走/清空时同样要上报回落（不残留 true 导致该 tab 永不再被接管）
+    const has = text.trim().length > 0 || pasteBlocks.length > 0;
+    if (has !== lastReportRef.current) {
+      lastReportRef.current = has;
+      onDraftContent(has);
+    }
+  }, [draftTabId, onDraftContent, text, pasteBlocks]);
 
   // 输入框临时放大：发送前放到约 5 倍高（受视口约束），发送后还原。
   // 不做常驻自适应——底部空间宝贵，长期占半屏会挤掉消息历史。

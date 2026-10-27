@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 lite-work contributors
 //
-// 「打开项目」默认落点：自动进入该项目**最近一条**会话（无历史则新建空对话）。
-// 背景：换项目后停在空白新会话会让人以为历史丢了，也会误以为要从头开始。
+// 打开项目/打开历史会话的页签落点语义：
+//   1. 打开项目后默认只有一个「新建对话」占位 tab（不再自动进最近历史会话）；
+//   2. 侧栏点击/双击历史会话时，若当前活跃的是**空白**新会话 tab（未绑定
+//      session ⇒ 无气泡，且输入框无文字/粘贴块），该 tab 原位变成历史会话；
+//   3. 新会话 tab 已有输入内容（打字/粘贴块）则不算空白：另开新 tab，不踩草稿。
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 // @ts-expect-error vi.mock 扩展了 ./api 的导出（__mocks/__defaults 仅供本测试使用）
@@ -70,12 +74,12 @@ vi.mock("./lib/sse", () => {
   };
 });
 
-/** 三条历史会话：**故意按「最老在前」返回**，验证取的是 updated_at 最大者（不依赖接口顺序）。 */
 const SESSIONS = [
-  { session_id: "s_old", created_at: 1_000, updated_at: 1_000, message_count: 2, title: "最老的对话", metadata: { workspace: "/projB" } },
-  { session_id: "s_mid", created_at: 2_000, updated_at: 2_000, message_count: 2, title: "中间的对话", metadata: { workspace: "/projB" } },
-  { session_id: "s_new", created_at: 3_000, updated_at: 3_000, message_count: 2, title: "最新的对话", metadata: { workspace: "/projB" } },
+  { session_id: "s_hist", created_at: 1_000, updated_at: 3_000, message_count: 2, title: "历史对话", metadata: { workspace: "/ws" } },
 ];
+
+const tabTitles = () =>
+  Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
 
 beforeEach(() => {
   localStorage.clear();
@@ -88,68 +92,71 @@ afterEach(() => {
 });
 
 describe("打开项目后的默认落点", () => {
-  it("带「打开项目」意图时：自动打开**最近一条**会话（不是最老的），且不留下多余的新会话页签", async () => {
-    __mocks.sessions.mockResolvedValue(SESSIONS);
-    __mocks.getSession.mockResolvedValue({
-      messages: [{ role: "user", content: "NEWEST-内容" }],
-      metadata: { workspace: "/projB" },
-    });
-    // 「打开项目」重载前写入的一次性意图
-    localStorage.setItem("litework.openLatestSession", "/projB");
-
-    render(<App />);
-
-    // 打开的是 updated_at 最大那条（接口顺序是最老在前 → 必须按 updated_at 取最大值）
-    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_new"));
-    expect(__mocks.getSession).not.toHaveBeenCalledWith("s_old");
-    // 页签标题用会话名；且只应有一个页签（复用了启动时空对话 tab，没有多余「新会话」）
-    await waitFor(() => {
-      const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
-      expect(titles).toEqual(["最新的对话"]);
-    });
-    // 一次性意图已消费：不应残留
-    expect(localStorage.getItem("litework.openLatestSession")).toBeNull();
-  });
-
-  it("没有该意图（普通启动）：不自动打开任何历史会话，仍是新建空对话", async () => {
+  it("普通启动 / 打开项目后：默认只有「新会话」占位 tab，不自动打开任何历史会话", async () => {
     __mocks.sessions.mockResolvedValue(SESSIONS);
 
     render(<App />);
 
     expect(__mocks.getSession).not.toHaveBeenCalled();
-    // 输入框与「新会话」页签可能不同帧就绪（慢速 CI 上页签 effect 晚于
-    // 输入框渲染）——都收进 waitFor，避免时序 flaky
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/下达任务/)).toBeTruthy();
-      const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
-      expect(titles).toEqual(["新会话"]);
+      expect(tabTitles()).toEqual(["新会话"]);
     });
   });
 
-  it("带意图但项目没有历史会话：退化为新建空对话（不报错、不长草）", async () => {
-    __mocks.sessions.mockResolvedValue([]);
-    localStorage.setItem("litework.openLatestSession", "/empty-proj");
+  it("重载意图（litework.openLatestSession 已废弃）：残留旧键不生效，仍是新会话 tab", async () => {
+    __mocks.sessions.mockResolvedValue(SESSIONS);
+    localStorage.setItem("litework.openLatestSession", "/ws");
 
     render(<App />);
 
-    await waitFor(() => expect(__mocks.sessions).toHaveBeenCalled());
     expect(__mocks.getSession).not.toHaveBeenCalled();
-    await waitFor(() => {
-      const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
-      expect(titles).toEqual(["新会话"]);
+    await waitFor(() => expect(tabTitles()).toEqual(["新会话"]));
+  });
+});
+
+describe("侧栏点击/双击历史会话：空白新会话 tab 的接管", () => {
+  const renderApp = async () => {
+    __mocks.sessions.mockResolvedValue(SESSIONS);
+    __mocks.getSession.mockResolvedValue({
+      messages: [{ role: "user", content: "历史内容" }],
+      metadata: { workspace: "/ws" },
     });
+    const utils = render(<App />);
+    // 等侧栏会话列表就绪
+    await screen.findByText("历史对话");
+    return utils;
+  };
+
+  it("单击历史会话：空白新会话 tab 原位变成该会话（不另开页签）", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByText("历史对话"));
+
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist"));
+    await waitFor(() => expect(tabTitles()).toEqual(["历史对话"]));
   });
 
-  it("会话列表拉取失败：退化为新建空对话，不阻塞启动", async () => {
-    __mocks.sessions.mockRejectedValue(new Error("boom"));
-    localStorage.setItem("litework.openLatestSession", "/projB");
+  it("双击历史会话：与单击一致，空白新会话 tab 原位被接管", async () => {
+    await renderApp();
+    fireEvent.doubleClick(screen.getByText("历史对话"));
 
-    render(<App />);
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist"));
+    await waitFor(() => expect(tabTitles()).toEqual(["历史对话"]));
+    expect(tabTitles()).toHaveLength(1);
+  });
 
+  it("新会话 tab 已输入文字：不算空白，历史会话另开新 tab（草稿保留）", async () => {
+    await renderApp();
+    // 在新会话 tab 的输入框里打字（Composer 内部 state → 上报 App）
+    const ta = await screen.findByPlaceholderText(/下达任务/);
+    await userEvent.type(ta, "写一半的草稿");
+
+    fireEvent.click(screen.getByText("历史对话"));
+
+    await waitFor(() => expect(__mocks.getSession).toHaveBeenCalledWith("s_hist"));
     await waitFor(() => {
-      const titles = Array.from(document.querySelectorAll(".tab-title")).map((e) => e.textContent);
-      expect(titles).toEqual(["新会话"]);
+      // 两个页签：草稿 tab 仍是「新会话」，历史会话另开
+      expect(tabTitles()).toEqual(["新会话", "历史对话"]);
     });
-    expect(__mocks.getSession).not.toHaveBeenCalled();
   });
 });
