@@ -365,7 +365,7 @@ export default function SettingsModal({
     }
     try {
       await api.savePluginConfig(name, payload);
-      setPluginMsg({ ok: true, text: `${name} 配置已保存（钩子类下一条消息生效；工具面最长 60 秒）` });
+      setPluginMsg({ ok: true, text: `${name} 配置已即时生效` });
       const r = await api.pluginSettings(name);
       setPluginCfg((prev) => ({ ...prev, [name]: { schema: r.schema || [], values: r.values || {} } }));
       setPluginCfgDraft((prev) => ({ ...prev, [name]: { ...(r.values || {}) } }));

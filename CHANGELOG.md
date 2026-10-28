@@ -4,6 +4,39 @@
 
 ## [未发布]
 
+### 修复（插件配置改了要重启才生效）
+
+- **现象**：设置页改插件配置（astock 的盯盘开关/发信阈值、email 的发件人与
+  审批开关等），保存后界面显示「下一条消息生效」，实际盯梢探针、面板仍用旧值，
+  要重启 Core 才对。
+- **根因**：`AgentApp._write_config_merged()` 落盘时执行 `self.config = disk`
+  ——**重新绑定**了 `self.config` 对象。而 `WatchScheduler` 是
+  `config=self.config` 持有引用的（`app.py` 的 `start_watch_scheduler`），
+  探针经 `ProbeContext.config` 读插件配置。于是第一次保存之后，调度器手里的
+  引用永久冻结在那一刻的快照上：之后所有插件配置改动它都看不见。
+  插件在 `install()` 里捕获的 `app` 虽然读的是 `app.config`（能跟上），
+  但凡走 `ctx.config` 的快照路径（盯梢探针、`status_from_config`）全部陈旧。
+- **修复**：改为原地合并（`clear()` + `update()`），保持对象身份不变，
+  长期持有者始终看到最新值。
+
+### 新增（配置热生效通道）
+
+- `AgentApp.save_config()` 落盘后新增 `_apply_hot_config()` 分发：
+  - `approval_timeout` → 审批门 / 提问门的 `timeout_seconds` 就地更新；
+  - `tool_timeout` → 清 `ShellPlugin` 缓存（构造期固化了超时），下个内核按新值重建；
+  - `llm` / `security` 经通用 `/api/config` 写入时就地应用并废弃旧适配器 / 热加载规则；
+  - 代理配置维持在每次保存后重新分发（原有行为）。
+- `Plugin.on_config_changed(config)` 可选钩子：主机在**本插件命名空间**配置保存后
+  回调，给「在 `install()` 里把配置拷成成员」的插件一个重新应用的机会
+  （限流速率、缓存 TTL、路径等）。默认空实现，未实现的插件完全不受影响；
+  钩子抛异常只记日志、不影响配置落盘。**不改社区插件代码**——需要热生效的
+  插件自行实现该方法即可。
+- 设置页插件配置保存提示由「钩子类下一条消息生效；工具面最长 60 秒」改为
+  「配置已即时生效」。
+- 新增 `tests/test_config_hot_reload.py`（9 项）：对象身份稳定、盯梢视图跟随、
+  磁盘合并语义不回退、审批超时即时生效、Shell 缓存失效、插件钩子送达/按命名空间
+  隔离/异常不阻塞保存，以及 `POST /api/config` 端到端热生效。
+
 ## [2.0.4] — 会话页签修复 + 气泡时间戳 + 技能环境隔离
 
 > 本版主体：会话页签的两处状态残留修复（新会话页签重复开页签、切项目后

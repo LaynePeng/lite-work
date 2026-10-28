@@ -554,7 +554,7 @@ class AgentApp:
             pass
 
     def save_config(self, updates: Dict[str, Any]) -> None:
-        """保存配置：**先合并磁盘上的现存内容**，再落盘。
+        """保存配置：**先合并磁盘上的现存内容**，再落盘，最后分发热生效项。
 
         为什么必须合并：`_load_config()` 只在启动时读一次，之后内存里的 self.config
         就是一份可能过期的快照。若直接 dump 内存，**任何不在内存里的键都会被抹掉**——
@@ -565,8 +565,88 @@ class AgentApp:
         """
         self.config.update({k: v for k, v in updates.items() if v is not None})
         self._write_config_merged()
-        # 代理配置热生效（llm/meta 即时；webfetch 下个任务内核；mcp/shell 实时 env）
+        self._apply_hot_config(set(updates))
+
+    def _apply_hot_config(self, changed: set) -> None:
+        """把**已保存**的配置分发给常驻挂件（构造时快照过这些值的那些）。
+
+        为什么需要单独一步：多数配置是「用的时候读 app.config」，保存即生效；
+        但有些挂件在 `__init__` 里把值拷进了成员（审批门超时、ShellPlugin 超时、
+        插件的限流/缓存参数）——它们不会自己重读，表现为「改了要重启」。
+
+        `changed` 是本次保存涉及的键；只为这些键做分发，避免每次保存都重建全部。
+        """
+        # 出网代理：llm/meta 即时，mcp/shell 下次启动子进程时读，webfetch 下个内核
+        # （无脑调用：内部按当前 config 重新计算，未改 proxy 时结果与现状一致）
         self._sync_proxy_settings()
+
+        # 审批/提问门的等待上限（构造时快照）
+        if "approval_timeout" in changed:
+            try:
+                timeout = float(self.config.get("approval_timeout", 600) or 600)
+            except (TypeError, ValueError):
+                timeout = 600.0
+            self.approval_gate.timeout_seconds = timeout
+            self.question_gate.timeout_seconds = timeout
+
+        # ShellPlugin 在构造时固化 tool_timeout；清缓存让下个内核按新值重建
+        #（与代理变更同一手法：进行中任务的旧实例不受影响）
+        if "tool_timeout" in changed:
+            self._shell_plugins.clear()
+
+        # llm 段经通用 /api/config 写入时（前端正常走 /api/llm/config，但配置
+        # 文件手改/第三方客户端可能走这里）：就地应用并废弃旧适配器
+        if "llm" in changed and isinstance(self.config.get("llm"), dict):
+            self.llm_registry.apply_config(self.config["llm"])
+            self.llm_registry.reset_adapter()
+
+        # 安全规则（动态黑白名单）
+        if "security" in changed and isinstance(self.config.get("security"), dict):
+            self.guard.apply_config(self.config["security"])
+
+        # 插件命名空间配置：通知插件实例重新应用 install() 时快照的参数
+        self._notify_plugins_config_changed(changed)
+
+    def _notify_plugins_config_changed(self, changed: set) -> None:
+        """把改动过的插件配置通知到插件实例（可选钩子，未实现的插件不受影响）。
+
+        背景：插件在 `install()` 里常把配置**拷成成员**（限流速率、缓存 TTL、
+        台账路径…）。这类插件靠 `app.config` 就地更新拿不到新值，只能重启。
+        钩子给了它们一个「重新应用」的时机——插件自己决定重读什么。
+
+        只调用 config 里作为顶层键出现、且确实在本次保存中改动过的插件。
+        """
+        names = [k for k in changed if k in self.config]
+        if not names:
+            return
+        for plugin in self._live_plugin_instances():
+            pname = getattr(plugin, "name", "")
+            if pname not in names:
+                continue
+            hook = getattr(plugin, "on_config_changed", None)
+            if not callable(hook):
+                continue
+            try:
+                hook(dict(self.config))
+            except Exception:  # noqa: BLE001 - 插件隔离边界：配置已落盘，失败不阻塞保存
+                logger.warning("[App] 插件 %s 的 on_config_changed 执行失败", pname,
+                               exc_info=True)
+
+    def _live_plugin_instances(self) -> List[Plugin]:
+        """当前**已存在**的插件实例（本地缓存 + 内置模块级缓存）。
+
+        刻意不复用 `tool_plugins()`：那个会为每次调用新建内置插件实例
+        （FileSystemPlugin 等），拿到的不是内核装配时用的那批对象，
+        对它们调热更新钩子等于写给一个马上被丢弃的实例。
+        """
+        from .tools.plugin_loader import load_builtin_plugins
+
+        instances: List[Plugin] = list(self._ensure_local_plugins())
+        try:
+            instances.extend(load_builtin_plugins())
+        except Exception:  # noqa: BLE001 - 内置插件加载失败不该影响保存
+            logger.debug("[App] 读取内置插件实例失败（跳过插件热通知）", exc_info=True)
+        return instances
 
     def _sync_proxy_settings(self) -> None:
         """代理配置生效点：把 config["proxy"] 分发到各出网面。
@@ -607,6 +687,12 @@ class AgentApp:
         （`_persist_config`）清空，插件随即报「缺少凭证」。
 
         合并规则：以内存为准（内存含本次改动），磁盘上多出来的键保留。
+
+        **必须原地更新（`self.config.clear()/update()`），不能 `self.config = disk`**：
+        `self.config` 的引用被多处长期持有——`WatchScheduler(config=self.config)`
+        （探针经 `ctx.config` 读插件配置）、插件在 `install()` 里捕获的 `app` 对象
+        等。重新绑定后那些引用会永久停留在**第一次保存时**的快照上（实测：改插件
+        配置后探针仍读到旧值），表现为「配置改了要重启才生效」。
         """
         disk: Dict[str, Any] = {}
         try:
@@ -619,7 +705,9 @@ class AgentApp:
             disk = {}
         if disk:
             disk.update(self.config)
-            self.config = disk
+            # 原地合并：保持 self.config 的对象身份不变（见 docstring）
+            self.config.clear()
+            self.config.update(disk)
         with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
 
