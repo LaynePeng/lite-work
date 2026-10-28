@@ -111,4 +111,17 @@ describe("WatchToaster", () => {
     render(<WatchToaster items={[note()]} onDismiss={() => {}} sessionOf={() => undefined} />);
     expect(screen.queryByText("打开会话 →")).toBeNull();
   });
+
+  it("钉住的条目（从盯梢页签「重新弹出」）不自动收起，取消钉住后恢复计时", () => {
+    const onDismiss = vi.fn();
+    const { rerender } = render(
+      <WatchToaster items={[note({ id: 3 })]} onDismiss={onDismiss} pinned={[3]} />,
+    );
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    rerender(<WatchToaster items={[note({ id: 3 })]} onDismiss={onDismiss} pinned={[]} />);
+    act(() => { vi.advanceTimersByTime(6100); });
+    expect(onDismiss).toHaveBeenCalledWith(3);
+  });
 });

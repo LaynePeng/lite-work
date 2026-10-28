@@ -845,4 +845,47 @@ describe("ToolPanel · 盯梢通知中心", () => {
     expect(container.textContent).toContain("暂无盯梢通知");
     expect(container.textContent).toContain("通知通道未连接");
   });
+
+  // 详情卡 portal 到 body（避开 .tool-panel 的 overflow:hidden），所以查 document
+  const dialogEl = () => document.querySelector('[role="dialog"]') as HTMLElement | null;
+
+  it("点条目弹出完整详情卡（浮层几秒就没，这里是回看入口）", () => {
+    const { container } = renderWatch();
+    expect(dialogEl()).toBeNull();
+    fireEvent.click(container.querySelectorAll(".watch-item")[0] as Element);
+    const dialog = dialogEl();
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain("盯部署");
+    expect(dialog?.textContent).toContain("main 有 3 个新提交");
+    expect(dialog?.textContent).toContain("检测到变化");
+    expect(dialog?.textContent).toContain("计划 sch_1");
+    expect(dialog?.textContent).toContain("任务 t_1");
+  });
+
+  it("详情卡可关（Esc 与「打开会话」都行）", () => {
+    const onOpenSession = vi.fn();
+    const { container } = renderWatch({
+      onOpenSession,
+      watchSessionOf: (sid: string) => (sid === "sch_1" ? "sess_9" : undefined),
+    });
+    fireEvent.click(container.querySelectorAll(".watch-item")[0] as Element);
+    fireEvent.click(document.querySelector(".watch-detail-btn.primary") as Element);
+    expect(onOpenSession).toHaveBeenCalledWith("sess_9");
+    expect(dialogEl()).toBeNull();
+
+    fireEvent.click(container.querySelectorAll(".watch-item")[2] as Element);
+    expect(dialogEl()).not.toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dialogEl()).toBeNull();
+  });
+
+  it("详情卡可「重新弹出提示」；无关联会话时说明原因而不是给死按钮", () => {
+    const onResurface = vi.fn();
+    const { container } = renderWatch({ onResurfaceWatch: onResurface, watchSessionOf: () => undefined });
+    fireEvent.click(container.querySelectorAll(".watch-item")[1] as Element);
+    expect(document.querySelector(".watch-detail-btn.primary")).toBeNull();
+    expect(dialogEl()?.textContent).toContain("没有关联会话");
+    fireEvent.click(document.querySelector(".watch-detail-btn") as Element);
+    expect(onResurface).toHaveBeenCalledWith(2);
+  });
 });

@@ -443,13 +443,23 @@ export default function App() {
   const [watchScheduleSessions, setWatchScheduleSessions] = useState<Record<string, string>>({});
   //: 可用盯梢数据源（内置 command/file/url + 插件提供的），计划编辑器用
   const [watchSources, setWatchSources] = useState<WatchSourceInfo[]>([]);
+  //: 从盯梢页签详情卡「重新弹出提示」的 id：置顶显示且不自动收起（直到用户关掉）
+  const [resurfacedWatch, setResurfacedWatch] = useState<number[]>([]);
   const dismissWatchToast = useCallback((id: number) => {
     setDismissedWatch((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setResurfacedWatch((prev) => prev.filter((x) => x !== id));
   }, []);
-  const watchToasts = useMemo(
-    () => watchNotifications.filter((n) => !dismissedWatch.includes(n.id)).slice(0, 4),
-    [watchNotifications, dismissedWatch],
-  );
+  const resurfaceWatchToast = useCallback((id: number) => {
+    setDismissedWatch((prev) => prev.filter((x) => x !== id));
+    setResurfacedWatch((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+  const watchToasts = useMemo(() => {
+    const visible = watchNotifications.filter((n) => !dismissedWatch.includes(n.id));
+    // 手动「重新弹出」的排最前：它可能已经很旧，不置顶会被下面 4 条上限挤掉
+    const pinned = visible.filter((n) => resurfacedWatch.includes(n.id));
+    const rest = visible.filter((n) => !resurfacedWatch.includes(n.id));
+    return [...pinned, ...rest].slice(0, 4);
+  }, [watchNotifications, dismissedWatch, resurfacedWatch]);
   const watchSessionOf = useCallback(
     (scheduleId: string) => watchScheduleSessions[scheduleId],
     [watchScheduleSessions],
@@ -3969,6 +3979,8 @@ export default function App() {
             sessionId={activeSessionId}
             onClearWatchNotifications={clearWatchNotifications}
             onOpenSession={(sid) => void selectSession(sid)}
+            watchSessionOf={watchSessionOf}
+            onResurfaceWatch={resurfaceWatchToast}
             collapsed={toolPanelCollapsed}
             onToggleCollapsed={() => setToolPanelCollapsed((v) => !v)}
             onCloseAgent={(id) => void handleCloseAgent(id)}
@@ -4021,6 +4033,7 @@ export default function App() {
         onDismiss={dismissWatchToast}
         onOpenSession={(sid) => void selectSession(sid)}
         sessionOf={(scheduleId) => watchSessionOf(scheduleId)}
+        pinned={resurfacedWatch}
       />
     </div>
   );

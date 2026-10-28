@@ -10082,7 +10082,11 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   border-bottom: 1px solid var(--bg-2);
   border-left: 2px solid var(--text-2);
   padding: 8px 10px;
+  /* 浮层几秒就收起，这里是事后回看的唯一入口 → 整条可点（单击即开） */
+  cursor: pointer;
 }
+.watch-item:hover { background: var(--bg-2); }
+.watch-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .watch-item.good { border-left-color: var(--green); }
 .watch-item.bad { border-left-color: var(--red); }
 .watch-item.warn { border-left-color: var(--yellow); }
@@ -10143,6 +10147,90 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 10.5px;
   color: var(--text-2);
   border-top: 1px solid var(--border);
+}
+
+/* ── 盯梢通知详情卡（点列表条目打开；内容不被截断） ── */
+.watch-detail-modal {
+  width: 460px;
+}
+
+.watch-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.watch-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.watch-detail-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.watch-detail-badge.good { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.watch-detail-badge.bad { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+.watch-detail-badge.warn { background: color-mix(in srgb, var(--yellow) 18%, transparent); color: var(--yellow); }
+
+.watch-detail-time {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.watch-detail-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-0);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+
+.watch-detail-kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+.watch-detail-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.watch-detail-btn {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.watch-detail-btn:hover { background: var(--bg-3); color: var(--text-0); }
+.watch-detail-btn.primary { color: var(--accent); }
+
+.watch-detail-hint {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.5;
 }
 
 /* ══ 盯梢计划管理（右栏「盯梢」页签内的列表 + 内联编辑器） ══ */

@@ -3,6 +3,7 @@
 //
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -736,7 +737,7 @@ function relTime(ts: number): string {
  *
  *  与右下角浮层的分工：浮层是**瞬时**提醒（几秒后自动消失），这里留痕可回溯。
  *  「无变化」也列出来（便于确认盯梢确实在跑），但不计入角标、不弹系统通知。 */
-function WatchPanel({ items, connected, onClear, onOpenSession, sources, sessionId, onChanged }: {
+function WatchPanel({ items, connected, onClear, onOpenSession, sources, sessionId, onChanged, sessionOf, onResurface }: {
   items: WatchNotice[];
   connected: boolean;
   onClear: () => void;
@@ -744,7 +745,21 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
   sources: WatchSourceInfo[];
   sessionId?: string | null;
   onChanged?: () => void;
+  /** schedule_id → session_id（详情卡「打开会话」用） */
+  sessionOf?: (scheduleId: string) => string | undefined;
+  /** 重新浮出右下角提示条（详情卡「重新弹出提示」用） */
+  onResurface?: (id: number) => void;
 }) {
+  // 浮层提示条几秒就自动收起，事后想再看内容只能靠这里：点条目开详情卡
+  // （双击同样命中——单击即开，不依赖双击手势）。存 id 而非对象：通知列表
+  // 随 SSE 更新，用 id 查最新那份，避免展示过期快照。
+  const [openedId, setOpenedId] = useState<number | null>(null);
+  useEffect(() => {
+    if (openedId === null) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpenedId(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openedId]);
   // 「计划管理」始终可用（哪怕还没有任何通知）——它是这个页签的主入口，
   // 通知列表只是它跑出来的结果。
   const plans = (
@@ -762,6 +777,8 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
     );
   }
   const notable = items.filter((n) => n.status !== "unchanged").length;
+  const opened = openedId === null ? null : items.find((n) => n.id === openedId) ?? null;
+  const openedSession = opened && sessionOf ? sessionOf(opened.schedule_id) : undefined;
   return (
     <div className="watch-panel">
       {plans}
@@ -776,7 +793,20 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
       </div>
       <ul className="watch-list">
         {items.map((n) => (
-          <li key={n.id} className={`watch-item ${notificationTone(n.status)}`}>
+          <li
+            key={n.id}
+            className={`watch-item ${notificationTone(n.status)}`}
+            role="button"
+            tabIndex={0}
+            title="点击查看完整通知"
+            onClick={() => setOpenedId(n.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setOpenedId(n.id);
+              }
+            }}
+          >
             <div className="watch-item-head">
               <span className="watch-item-badge">{notificationLabel(n.status)}</span>
               <span className="watch-item-name" title={n.name}>{n.name}</span>
@@ -791,6 +821,64 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
         <div className="watch-panel-foot">
           想看某次结果？在规划该计划的会话里查看完整对话。
         </div>
+      )}
+      {opened && createPortal(
+        <div
+          className="modal-overlay"
+          onClick={(e) => { if (e.target === e.currentTarget) setOpenedId(null); }}
+        >
+          <div className="modal watch-detail-modal" role="dialog" aria-label="盯梢通知详情">
+            <div className="modal-header">
+              <h2>{opened.name}</h2>
+              <button className="modal-close" onClick={() => setOpenedId(null)} title="关闭 (Esc)">✕</button>
+            </div>
+            <div className="modal-body watch-detail-body">
+              <div className="watch-detail-meta">
+                <span className={`watch-detail-badge ${notificationTone(opened.status)}`}>
+                  {notificationLabel(opened.status)}
+                </span>
+                <span className="watch-detail-time">
+                  {new Date(opened.at * 1000).toLocaleString("zh-CN")} · {relTime(opened.at)}
+                </span>
+              </div>
+              <div className="watch-detail-text">{opened.detail || "（这条通知没有摘要内容）"}</div>
+              <div className="watch-detail-kv">
+                <span>计划 {opened.schedule_id}</span>
+                {opened.task_id && <span>任务 {opened.task_id}</span>}
+              </div>
+              <div className="watch-detail-actions">
+                {openedSession && onOpenSession && (
+                  <button
+                    className="watch-detail-btn primary"
+                    onClick={() => {
+                      onOpenSession(openedSession);
+                      setOpenedId(null);
+                    }}
+                  >
+                    打开会话 →
+                  </button>
+                )}
+                {onResurface && (
+                  <button
+                    className="watch-detail-btn"
+                    onClick={() => {
+                      onResurface(opened.id);
+                      setOpenedId(null);
+                    }}
+                  >
+                    重新弹出提示
+                  </button>
+                )}
+                {!openedSession && (
+                  <span className="watch-detail-hint">
+                    这条通知没有关联会话——在规划该计划的会话里可查看完整结果。
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -1264,7 +1352,7 @@ export default function ToolPanel({
   contextStats, contextHistory, running, liveSpeed, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
   watchNotifications, watchConnected, onClearWatchNotifications, onOpenSession,
-  watchSources, sessionId, onWatchChanged,
+  watchSources, sessionId, onWatchChanged, watchSessionOf, onResurfaceWatch,
   activeTab, onTabChange, onCompact, compacting, onCloseAgent,
 }: {
   contextStats: ContextStats | null;
@@ -1297,6 +1385,10 @@ export default function ToolPanel({
   sessionId?: string | null;
   /** 计划被增删改后回调（父组件刷新通知/映射） */
   onWatchChanged?: () => void;
+  /** schedule_id → session_id（盯梢通知详情卡的「打开会话」） */
+  watchSessionOf?: (scheduleId: string) => string | undefined;
+  /** 重新浮出右下角提示条（详情卡「重新弹出提示」） */
+  onResurfaceWatch?: (id: number) => void;
   /** 受控 tab（可选）：聊天区状态条等外部入口可跳转到指定 tab */
   activeTab?: PanelTabId;
   onTabChange?: (tab: PanelTabId) => void;
@@ -1706,6 +1798,8 @@ const PanelSegment = memo(function PanelSegment({ seg }: { seg: PanelSeg }) {
                         sources={watchSources ?? []}
                         sessionId={sessionId}
                         onChanged={onWatchChanged}
+                        sessionOf={watchSessionOf}
+                        onResurface={onResurfaceWatch}
                       />
                   : pluginPanels.some((x) => panelKeyOf(x) === panelTab)
                     ? (

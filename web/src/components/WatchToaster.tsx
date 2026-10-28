@@ -23,19 +23,31 @@ interface Props {
   onOpenSession?: (sessionId: string) => void;
   /** schedule_id → session_id（用于「查看」跳转；缺省则不显示按钮） */
   sessionOf?: (scheduleId: string) => string | undefined;
+  /** 钉住不自动收起的 id（从盯梢页签「重新弹出」的条目：用户要看，别 6 秒就没了） */
+  pinned?: number[];
 }
 
 /** 自动收起时长（ms）：错误留久一点，让用户看清。 */
 const TTL_OK = 6000;
 const TTL_ERR = 12000;
 
-export function WatchToaster({ items, onDismiss, onOpenSession, sessionOf }: Props) {
+export function WatchToaster({ items, onDismiss, onOpenSession, sessionOf, pinned }: Props) {
   const timers = useRef(new Map<number, number>());
   const sysShown = useRef(new Set<number>());
 
   // 自动收起：每个 id 只挂一个定时器；卸载/手动关闭时清理
   useEffect(() => {
+    const pinnedIds = new Set(pinned ?? []);
     for (const n of items) {
+      if (pinnedIds.has(n.id)) {
+        // 钉住的项：清掉可能已挂的定时器，不再自动收起
+        const t = timers.current.get(n.id);
+        if (t !== undefined) {
+          window.clearTimeout(t);
+          timers.current.delete(n.id);
+        }
+        continue;
+      }
       if (timers.current.has(n.id)) continue;
       const ttl = notificationTone(n.status) === "bad" ? TTL_ERR : TTL_OK;
       const t = window.setTimeout(() => {
@@ -54,7 +66,7 @@ export function WatchToaster({ items, onDismiss, onOpenSession, sessionOf }: Pro
         }
       }
     };
-  }, [items, onDismiss]);
+  }, [items, onDismiss, pinned]);
 
   // 系统通知：每条只弹一次
   useEffect(() => {
