@@ -384,9 +384,43 @@ class WatchScheduler:
         first = not sched.last_hash
         self._set_hash(sched.id, fp)
         prompt = self._build_prompt(sched, result, first=first)
-        run_rec = await self._fire_task(sched, catch_up=False, prompt_override=prompt)
+        # 把探针算好的「变了什么 + 该做什么」带进 RunRecord.detail，
+        # 这样盯梢面板/通知上直接可读，不必点进对话翻。
+        # changed_hint 是探针给的详情（形如「- 格力站回 37.11｜转观察」），
+        # summary 是一句话概括（形如「2 条新触发」）——两者都有才有信息量。
+        brief = self._brief_detail(result)
+        run_rec = await self._fire_task(
+            sched, catch_up=False, prompt_override=prompt, summary=brief)
         run_rec.status = "changed" if run_rec.status == "ok" else run_rec.status
         return run_rec
+
+    @staticmethod
+    def _brief_detail(result: Any) -> str:
+        """把探针结果压成一行可读摘要（供通知 detail 展示）。
+
+        优先用 changed_hint 里**已去掉 markdown 结构**的首条明细——那才是
+        「该做什么」；没有就退回 summary。都为空则返回空串（调用方兜底）。
+        """
+        hint = (getattr(result, "changed_hint", "") or "").strip()
+        if hint:
+            # 只取**列表项**（以 "- " 开头）——首行常是「触发信号：」这类
+            # 标题（插件约定），把它当内容会产出毫无信息的 detail（实测踩到：
+            # 面板只显示「触发信号：」四个字）。
+            for line in hint.splitlines():
+                ln = line.strip()
+                if not ln.startswith("-"):
+                    continue
+                ln = ln.lstrip("-").strip()
+                # 去掉 "[urgent] " 之类的级别前缀
+                if ln.startswith("[") and "]" in ln:
+                    ln = ln.split("]", 1)[1].strip()
+                if ln:
+                    return ln
+            # 没有列表项（非标准插件）→ 退回首条非空行
+            for line in hint.splitlines():
+                if line.strip():
+                    return line.strip()
+        return (getattr(result, "summary", "") or "").strip()
 
     def _workspace_for(self, sched: Schedule) -> str:
         """计划的工作区：优先计划自带，为空则回退应用当前工作区。
@@ -435,8 +469,17 @@ class WatchScheduler:
         return head + "\n" + (sched.prompt or "请简要总结这次变化并给出结论。")
 
     async def _fire_task(
-        self, sched: Schedule, catch_up: bool, prompt_override: Optional[str] = None
+        self, sched: Schedule, catch_up: bool,
+        prompt_override: Optional[str] = None,
+        summary: str = "",
     ) -> RunRecord:
+        """跑一次任务并记账。
+
+        `summary`：探针给出的**可读变化摘要**（如「格力回踩 48.21 -> 买点观察」），
+        写进 RunRecord.detail。早先 detail 写死为「已触发」——盯梢面板上只看得
+        到「异动」三个字，看不到**该做什么**，用户必须点进对话翻才知道。
+        探针本来就在 changed_hint 里算好了这些，不落地纯属浪费。
+        """
         if self.start_task is None:
             return RunRecord(status="error", detail="未配置任务启动器（start_task 缺失）")
         prompt = prompt_override or sched.prompt or f"定时任务：{sched.name or sched.id}"
@@ -453,9 +496,13 @@ class WatchScheduler:
                 return RunRecord(status="error", detail="任务启动失败（会话或工作区不可用／模型未配置）")
         except Exception as exc:  # noqa: BLE001
             return RunRecord(status="error", detail=f"启动任务失败: {exc}")
+        # detail 优先用探针摘要（让人在面板上直接看到「该做什么」）；
+        # 探针没给摘要时退回原措辞，保持向后兼容。
+        detail = summary.strip() if summary and summary.strip() else \
+            ("补跑（错过）" if catch_up else "已触发")
         return RunRecord(
             status="ok",
-            detail=("补跑（错过）" if catch_up else "已触发"),
+            detail=detail[:500],
             task_id=str(task_id),
         )
 
