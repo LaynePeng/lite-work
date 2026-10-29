@@ -4,6 +4,35 @@
 
 ## [未发布]
 
+## [2.0.5] — 内存回收 + 盯梢通知回看 + 插件配置热生效
+
+> 本版主体：①内存回收——补上会话级与项目级的释放入口（此前只有任务级回收，
+> 按会话与按项目驻留的结构没有任何释放入口，只能重启软件），并修掉「裁剪
+> 实际不释放」的缺陷（只断 `record.messages` 一条引用，真正持有者
+> `loop.kernel.ctx.messages` 与 loop 都还在，主场景内存照涨）；
+> ②盯梢通知链路的两处体验修复——通知能点开详情卡回看（浮层几秒就收起，
+> 此前双击也无反应），卡片直接给出「该做什么」而不是只有「已触发」；
+> ③设置页改插件配置不再需要重启 Core（`self.config` 被重新绑定导致调度器
+> 永久持有旧快照），配套补上 `Plugin.on_config_changed` 热生效钩子。
+>
+> 本版为 v2.0.4 之后的全部改动合并发布。
+
+### 修复（内存裁剪实际不释放：只清消息链、未清 loop）
+
+- **现象**：v2.0.5 给「会话长期不关」加了终态 30 分钟裁剪
+  （`trim_finished_messages`），但用户实测内存照涨不减——该放的没放掉。
+- **根因**：裁剪只执行 `record.messages = []`。而消息链的**真正持有者**是
+  `record.loop.kernel.ctx.messages`（同一批 `Message` 对象），且 `record.loop`
+  反过来钉住整个 loop——只断 record 上那一条引用，等于什么都没放。
+  实测（单 agent：40 条 × 20KB）：旧实现裁剪后消息对象**仍存活**、残留 782KB；
+  一个会话 12 个 agent 裁剪后仍钉住 **≈ 9.2MB**。
+- **修复**：裁剪时连 `record.loop` 一起置 None，并清 `pending_inbox`。
+  同口径修了 `release()`（会话/项目释放路径）。
+- **影响面**：该缺陷与时间无关，**只要走到裁剪就 100% 发生**——
+  「关对话/关项目」那条路径本来逐条清 loop，不受影响；受影响的是
+  「对话一直开着」的场景，正是本版内存回收想解决的主场景。
+- 涉及文件：`litework/orchestration/agent_manager.py`。
+
 ### 修复（发给运行中子 Agent 的消息落进「等唤醒」队列）
 
 - **现象**：`send_message` 打给一个**看起来在跑**的 agent，回执却是「已暂存
@@ -13,31 +42,23 @@
 - **根因**：送达判定看的是 `record.loop is not None`。而 `spawn` / `followup`
   只负责置 `status=running` 并 `create_task`，真正挂 `record.loop` 要等
   `run_task` 建完 kernel、registry、取完 git 信息——本机实测这段启动窗口
-  约 130ms（CI 更慢），期间消息就被归成「未在运行」。
+  小目录 **106ms**、300 文件 git 仓库 **26ms**（CI 更慢），
+  期间消息就被归成「未在运行」。
 - **修复**：
   - `AgentRecord.attach_loop()`：挂载 loop 时把窗口期攒下的消息转交
     `agent_inbox`；`send_message` 改为**只要 `status=="running"` 即算送达**，
     loop 未挂载则先存 `pending_inbox`（不是 `mailbox`——后者语义是等唤醒）；
   - `followup` 唤醒前先抹掉 `record.loop`：否则上一轮的旧 loop 还挂在记录上，
-    窗口期消息会进这个已经结束的 loop 的 inbox，永久不被消费；
-  - `trim_finished_messages` / `release` 补清 `loop` 与两个收件箱：只清
-    `messages` 是不够的（`loop.ctx.messages` 持有同一批 Message 对象，
-    留着 loop 等于一条都没放掉，v2.0.5 的裁剪收益会归零）。
+    窗口期消息会进这个已经结束的 loop 的 inbox，永久不被消费。
+- **实际触发率很低**：编排者要发消息必须等同一批工具调用跑完、再过一次 LLM
+  往返（秒级），而窗口只有几十到一百毫秒——真实对话几乎撞不上。
+  自 2026-09-08（`ce72358c`）引入约 7 周无用户报障，只有 CI 暴露。
+  但「同批工具里 spawn 紧接 send_message」的代码路径会必现，
+  将来加这类并行编排工具时就是真 bug。
 - 回归：`test_send_message_during_spawn_window_still_delivered`（旧代码必红），
   原用例改为等首轮 LLM 真正起飞而非 `sleep(0.1)` 赌时序。
 - 涉及文件：`litework/orchestration/agent_manager.py`、
   `litework/orchestration/sub_agent.py`、`tests/test_multi_agent.py`。
-
-## [2.0.5] — 内存回收 + 盯梢通知回看 + 插件配置热生效
-
-> 本版主体：①关闭对话 / 关闭项目后的内存回收（此前只有任务级回收，按会话与
-> 按项目驻留的结构没有任何释放入口，只能重启软件）；②盯梢通知链路的两处体验
-> 修复——通知能点开详情卡回看（浮层几秒就收起，此前双击也无反应），卡片直接
-> 给出「该做什么」而不是只有「已触发」；③设置页改插件配置不再需要重启 Core
-> （`self.config` 被重新绑定导致调度器永久持有旧快照），配套补上
-> `Plugin.on_config_changed` 热生效钩子。
->
-> 本版为 v2.0.4 之后的全部改动合并发布。
 
 ### 修复（关闭对话 / 关闭项目后 Core 内存不回收，必须重启软件）
 
