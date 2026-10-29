@@ -293,8 +293,9 @@ class SubAgentRunner:
         # 孙 agent 完成通知注入源：按 sub_id 查其专属 manager（嵌套派生时懒创建）
         loop.agent_manager_factory = lambda sid: self.app.agent_manager(sid, create=False)
         # 挂载 loop 引用（send_message 直达运行中的 agent 的 agent_inbox）
+        # attach_loop 顺带把启动窗口期攒在 pending_inbox 的消息转进来
         if record is not None:
-            record.loop = loop
+            record.attach_loop(loop)
 
         # 嵌套深度 ContextVar：本子 Agent 的工具 handler（spawn_agent 等）
         # 读取当前深度，派生时传 depth+1 给孙 agent 的 manager

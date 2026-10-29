@@ -311,12 +311,51 @@ async def test_send_message_to_running_agent(tmp_path):
     app._mock_adapter.delay = 0.3
     mgr = app.agent_manager("s1")
     r = await mgr.spawn("任务A", role="explorer", max_steps=5)
-    await asyncio.sleep(0.1)  # 首轮仍在飞行
+    # 等首轮 LLM 真的起飞（seen 非空），而不是赌一个固定 sleep：
+    # spawn 返回到 record.loop 挂载之间要建 kernel/registry/取 git 信息，
+    # 耗时随机器在几十到几百 ms 间浮动（CI 与本机都因此红过）。
+    for _ in range(300):
+        if seen:
+            break
+        await asyncio.sleep(0.01)
+    assert seen, "首轮 LLM 未起飞"
     out = await mgr.send_message(r["agent_id"], "补充线索：重点看 auth 模块")
     assert out["ok"] and "已送达" in out["delivered"]
     await mgr.wait([r["agent_id"]], timeout_ms=10000)
     # 消息注入了 agent 上下文（第二轮 LLM 调用可见）
     assert any("[来自其他 Agent 的消息]" in c and "auth" in c
+               for call in seen for c in call)
+
+
+async def test_send_message_during_spawn_window_still_delivered(tmp_path):
+    """启动窗口期（status=running 但 loop 未挂载）的消息也要进本轮上下文。
+
+    回归：此前按 loop is not None 判定是否运行中，这段窗口里到达的消息会被
+    归成「已暂存」落 mailbox——调用方看到 agent 在跑，消息却要等下次唤醒。
+    """
+    app = _make_app(tmp_path)
+
+    seen = []
+
+    class CaptureAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            seen.append([m.content for m in messages])
+            await asyncio.sleep(0.05)
+            return await super().chat_stream(messages, tools, events)
+
+    app._mock_adapter = CaptureAdapter(
+        [("工作ing", [tool_call("read_file", '{"filePath":"a.txt"}')]),
+         ("收到消息，继续。", [])])
+    mgr = app.agent_manager("s1")
+    r = await mgr.spawn("任务A", role="explorer", max_steps=5)
+    rec = mgr.get(r["agent_id"])
+    # 不等 loop 挂载：就在窗口期发
+    assert rec.loop is None
+    out = await mgr.send_message(r["agent_id"], "窗口期消息：看 auth 模块")
+    assert out["ok"] and "已送达" in out["delivered"]
+    assert rec.mailbox == [], "窗口期消息不该落到「等唤醒」的 mailbox"
+    await mgr.wait([r["agent_id"]], timeout_ms=10000)
+    assert any("[来自其他 Agent 的消息]" in c and "窗口期消息" in c
                for call in seen for c in call)
 
 

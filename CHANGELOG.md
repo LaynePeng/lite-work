@@ -4,6 +4,30 @@
 
 ## [未发布]
 
+### 修复（发给运行中子 Agent 的消息落进「等唤醒」队列）
+
+- **现象**：`send_message` 打给一个**看起来在跑**的 agent，回执却是「已暂存
+  （agent 未在运行，followup_task 唤醒时送达）」——消息要等下次唤醒才进上下文，
+  调用方以为已经插话成功。CI 上表现为
+  `test_multi_agent.py::test_send_message_to_running_agent` 随机变红。
+- **根因**：送达判定看的是 `record.loop is not None`。而 `spawn` / `followup`
+  只负责置 `status=running` 并 `create_task`，真正挂 `record.loop` 要等
+  `run_task` 建完 kernel、registry、取完 git 信息——本机实测这段启动窗口
+  约 130ms（CI 更慢），期间消息就被归成「未在运行」。
+- **修复**：
+  - `AgentRecord.attach_loop()`：挂载 loop 时把窗口期攒下的消息转交
+    `agent_inbox`；`send_message` 改为**只要 `status=="running"` 即算送达**，
+    loop 未挂载则先存 `pending_inbox`（不是 `mailbox`——后者语义是等唤醒）；
+  - `followup` 唤醒前先抹掉 `record.loop`：否则上一轮的旧 loop 还挂在记录上，
+    窗口期消息会进这个已经结束的 loop 的 inbox，永久不被消费；
+  - `trim_finished_messages` / `release` 补清 `loop` 与两个收件箱：只清
+    `messages` 是不够的（`loop.ctx.messages` 持有同一批 Message 对象，
+    留着 loop 等于一条都没放掉，v2.0.5 的裁剪收益会归零）。
+- 回归：`test_send_message_during_spawn_window_still_delivered`（旧代码必红），
+  原用例改为等首轮 LLM 真正起飞而非 `sleep(0.1)` 赌时序。
+- 涉及文件：`litework/orchestration/agent_manager.py`、
+  `litework/orchestration/sub_agent.py`、`tests/test_multi_agent.py`。
+
 ## [2.0.5] — 内存回收 + 盯梢通知回看 + 插件配置热生效
 
 > 本版主体：①关闭对话 / 关闭项目后的内存回收（此前只有任务级回收，按会话与
