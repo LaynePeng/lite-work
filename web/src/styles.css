@@ -678,6 +678,22 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: var(--bg-3);
 }
 
+/* 关闭项目：回到项目列表并释放该项目在 Core 里的缓存/会话内存（不删会话）。
+   与「从最近列表移除（✕）」不是一回事——那个只动列表记录。 */
+.btn-close-project {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-2);
+  padding: 4px 7px;
+  border-radius: 6px;
+}
+
+.btn-close-project:hover {
+  background: var(--bg-3);
+  color: var(--red);
+}
+
 .project-context-name {
   flex: 1;
   min-width: 0;

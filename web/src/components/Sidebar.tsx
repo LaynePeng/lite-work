@@ -1096,6 +1096,7 @@ export default function Sidebar({
   onOpenWorktree,
   onOpenWorktreeSession,
   onBackToProjects,
+  onCloseProject,
   onOpenProjectNewWindow,
   onOpenSettings,
   onOpenAbout,
@@ -1158,6 +1159,8 @@ export default function Sidebar({
   /** 打开某个 worktree 对应的会话（名字即会话 ID；文件面板区块点击） */
   onOpenWorktreeSession?: (sessionId: string) => void;
   onBackToProjects: () => void;
+  /** 关闭当前项目：回到项目列表并释放该项目在 Core 里的缓存/会话内存态（不删会话） */
+  onCloseProject?: () => void;
   onOpenProjectNewWindow?: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
@@ -1368,6 +1371,15 @@ export default function Sidebar({
                     <button className={sessionsGlobalMode ? "active" : ""}
                       onClick={() => onSwitchSessionsView(true)}>全部</button>
                   </div>
+                )}
+                {onCloseProject && !sessionsGlobalMode && (
+                  <button
+                    className="btn-close-project"
+                    onClick={onCloseProject}
+                    title="关闭项目：回到项目列表，并释放该项目在 Core 里占用的缓存与会话内存（会话历史不删）"
+                  >
+                    ⏻
+                  </button>
                 )}
               </div>
               <button className="btn-new-session" onClick={onNewSession}>

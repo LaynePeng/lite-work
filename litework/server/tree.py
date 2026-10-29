@@ -20,7 +20,44 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("litework.server.tree")
 
 GIT_CACHE_TTL = 3.0
+#: 缓存条目上限：模块级字典按工作区绝对路径为键，一个长期运行的 Core 会在
+#: 用户切过的**每个**项目下留一条（打开/关闭项目几十次就是几十条，条目本身
+#: 小但永不过期）。超限时按 TTL 从旧到新淘汰。
+GIT_CACHE_MAX = 16
 _git_cache: Dict[str, Tuple[float, Optional[str], Dict[str, str]]] = {}
+
+
+def invalidate_git_cache(workspace: str) -> int:
+    """清掉某工作区的 git 状态缓存（关闭项目时调用）。返回清掉的条数。
+
+    键是 `os.path.abspath` 与 `os.path.realpath` 两种形态都可能出现（取决于
+    调用方传入的路径），两种都清——否则符号链接路径（macOS 的 /var →
+    /private/var）会留下一条永远命中不到的残条。
+    """
+    removed = 0
+    candidates = {workspace}
+    try:
+        candidates.add(os.path.realpath(workspace))
+        candidates.add(os.path.abspath(workspace))
+    except OSError:
+        pass
+    for key in candidates:
+        if _git_cache.pop(key, None) is not None:
+            removed += 1
+    return removed
+
+
+def _evict_git_cache(now: float) -> None:
+    """缓存溢出时淘汰：先丢已过 TTL 的，仍超限则按写入时间丢最旧的。"""
+    if len(_git_cache) <= GIT_CACHE_MAX:
+        return
+    for key, entry in list(_git_cache.items()):
+        if now - entry[0] > GIT_CACHE_TTL:
+            _git_cache.pop(key, None)
+    if len(_git_cache) > GIT_CACHE_MAX:
+        victims = sorted(_git_cache.items(), key=lambda kv: kv[1][0])
+        for key, _ in victims[: len(_git_cache) - GIT_CACHE_MAX]:
+            _git_cache.pop(key, None)
 
 
 def _run_git(workspace: str, args: List[str]) -> Tuple[int, str]:
@@ -56,6 +93,7 @@ def git_snapshot(workspace: str) -> Tuple[Optional[str], Dict[str, str]]:
     code, out = _run_git(workspace, ["status", "--porcelain", "-z"])
     if code != 0:
         _git_cache[workspace] = (now, None, {})
+        _evict_git_cache(now)
         return None, {}
 
     branch: Optional[str] = None
@@ -80,6 +118,7 @@ def git_snapshot(workspace: str) -> Tuple[Optional[str], Dict[str, str]]:
             status_map[path] = _status_char(xy)
 
     _git_cache[workspace] = (now, branch, status_map)
+    _evict_git_cache(now)
     return branch, status_map
 
 

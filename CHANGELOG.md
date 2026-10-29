@@ -4,6 +4,49 @@
 
 ## [未发布]
 
+### 修复（关闭对话 / 关闭项目后 Core 内存不回收，必须重启软件）
+
+- **现象**：关掉对话页签、或从项目 A 切到项目 B 之后，Core 占用的内存不下降；
+  用久了只能把整个应用退掉重开。用户报障原话：「关闭了对话或者项目，对应的
+  core 不会回收，需要整个软件重启才能清除不用的 core，造成泄漏。」
+- **根因不是一处，是一整层缺失**：任务级的回收（`TaskHandle.release` /
+  `TaskManager.reap`，v1.9 已做）是好的，但**按会话**与**按项目**驻留的结构
+  从来没有释放入口——
+  - 按会话：`app.agent_managers[sid]`（**绝对大头**：子 Agent 的完整消息链）、
+    `_context_session_stats`、`approval_rules`、TODO 看板的事件绑定；
+  - 按项目：`_shell_plugins`（按目录缓存）、`server/tree._git_cache`
+    （模块级字典，键是目录，**永不淘汰**）。
+  这些只能在「删除会话」或「重启 Core」时清掉。关页签在前端纯属视图动作，
+  后端没有任何调用。
+- **实测（修复前 → 修复后）**：30 个会话 × 4 个子 Agent × 40 条消息，
+  修复前常驻 **24.11MB** 且不随关闭下降；关闭对话后降到 **2.4KB**，
+  关闭项目后 shell/git 缓存归零，**30/30 个会话文件原样保留**。
+- **修复**：
+  - `AgentApp.release_session()` / `release_workspace()`：会话级与项目级内存态
+    的统一释放入口（只放内存，不删会话文件、不动落盘历史）；
+  - `SessionAgentManager.release()` + `close()` 清空消息链（已关闭的 agent 本来
+    就不能再 `followup`，消息链再无消费方）；新增 `trim_finished_messages()`：
+    终态 30 分钟后**只放消息链、保留记录**（看板照常显示，`followup` 退化为
+    「原任务 + 上次总结」的既有轻量路径），由服务启动的回收循环每 30s 巡检；
+  - `server/tree._git_cache` 增加 `invalidate_git_cache()` 与容量上限淘汰
+    （切过的每个项目留一条、永不清理是进程级泄漏）；
+  - 前端：**关页签即调 `POST /api/sessions/{id}/release`**（fire-and-forget，
+    失败不影响关页签；有任务在跑时后端 409 属正常拒绝）；批量释放路径
+    （`releaseDetachedChats`）同样调用。
+- **新增「关闭项目」入口**（此前没有这个概念，只能「切到别的项目」）：
+  项目内会话视图右上角 `⏻` → `POST /api/workspace/close`：本端回到
+  「未打开项目」，释放该项目目录的缓存与该目录下**所有已无运行任务的会话**
+  内存态。与「从最近列表移除（✕）」不是一回事——那个只动列表记录。
+- **边界**：仍在跑任务（或仍有运行中的后台子 Agent）的会话拒绝释放（409），
+  任务收尾要往这份状态里落账；统计面板的会话累计在释放后从零重新累计
+  （落盘的历史用量不受影响）。
+- 涉及文件：`litework/app.py`、`litework/orchestration/agent_manager.py`、
+  `litework/server/app.py`、`litework/server/tree.py`、
+  `litework/server/routers/sessions.py`、`litework/server/routers/workspace.py`、
+  `web/src/App.tsx`、`web/src/api.ts`、`web/src/components/Sidebar.tsx`、
+  `web/src/styles.css`；新增 `tests/test_session_reclaim.py`（12 例）与
+  `web/src/App.closeProject.test.tsx`（4 例）。
+
 ## [2.0.5] — 盯梢通知回看 + 插件配置热生效
 
 > 本版主体：盯梢通知链路的两处体验修复——通知能点开详情卡回看（浮层几秒就

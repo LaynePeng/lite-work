@@ -136,6 +136,13 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                     tasks.reap()
                 except Exception:  # noqa: BLE001 - 回收失败不该杀掉循环
                     logger.warning("[Reap] 回收已完成任务失败", exc_info=True)
+                # 会话级：子 Agent 的消息链是「关不掉的对话」里最大的一块。
+                # 放在同一循环里做，是因为 trimmed 的判定依赖时间流逝（30 分钟），
+                # 而 /api/status 不是轮询接口——不能指望有请求来触发。
+                try:
+                    app.trim_finished_agent_messages()
+                except Exception:  # noqa: BLE001
+                    logger.warning("[Reap] 裁剪子 Agent 消息链失败", exc_info=True)
 
         reap_task = asyncio.create_task(_reap_finished_tasks())
         try:
@@ -163,6 +170,10 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     push = PushManager(app.config_dir)
     ctx = ServerContext(app=app, tasks=tasks, auth=auth, jobs=InstallJobRegistry(),
                         push=push)
+    # 供测试与内省取用（路由闭包持有同一实例）：验证「有任务在跑时不释放」
+    # 这类跨层约定时，需要从外部访问 TaskManager
+    fast_app.state.tasks = tasks
+    fast_app.state.ctx = ctx
     # 盯梢通知的设备推送通道（PWA）：门槛判断在 PushManager.on_watch_note，
     # 回调异常由总线自吞，不影响调度器
     app.watch_notifications.on_push = push.on_watch_note

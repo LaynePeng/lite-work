@@ -497,7 +497,31 @@ class SessionAgentManager:
         record.status = "closed"
         record.finished_at = record.finished_at or time.time()
         record.loop = None
+        # 已关闭的 agent 无法再 followup（见 followup 的 status=="closed" 拒绝），
+        # 消息链再无消费方——留着只是把几十上百 KB 钉在内存里直到重启
+        record.messages = []
         return {"ok": True, "agent_id": agent_id, "previous_status": previous}
+
+    def release(self) -> int:
+        """释放本会话全部**内存态**（manager 被摘除前调用）。返回清掉的 agent 记录数。
+
+        为什么不只是 pop 掉 manager 就够了：`AgentRecord.messages` 是子 Agent 的
+        完整消息链（followup 唤醒的上下文基础），每个 agent 几十条消息、几十到
+        几百 KB；一个会话派生十几个 agent 就是几 MB 到几十 MB。此前只有
+        `gc_stale`（终态 1 小时后、且只在 `/api/status` 被请求时才跑）会摘记录，
+        manager 外壳本身永不移除——「关掉对话/切走项目」后这些内存只能等重启。
+        """
+        count = len(self.agents)
+        for record in self.agents.values():
+            record.messages = []
+            record.loop = None
+            record.runner = None
+        self.agents.clear()
+        self.notifications.clear()
+        self.shared_tasks.clear()
+        self._msg_rate.clear()
+        self._nickname_counter.clear()
+        return count
 
     async def shutdown(self) -> int:
         """停掉本会话全部子 Agent（会话删除/清理时调用，防泄漏）。返回停止数。"""
@@ -533,6 +557,38 @@ class SessionAgentManager:
         if stale:
             logger.info("[AgentManager] GC 清理 %d 个过期 Agent 记录", len(stale))
         return len(stale)
+
+    #: 终态 agent 的消息链在内存里保留多久（秒）。消息链只服务一个目的：
+    #: 让 followup_task 能在原上下文中续跑。超过这个窗口后再唤醒会退化到
+    #: 「原任务 + 上次总结」的轻量历史（followup 本来就有这条兜底路径），
+    #: 而期间省下的是每个 agent 几十到几百 KB、一会话几 MB 到几十 MB。
+    MESSAGES_TTL_SECONDS = 1800
+
+    def trim_finished_messages(self, max_idle_seconds: Optional[float] = None) -> int:
+        """裁剪终态 agent 的消息链（保留记录，只放掉上下文）。返回裁剪条数。
+
+        与 `gc_stale` 的分工：gc 摘**记录**（1 小时，看板不再显示），这里只放
+        **消息链**（30 分钟，记录与总结保留、看板照常显示、followup 退化为
+        轻量历史）。只做 gc 的话，会话长期不关的机器上消息链会一直涨——那是
+        实测里最大的一块（30 会话 × 4 agent × 40 条 ≈ 24MB）。
+        """
+        limit = self.MESSAGES_TTL_SECONDS if max_idle_seconds is None else max_idle_seconds
+        now = time.time()
+        trimmed = 0
+        for record in self.agents.values():
+            if not record.messages:
+                continue
+            if record.status not in ("closed", "completed", "errored"):
+                continue
+            finished = record.finished_at
+            if finished is None or (now - finished) <= limit:
+                continue
+            record.messages = []
+            trimmed += 1
+        if trimmed:
+            logger.info("[AgentManager] 会话 %s 裁剪 %d 个终态 agent 的消息链",
+                        self.session_id, trimmed)
+        return trimmed
 
     async def wait(self, agent_ids: List[str], timeout_ms: int = 120000) -> Dict[str, Any]:
         """阻塞门：等指定 agent 终态，返回状态与总结。"""

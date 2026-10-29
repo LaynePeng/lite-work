@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -41,6 +42,18 @@ class ProjectKindRequest(BaseModel):
     """手动标记项目类型（写入最近项目并锁定，不再被启发式覆盖）。"""
     path: str
     kind: str
+
+
+def _norm_ws(path: str) -> str:
+    """工作区路径归一（比较会话归属用）：绝对化 + 大小写（Windows）+ 去尾斜杠。
+
+    不能直接比字符串：会话 metadata 里记的是创建时的 workspace 绝对路径，
+    而用户可能经符号链接/不同大小写形态重新打开同一目录。
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    return os.path.normcase(os.path.abspath(os.path.expanduser(raw))).rstrip("/\\")
 
 
 def create_router(ctx: ServerContext) -> APIRouter:
@@ -122,6 +135,60 @@ def create_router(ctx: ServerContext) -> APIRouter:
         except Exception:
             logger.debug("[Workspace] 记录最近项目失败", exc_info=True)
         return {"ok": True, "workspace": path}
+
+    @router.post("/api/workspace/close")
+    async def close_workspace(request: Request):
+        """关闭当前项目视图：解除本端项目登记 + 释放该目录的缓存对象。
+
+        「关闭项目」与「切换到别的项目」的区别：后者会把视图换成另一个目录，
+        但**旧目录的缓存与无人认领的会话内存一直留着**；关掉项目则是显式收尾
+        ——本端回到「未打开项目」，该目录的 ShellPlugin / git 缓存释放，
+        并且**该目录下所有已无运行任务的会话**（agent_managers 里的子 Agent
+        消息链、context_stats、approval_rules）一并释放。
+
+        释放的是纯内存态：会话文件、TODO 看板、历史消息全部照旧落盘，
+        重新打开项目与对话一切照常。有任务在跑的会话不动（跑完还要落账）。
+        """
+        ctx.check_auth(request)
+        workspace = ctx.resolve_workspace(request)
+        if not workspace:
+            return {"ok": True, "workspace": "", "released": {}}
+
+        running = {h.kernel.session_id for h in tasks.tasks.values()
+                   if h.running and h.kernel is not None}
+        released_sessions: list[str] = []
+        skipped = 0
+        target = _norm_ws(workspace)
+        for snap in app.session_store.list():
+            sid = snap.get("session_id") or ""
+            if not sid:
+                continue
+            if _norm_ws((snap.get("metadata") or {}).get("workspace", "")) != target:
+                continue
+            if sid in running:
+                skipped += 1
+                continue
+            app.release_session(sid)
+            released_sessions.append(sid)
+
+        freed = app.release_workspace(workspace)
+        # 本端回到「未打开项目」：带 client-id 的端显式登记空串（resolve_workspace
+        # 命中空串 → require_workspace 抛 409，语义与首次连接一致）；旧客户端
+        # 退回全局值，只能把全局 workspace 清掉。
+        cid = ctx.client_id_of(request)
+        if cid:
+            ctx.client_views[cid] = ""
+        else:
+            app.workspace = None
+        logger.info("[Workspace] 已关闭项目 %s（释放会话 %d，跳过在跑 %d）",
+                    workspace, len(released_sessions), skipped)
+        return {
+            "ok": True,
+            "workspace": "",
+            "closed": workspace,
+            "released": {**freed, "sessions": len(released_sessions),
+                         "running_skipped": skipped},
+        }
 
     @router.post("/api/projects/create")
     async def create_project(payload: ProjectCreateRequest, request: Request):

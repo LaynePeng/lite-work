@@ -642,6 +642,10 @@ export const api = {
     }),
   cleanupSessions: () =>
     req<{ ok: boolean; deleted: number }>("/api/sessions/cleanup", { method: "DELETE" }),
+  /** 释放会话内存态（关页签时调用）：不删会话，只放掉子 Agent 消息链/统计。 */
+  releaseSession: (id: string) =>
+    req<{ ok: boolean; session_id: string; released: Record<string, unknown> }>(
+      `/api/sessions/${id}/release`, { method: "POST" }),
 
   tools: (agentId?: string) => {
     const url = agentId ? `/api/tools?agent_id=${encodeURIComponent(agentId)}` : "/api/tools";
@@ -662,6 +666,11 @@ export const api = {
     req<{ ok: boolean; workspace: string }>("/api/workspace", {
       method: "POST", body: JSON.stringify({ path }),
     }),
+  /** 关闭当前项目：本端回到「未打开项目」+ 释放该项目目录的缓存与会话内存态。 */
+  closeWorkspace: () =>
+    req<{ ok: boolean; workspace: string; closed?: string;
+          released?: Record<string, unknown> }>(
+      "/api/workspace/close", { method: "POST" }),
   mcpStatus: () => req<MCPStatus>("/api/mcp"),
   updateMcpServers: (servers: Record<string, MCPServerConfig>) =>
     req<{ ok: boolean; servers: MCPServerStatus[] }>("/api/mcp", {

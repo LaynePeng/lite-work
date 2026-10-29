@@ -905,6 +905,11 @@ export default function App() {
         flushTimersRef.current.delete(sid);
       }
     }
+    // 前端丢弃的同时释放后端会话内存态（子 Agent 消息链/统计）；
+    // 这批会话已无页签且不在跑，后端资源再没人会用。失败忽略。
+    for (const sid of stale) {
+      void api.releaseSession(sid).catch(() => { /* 尽力而为 */ });
+    }
     dropChats(stale);
   }, [closeStream, dropChats]);
 
@@ -1135,6 +1140,11 @@ export default function App() {
           taskIdsRef.current.delete(sid);
           stopRequestedRef.current.delete(sid);
           dropChat(sid);
+          // 后端也要释放：此前关页签纯属前端动作，Core 里该会话的子 Agent
+          // 消息链/统计一直挂着，只能靠重启 Core 清（用户反馈的「越用越吃
+          // 内存」）。失败不影响关页签（只是内存晚点回收）。
+          // fire-and-forget：不阻塞交互，且 409（任务仍在跑）属于正常拒绝。
+          void api.releaseSession(sid).catch(() => { /* 忽略：尽力而为 */ });
         }
       }
       setTabs((prev) => {
@@ -1772,6 +1782,43 @@ export default function App() {
   }, []);
 
   const backToProjects = useCallback(() => setProjectsView("list"), []);
+
+  /** 关闭当前项目：本端回到「未打开项目」+ 让 Core 释放该项目占用的资源。
+   *
+   *  与「切换到别的项目」的区别：切走只是换视图，旧目录的 ShellPlugin 缓存、
+   *  git 状态缓存、以及**已无运行任务**的会话内存态（子 Agent 消息链是大头）
+   *  会一直留着，直到删除会话或重启 Core——这就是「越用越吃内存、必须整个
+   *  软件重启」。关闭项目是显式收尾：后端一次性把这些放掉。
+   *
+   *  不删任何会话：历史消息、TODO 看板都在磁盘，重新打开项目一切照旧。 */
+  const closeProject = useCallback(async () => {
+    if (!status?.workspace) return;
+    const closing = status.workspace;
+    try {
+      await api.closeWorkspace();
+    } catch (e) {
+      // 后端失败不该把用户锁在项目里：仍是回到项目列表，只是内存晚点回收
+      pushLog(`⚠ 关闭项目时释放资源失败（${(e as Error).message}），已回到项目列表`);
+    }
+    // 本端视图清空 + 关掉该项目下所有页签的前端状态（SSE/消息体）
+    const sids = tabsRef.current.flatMap((t) =>
+      t.kind === "chat" && t.sessionId ? [t.sessionId] : []);
+    for (const sid of sids) closeStream(sid);
+    dropChats(sids);
+    // 页签一并收起：留着已无状态、且不属于任何项目的对话页签只会是一片空白
+    //（session 仍有，但当前没有项目可归属，点进去也发不出任务）
+    setTabs([]);
+    newChatTab();
+    setStatus((prev) => (prev ? { ...prev, workspace: "" } : prev));
+    notifyElectronWorkspace("");
+    setProjectsView("list");
+    changeSidebarTab("sessions");
+    void refreshRecentProjects();
+    pushLog(`⏏ 已关闭项目: ${closing}（该项目的缓存与会话内存已释放，历史对话保留）`);
+    setSuccess(`已关闭项目：${closing}`);
+    setTimeout(() => setSuccess(null), 4000);
+  }, [status?.workspace, closeStream, dropChats, notifyElectronWorkspace,
+      refreshRecentProjects, changeSidebarTab, pushLog, newChatTab]);
 
   // 首次启动：打开一个占位会话 tab
   useEffect(() => {
@@ -3745,6 +3792,7 @@ export default function App() {
         onOpenWorktree={(path) => void openWorktreeSession(path)}
         onOpenWorktreeSession={(sessionId) => void selectSession(sessionId)}
         onBackToProjects={backToProjects}
+        onCloseProject={() => void closeProject()}
         onOpenProjectNewWindow={() => void openProjectNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}

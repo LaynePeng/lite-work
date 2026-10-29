@@ -4,6 +4,7 @@
 """会话管理：/api/sessions*、/api/todos、/api/compact。"""
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from typing import Any, Dict, Optional
@@ -15,6 +16,8 @@ from pydantic import BaseModel
 # 也要用，避免 core→server 反向依赖）；re-export 保持既有引用（含测试）兼容。
 from ...core.personal import PERSONAL_WORKSPACE, ensure_personal_workspace  # noqa: F401
 from .context import ServerContext, _session_title
+
+logger = logging.getLogger("litework.server.sessions")
 
 
 class SessionCreateRequest(BaseModel):
@@ -271,6 +274,43 @@ def create_router(ctx: ServerContext) -> APIRouter:
             metadata["workspace"] = workspace
         app.session_store.save(session_id, [], metadata)
         return {"session_id": session_id}
+
+    @router.post("/api/sessions/{session_id}/release")
+    async def release_session(session_id: str, request: Request):
+        """释放该会话的**内存态**资源（关闭对话页签时调用；不删会话）。
+
+        为什么需要它：关页签在前端只是视图动作，后端原来没有任何调用——
+        `agent_managers` 里的子 Agent 消息链、context_stats、approval_rules
+        等按会话驻留的结构，只能靠「删除会话」或「重启 Core」清掉。用户感知
+        就是越开越吃内存、必须整个软件重启。
+
+        释放后可安全重开：历史消息在磁盘、TODO 看板在磁盘，重新打开会按需
+        重建 manager 与统计；子 Agent 看板记录也会从 subagent_records 恢复。
+
+        有任务在跑的会话拒绝（409）：任务收尾要往这份状态里落账。
+        """
+        ctx.check_auth(request)
+        if app.session_store.load(session_id) is None and \
+                session_id not in app.agent_managers:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        active = tasks.active_for_session(session_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该会话有任务正在运行，等结束或停止后再释放",
+            )
+        # 活跃的后台子 Agent 不在 TaskHandle 里：它们由 manager 持着 runner。
+        # 有在跑的就不能整体释放（会掐断正在执行的工作）
+        manager = app.agent_manager(session_id, create=False)
+        if manager is not None and any(
+                r.status == "running" for r in manager.agents.values()):
+            raise HTTPException(
+                status_code=409,
+                detail="该会话仍有后台子 Agent 在运行，等结束或关闭后再释放",
+            )
+        freed = app.release_session(session_id)
+        logger.info("[Session] 已释放会话内存态 %s: %s", session_id, freed)
+        return {"ok": True, "session_id": session_id, "released": freed}
 
     @router.post("/api/sessions/{session_id}/derive")
     async def derive_session(session_id: str, payload: SessionDeriveRequest, request: Request):

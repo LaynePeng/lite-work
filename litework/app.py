@@ -321,6 +321,73 @@ class AgentApp:
             m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
         return m
 
+    # ------------------------------------------------ 会话 / 项目资源释放
+    #
+    # 为什么需要显式释放：「关闭对话页签」「切走项目」在前端只是视图动作，
+    # 后端没有任何调用。而按会话/按项目驻留的结构有六处，删除会话或重启
+    # Core 之前只增不减——用户感知就是「越用越吃内存，得整个软件重启」。
+    #
+    # 分两层（与任务级 release/reap 同一思路）：
+    # - 会话级：agent_managers（子 Agent 消息链，实测占大头）/ context_stats /
+    #   approval_rules / todo 看板绑定 / 任务统计基线；
+    # - 项目级：_shell_plugins（按目录缓存）/ tree._git_cache（模块级按目录）。
+
+    def release_session(self, session_id: str, *, drop_agents: bool = True) -> Dict[str, Any]:
+        """释放某会话的**内存态**资源（不删会话文件、不动落盘历史）。
+
+        只在确认该会话已无运行中任务时调用（调用方判定，见 TaskManager）。
+        drop_agents=False 时保留子 Agent 记录（活跃子 Agent 可能还在跑）。
+        返回释放明细，便于接口回执与测试断言。
+        """
+        if not session_id:
+            return {}
+        freed: Dict[str, bool] = {}
+        if drop_agents:
+            manager = self.agent_managers.pop(session_id, None)
+            if manager is not None:
+                manager.release()
+                freed["agents"] = True
+        # 会话级累计统计：关页签后再打开会重新累计（面板数字归零可接受，
+        # 落盘的历史用量不受影响——那是一份独立的 tokens 记录）
+        freed["context_stats"] = self._context_session_stats.pop(session_id, None) is not None
+        freed["task_snapshot"] = self._last_task_snapshot.pop(session_id, None) is not None
+        # 「记住并允许同类」规则：内存级会话语义，会话收工即失效
+        freed["approval_rules"] = self.approval_rules.pop(session_id, None) is not None
+        # TODO 看板：只解绑事件总线，看板内容留在磁盘（重开会话仍要能看到）
+        try:
+            self.todo_plugin.unbind(session_id)
+        except Exception:  # noqa: BLE001 - 释放路径绝不抛
+            logger.debug("[Release] 解绑 TODO 看板失败: %s", session_id, exc_info=True)
+        return freed
+
+    def release_workspace(self, workspace: str) -> Dict[str, Any]:
+        """释放某项目目录的**缓存对象**（不删磁盘文件、不动会话）。
+
+        覆盖：按目录缓存的 ShellPlugin 实例、目录树 git 状态缓存。
+        正在跑的**后台命令**不受影响——注册表已提到 app 级共享（见 _bg_registry），
+        ShellPlugin 只是工具门面，丢弃不丢任务归属。
+        """
+        if not workspace:
+            return {}
+        target = os.path.abspath(os.path.expanduser(workspace))
+        freed: Dict[str, bool] = {}
+        freed["shell_plugin"] = self._shell_plugins.pop(target, None) is not None
+        # ShellPlugin 缓存也可能以 realpath 为键（工作区经符号链接传入）
+        try:
+            real = os.path.realpath(target)
+            if real != target:
+                freed["shell_plugin"] = (
+                    self._shell_plugins.pop(real, None) is not None or freed["shell_plugin"])
+        except OSError:
+            pass
+        try:
+            from .server.tree import invalidate_git_cache
+
+            freed["git_cache"] = invalidate_git_cache(target) > 0
+        except Exception:  # noqa: BLE001 - 释放路径绝不抛
+            logger.debug("[Release] 清理 git 缓存失败: %s", target, exc_info=True)
+        return freed
+
     # ------------------------------------------------ 盯梢 / 定时（watch & schedule）
 
     @property
@@ -394,6 +461,21 @@ class AgentApp:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None
 
+    def trim_finished_agent_messages(self) -> int:
+        """裁剪全部会话中终态子 Agent 的消息链（保留记录）。返回裁剪条数。
+
+        被服务启动的回收循环周期性调用（见 server/app.py 的 `_reap_finished_tasks`）。
+        与 `background_agent_count` 里的 gc 分工见
+        `SessionAgentManager.trim_finished_messages`。
+        """
+        trimmed = 0
+        for manager in list(self.agent_managers.values()):
+            try:
+                trimmed += manager.trim_finished_messages()
+            except Exception:  # noqa: BLE001 - 单会话失败不影响其余
+                logger.debug("[App] 裁剪子 Agent 消息链失败", exc_info=True)
+        return trimmed
+
     def background_agent_count(self) -> int:
         """全部会话中仍在运行的后台子 Agent 数（MCP 热重载 / 工作区切换守卫用）。
 
@@ -407,6 +489,9 @@ class AgentApp:
         for manager in self.agent_managers.values():
             try:
                 manager.gc_stale(max_age_seconds=3600)
+                # 消息链单独一层（30 分钟）：记录留着（看板照常显示、还能
+                # followup），只放掉上下文——那是子 Agent 内存里的绝对大头
+                manager.trim_finished_messages()
             except Exception:
                 logger.debug("[App] Agent 记录 GC 失败", exc_info=True)
         return sum(
