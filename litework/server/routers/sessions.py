@@ -388,10 +388,11 @@ def create_router(ctx: ServerContext) -> APIRouter:
             if name:
                 updates["name"] = name[:120]
             else:
-                # 清除自定义名：save 会把空串当缺省，这里显式删除键
-                meta = snap.metadata or {}
-                meta.pop("name", None)
-                app.session_store.save(session_id, snap.messages, meta)
+                # 清除自定义名：save 会把空串当缺省，这里显式删除键。
+                # 不能用「snap.messages + save」——那份 snap 是本函数开头读的，
+                # 期间可能有新消息落盘（任务正在跑），整份写回会把它们覆盖掉；
+                # 统一交给 update_metadata（内部会重读最新快照，只改元数据）。
+                updates["name"] = None
         if payload.pinned is not None:
             updates["pinned"] = bool(payload.pinned)
         if updates:

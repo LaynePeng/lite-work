@@ -257,6 +257,21 @@ async def test_session_patch_rename_and_pin(live_client):
                  if s["session_id"] == sid)
     assert entry["title"] == "原始任务标题"
 
+    # 清除名走的是「只改元数据」路径，绝不能顺带把消息写回旧版本：
+    # 端点开头 load 的快照可能已过期（任务正在跑、别的客户端刚写入），
+    # 若用 snap.messages + save 整份写回，就会静默覆盖掉这段时间的新消息。
+    from litework.core.types import Message as _Msg
+    app.session_store.save(sid, [
+        _Msg(role="user", content="原始任务标题"),
+        _Msg(role="assistant", content="并发写入的新回复"),
+    ], {"workspace": ws})
+    r = await c.patch(f"/api/sessions/{sid}", json={"name": "又一个名字"})
+    assert r.json()["name"] == "又一个名字"
+    r = await c.patch(f"/api/sessions/{sid}", json={"name": ""})
+    assert r.json()["name"] is None
+    msgs = [m.content for m in app.session_store.load(sid).messages]
+    assert "并发写入的新回复" in msgs, "改元数据把新消息覆盖掉了"
+
     # 置顶
     r = await c.patch(f"/api/sessions/{sid}", json={"pinned": True})
     assert r.json()["pinned"] is True
