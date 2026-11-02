@@ -508,3 +508,74 @@ async def test_midbatch_queued_input_interrupts_remaining_tools(tmp_path):
     assert inject_idx > last_tool_idx > first_tool_idx, (
         f"注入消息位置非法：inject={inject_idx}, tool=[{first_tool_idx},{last_tool_idx}]"
     )
+
+async def test_prune_stats_do_not_double_count_across_turns():
+    """prune 是逐轮投影（messages 不写回），同一批老消息会被反复裁掉。
+
+    回归的是统计失真：原实现每轮把整笔 removed_tokens 累加，
+    连续 N 轮就把同一笔节省计了 N 次（线上 604 轮 → 面板省 token 虚高几十倍）。
+    正确行为：只累计**新**被裁掉的消息，重复裁剪不再加数。
+
+    走 prune 分支的前提是「经济学决策认为不值得摘要」——把 economics 关掉
+    即可稳定复现这条兜底路径（这也正是线上长期发生的路径）。
+    """
+    registry = ToolRegistry()
+    adapter = MockLLMAdapter([("完成", [])])
+    loop = AgentLoop(kernel=Kernel("prune-stats"), adapter=adapter, registry=registry,
+                     token_budget=300, context_window=1000)
+    # 强制走免费裁剪兜底（不触发 LLM 摘要，否则走的是另一条会写回的分支）
+    loop._enable_compaction_economics = False
+
+    async def _no_compact(*a, **kw):
+        return None
+    loop._try_compact = _no_compact  # type: ignore[method-assign]
+
+    messages = [Message(role="system", content="sys")]
+    for i in range(6):
+        messages.append(Message(role="user", content=f"问题{i} " + "x" * 600))
+        messages.append(Message(role="assistant", content=f"回答{i} " + "x" * 600))
+    total = len(messages)
+
+    stats: Dict[str, Any] = {"turns": 1}
+    payload = await loop._trim_context(messages, stats)
+    after_first = loop._compressed_tokens
+    assert after_first > 0, "第一轮应统计到裁剪节省"
+    assert loop._compression_count == 1
+    # prune 投影不写回：messages 仍是完整历史，只有返回的 payload 变短
+    assert len(messages) == total
+    assert len(payload) < total
+
+    # 第二轮：同一批老消息被重新裁掉，但不应再计入节省
+    await loop._trim_context(messages, stats)
+    assert loop._compressed_tokens == after_first, \
+        "重复裁剪同一批消息不得再累加节省（否则随轮数线性虚高）"
+    assert loop._compression_count == 1
+
+
+async def test_prune_stats_count_newly_aged_messages():
+    """新增的更老消息（本轮新被裁到的）仍要计入——去重不能把真节省也丢掉。"""
+    registry = ToolRegistry()
+    adapter = MockLLMAdapter([("完成", [])])
+    loop = AgentLoop(kernel=Kernel("prune-new"), adapter=adapter, registry=registry,
+                     token_budget=300, context_window=1000)
+    loop._enable_compaction_economics = False
+
+    async def _no_compact(*a, **kw):
+        return None
+    loop._try_compact = _no_compact  # type: ignore[method-assign]
+
+    messages = [Message(role="system", content="sys")]
+    for i in range(6):
+        messages.append(Message(role="user", content=f"问题{i} " + "x" * 600))
+        messages.append(Message(role="assistant", content=f"回答{i} " + "x" * 600))
+
+    stats: Dict[str, Any] = {"turns": 1}
+    await loop._trim_context(messages, stats)
+    baseline = loop._compressed_tokens
+
+    # 追加新轮次：更老的消息会滑出保留窗口 → 产生新的节省
+    messages.append(Message(role="user", content="新问题 " + "x" * 400))
+    messages.append(Message(role="assistant", content="新回答 " + "y" * 400))
+    messages.append(Message(role="user", content="更新问题 " + "x" * 400))
+    await loop._trim_context(messages, stats)
+    assert loop._compressed_tokens > baseline, "滑出窗口的消息属于新节省，必须计入"

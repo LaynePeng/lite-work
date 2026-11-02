@@ -197,6 +197,9 @@ class ContextManager:
         self.last_prune.update(
             compressed=removed_tokens > 0,
             removed_tokens=max(0, removed_tokens),
+            # 本轮被裁掉的消息对象（调用方用它做跨轮去重：同一批老消息会在
+            # 每一轮被重新裁一次，只有第一次算「新增节省」）
+            removed_messages=[m for m, r in zip(body, removed[1:]) if r],
         )
         logger.info(
             "[ContextManager] Pruned to %s messages (saved %s tokens, stage=%s).",

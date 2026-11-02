@@ -152,6 +152,11 @@ class AgentLoop:
         # 上下文压缩/缓存统计（供「上下文情况」面板）
         self._compression_count = 0
         self._compressed_tokens = 0
+        # prune 是「逐轮投影」而非永久删除（messages 不写回，磁盘保留完整历史），
+        # 所以同一批老消息会在每一轮被重新裁掉一次。若把每轮的 removed_tokens
+        # 直接累加，同一笔节省会被重复计 N 次（线上 604 轮 → 面板显示节省量
+        # 虚高几十倍）。这里记住已计入的消息身份，只累计**新**被裁掉的部分。
+        self._pruned_msg_ids: set[int] = set()
         self._last_usage: Optional[Dict[str, int]] = None
         # 最近一次 LLM 调用的用量与速度（「本次调用」口径，与 stats 里的任务累计区分）：
         # tokens 为整数，速度字段可能为 None（窗口过小/未计量）→ 用 Any
@@ -631,12 +636,20 @@ class AgentLoop:
 
         payload = self.context_manager.prune_messages(messages, hard_cap=cap)
         if self.context_manager.last_prune.get("compressed"):
-            self._compression_count += 1
-            self._compressed_tokens += int(
-                self.context_manager.last_prune.get("removed_tokens", 0)
-            )
-            if decision is None and self._compaction_reason is None:
-                self._compaction_reason = "pruned"
+            # 去重：prune 每轮把同一批老消息重新裁一遍（messages 不写回），
+            # 只累计本轮**新**被裁掉的那些，否则节省量会随轮数线性虚高。
+            fresh = [
+                m for m in self.context_manager.last_prune.get("removed_messages") or []
+                if id(m) not in self._pruned_msg_ids
+            ]
+            if fresh:
+                new_tokens = sum(TokenCounter.count_message_tokens(m) for m in fresh)
+                for m in fresh:
+                    self._pruned_msg_ids.add(id(m))
+                self._compression_count += 1
+                self._compressed_tokens += new_tokens
+                if decision is None and self._compaction_reason is None:
+                    self._compaction_reason = "pruned"
         return payload
 
     async def _call_llm_with_retry(
