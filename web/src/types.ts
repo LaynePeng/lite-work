@@ -568,7 +568,10 @@ export interface LiteWorkBridge {
   platform: string;
   version: string;
   openProject: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
-  openProjectNewWindow: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
+  /** 新开一个窗口（内含独立本地 Core；项目在新窗口里再选） */
+  openNewWindow: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
+  /** 旧名兼容（旧打包版主进程只认这个名字） */
+  openProjectNewWindow?: () => Promise<{ ok: boolean; url?: string; workspace?: string; error?: string }>;
   /** 通用目录选择（不切换工作区）；用户取消返回 error: "cancelled" */
   chooseDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;
   /** 重启当前窗口的本地 Core（插件变更后换取全新进程状态）；成功后页面整页刷新 */

@@ -771,10 +771,13 @@ async function createLocalWindow(workspace = null) {
   }
 }
 
-ipcMain.handle("open-project-new-window", async (event) => {
-  if (coreMode !== "local") return { ok: false, error: "当前模式不支持新建本地项目窗口" };
-  const workspace = await chooseWorkspace(BrowserWindow.fromWebContents(event.sender));
-  return workspace ? createLocalWindow(workspace) : { ok: false, error: "cancelled" };
+// 新窗口 = 新 Core：直接拉起窗口（各自独立的 Core 进程/端口/令牌），
+// 项目留到该窗口里再选（左栏项目列表）。原先这里先弹目录框再开窗，
+// 「打开新窗口」变成一个必须先想好项目才能点的按钮——多开一个空窗口
+// 本来是常见需求（并行两条任务线），选项目是下一步的事。
+ipcMain.handle("open-new-window", async () => {
+  if (coreMode !== "local") return { ok: false, error: "当前模式不支持新开本地窗口" };
+  return createLocalWindow();
 });
 
 // ------------------------------------------------------------ Core 重启

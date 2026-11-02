@@ -24,7 +24,7 @@
 -   **项目指令与 Skills**：读取项目根目录 `AGENTS.md` / `CLAUDE.md` 注入 System Prompt；技能索引常驻、`load_skill` 按需加载全文
 -   **OpenCode 风格交互**：思考/回答分离、工具调用卡片、多 Tab 工作台（对话 + 文件查看）、布局边界可拖拽调整
 -   **真实终端**：node-pty + xterm.js，macOS 使用 `$SHELL`，Windows 使用 PowerShell；终端不进入会话上下文
--   **多窗口项目**：窗口 = 项目 = Core；当前窗口可热切换工作区，也可新窗口打开项目，窗口间共享用户配置
+-   **多窗口项目**：窗口 = 项目 = Core；当前窗口可热切换工作区，也可「打开新窗口」新开一个窗口（窗口内带独立的 Core），项目在新窗口里再选，窗口间共享用户配置
 -   **多会话管理**：按项目隔离历史会话，JSON 原子写盘持久化，重启后自动加载续聊
 -   **运行日志**：后端与 Electron 主进程均写入 `~/.lite-work/logs/`（Windows：`C:\Users\<用户名>\.lite-work\logs\`），按 5 MiB 滚动并保留 3 个备份
 

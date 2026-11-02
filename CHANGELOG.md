@@ -9,6 +9,19 @@
 > 状态被谎报成 `completed`、转发给子 Agent 的消息只存在于内存、跨会话撞同一
 > 项目一律 429。另补跨会话 agent 的只读可见性，以及后台面板里的排队视图。
 
+### 变更（左栏「新窗口打开项目」→「打开新窗口」）
+
+- 左栏项目列表的入口由 **「▣ 新窗口打开项目…」** 改为 **「＋ 打开新窗口」**。
+  旧行为是**先弹目录选择框**、选完才开窗，于是「只是想多开一个窗口并行干活」
+  也被迫先决定项目；新行为直接开窗——主进程为该窗口拉起**独立的 Core**
+  （独立端口/令牌，`createLocalWindow()` 不传 workspace），项目在新窗口里
+  从左栏项目列表选，与首次启动的形态一致。
+- IPC 通道 `open-project-new-window` → `open-new-window`，preload 暴露
+  `openNewWindow`；`openProjectNewWindow` 作为旧名别名保留（旧打包版主进程
+  仍只认这个通道，前端 `bridge.openNewWindow ?? bridge.openProjectNewWindow`
+  双向兼容）。
+- 非桌面环境（浏览器）点击给出明确提示，不再静默失败。
+
 ### 修复（afterTool 超时/取消留下未 await 的协程）
 
 - `agent_loop.py` 的 afterTool 管道原本直接

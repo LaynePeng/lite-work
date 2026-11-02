@@ -1097,7 +1097,7 @@ export default function Sidebar({
   onOpenWorktreeSession,
   onBackToProjects,
   onCloseProject,
-  onOpenProjectNewWindow,
+  onOpenNewWindow,
   onOpenSettings,
   onOpenAbout,
   onOpenPhoneConnect,
@@ -1161,7 +1161,8 @@ export default function Sidebar({
   onBackToProjects: () => void;
   /** 关闭当前项目：回到项目列表并释放该项目在 Core 里的缓存/会话内存态（不删会话） */
   onCloseProject?: () => void;
-  onOpenProjectNewWindow?: () => void;
+  /** 新开一个窗口（内含独立 Core，项目在新窗口里选） */
+  onOpenNewWindow?: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   /** 「手机 / 局域网连接」入口（仅桌面 Electron 传入；缺省不渲染按钮） */
@@ -1265,9 +1266,14 @@ export default function Sidebar({
                   </span>
                 </button>
               </div>
-              {onOpenProjectNewWindow && (
-                <button className="btn-open-session" onClick={onOpenProjectNewWindow} title="在新窗口打开另一个项目">
-                  ▣ 新窗口打开项目…
+              {/* 远程 Core 模式下没有「本窗口的 Core」可拉起，入口隐藏（避免点了必然报错） */}
+              {onOpenNewWindow && coreMode !== "remote" && (
+                <button
+                  className="btn-open-session"
+                  onClick={onOpenNewWindow}
+                  title="打开新窗口：新窗口带独立 Core，可在里面另开一条任务线（项目在新窗口里选）"
+                >
+                  ＋ 打开新窗口
                 </button>
               )}
               <div className="projects-recent-title">最近打开</div>

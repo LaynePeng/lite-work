@@ -1647,14 +1647,24 @@ export default function App() {
     setShowPicker(true);
   }, [patchActiveChat]);
 
-  const openProjectNewWindow = useCallback(async () => {
-    if (!window.liteWork) {
-      window.alert("新窗口打开项目仅支持桌面应用。");
+  /**
+   * 新开一个窗口：主进程为该窗口拉起**独立的 Core**（独立端口/令牌），
+   * 项目在新窗口里再选。窗口间共享用户配置（~/.lite-work）。
+   */
+  const openNewWindow = useCallback(async () => {
+    const bridge = window.liteWork;
+    if (!bridge) {
+      window.alert("打开新窗口仅支持桌面应用。");
       return;
     }
-    const result = await window.liteWork.openProjectNewWindow();
-    if (!result.ok && result.error !== "cancelled") {
-      patchActiveChat({ error: result.error ?? "无法打开新项目窗口" });
+    const invoke = bridge.openNewWindow ?? bridge.openProjectNewWindow;
+    if (!invoke) {
+      window.alert("当前应用版本不支持打开新窗口，请更新后再试。");
+      return;
+    }
+    const result = await invoke();
+    if (!result.ok) {
+      patchActiveChat({ error: result.error ?? "无法打开新窗口" });
     }
   }, [patchActiveChat]);
 
@@ -3868,7 +3878,7 @@ export default function App() {
         onOpenWorktreeSession={(sessionId) => void selectSession(sessionId)}
         onBackToProjects={backToProjects}
         onCloseProject={() => void closeProject()}
-        onOpenProjectNewWindow={() => void openProjectNewWindow()}
+        onOpenNewWindow={() => void openNewWindow()}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
         onOpenPhoneConnect={isElectron() ? () => setShowPhoneConnect(true) : undefined}

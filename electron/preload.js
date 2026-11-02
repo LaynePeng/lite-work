@@ -15,7 +15,10 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 返回 { ok: true, url } 或 { ok: false, error }；用户在对话框取消时返回 { ok: false, error: "cancelled" }。
    */
   openProject: () => ipcRenderer.invoke("open-project"),
-  openProjectNewWindow: () => ipcRenderer.invoke("open-project-new-window"),
+  /** 新开一个窗口（内含独立本地 Core，项目在新窗口里再选） */
+  openNewWindow: () => ipcRenderer.invoke("open-new-window"),
+  /** 旧名兼容：已打包的旧前端仍按这个名字调用 */
+  openProjectNewWindow: () => ipcRenderer.invoke("open-new-window"),
   /**
    * 通用目录选择（不切换工作区）。新建任务向导「任意目录」落盘位置用。
    * 返回 { ok: true, path } 或 { ok: false, error: "cancelled" }。
