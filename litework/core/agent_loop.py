@@ -20,7 +20,9 @@ from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .compaction_economics import decide_compaction
-from .context_manager import ContextManager, patch_dangling_tool_calls, repair_tool_call_pairs
+from .context_manager import (
+    MAX_SUMMARY_CHARS, ContextManager, patch_dangling_tool_calls, repair_tool_call_pairs,
+)
 from .json_repair import safe_json_parse
 from .observation_pack import (
     observations_dir, project_observations, read_recall_chunk,
@@ -1258,10 +1260,28 @@ class AgentLoop:
             if not body:
                 return None
             # 超长保护：head 是已发送过的缓存内容，逐字转发通常更便宜；
-            # 但极端长会话仍需截断，避免单次请求超限
+            # 但极端长会话仍需截断，避免单次请求超限。
+            # ⚠️ 这里**不能返回 None**：调用方 _trim_context 拿到 None 会当作
+            # 「摘要失败」回退免费裁剪，而裁剪是逐轮投影、不写回 messages——
+            # 结果就是每轮都从完整历史重算一遍（实测 604 次超预算日志、
+            # 历史单调涨到 1.5M tokens）。改为软截断：丢最早的，保最近的，
+            # 至少让压缩真的发生（与 app._summarize_head 同口径）。
             total_chars = sum(len(m.content or "") for m in body)
-            if total_chars > 200_000:
-                return None
+            if total_chars > MAX_SUMMARY_CHARS:
+                budget = MAX_SUMMARY_CHARS
+                selected: List[Message] = []
+                for m in reversed(body):
+                    if budget <= 0:
+                        break
+                    selected.append(m)
+                    budget -= len(m.content or "")
+                body = repair_tool_call_pairs(list(reversed(selected)))
+                if not body:
+                    return None
+                logger.warning(
+                    "[AgentLoop] 摘要输入超长（%d 字符 > %d），仅摘要最近 %d 条",
+                    total_chars, MAX_SUMMARY_CHARS, len(body),
+                )
             instruction = (
                 "请将以上全部对话历史压缩为一段精炼的中文摘要，作为后续工作的背景说明：\n"
                 "保留已完成的决策与结论、修改过的文件清单、关键发现与未完成的任务，"

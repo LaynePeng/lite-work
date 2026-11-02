@@ -170,8 +170,10 @@ _DEEPSEEK_FAMILY_RE = re.compile(r"^deepseek", re.I)
 DEEPSEEK_CURRENT_MODEL = "deepseek-flash"
 DEEPSEEK_LEGACY_MODEL = "deepseek-v4-flash"
 
-# 手动压缩时 head 摘要输入字符上限（超过则只保留最近部分）
-MAX_SUMMARY_CHARS = 180_000
+# 手动压缩时 head 摘要输入字符上限（超过则只保留最近部分）。
+# 定义在 core.context_manager：自动压缩（AgentLoop._summarize_history）与手动
+# 压缩（_summarize_head）共用同一个阀值，两边行为必须一致。
+from .core.context_manager import MAX_SUMMARY_CHARS  # noqa: E402
 
 # 已安装插件列表的缓存 TTL（秒）：装/删/覆盖会主动失效，这里只兜底"外部手改插件目录"
 PLUGIN_LIST_TTL = 5.0
@@ -227,6 +229,8 @@ class AgentApp:
         self._plugins_list_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
         # 全量工具名缓存 (monotonic_ts, names)
         self._tool_names_cache: Optional[Tuple[float, List[str]]] = None
+        # 工具 schema 缓存（摘要类辅助调用复用，避免每次压缩重装全部插件）
+        self._tool_schema_cache: Optional[Tuple[float, List[Any]]] = None
         # 按 workspace（绝对路径）为键的 ShellPlugin 实例表：缓存键就是目录，
         # 切换工作区不可能再拿到旧目录的实例——「切换后 cwd 陈旧」这一类 bug
         # 从结构上消失（与 OpenCode 的 InstanceStore「按目录缓存实例」同构）。
@@ -1091,7 +1095,9 @@ class AgentApp:
         self.config["mcp_servers"] = servers
         self._write_config_merged()
         result = await self.mcp_manager.reload(servers)
-        self._tool_names_cache = None  # MCP 工具集变了 → 全量工具名缓存失效
+        self._tool_names_cache = None
+        # MCP 工具集变了 → 全量工具名/schema 缓存都失效
+        self._tool_schema_cache = None
         return result
 
     # ------------------------------------------------------------ LLM
@@ -2052,6 +2058,7 @@ class AgentApp:
         self._local_plugins = None
         self._plugins_list_cache = None
         self._tool_names_cache = None
+        self._tool_schema_cache = None
 
     def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
                            overwrite: bool = False) -> List[Dict[str, Any]]:
@@ -2307,9 +2314,12 @@ class AgentApp:
                 selected.append(m)
                 budget -= len(m.content or "")
             selected = list(reversed(selected))
+            dropped = len(body) - len(selected)
             logger.warning(
-                "[App] 手动压缩 head 超长（%d 字符），仅摘要最近 %d 条（约 %d 字符）",
-                total_chars, len(selected), sum(len(m.content or "") for m in selected),
+                "[App] 手动压缩 head 超长（%d 字符），仅摘要最近 %d 条（约 %d 字符），"
+                "较早 %d 条将被丢弃",
+                total_chars, len(selected),
+                sum(len(m.content or "") for m in selected), dropped,
             )
         # 软截断的刀口可能落在 assistant(tool_calls)+tool 原子对中间（selected
         # 以无主 tool 消息开头），且 compact 直接读盘、不经任务加载路径的
@@ -2331,8 +2341,10 @@ class AgentApp:
         ]
         try:
             # 与自动压缩 (AgentLoop._summarize_history) 对齐：携带工具 schema，
-            # 避免模型在无工具上下文里误发工具调用而返回空正文
-            tools = self.build_registry().get_tools()
+            # 避免模型在无工具上下文里误发工具调用而返回空正文。
+            # 走 cached_tool_schemas：摘要路径高频，且只需要 schema 前缀，
+            # 不该每次都 build_registry() 把整套插件重装一遍。
+            tools = self.cached_tool_schemas()
             content, _, _ = await self.adapter.chat_stream(messages, tools, None)
         except Exception:
             logger.exception("[App] 手动压缩摘要 LLM 调用失败")
@@ -2545,6 +2557,23 @@ class AgentApp:
         names = [t.name for t in self.build_registry().get_tools()]
         self._tool_names_cache = (now, names)
         return names
+
+    def cached_tool_schemas(self) -> List[Any]:
+        """全量工具 schema（带 TTL 缓存），供摘要类辅助调用复用。
+
+        为什么单独缓存：压缩摘要只是要「和主对话同口径的 tools 前缀」，
+        每次 compress 都 build_registry() 会把整套插件重装一遍——实测日志里
+        「Plugin loaded」在同一毫秒刷出 20 条、全会话 223 次 Kernel 重建。
+        摘要调用是压缩链路上的高频动作，必须复用。
+        """
+        cache = self._tool_schema_cache
+        now = time.monotonic()
+        if cache is not None and now - cache[0] < TOOL_NAMES_TTL:
+            return cache[1]
+        schemas = self.build_registry().get_tools()
+        self._tool_schema_cache = (now, schemas)
+        return schemas
+
 
     def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None,
                               unattended_profile: Optional[str] = None,

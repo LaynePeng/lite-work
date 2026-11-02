@@ -25,6 +25,11 @@ from .types import Message, now_ms
 
 logger = logging.getLogger("litework.context")
 
+# 摘要调用（自动压缩 / 手动压缩共用）的输入字符上限。
+# 超过则软截断——只摘要最近的、丢掉最早的，而不是整个放弃：
+# 放弃会让调用方回退「逐轮投影不写回」的免费裁剪，历史就永远压不下去。
+MAX_SUMMARY_CHARS = 180_000
+
 
 def patch_dangling_tool_calls(messages: List[Message]) -> List[Message]:
     """为悬空的 tool_calls 补占位 tool 结果（就地修复，返回原列表）。

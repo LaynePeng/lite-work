@@ -247,3 +247,156 @@ def test_compact_summary_sets_header_context(tmp_path):
     # 压缩落盘后 conversation_ids 仍在（不被开头的旧 metadata 覆盖）
     snap = app.session_store.load(sid)
     assert snap.metadata.get("conversation_ids", {}).get("custom_x") == cid
+
+
+# ---------------------------------------------------------------- 软截断回归
+#
+# 回归的是真实事故：_summarize_history 在 head 超过 200_000 字符时**直接
+# return None**，调用方据此判定「摘要失败」→ 回退免费裁剪（prune）。而 prune
+# 是逐轮投影、不写回 messages，于是下一轮又从完整历史重算一遍，历史永远
+# 压不下去（线上日志：604 次 Exceeded token budget、单调涨到 1.5M tokens）。
+# 正确行为：超长时软截断（丢最早的、保最近的），让压缩真的发生。
+
+
+def _huge_head(n_messages=40, chars_each=10_000):
+    """构造一个必然超过 MAX_SUMMARY_CHARS 的 head。"""
+    from litework.core.context_manager import MAX_SUMMARY_CHARS
+
+    assert n_messages * chars_each > MAX_SUMMARY_CHARS
+    head = [Message(role="system", content="sys prompt")]
+    for i in range(n_messages):
+        head.append(Message(role="user", content=f"[{i}] " + "x" * chars_each))
+        head.append(Message(role="assistant", content=f"[{i}] 回答 " + "y" * chars_each))
+    return head
+
+
+async def test_summarize_history_truncates_instead_of_giving_up(tmp_path):
+    """head 超长 → 软截断后仍产出摘要，而不是返回 None（历史压不下去的根因）。"""
+    from litework.core.context_manager import MAX_SUMMARY_CHARS
+
+    app = _make_app(tmp_path, MockLLMAdapter([("摘要正文", [])]))
+    app._mock_adapter = MockLLMAdapter([("摘要正文", [])])
+
+    captured = {}
+
+    class CapturingAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            captured["chars"] = sum(len(m.content or "") for m in messages)
+            captured["n"] = len(messages)
+            # 必须带 tools（前缀对齐）；这里只验证不返回 None
+            return "摘要正文", [], None
+
+    from litework.core.agent_loop import AgentLoop
+    from litework.core.kernel import Kernel
+    from litework.tools.registry import ToolRegistry
+
+    loop = AgentLoop(kernel=Kernel("trunc"), adapter=CapturingAdapter([("完成", [])]),
+                     registry=ToolRegistry(), token_budget=1000, context_window=1_000_000)
+    head = _huge_head()
+    summary = await loop._summarize_history(head)
+
+    assert summary == "摘要正文", "超长时必须软截断后继续摘要，不能返回 None"
+    # 软截断确实发生了：送出的字符数被压到上限附近，而不是原始 80 万
+    assert captured["chars"] <= MAX_SUMMARY_CHARS + 5_000
+    assert captured["chars"] < sum(len(m.content or "") for m in head)
+
+
+async def test_summarize_history_keeps_newest_when_truncating(tmp_path):
+    """软截断丢最早的、保最近的（最近的才是当前任务上下文）。"""
+    from litework.core.agent_loop import AgentLoop
+    from litework.core.context_manager import MAX_SUMMARY_CHARS
+    from litework.core.kernel import Kernel
+    from litework.tools.registry import ToolRegistry
+
+    sent = []
+
+    class CapturingAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            sent.extend(messages)
+            return "摘要正文", [], None
+
+    loop = AgentLoop(kernel=Kernel("trunc2"), adapter=CapturingAdapter([("完成", [])]),
+                     registry=ToolRegistry(), token_budget=1000, context_window=1_000_000)
+    head = _huge_head()
+    await loop._summarize_history(head)
+
+    body_text = " ".join(m.content or "" for m in sent)
+    # 最后一条编号（39）必须在，最早一条（0）应已被丢弃
+    assert "[39]" in body_text
+    assert "[0] " not in body_text
+
+
+async def test_summarize_history_short_head_unchanged(tmp_path):
+    """未超长的 head 不应被截断（不引入行为变化）。"""
+    from litework.core.agent_loop import AgentLoop
+    from litework.core.kernel import Kernel
+    from litework.tools.registry import ToolRegistry
+
+    sent = []
+
+    class CapturingAdapter(MockLLMAdapter):
+        async def chat_stream(self, messages, tools, events=None):
+            sent.extend(messages)
+            return "短摘要", [], None
+
+    loop = AgentLoop(kernel=Kernel("short"), adapter=CapturingAdapter([("完成", [])]),
+                     registry=ToolRegistry(), token_budget=1000, context_window=1_000_000)
+    head = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="问题一"),
+        Message(role="assistant", content="回答一"),
+    ]
+    assert await loop._summarize_history(head) == "短摘要"
+    body = [m for m in sent if m.role != "system"]
+    assert any("问题一" in (m.content or "") for m in body)
+
+
+async def test_manual_compact_reuses_tool_schema_cache(tmp_path):
+    """手动压缩不应每次都 build_registry() 把整套插件重装一遍。
+
+    线上证据：日志里「Plugin loaded」在同一毫秒刷出 20 条、全会话 223 次
+    Kernel 重建——摘要路径每轮都 build_registry() 是来源之一。
+    """
+    calls = {"n": 0}
+    app = _make_app(tmp_path, MockLLMAdapter([("摘要正文", [])]))
+
+    orig = app.build_registry
+
+    def counting_build_registry(*a, **kw):
+        calls["n"] += 1
+        return orig(*a, **kw)
+
+    app.build_registry = counting_build_registry  # type: ignore[method-assign]
+
+    first = app.cached_tool_schemas()
+    second = app.cached_tool_schemas()
+    assert first == second
+    assert calls["n"] == 1, "第二次应命中缓存，不该再重建插件"
+
+    # 插件/MCP 变更后缓存必须失效
+    app._invalidate_plugin_cache()
+    app.cached_tool_schemas()
+    assert calls["n"] == 2, "失效后应重新构建一次"
+
+
+async def test_manual_compact_uses_cached_schemas(tmp_path):
+    """真正的 /compact 走缓存：摘要调用的 tools 来自 cached_tool_schemas。"""
+    adapter = RecordingAdapter("压缩摘要")
+    app = _make_app(tmp_path, adapter)
+    app._mock_adapter = adapter
+    sid = "sess-cache"
+    await asyncio.to_thread(
+        app.session_store.save, sid, _seed_messages(),
+    )
+
+    used = {"n": 0}
+    real_cached = app.cached_tool_schemas
+
+    def spy_cached():
+        used["n"] += 1
+        return real_cached()
+
+    app.cached_tool_schemas = spy_cached  # type: ignore[method-assign]
+    res = await app.compact_session(sid, "")
+    assert res["ok"] is True
+    assert used["n"] == 1, "手动压缩应走 cached_tool_schemas 而非 build_registry"
