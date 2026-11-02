@@ -9,6 +9,81 @@
 > 状态被谎报成 `completed`、转发给子 Agent 的消息只存在于内存、跨会话撞同一
 > 项目一律 429。另补跨会话 agent 的只读可见性，以及后台面板里的排队视图。
 
+### 修复（afterTool 超时/取消留下未 await 的协程）
+
+- `agent_loop.py` 的 afterTool 管道原本直接
+  `await asyncio.wait_for(pipeline.run(...), timeout=...)`。超时或外层取消时，
+  `wait_for` 会丢弃传进去的协程对象，CPython 随即报
+  `coroutine 'Pipeline.run' was never awaited`。
+  - **不是致命的**，但每个被用户拒绝/超时的工具都漏一个，日志被
+    RuntimeWarning 灌满——ACP 联调时真实的工具状态映射问题就是这样被埋掉的；
+  - 改为先 `ensure_future` 包成 **Task** 再等：Task 持有协程、取消时负责关闭；
+    `finally` 里兜底 `cancel() + await`，并显式处理 `CancelledError`
+    （它是 `BaseException`，原来的 `except Exception` 兜不住）。
+  - 验证：ACP 拒绝场景此前 **3/3 必现**该警告，修复后连续 **5/5 为零**。
+
+### 新增（ACP：被编辑器直接驱动）
+
+- 新增 `lite-work acp` 子命令：以 **ACP Agent**（Agent Client Protocol，
+  <https://agentclientprotocol.com>）身份跑在 stdio 上，Zed / JetBrains 等
+  ACP 客户端可把 lite-work 当 Agent 直接用——不需要为每个编辑器写扩展。
+  - 实现 `initialize` / `session/new` / `session/prompt` / `session/cancel`；
+    prompt 期间以 `session/update`（`agent_message_chunk`）流式回文本；
+  - 跑的是**完整 AgentLoop**：插件、技能、MCP、上下文压缩、多 Agent 编排
+    全部生效，与桌面版同源；
+  - **stdout 保护**：`run_acp` 在构造业务对象前先把真 stdout `dup` 出来专供
+    协议、把 fd 1 重定向到 stderr，此后任何 `print()`/logging 都落 stderr。
+    协议要求 stdout 只能是合法 JSON-RPC，而插件里一个疏忽的 print 就会让
+    客户端认为 Agent 崩了（现象是「连上几秒断开」，极难归因）；
+  - **取消语义**：每个请求独立 task 分发，读循环不被长时间 turn 阻塞，
+    否则 `session/cancel` 永远收不到、编辑器点「停止」无反应。取消时
+    `session/prompt` 按协议**正常返回** `{stopReason: "cancelled"}` 而非抛异常
+    （抛异常会让编辑器把「用户主动停止」显示成一次失败）。
+  - 能力声明坚持「不谎报」：`loadSession` 按是否注入 history_loader 动态声明；
+    只支持 text 内容块；不实现 terminal/slash commands。
+  - **历史重放（`session/load`）**：编辑器重启后可恢复对话。映射规则
+    user→`user_message_chunk`、assistant→`agent_message_chunk`、工具调用展开成
+    `tool_call`+`tool_call_update` 且 status 固定 `completed`（重放一个「正在
+    运行」的旧工具会让客户端永远转圈）；`system` 与悬空工具调用跳过。
+  - **工具调用可视化**：`tool:before_execute`/`tool:after_execute` 翻译成 ACP
+    `tool_call`/`tool_call_update`，按工具名推断 `kind`（read/edit/execute/…）
+    供客户端选图标。`todo_write`/`plan_save` 这类带 write 的规划类工具**优先
+    判为 think**，否则编辑器会显示成「正在改代码」误导用户。
+  - **审批接入（关键）**：审批门 ↔ `session/request_permission` 双向桥。此前
+    写文件/执行命令会被自己的审批门拦住直到 600s 超时——表现为「Agent 卡了
+    十分钟然后失败」。现在决定弹在编辑器里；通道断了或响应畸形一律按**拒绝**
+    处理（把不确定当放行是危险的）。
+  - 文档见 `docs/acp.md`；`tests/test_acp.py`（19 项协议契约）
+    + `tests/test_acp_advanced.py`（38 项：重放/工具/审批）
+    + `tests/e2e_acp.py`（真实子进程联调）
+    + `scripts/verify-acp-flow.py`（**全链路认证**：假 LLM 驱动真 AgentLoop +
+    真工具 + 真审批，允许/拒绝两场景 14/15 项全通过）。
+  - 顺带修掉一个**误导性状态映射**：被用户拒绝/安全拦截的工具
+    （内部 status=`cancelled`）此前在 ACP 侧 fallback 成 `completed`，
+    编辑器会显示「删除已完成」而实际上文件没动。现映射为 `failed`。
+
+### 新增（SessionStore 乐观锁：多客户端不再静默覆盖）
+
+- `SessionStore.save()` 支持 `expected_version`：版本不一致抛
+  `SessionConflictError`，**不再后写者通吃**。无该字段的老会话文件读成
+  version=0，无需数据迁移。
+- `update_metadata` 改为「读最新 → 合并 → 带版本比较写入」，冲突时重读重试
+  （元数据合并幂等）；顺带修掉它一直未真正保留 `created_at` 的问题
+  （docstring 承诺保留，实际调用 `save()` 时没传，每次都被重写）。
+- `PATCH /api/sessions/{id}` 清除会话名时不再 `save(snap.messages)` 整份回写
+  ——那份快照是端点开头读的，任务正在跑时会覆盖掉新消息。
+- `value=None` 约定为「删除该元数据键」，调用方不必再自己 load+save 整套快照。
+
+### 修复（Core 意外退出完全静默）
+
+- `electron/main.js` 的 `child.on("exit")` 此前只处理「就绪前退出」，Core
+  就绪后崩溃**不写日志、不通知窗口、不重连**——用户只看到「窗口还在但什么都
+  不动」，日志一行不留，线上「闪退」长期查无实据。
+- 现在记录退出码/信号/存活时长，并在窗口顶部常驻横幅提示 + 一键重启；
+  主动回收（关窗/重启/退出）经 `classifyExit` 判定后静默，不误报。
+- 判定逻辑抽到 `electron/core-health.js` 纯函数，`tests/js/core-health.test.mjs`
+  覆盖三种退出形态。
+
 ### 修复（上下文压不下去：1.5M tokens 的长会话）
 
 - **现象**：长会话里日志反复刷 `Exceeded token budget (1523769/943718)`，

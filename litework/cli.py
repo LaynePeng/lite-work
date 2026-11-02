@@ -52,6 +52,16 @@ def _parse_args(argv: list) -> argparse.Namespace:
     serve.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
     warmup = sub.add_parser("warmup", help="预热本地缓存（matplotlib 字体缓存，供安装阶段调用）")
+    acp = sub.add_parser(
+        "acp",
+        help="作为 ACP Agent 运行（stdio，供 Zed 等编辑器客户端驱动）",
+        description="Agent Client Protocol over stdio：客户端拉起本进程后经 "
+                    "JSON-RPC 通信。stdout 只输出协议消息，日志走 stderr。",
+    )
+    acp.add_argument("--workspace", default=None,
+                     help="默认工作区（客户端的 session/new 会带 cwd，通常无需指定）")
+    acp.add_argument("--config-dir", default=None, help="配置/会话目录（默认 ~/.lite-work）")
+    acp.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
     pair = sub.add_parser("pair", help="打印手机配对二维码（对运行中的 Core 探测地址与令牌）")
     pair.add_argument("--url", default="", help="Core 地址（默认自动探测本机运行实例）")
     pair.add_argument("--token", default="", help="访问令牌（默认从 Core 的配置目录读取）")
@@ -236,6 +246,17 @@ def main(argv: list | None = None) -> None:
 
     if args.command == "warmup":
         sys.exit(_run_warmup())
+
+    if args.command == "acp":
+        # stdout 是 ACP 协议通道：此分支里**绝不能** print 到 stdout
+        # （run_acp 内部会把 stdout 改道 stderr 才进服务循环）
+        from .acp.runner import run_acp
+
+        sys.exit(run_acp(
+            config_dir=args.config_dir,
+            workspace=args.workspace,
+            log_level=args.log_level,
+        ))
 
     if args.command == "pair":
         sys.exit(_run_pair(args))

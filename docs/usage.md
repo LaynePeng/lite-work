@@ -136,6 +136,36 @@ node scripts/package-backend.mjs
   构建 `web/dist` 后同一端口即提供完整 Web UI。
 - 预缓存 matplotlib 字体可执行 `python -m litework warmup`（安装期调用）。
 
+## 4.1 作为 ACP Agent（被 Zed 等编辑器驱动）
+
+```bash
+# 编辑器会把它当子进程拉起：stdout 只走 JSON-RPC，日志全在 stderr
+python -m litework acp
+```
+
+ACP（Agent Client Protocol，<https://agentclientprotocol.com>）让编辑器直接把
+lite-work 当 Agent 用——`session/prompt` 下发任务，`session/update` 流式回来。
+跑的是完整 AgentLoop（插件/技能/MCP/上下文压缩/多 Agent 全部生效），与桌面版同源。
+
+Zed 的 `settings.json`：
+
+```json
+{
+  "agent_servers": {
+    "lite-work": {
+      "type": "custom",
+      "command": "/path/to/.venv/bin/python",
+      "args": ["-m", "litework", "acp"]
+    }
+  }
+}
+```
+
+注意：ACP 客户端**不需要填地址/端口**——它把你的 CLI 当子进程拉起
+（stdio 通信），不像 `serve` 那样监听端口。`"type": "custom"` 不能省。
+
+实现细节、已支持方法、能力声明与已知限制见 **[ACP 接入文档](acp.md)**。
+
 ## 5. 运行日志与排障
 
 - 日志目录 `~/.lite-work/logs/`（Windows：`C:\Users\<用户名>\.lite-work\logs\`），
