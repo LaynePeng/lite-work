@@ -573,6 +573,14 @@ export interface LiteWorkBridge {
   chooseDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;
   /** 重启当前窗口的本地 Core（插件变更后换取全新进程状态）；成功后页面整页刷新 */
   restartCore: () => Promise<{ ok: boolean; url?: string; error?: string }>;
+  /** 探测本地 Core 是否仍存活（exit 事件漏接时的兜底复核） */
+  probeCore?: () => Promise<{ ok: boolean; status?: number; reason?: string; error?: string }>;
+  /**
+   * 订阅「Core 意外退出」。收到后应提示用户（并可一键重启）——
+   * 此前 Core 崩溃完全静默，界面只是「不动」，日志也没有记录。
+   * 返回取消订阅函数。
+   */
+  onCoreLost?: (listener: (info: CoreLostInfo) => void) => () => void;
   /** 用系统默认应用打开工作区内的文件（非代码文件） */
   openFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
   /** 在系统文件管理器中定位（高亮显示）工作区内的文件 */
@@ -625,6 +633,24 @@ export interface CoreModeInfo {
   label: string;
   url: string;
   cores: CoreEntry[];
+}
+
+/**
+ * Core 意外退出事件（主进程 `core-lost` 通道）。
+ *
+ * 为什么单独存在：Core 就绪后崩溃此前没有任何观测点——窗口照旧显示，
+ * 只是所有请求都失败，日志也一行不留。用户侧表现为「闪退 / 卡住不动」，
+ * 但无从定位。这个事件把「Core 死了」变成用户可见、可操作的事实。
+ */
+export interface CoreLostInfo {
+  /** 进程退出码；被信号杀死时为 null */
+  code: number | null;
+  /** 终止信号（如 SIGSEGV / SIGKILL）；正常退出为 null */
+  signal: string | null;
+  /** Core 从启动到退出的存活时长（毫秒）——判断「启动即崩」还是「跑一阵才崩」 */
+  uptimeMs: number;
+  /** 当前是否为本地模式（本地才支持一键重启） */
+  restartable: boolean;
 }
 
 /** 「手机 / 局域网」面板数据：enabled=false 时 url/token 为空。 */

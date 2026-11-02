@@ -17,6 +17,7 @@ const path = require("path");
 
 const { createTokenInjector, originOf } = require("./token-injector");
 const { lanAddresses, coreSpawnArgs, selectLanSharePort } = require("./lan");
+const { classifyExit, describeExit, buildCoreLostPayload } = require("./core-health");
 
 const CLIENT_CONFIG = path.join(os.homedir(), ".lite-work", "client.json");
 const LOG_DIR = path.join(os.homedir(), ".lite-work", "logs");
@@ -416,6 +417,12 @@ function spawnCoreOnce({ python, projectRoot, env, workspace, lanShare, port }) 
     child.on("exit", () => coreChildren.delete(child));
 
     let resolved = false;
+    // 退出观测：resolved 之后 Core 意外退出此前是完全静默的（不写日志、
+    // 不通知窗口、不重连）——用户只看到「窗口还在但什么都不动」，日志里
+    // 一行都不留，闪退因此长期查无实据。这里补齐：记录退出码/信号/存活时长，
+    // 并把事件交给 spawnLocalCore 的调用方决定怎么提示。
+    const startedAt = Date.now();
+    let unexpectedExitHandler = null;
     const timer = setTimeout(() => {
       if (!resolved) {
         child.kill("SIGKILL");
@@ -438,16 +445,34 @@ function spawnCoreOnce({ python, projectRoot, env, workspace, lanShare, port }) 
         const token = m[3] || "";
         // lanShare 记的是"这个进程是不是按共享参数起来的"（而非配置开关）：
         // 面板据此区分「已生效」与「改了开关但还没重启」。
-        resolve({ child, url: `http://127.0.0.1:${boundPort}`, token, lanShare, port: boundPort });
+        resolve({
+          child, url: `http://127.0.0.1:${boundPort}`, token, lanShare, port: boundPort,
+          // 就绪后意外退出的事故记录器：调用方注册后，Core 死掉会收到
+          // { code, signal, uptimeMs }，用于日志 + 窗口提示 + 决定是否重拉。
+          onUnexpectedExit: (handler) => { unexpectedExitHandler = handler; },
+        });
       }
     };
 
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    child.on("exit", (code) => {
-      if (!resolved) {
-        clearTimeout(timer);
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      const kind = classifyExit(resolved, coreChildren.has(child));
+      if (kind === "starting-failed") {
         reject(new Error(`后端进程提前退出（code=${code}）`));
+        return;
+      }
+      // 主动回收（关窗 / 重启 / 退出）不是事故，静默忽略
+      if (kind === "intentional") return;
+      const uptimeMs = Date.now() - startedAt;
+      writeLog("error", `Core 意外退出（${describeExit(code, signal, uptimeMs)}）`);
+      if (unexpectedExitHandler) {
+        try {
+          unexpectedExitHandler({ code, signal: signal || null, uptimeMs });
+        } catch (err) {
+          writeLog("error", "Core 退出处理器自身异常:", err && err.message);
+        }
       }
     });
   });
@@ -638,6 +663,54 @@ ipcMain.handle("write-workspace-file", async (event, relPath, base64) => {
   }
 });
 
+// ------------------------------------------------------------ Core 存活观测
+
+/**
+ * Core 意外退出后的统一处置：写日志（已在 spawnCoreOnce 写过一次）+ 通知窗口。
+ *
+ * 为什么需要它：Core 就绪后的 `exit` 此前无人监听，进程死掉时窗口完全无感
+ * ——页面照旧显示，只是所有请求都失败。用户描述为「闪退 / 卡死」，但我们
+ * 既没有日志也没有提示，只能靠猜。这条链路补上后，下次再发生就有据可查。
+ */
+function notifyCoreLost(winId, record, info) {
+  if (!record || !record.window || record.window.isDestroyed()) return;
+  try {
+    record.window.webContents.send(
+      "core-lost",
+      buildCoreLostPayload({
+        code: info.code,
+        signal: info.signal,
+        uptimeMs: info.uptimeMs,
+        restartable: coreMode === "local",
+      }),
+    );
+  } catch (err) {
+    writeLog("warn", "发送 core-lost 失败:", err && err.message);
+  }
+  writeLog(
+    "error",
+    `窗口 ${winId} 的 Core 已退出，已通知渲染进程（code=${info.code} signal=${info.signal || "none"}）`,
+  );
+}
+
+/** 主动探测某窗口的 Core 是否还活着（给渲染进程兜底用，防 exit 事件漏接）。 */
+async function probeLocalCore(winId) {
+  const record = localInstances.get(winId);
+  if (!record?.url) return { ok: false, reason: "no-core" };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(new URL("/api/health", record.url).href, {
+      headers: coreHeaders(record.token),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return { ok: resp.ok, status: resp.status, url: record.url };
+  } catch (err) {
+    return { ok: false, reason: "unreachable", error: err && err.message, url: record.url };
+  }
+}
+
 async function createLocalWindow(workspace = null) {
   const loadingUrl = `file://${path.join(__dirname, "loading.html")}`;
   const window = createWindow(loadingUrl);
@@ -672,6 +745,14 @@ async function createLocalWindow(workspace = null) {
     const record = { window, ...instance, workspace: effectiveWorkspace };
     const winId = window.webContents.id;
     localInstances.set(winId, record);
+    // Core 意外退出 → 通知该窗口（横幅提示 + 可选一键重启）。
+    // 没有这条通道时，Core 死掉用户只会看到界面「什么都不动」，
+    // 而日志同样空白，闪退长期无法定位。
+    if (typeof instance.onUnexpectedExit === "function") {
+      instance.onUnexpectedExit((info) => {
+        notifyCoreLost(winId, record, info);
+      });
+    }
     window.once("closed", () => {
       stopTerminal(winId);
       // 引用 record（可变）而非 instance：restart-core 原地更新 record.child，
@@ -744,6 +825,11 @@ async function restartLocalCore(winId) {
     // applied/port 都读这两个字段，必须一并更新
     record.lanShare = instance.lanShare === true;
     record.port = instance.port || 0;
+    // 新 Core 必须重新挂退出监听：旧 child 的监听随进程消失而失效，
+    // 不重挂的话「重启后再崩」又会回到完全静默的老问题。
+    if (typeof instance.onUnexpectedExit === "function") {
+      instance.onUnexpectedExit((info) => notifyCoreLost(winId, record, info));
+    }
     releaseCoreToken(previousUrl);
     if (record.window && !record.window.isDestroyed()) {
       record.window.loadURL(instance.url);
@@ -757,6 +843,9 @@ async function restartLocalCore(winId) {
 }
 
 ipcMain.handle("restart-core", (event) => restartLocalCore(event.sender.id));
+
+/** 渲染进程兜底探活：exit 事件理论上总会到达，但窗口重载/事件漏接时用它复核。 */
+ipcMain.handle("probe-core", (event) => probeLocalCore(event.sender.id));
 
 // ---- 局域网共享（手机直连本机 Core）：状态查询、开关与连通性检测 ----
 

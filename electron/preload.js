@@ -26,6 +26,21 @@ contextBridge.exposeInMainWorld("liteWork", {
    * 成功后页面整页刷新；有任务运行中时返回 { ok: false, error }。
    */
   restartCore: () => ipcRenderer.invoke("restart-core"),
+  /**
+   * 探测当前窗口的本地 Core 是否还活着（exit 事件漏接时的兜底）。
+   * 返回 { ok, status? } 或 { ok: false, reason, error? }。
+   */
+  probeCore: () => ipcRenderer.invoke("probe-core"),
+  /**
+   * 订阅「Core 意外退出」事件。Core 就绪后崩溃此前完全静默，界面上只会
+   * 表现为「什么都不动」，日志也没有记录。收到后应提示用户并可一键重启。
+   * 返回取消订阅函数。
+   */
+  onCoreLost: (listener) => {
+    const handler = (_event, info) => listener(info);
+    ipcRenderer.on("core-lost", handler);
+    return () => ipcRenderer.removeListener("core-lost", handler);
+  },
   /** 局域网共享状态：{ enabled, localCore, applied, url, token, ips, addresses, port } */
   getLanShare: () => ipcRenderer.invoke("get-lan-share"),
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */

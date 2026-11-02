@@ -4569,6 +4569,44 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   font-size: 12px;
 }
 
+/* Core 意外退出：与「任务报错」不同，这是全局性故障（所有请求都会失败），
+   因此固定在顶部常驻、不自动消失，且给出可点击的恢复动作。 */
+.error-banner.core-lost {
+  bottom: auto;
+  top: 12px;
+  background: rgba(248, 81, 73, 0.18);
+  border-color: rgba(248, 81, 73, 0.65);
+  color: #ffc9c4;
+  max-width: min(720px, 92%);
+  line-height: 1.5;
+}
+
+.error-banner.core-lost button {
+  flex: none;
+  white-space: nowrap;
+  border: 1px solid rgba(248, 81, 73, 0.6);
+  border-radius: 6px;
+  padding: 3px 10px;
+  background: rgba(248, 81, 73, 0.16);
+}
+
+.error-banner.core-lost button:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.3);
+}
+
+.error-banner.core-lost button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 重启失败原因：在横幅正文里再强调一层，否则重复失败时用户看不出区别 */
+.core-lost-error {
+  display: block;
+  margin-top: 4px;
+  color: #ff9a92;
+  font-weight: 600;
+}
+
 .success-banner {
   position: absolute;
   bottom: 92px;

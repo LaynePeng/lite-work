@@ -25,7 +25,7 @@ import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { WatchToaster } from "./components/WatchToaster";
 import { useResizable } from "./hooks/useResizable";
 import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
-import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, QueuedTaskInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, CoreLostInfo, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, QueuedTaskInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 import { apiUrl, authHeaders, isElectron, UNAUTHORIZED_EVENT } from "./lib/connection";
@@ -241,6 +241,12 @@ export default function App() {
   const [providerMeta, setProviderMeta] = useState<LLMProviderMeta[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  /** Core 意外退出的信息；null = Core 正常。非 null 时顶部显示断连横幅。 */
+  const [coreLost, setCoreLost] = useState<CoreLostInfo | null>(null);
+  /** 正在通过横幅按钮重启 Core */
+  const [coreRestarting, setCoreRestarting] = useState(false);
+  /** 横幅上「重启 Core」失败的原因；null = 没失败过 */
+  const [coreRestartError, setCoreRestartError] = useState<string | null>(null);
   const [showPhoneConnect, setShowPhoneConnect] = useState(false);
   const [showCoreConnect, setShowCoreConnect] = useState(false);
   // footer「Core」角标：local/remote + 远程显示名（Electron IPC 读取；浏览器端恒为本地）
@@ -515,6 +521,19 @@ export default function App() {
     setDebugLogs((prev) => [...prev.slice(-200), line]);
   }, []);
 
+  // Core 意外退出 → 顶部横幅。此前这条链路完全缺失：Core 就绪后崩溃既
+  // 不写日志也不通知窗口，界面只会「什么都不动」，用户报的「闪退」因此
+  // 长期查无实据。现在把退出码/信号/存活时长摆到界面上。
+  useEffect(() => {
+    const bridge = window.liteWork;
+    if (!bridge?.onCoreLost) return;
+    return bridge.onCoreLost((info) => {
+      setCoreLost(info);
+      setCoreRestarting(false);
+      pushLog(`✗ Core 意外退出（code=${info.code ?? "null"} signal=${info.signal ?? "none"} 存活=${Math.round(info.uptimeMs / 1000)}s）`);
+    });
+  }, [pushLog]);
+
   // ------------------------------------------------------------ 会话状态读写
 
   const getChat = useCallback((sid: string): ChatSessionState => {
@@ -587,6 +606,27 @@ export default function App() {
     },
     [activeSessionId, patchChat]
   );
+
+  /** 横幅「重启 Core」：成功后主进程会整页刷新，因此这里不重置状态。 */
+  const restartFromBanner = useCallback(async () => {
+    const bridge = window.liteWork;
+    if (!bridge?.restartCore) return;
+    setCoreRestarting(true);
+    setCoreRestartError(null);
+    try {
+      const r = await bridge.restartCore();
+      if (!r.ok) {
+        // 失败原因留在横幅上：走 currentChat.error 会绑到「当前会话」，
+        // 而没有会话时那条提示根本不会渲染（横幅反而看起来点完就没反应）。
+        setCoreRestarting(false);
+        setCoreRestartError(r.error || "未知错误");
+      }
+      // 成功：主进程 loadURL 整页刷新，横幅随页面重建消失
+    } catch (err) {
+      setCoreRestarting(false);
+      setCoreRestartError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   // ------------------------------------------------------------ 子 Agent 完成记录自动消失
 
@@ -3996,6 +4036,21 @@ export default function App() {
               {showDebug ? "隐藏日志" : "日志"}
             </button>
           </>
+        )}
+        {coreLost && (
+          <div className="error-banner core-lost" role="alert">
+            <span>
+              ⚠ 后端 Core 已退出（{coreLost.signal ? `信号 ${coreLost.signal}` : `退出码 ${coreLost.code ?? "未知"}`}
+              ，存活 {Math.max(1, Math.round(coreLost.uptimeMs / 1000))}s）。
+              当前页面的请求都将失败，重启 Core 可恢复；如需排查请查看 ~/.lite-work/logs/。
+              {coreRestartError && <strong className="core-lost-error">重启失败：{coreRestartError}</strong>}
+            </span>
+            {coreLost.restartable && (
+              <button onClick={restartFromBanner} disabled={coreRestarting}>
+                {coreRestarting ? "重启中…" : "重启 Core"}
+              </button>
+            )}
+          </div>
         )}
         {currentChat.stalled && currentChat.running && (
           <div className="error-banner stalled">

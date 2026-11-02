@@ -103,3 +103,10 @@ jobs:
       # 「共享端口随机 → 重启后手机书签失效」。
       - name: Electron LAN share tests (node:test)
         run: node --test tests/js/lan.test.mjs
+      # Core 退出判定：区分「主动回收」与「意外崩溃」。
+      # 回归「Core 就绪后崩溃完全静默——不写日志也不通知窗口，用户只看到
+      # 界面不动，线上闪退长期查无实据」。
+      - name: Electron core health tests (node:test)
+        run: node --test tests/js/core-health.test.mjs
+      # ACP 协议契约：stdout 只能有合法 JSON-RPC、取消语义、错误不打死读循环。
+      # 已含在 pytest 全量里，这里不重复跑（见 tests/test_acp.py）。
