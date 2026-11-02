@@ -214,8 +214,15 @@ class ContextManager:
     ) -> Optional[Tuple[List[Message], List[Message], int]]:
         """opencode 风格：把超预算历史拆成 (head 待摘要, tail 原样保留, head_tokens)。
 
-        从最新轮次往前保留 tail（预算内、至少一轮），head 为更早轮次。
+        从最新轮次往前保留 tail（预算内），head 为更早轮次。
         未超预算或 head 为空返回 None（调用方回退旧裁剪策略）。
+
+        **tail 必须自身也落在预算内**：早先的实现「至少保留一整轮」，
+        但单个轮次本身就可能超预算（一轮里读几个大文件就够）。此时摘要
+        只切掉 head，而 tail 仍然超 cap → 压完依旧超预算 → 下一轮再压一次
+        head、再超一次，历史永远收敛不了（线上实测「压缩 1 条旧消息」反复刷、
+        cap 943718 却长期停在 1.5M）。所以最新一轮超预算时改为按消息切，
+        只保留能装进预算的那部分（严格保住 tool 原子对）。
         """
         cap = hard_cap or self.max_allowed_tokens
         system, body = self._split_body(messages)
@@ -238,6 +245,11 @@ class ContextManager:
                 tail_start = start
             else:
                 break
+        # 整轮粒度装不下（最新一轮自身就超预算）→ 降到消息粒度切
+        if TokenCounter.count_messages_tokens(body[tail_start:]) > cap - sys_tokens:
+            fitted = self._fit_tail_start(body, cap - sys_tokens)
+            if fitted is not None:
+                tail_start = fitted
         if tail_start <= 0:
             return None
         head = body[:tail_start]
@@ -245,6 +257,34 @@ class ContextManager:
         if head_tokens <= 0:
             return None
         return head, body[tail_start:], head_tokens
+
+    def _fit_tail_start(self, body: List[Message], budget: int) -> Optional[int]:
+        """返回最小起点 idx，使 body[idx:] 能装进 budget。
+
+        约束：不劈开 assistant(tool_calls)+tool 原子对（劈开会被 API 400 拒绝）。
+        因此起点若落在 tool 消息上、或其前一条是被它回应的 assistant，
+        就把起点前移把「父亲」一起带上——宁可略微超预算，也不能发出非法消息。
+        """
+        if budget <= 0:
+            return None
+        idx = len(body)
+        acc = 0
+        while idx > 0:
+            t = TokenCounter.count_message_tokens(body[idx - 1])
+            if acc + t > budget:
+                break
+            acc += t
+            idx -= 1
+        if idx >= len(body):
+            return None
+        # 原子对保护：起点不能是 tool（它回应的 assistant 被切到 head 里了）
+        while idx > 0 and (
+            body[idx].role == "tool"
+            or (body[idx - 1].role == "assistant" and body[idx - 1].tool_calls)
+        ):
+            idx -= 1
+        return idx
+
 
     # ------------------------------------------------------------------ 内部
 

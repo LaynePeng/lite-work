@@ -258,3 +258,144 @@ def test_anthropic_usage_extract():
     assert delta == {"output_tokens": 42, "cache_read_input_tokens": 10}
     assert AnthropicAdapter._start_usage({"type": "x"}) is None
     assert AnthropicAdapter._delta_usage({"type": "x"}) is None
+
+# ------------------------------------------------- 压缩后必须真的落进预算
+#
+# 回归的是线上最要命的一条：cap 943718 却长期停在 1.5M，日志反复
+# 「压缩 1 条旧消息」。原因不是摘要失败，而是 split_for_compaction 只按
+# 「整轮」保留 tail，而**单个轮次自身就能超预算**（一轮里读几个大文件）。
+# 于是 head 被摘要掉、tail 依然超 cap → 压完还是超 → 下一轮再压一次 head。
+# 这个循环每轮都在花 token，却永远收敛不了。
+
+
+def _msgs_with_huge_last_turn(payload_chars=8000):
+    from litework.core.types import ToolCall
+
+    return [
+        Message(role="system", content="sys"),
+        Message(role="user", content="很早的问题"),
+        Message(role="assistant", content="很早的回答"),
+        Message(role="user", content="当前问题"),
+        Message(role="assistant", content=None,
+                tool_calls=[ToolCall(id="c9", name="read", arguments="{}")]),
+        Message(role="tool", content="X" * payload_chars, tool_call_id="c9"),
+        Message(role="assistant", content="当前回答"),
+    ]
+
+
+def test_compaction_tail_fits_budget():
+    """最新一轮自身超预算时，压缩结果必须落进 cap（而不是原样留着继续超）。"""
+    from litework.core.token_counter import TokenCounter
+
+    cm = ContextManager(max_allowed_tokens=1000)
+    messages = _msgs_with_huge_last_turn()
+    cap = 1000
+
+    plan = cm.split_for_compaction(messages, hard_cap=cap)
+    assert plan is not None
+    head, tail, head_tokens = plan
+
+    compacted = [messages[0], Message(role="user", content="[历史摘要] 摘要")] + tail
+    after = TokenCounter.count_messages_tokens(compacted)
+    assert after <= cap, f"压缩后仍超预算：{after} > {cap}（这正是历史永不收敛的根因）"
+    assert head_tokens > 0
+
+
+def test_compaction_never_orphans_tool_messages():
+    """按消息粒度切 tail 时绝不能劈开 assistant(tool_calls)+tool 原子对。"""
+    from litework.core.types import ToolCall
+
+    cm = ContextManager(max_allowed_tokens=500)
+    messages = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="q1"),
+        Message(role="assistant", content=None,
+                tool_calls=[ToolCall(id="a", name="read", arguments="{}")]),
+        Message(role="tool", content="A" * 3000, tool_call_id="a"),
+        Message(role="assistant", content="a1"),
+        Message(role="user", content="q2"),
+        Message(role="assistant", content=None,
+                tool_calls=[ToolCall(id="b", name="read", arguments="{}")]),
+        Message(role="tool", content="B" * 3000, tool_call_id="b"),
+        Message(role="assistant", content="a2"),
+    ]
+
+    for cap in (500, 800, 1000, 1500, 2000):
+        plan = cm.split_for_compaction(messages, hard_cap=cap)
+        if plan is None:
+            continue
+        _head, tail, _ht = plan
+        # tail 里每个 tool 消息都必须能找到回应它的 assistant
+        for i, m in enumerate(tail):
+            if m.role != "tool":
+                continue
+            owners = [
+                t for t in tail[:i]
+                if t.role == "assistant" and t.tool_calls
+                and any(c.id == m.tool_call_id for c in t.tool_calls)
+            ]
+            assert owners, f"cap={cap}: tail 出现无主 tool 消息（API 会 400）"
+
+
+def test_compaction_converges_after_repeated_rounds():
+    """反复压缩必须收敛：每轮压完都落在 cap 内，不会越压越超。"""
+    from litework.core.token_counter import TokenCounter
+
+    cm = ContextManager(max_allowed_tokens=1000)
+    cap = 1000
+    messages = _msgs_with_huge_last_turn()
+
+    # 模拟连续 3 轮：每轮都按 split_for_compaction 压缩，再追加新内容
+    for round_no in range(3):
+        plan = cm.split_for_compaction(messages, hard_cap=cap)
+        if plan is None:
+            break
+        head, tail, _ht = plan
+        messages = ([messages[0]]
+                    + [Message(role="user", content=f"[历史摘要] 第{round_no}次")]
+                    + tail)
+        assert TokenCounter.count_messages_tokens(messages) <= cap, (
+            f"第 {round_no} 轮压缩后仍超预算："
+            f"{TokenCounter.count_messages_tokens(messages)} > {cap}"
+        )
+        # 追加一轮新对话（模拟任务继续）
+        messages.append(Message(role="user", content=f"新问题{round_no}"))
+        messages.append(Message(role="assistant", content=f"新回答{round_no}"))
+
+
+def test_compaction_single_turn_session_still_compacts():
+    """单轮长会话也必须能压缩（自动压缩失效的真实形态）。
+
+    线上最常见的历史形态**不是**很多轮问答，而是「用户只发一条指令，
+    agent 连跑上千次工具调用」。此时 `_turn_ranges` 只切出 1 个轮次，
+    `tail_start` 初值 = 0 → 旧实现直接 `return None` → 摘要压缩**从不触发**，
+    只剩 prune 免费裁剪兜底（而 prune 不写回 messages，下一轮又从完整历史
+    重算）。这就是「超预算 282 次、摘要只成功 22 次」的直接原因。
+    """
+    from litework.core.types import ToolCall
+    from litework.core.token_counter import TokenCounter
+
+    cm = ContextManager(max_allowed_tokens=943718)
+    messages = [Message(role="system", content="sys")]
+    messages.append(Message(role="user", content="帮我重构整个项目"))
+    for i in range(700):
+        messages.append(Message(role="assistant", content=None,
+                                tool_calls=[ToolCall(id=f"c{i}", name="read", arguments="{}")]))
+        messages.append(Message(role="tool", content="X" * 6000, tool_call_id=f"c{i}"))
+        messages.append(Message(role="assistant", content=f"a{i}"))
+
+    cap = 943718
+    assert TokenCounter.count_messages_tokens(messages) > cap
+
+    # 前提确认：这种形态确实只切出 1 个轮次
+    assert len(ContextManager._turn_ranges(messages[1:])) == 1
+
+    plan = cm.split_for_compaction(messages, hard_cap=cap)
+    assert plan is not None, "单轮长会话必须能压缩，否则摘要永不触发"
+    head, tail, head_tokens = plan
+    assert head_tokens > 0
+    assert len(head) > 0 and len(tail) > 0
+
+    after = TokenCounter.count_messages_tokens(
+        [messages[0], Message(role="user", content="[历史摘要] x")] + tail)
+    assert after <= cap, f"压缩后仍超预算：{after} > {cap}"

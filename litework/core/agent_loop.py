@@ -1249,9 +1249,15 @@ class AgentLoop:
             Message(role="user", content=f"[历史摘要] {summary}")
         ] + tail
         self._compression_count += 1
-        self._compressed_tokens += max(0, head_tokens - TokenCounter.count_text_tokens(summary))
-        logger.info("[AgentLoop] 上下文摘要压缩: 压缩 %s 条旧消息, 释放 %s tokens",
-                    len(head), head_tokens)
+        summary_tokens = TokenCounter.count_text_tokens(summary)
+        self._compressed_tokens += max(0, head_tokens - summary_tokens)
+        # 日志口径修正：之前把 head_tokens（被摘要的原文规模）打成「释放」，
+        # 与 _compressed_tokens 的实际累加值不一致，排查时极易误判成「压了没效果」。
+        logger.info(
+            "[AgentLoop] 上下文摘要压缩: 压缩 %s 条旧消息（%s tokens）→ 摘要 %s tokens，净释放 %s",
+            len(head), head_tokens, summary_tokens,
+            max(0, head_tokens - summary_tokens),
+        )
         return compacted
 
     async def _summarize_history(self, head: List[Message]) -> Optional[str]:

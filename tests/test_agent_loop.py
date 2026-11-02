@@ -327,15 +327,18 @@ async def test_try_compact_replaces_head_with_summary():
         messages.append(Message(role="user", content=f"问题{i} " + "x" * 150))
         messages.append(Message(role="assistant", content=f"回答{i} " + "x" * 150))
 
-    # 直接构造超预算场景：hard_cap 设为 100 强制压缩
-    plan = loop.context_manager.split_for_compaction(messages, hard_cap=100)
+    # 直接构造超预算场景：hard_cap=250 强制压缩，但仍装得下最新一轮
+    # （system 11 + 每轮 92；装完最新轮还剩 147，可再装一轮）。
+    # 注意不能像旧版那样设成 100——那比最新一轮自身（92）还小，
+    # 会触发「按消息切」的新逻辑（见 test_compaction_tail_fits_budget）。
+    plan = loop.context_manager.split_for_compaction(messages, hard_cap=250)
     assert plan is not None
     head, tail, head_tokens = plan
     assert any(m.content.startswith("问题0") for m in head)
     assert any(m.content.startswith("问题2") for m in tail)
     assert head_tokens > 0
 
-    compacted = await loop._try_compact(messages, 100)
+    compacted = await loop._try_compact(messages, 250)
     assert compacted is not None
     assert compacted[0].role == "system"
     assert compacted[1].role == "user" and "历史摘要" in compacted[1].content
