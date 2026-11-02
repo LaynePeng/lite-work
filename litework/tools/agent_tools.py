@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Optional
 
 from ..core.agent_loop import current_session_id
 from ..core.types import ToolDefinition
 from ..orchestration.agent_manager import current_agent_depth, extract_fork_messages
 from ..tools.plugin import ToolPlugin
+
+logger = logging.getLogger("litework.agent_tools")
 
 
 def _manager(app, kernel=None):
@@ -35,9 +38,33 @@ def _manager(app, kernel=None):
     return app.agent_manager(str(sid)), sid
 
 
-def _collab_gate(app) -> str:
+def _collab_gate(app, session_id: Optional[str] = None) -> str:
     """治理档位（P3，对齐 Codex MultiAgentMode）：explicit=默认（用户明确要求才派生），
-    proactive=主动委派。注入 spawn_agent 描述头部。"""
+    proactive=主动委派。注入 spawn_agent 描述头部。
+
+    会话级协作模式（对话框选择器写入 metadata.collab_mode）是**用户显式选定**的
+    指令，优先于全局治理档位：此时不得再输出「不构成派生许可」——否则与
+    tasks.py 注入的「必须按上述流程派生子 Agent」直接矛盾，模型倾向不派生。
+    """
+    if session_id:
+        try:
+            snapshot = getattr(app, "session_store", None)
+            snap = snapshot.load(session_id) if snapshot is not None else None
+            mode = str(((snap.metadata or {}).get("collab_mode") if snap else "") or "").strip()
+            if mode:
+                display = mode
+                try:
+                    from ..orchestration.collab_policy import list_collab_modes
+
+                    display = next(
+                        (m["display_name"] for m in list_collab_modes(app)
+                         if m["name"] == mode), mode)
+                except Exception:  # noqa: BLE001 - 显示名解析失败退回 mode_name
+                    pass
+                return (f"本会话已由用户显式选定协作模式「{display}」：必须按该模式的编排流程"
+                        "派生子 Agent，不要因任务看似简单或与配方典型场景不完全一致而改用单 agent。")
+        except Exception:  # noqa: BLE001 - 工具描述构造绝不因读会话失败而中断
+            logger.debug("[AgentTools] 读取会话协作模式失败（忽略）", exc_info=True)
     mode = str(app.config.get("agent_collab_mode") or "explicit")
     if mode == "proactive":
         return ("主动委派已开启：当并行能节省时间或提升质量时，应主动派生子 Agent"
@@ -77,6 +104,13 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         manager, _sid = _manager(app, kernel)
         if manager is None:
             return "[Error]: 无活动会话，无法派生 agent。"
+        # role 拼错必须报错：协作模式配方按名字引用 role（如 critic），静默降级
+        # general 会让配方意图无声丢失。
+        role = str(args.get("role") or "general")
+        runner = getattr(app, "sub_agent_runner", None)
+        if runner is not None and getattr(runner, "unknown_role", None) and runner.unknown_role(role):
+            return (f"[Error]: 未知的 role「{role}」。可用：general / explorer / tester / "
+                    f"critic / refactor，或已注册的自定义 subagent id。")
         # 嵌套深度：主会话=0 → 派生 depth=1；子 Agent（handler 在子 loop 中重绑）
         # 经 ContextVar 读自身深度 → 派生 depth+1（manager 校验配置上限）
         depth = current_agent_depth.get() + 1
@@ -144,7 +178,21 @@ def make_agent_tool_handlers(app, parent_events=None, kernel=None):
         agents = manager.list_agents()
         if not agents:
             return "当前没有已派生的 agent。"
-        return json.dumps(agents, ensure_ascii=False, indent=1)
+        # 跨会话只读可见（D 项）：别的会话有 agent 在跑时告知一句，避免
+        # 「另一个会话派的活我看不到」。刻意不返回其可操作 id 列表的语义——
+        # send_message / close_agent 仍只能作用于本会话，所以只给计数与提示。
+        others = 0
+        try:
+            for sid, rows in app.all_agents().items():
+                if sid != _sid and rows:
+                    others += len(rows)
+        except Exception:  # noqa: BLE001 - 跨会话查询失败不影响本会话清单
+            others = 0
+        text = json.dumps(agents, ensure_ascii=False, indent=1)
+        if others:
+            text += (f"\n\n（另有 {others} 个 agent 属于其他会话。跨会话只能查看，"
+                     "不能收发消息或关闭——要续跑请到它所属的会话操作。）")
+        return text
 
     async def _close(args: Dict[str, Any]) -> str:
         manager, _sid = _manager(app, kernel)
@@ -279,19 +327,23 @@ class MultiAgentPlugin(ToolPlugin):
     """多 Agent 协作工具插件（Phase 1 原语层）。"""
 
     name = "multi-agent-plugin"
-    version = "1.0.0"
+    version = "1.0.1"
     description = "多 Agent 协作：异步派生/查询/等待/关闭子 Agent"
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, session_id: Optional[str] = None) -> None:
         self._app = app
+        # 会话上下文：工具描述必须反映**该会话**选定的协作模式，而不是全局策略。
+        # 此前只读全局 config，导致「会话选了头脑风暴、工具描述仍在劝阻派生」。
+        self._session_id = session_id
         self._handlers = make_agent_tool_handlers(app)
 
     def get_tools(self) -> List[ToolDefinition]:
-        gate = _collab_gate(self._app)
+        sid = self._session_id
+        gate = _collab_gate(self._app, sid)
         roles = _role_registry_hint(self._app)
         from ..orchestration.collab_policy import get_collab_policy
 
-        recipe = get_collab_policy(self._app).recipe()
+        recipe = get_collab_policy(self._app, session_id=sid).recipe()
         return [
             ToolDefinition(
                 name="spawn_agent",

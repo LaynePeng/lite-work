@@ -69,7 +69,7 @@ def app(tmp_path):
 def test_build_registry_survives_broken_plugin(app):
     """坏插件被跳过；其余插件工具照常装配（不再整体失败）。"""
     original = app.tool_plugins
-    app.tool_plugins = lambda ws=None: list(original(ws)) + [_GoodPlugin(), _BrokenPlugin()]  # type: ignore[assignment]
+    app.tool_plugins = lambda ws=None, session_id=None: list(original(ws)) + [_GoodPlugin(), _BrokenPlugin()]  # type: ignore[assignment]
 
     registry = app.build_registry()          # 关键：不抛异常
     names = set(registry.names())
@@ -93,7 +93,7 @@ def test_install_plugins_reports_skipped(app):
 def test_create_kernel_survives_broken_plugin(app):
     """任务内核装配路径同样隔离（否则任务起不来）。"""
     original = app.tool_plugins
-    app.tool_plugins = lambda ws=None: list(original(ws)) + [_BrokenPlugin()]  # type: ignore[assignment]
+    app.tool_plugins = lambda ws=None, session_id=None: list(original(ws)) + [_BrokenPlugin()]  # type: ignore[assignment]
 
     kernel = app.create_kernel("s-broken")   # 不抛异常
     registry = kernel.get_service("tools")
@@ -103,7 +103,7 @@ def test_create_kernel_survives_broken_plugin(app):
 def test_tools_endpoint_still_works_with_broken_plugin(app):
     """/api/tools 不受坏插件影响（用户可见的直接后果）。"""
     original = app.tool_plugins
-    app.tool_plugins = lambda ws=None: list(original(ws)) + [_BrokenPlugin()]  # type: ignore[assignment]
+    app.tool_plugins = lambda ws=None, session_id=None: list(original(ws)) + [_BrokenPlugin()]  # type: ignore[assignment]
 
     fast = create_app(app, token=None)
     with TestClient(fast) as client:

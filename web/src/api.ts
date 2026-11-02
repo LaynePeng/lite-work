@@ -685,7 +685,7 @@ export const api = {
     if (reasoningEffort) body.reasoning_effort = reasoningEffort;
     // AI 合并任务：指定 worktree 名 → 后端在主工作区起任务执行 git merge + 解决冲突
     if (mergeWorktree) body.merge_worktree = mergeWorktree;
-    return req<{ task_id: string; queued?: boolean }>("/api/chat", {
+    return req<{ task_id: string; queued?: boolean; position?: number; message?: string }>("/api/chat", {
       method: "POST", body: JSON.stringify(body),
     });
   },
@@ -693,6 +693,12 @@ export const api = {
     req<{ ok: boolean }>(`/api/tasks/${taskId}/stop`, { method: "POST" }),
   backgroundTasks: () =>
     req<{ tasks: import("./types").BackgroundTaskInfo[] }>("/api/tasks/background"),
+  /** 同项目排队中的任务（C 项）：后台面板展示「谁在等谁」 */
+  queuedTasks: () =>
+    req<{ tasks: import("./types").QueuedTaskInfo[] }>("/api/tasks/queued"),
+  /** 取消一个排队任务（还没启动，只是从队列移除） */
+  cancelQueuedTask: (taskId: string) =>
+    req<{ ok: boolean }>(`/api/tasks/queued/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
   killBackgroundTask: (taskId: string) =>
     req<{ ok: boolean }>(`/api/tasks/background/${encodeURIComponent(taskId)}/kill`, { method: "POST" }),
   /** Agents 看板手动取消子 Agent：取消 runner + 广播 agent:closed（by=user） */

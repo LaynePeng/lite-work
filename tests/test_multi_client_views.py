@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from litework.app import AgentApp
 from litework.server.app import create_app
-from litework.server.tasks import TaskManager, WorkspaceBusyError
+from litework.server.tasks import TaskManager, TaskQueued, WorkspaceBusyError
 
 
 AUTH = {"Authorization": "Bearer t"}
@@ -124,7 +124,7 @@ def test_task_pins_session_workspace_not_global(core, two_projects):
     tm = TaskManager(app)
     captured = {}
 
-    def fake_registry(agent_id, workspace=None, unattended_profile=None):
+    def fake_registry(agent_id, workspace=None, unattended_profile=None, session_id=None):
         captured["workspace"] = workspace
         raise _Abort()
 
@@ -142,6 +142,24 @@ def test_task_pins_session_workspace_not_global(core, two_projects):
 
 class _Abort(Exception):
     pass
+
+
+def _fake_running_task(sid: str, ws: str):
+    """一个「正在运行」的 TaskHandle 替身（只带互斥/排队判定需要的字段）。"""
+    from litework.server.tasks import TaskHandle
+
+    h = TaskHandle.__new__(TaskHandle)
+    h.running = True
+    h.stopping = False
+    h.done = False
+    h.released = True
+    h.finished_at = None
+    h._subscribers = []
+    h.workspace = ws
+    h.session_workspace = ws
+    h.worktree_name = None
+    h.kernel = type("K", (), {"session_id": sid})()
+    return h
 
 
 # ---------------------------------------------------------------- 同项目互斥
@@ -168,14 +186,16 @@ def test_same_project_rejected_while_running(core, two_projects):
     sid_a = _mk_session(app, a, "want-a")
     sid_b = _mk_session(app, b, "want-b")
 
-    # 同项目：拒
-    with pytest.raises(WorkspaceBusyError):
+    # 同项目 + **跨会话**：排队（C 项，不再 429 让用户反复重试）
+    with pytest.raises(TaskQueued) as ei:
         _start_until_registry(tm, app, sid_a)
+    assert ei.value.queued.position == 1
+    assert tm.queued_for(sid_a)
     # 跨项目：过（走到 registry 构建为止）
     captured = {}
     orig = app.create_agent_registry
 
-    def fake_registry(agent_id, workspace=None, unattended_profile=None):
+    def fake_registry(agent_id, workspace=None, unattended_profile=None, session_id=None):
         captured["ok"] = True
         raise _Abort()
 
@@ -188,11 +208,128 @@ def test_same_project_rejected_while_running(core, two_projects):
         app.create_agent_registry = orig  # type: ignore[method-assign]
 
 
+def test_same_session_duplicate_start_still_rejected(core, two_projects):
+    """同会话重复启动仍是直接拒绝（误操作，排队只会掩盖它）。"""
+    app, client = core
+    a, b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    sid_same = "session_same"
+    h.kernel = type("K", (), {"session_id": sid_same})()
+    tm.tasks["t1"] = h
+
+    # 会话必须真实存在且钉在同一项目上（否则 base_ws 为空 → 不判冲突）
+    app.session_store.save(sid_same, [], {"workspace": a})
+    # 用同一个 session_id 再起 → 拒（不是排队）
+    with pytest.raises(WorkspaceBusyError):
+        _start_until_registry(tm, app, sid_same)
+    assert not tm.queued_for(sid_same)
+
+
+def test_queue_if_busy_false_still_raises(core, two_projects):
+    """无人值守路径传 queue_if_busy=False → 保持旧的拒绝语义（撞车即跳过）。"""
+    app, client = core
+    a, b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    h.kernel = type("K", (), {"session_id": "watch"})()
+    tm.tasks["t1"] = h
+
+    sid = _mk_session(app, a, "want-a")
+    with pytest.raises(WorkspaceBusyError):
+        tm.start(sid, "hi", queue_if_busy=False)
+    assert not tm.queued_for(sid)
+
+
+def test_queue_order_is_fifo(core, two_projects):
+    """同项目多个会话排队：先到先跑，position 递增。"""
+    app, client = core
+    a, b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    h.kernel = type("K", (), {"session_id": "busy"})()
+    tm.tasks["t1"] = h
+
+    sids = [_mk_session(app, a, f"want-{i}") for i in range(3)]
+    positions = []
+    for sid in sids:
+        with pytest.raises(TaskQueued) as ei:
+            _start_until_registry(tm, app, sid)
+        positions.append(ei.value.queued.position)
+    assert positions == [1, 2, 3]
+    # 队列里顺序与会话入队顺序一致
+    key = tm._ws_key(a)
+    assert [q.session_id for q in tm.pending[key]] == sids
+
+
+def test_cancel_queued_removes_only_target_session(core, two_projects):
+    app, client = core
+    a, b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    h.kernel = type("K", (), {"session_id": "busy"})()
+    tm.tasks["t1"] = h
+
+    s1 = _mk_session(app, a, "want-1")
+    s2 = _mk_session(app, a, "want-2")
+    for sid in (s1, s2):
+        with pytest.raises(TaskQueued):
+            _start_until_registry(tm, app, sid)
+    assert tm.cancel_queued(s1) == 1
+    assert not tm.queued_for(s1)
+    assert tm.queued_for(s2)  # 另一个不受影响
+    # position 重新编号
+    assert tm.queued_for(s2)[0].position == 1
+
+
+def test_drain_starts_next_when_project_free(core, two_projects):
+    """项目空出来后 drain_queues 启动队首任务。"""
+    app, client = core
+    a, b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    h.kernel = type("K", (), {"session_id": "busy"})()
+    tm.tasks["t1"] = h
+
+    sid = _mk_session(app, a, "want-a")
+    with pytest.raises(TaskQueued):
+        _start_until_registry(tm, app, sid)
+
+    # 项目仍被占用：不启动
+    assert tm.drain_queues() == 0
+    assert tm.queued_for(sid)
+
+    # 占用者结束 → 队首被启动
+    h.running = False
+    started = []
+    orig = app.create_agent_registry
+
+    def fake_registry(agent_id, workspace=None, unattended_profile=None, session_id=None):
+        started.append(agent_id)
+        raise _Abort()
+
+    app.create_agent_registry = fake_registry  # type: ignore[method-assign]
+    try:
+        try:
+            tm.drain_queues()
+        except _Abort:
+            pass
+        assert started  # 队列被消费（跑到了 registry 构建）
+    finally:
+        app.create_agent_registry = orig  # type: ignore[method-assign]
+        # drain 内部吞掉异常，队列已被 pop（启动失败也不重排，避免死循环）
+
+
 def _start_until_registry(tm: TaskManager, app: AgentApp, sid: str):
     """start 到 registry 构建即止（不真正起任务）。"""
     orig = app.create_agent_registry
 
-    def fake_registry(agent_id, workspace=None, unattended_profile=None):
+    def fake_registry(agent_id, workspace=None, unattended_profile=None, session_id=None):
         raise _Abort()
 
     app.create_agent_registry = fake_registry  # type: ignore[method-assign]
@@ -234,7 +371,7 @@ def test_worktree_task_not_mutually_exclusive(core, two_projects):
     captured = {}
     orig_reg = app.create_agent_registry
 
-    def fake_registry(agent_id, workspace=None, unattended_profile=None):
+    def fake_registry(agent_id, workspace=None, unattended_profile=None, session_id=None):
         captured["workspace"] = workspace
         raise _Abort()
 
@@ -271,3 +408,82 @@ def test_chat_returns_429_on_busy_workspace(core, two_projects):
         assert "已有任务运行" in r.json()["detail"]
     finally:
         TM.start = orig_start  # type: ignore[method-assign]
+
+
+def test_chat_returns_queue_info_on_cross_session_conflict(core, two_projects):
+    """/api/chat 撞同项目（跨会话）→ 200 + queued + position（不再 429）。"""
+    app, client = core
+    a, _b = two_projects
+    sid = _mk_session(app, a, "queued")
+    from litework.server.tasks import QueuedTask, TaskManager as TM
+
+    orig_start = TM.start
+
+    def queue_start(self, session_id, prompt, **kw):
+        raise TaskQueued(QueuedTask(task_id="qid", session_id=session_id,
+                                    prompt=prompt, position=2))
+
+    TM.start = queue_start  # type: ignore[method-assign]
+    try:
+        r = client.post("/api/chat", json={"session_id": sid, "prompt": "hi"}, headers=AUTH)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["queued"] is True
+        assert body["position"] == 2
+        assert body["task_id"] == "qid"
+        assert "排队" in body["message"]
+    finally:
+        TM.start = orig_start  # type: ignore[method-assign]
+
+
+def test_all_queued_reports_position_and_waiting(core, two_projects):
+    """all_queued()：面板数据源——带序号、前面还有几个、已等待秒数。"""
+    app, client = core
+    a, _b = two_projects
+    tm = TaskManager(app)
+
+    h = _fake_running_task("busy", a)
+    tm.tasks["t1"] = h
+
+    s1 = _mk_session(app, a, "q1")
+    s2 = _mk_session(app, a, "q2")
+    for sid in (s1, s2):
+        with pytest.raises(TaskQueued):
+            _start_until_registry(tm, app, sid)
+
+    rows = tm.all_queued()
+    assert [r["session_id"] for r in rows] == [s1, s2]
+    assert [r["position"] for r in rows] == [1, 2]
+    # 队首前面只有「正在跑的那个」，第二个前面还有跑着的 + 队首
+    assert [r["waiting_behind"] for r in rows] == [1, 2]
+    assert all(r["waiting"] >= 0 for r in rows)
+    assert all(r["project"] for r in rows)
+
+
+def test_api_queued_list_and_cancel(core, two_projects):
+    """GET /api/tasks/queued 与 DELETE /api/tasks/queued/{id}。"""
+    app, client = core
+    a, _b = two_projects
+    tm = app._task_manager
+
+    h = _fake_running_task("busy", a)
+    tm.tasks["t1"] = h
+
+    sid = _mk_session(app, a, "api-q")
+    with pytest.raises(TaskQueued) as ei:
+        _start_until_registry(tm, app, sid)
+    qid = ei.value.queued.task_id
+
+    r = client.get("/api/tasks/queued", headers=AUTH)
+    assert r.status_code == 200
+    rows = r.json()["tasks"]
+    assert any(x["task_id"] == qid for x in rows)
+
+    r = client.delete(f"/api/tasks/queued/{qid}", headers=AUTH)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert not any(x["task_id"] == qid for x in client.get(
+        "/api/tasks/queued", headers=AUTH).json()["tasks"])
+
+    # 再删一次：已不在队列，返回 False（不是 500）
+    r = client.delete(f"/api/tasks/queued/{qid}", headers=AUTH)
+    assert r.status_code == 200 and r.json()["ok"] is False

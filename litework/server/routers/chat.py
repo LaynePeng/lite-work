@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .context import ServerContext
-from ..tasks import TaskLimitError, WorkspaceBusyError
+from ..tasks import TaskLimitError, TaskQueued, WorkspaceBusyError
 
 logger = logging.getLogger("litework.server.chat")
 
@@ -68,9 +68,14 @@ def create_router(ctx: ServerContext) -> APIRouter:
             handle = tasks.start(session_id, prompt, agent_id=payload.agent_id,
                                   reasoning_effort=payload.reasoning_effort,
                                   merge_worktree=payload.merge_worktree)
+        except TaskQueued as exc:
+            # 跨会话撞同项目 → 已排队（不再 429 让用户反复重试）
+            q = exc.queued
+            return {"task_id": q.task_id, "queued": True, "position": q.position,
+                    "message": f"该项目已有任务在跑，已排队（前面还有 {q.position - 1} 个）。"}
         except (TaskLimitError, WorkspaceBusyError) as exc:
-            # 并发护栏（max_running_tasks，云端小内存机）与同项目互斥（多端
-            # 视图分离）：429 让前端可提示重试
+            # 并发护栏（max_running_tasks，云端小内存机）与同会话重复启动：
+            # 429 让前端可提示重试
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         return {"task_id": handle.task_id}
 
@@ -123,6 +128,18 @@ def create_router(ctx: ServerContext) -> APIRouter:
     async def list_background_tasks(request: Request):
         ctx.check_auth(request)
         return {"tasks": app.background_tasks()}
+
+    @router.get("/api/tasks/queued")
+    async def list_queued_tasks(request: Request):
+        """同项目排队中的任务（C 项）：后台面板展示「谁在等谁」。"""
+        ctx.check_auth(request)
+        return {"tasks": tasks.all_queued()}
+
+    @router.delete("/api/tasks/queued/{task_id}")
+    async def cancel_queued_task(task_id: str, request: Request):
+        """取消一个排队任务（还没启动，所以只是从队列移除）。"""
+        ctx.check_auth(request)
+        return {"ok": tasks.cancel_queued_by_id(task_id)}
 
     @router.post("/api/tasks/background/{task_id}/kill")
     async def kill_background_task(task_id: str, request: Request):

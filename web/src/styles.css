@@ -6413,6 +6413,44 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   background: rgba(248, 81, 73, 0.12);
 }
 
+/* 排队中的任务（C 项）：按项目分组，看得出「谁在等谁」 */
+.bg-queue-group {
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+}
+.bg-queue-group:last-child {
+  border-bottom: none;
+}
+.bg-queue-project {
+  padding: 5px 8px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--bg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bg-item.queue {
+  border-bottom: none;
+  padding-left: 14px;
+}
+.bg-queue-pos {
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(79, 140, 255, 0.14);
+  border-radius: 4px;
+}
+.bg-item.queue .bg-item-meta {
+  color: var(--yellow, #d29922);
+}
+
 /* 上下文情况面板（ctx2）：仪表 + 账单卡 + 平铺明细 */
 .ctx2 {
   display: flex;

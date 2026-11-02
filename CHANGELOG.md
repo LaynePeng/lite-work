@@ -2,6 +2,70 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.1.0]
+
+> 本版主体：多 Agent 的四项可靠性修补——**选中的协作模式此前不会影响
+> `spawn_agent` 的工具描述**（选了「头脑风暴」却不派生）、重启后子 Agent
+> 状态被谎报成 `completed`、转发给子 Agent 的消息只存在于内存、跨会话撞同一
+> 项目一律 429。另补跨会话 agent 的只读可见性，以及后台面板里的排队视图。
+
+### 修复（选中协作模式不生效，模型被两条矛盾指令夹住）
+
+- **现象**：在界面上选「头脑风暴」，主 Agent 并不派生子 Agent，直接自己单干。
+- **根因**：两条路径读的不是同一份配置。系统提示走
+  `get_collab_policy(app, session_id)`（会读会话），而 `spawn_agent` 工具描述
+  走 `_collab_gate(app)` ——**只读全局配置**，且 `get_tools()` 调
+  `get_collab_policy` 时**没传 `session_id`**。结果提示词说「必须按流程派生」、
+  工具描述说「『多角度』不构成派生许可」，模型倾向不派生。
+- **修复**：`_collab_gate` 与会话级策略对齐；`session_id` 沿
+  `create_agent_registry → tool_plugins → _builtin_plugins → MultiAgentPlugin`
+  一路下传，使工具描述反映**该会话**选定的模式。补会话级回归测试
+  （原有测试只覆盖全局策略，正好漏掉这条分支）。
+
+### 修复（Core 重启后运行中的子 Agent 被谎报为 completed）
+
+- **根因**：`_restore_from_session` 与落盘侧都硬编码 `status="completed"`，
+  重启时正在跑的 agent 恢复后变成「已完成」，编排者据此以为活干完了，
+  可能重复派活或漏接管。
+- **修复**：引入 `interrupted` 终态——落盘时写真实终态，恢复时只沿用
+  `completed/errored/timeout/closed`，`running/pending` 与旧版无 status 的
+  记录一律 `interrupted`。`list_agents` 明确提示「有 N 个 agent 被中断，
+  需要决定重派还是接管」，`followup_task` 可照常唤醒它们。
+
+### 新增（子 Agent 信箱持久化）
+
+- 消息此前只存在于三处内存（`agent_inbox` deque / `pending_inbox` /
+  `mailbox`），进程一退全丢，且没有幂等键。
+- 新增 `AgentMailbox`：append-only JSONL（复用 `core/jsonl_io` 的追加/轮转/
+  错误静默），`consumed_at` 标记消费而非删除（保留审计），`msg_id` 保证
+  重试不重复投递。三处内存收敛为「内存视图 + 持久事实源」，重启后未消费
+  消息自动回填。日志超阈值自动压缩，损坏行逐条跳过不影响整体。
+- 投递点统一：运行中直达的同时标记已消费（否则下次唤醒会重送）。
+
+### 变更（同项目互斥：跨会话改排队，不再一律 429）
+
+- **背景**：同项目互斥本身是对的（两个 Agent 同时改一个目录必打架），但
+  一律 429 要求用户自己反复重试。
+- **现在**：**跨会话**撞同一项目 → 入队并返回排队位置，前一个任务结束
+  自动接上（`drain_queues` 在 `running=False` 之后触发，避免旧任务把自己
+  当成占用者）；**同会话**重复启动仍直接拒绝（那是误操作）；**无人值守**
+  （盯梢/定时）传 `queue_if_busy=False` 保持撞车即跳过——排队会让一条本该
+  错过的计划在用户早已离开时突然开跑。删除会话时清掉其排队任务。
+- 工作区比较改用 `realpath` 归一化，符号链接/相对路径不再产生假冲突。
+- 「后台」页签现在同时展示**排队中的任务**（此前只显示后台命令，排队对
+  用户完全不可见）：按项目分组、带序号与等待时长，可直接取消；页签角标
+  是「运行中 + 排队中」之和。新增 `GET /api/tasks/queued` 与
+  `DELETE /api/tasks/queued/{id}`。
+
+### 新增（跨会话 agent 只读可见性）
+
+- 新增 `app.all_agents()` / `find_agent()` 与 `GET /api/agents/live`；
+  `list_agents` 工具在别的会话有 agent 时附一句提示。
+- **刻意只读**：跨会话不发消息、不唤醒、不关闭——那些必须回到 agent 所属
+  的会话。查询也不为「看得见」而实例化 manager（否则和 `release_session`
+  的回收目标打架）。理由：dsh-superagent 的研究结论是跨 session 动作必须
+  单向、受中介、带权限语义，它自己刻意不做自由的 agent 消息总线。
+
 ## [2.0.6] — 内置 office/ocr 工作区解析修复
 
 > 本版内容：内置 office/ocr 包装类在面板等非任务路径下以家目录为工作区，

@@ -532,7 +532,8 @@ export interface SubAgentProgress {
   task: string;
   turn: number;
   steps: SubAgentStep[];
-  status: "running" | "done" | "error";
+  /** interrupted = Core 重启时仍在运行（工作被中断，需要人决定重派或接管） */
+  status: "running" | "done" | "error" | "interrupted";
   summary?: string;
   tokens?: number;
   /** 子 Agent 实时流式文本（llm:stream 累积） */
@@ -882,6 +883,21 @@ export interface BackgroundTaskInfo {
   running: boolean;
   elapsed: number;
   exit_code: number | null;
+}
+
+/** 同项目排队中的任务（还没启动）：后台面板展示「谁在等谁」 */
+export interface QueuedTaskInfo {
+  task_id: string;
+  session_id: string;
+  prompt: string;
+  /** 在本项目队列里的序号（1 = 下一个跑） */
+  position: number;
+  /** 前面还有几个（含正在跑的那个） */
+  waiting_behind: number;
+  /** 已等待秒数 */
+  waiting: number;
+  /** 归一化的项目路径（同组展示用） */
+  project: string;
 }
 
 // ---------------------------------------------------------------- Skills 管理与命令

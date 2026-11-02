@@ -104,7 +104,11 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             """
             try:
                 handle = tasks.start(sched.session_id or "", prompt, agent_id=None,
-                                     unattended_profile=sched.permissions or "read")
+                                     unattended_profile=sched.permissions or "read",
+                                     # 无人值守不排队：撞车就记一次跳过，等下一个周期
+                                     # 再来。排队会让一条本该错过就错过的计划在用户
+                                     # 早已离开时突然开跑。
+                                     queue_if_busy=False)
                 return handle.task_id
             except WorkspaceBusyError as exc:
                 # 同项目互斥（多端视图分离）：无人值守任务撞上在跑任务，
@@ -167,6 +171,9 @@ def create_app(app: AgentApp, token: Optional[str] = None,
     fast_app = FastAPI(title="lite-work", version=VERSION, lifespan=_lifespan)
     auth = TokenAuth(token)
     tasks = TaskManager(app)
+    # TaskHandle.run 结束时需要触发「同项目排队」的排空（C 项）：
+    # 那里必须等 running=False 之后才能放行下一个，所以不能从 start 内部递归。
+    app._task_manager = tasks  # type: ignore[attr-defined]
     push = PushManager(app.config_dir)
     ctx = ServerContext(app=app, tasks=tasks, auth=auth, jobs=InstallJobRegistry(),
                         push=push)

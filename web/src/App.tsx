@@ -25,7 +25,7 @@ import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { WatchToaster } from "./components/WatchToaster";
 import { useResizable } from "./hooks/useResizable";
 import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
-import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
+import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, QueuedTaskInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
 import { baseName } from "./lib/path";
 import { isTextLikePath, resolveOpenTarget } from "./lib/fileOpen";
 import { apiUrl, authHeaders, isElectron, UNAUTHORIZED_EVENT } from "./lib/connection";
@@ -202,9 +202,12 @@ function reduceAgentBoard(
   // completed：卡片流入「已完成」分区（changed_files 随通知送达 → review gate 数据源）
   const changedFiles = Array.isArray(d.changed_files)
     ? d.changed_files.map(String) : undefined;
+  // 中断不是完成：Core 重启时仍在跑的 agent 要显示为「已中断」，否则用户会
+  // 以为活干完了（这正是 _restore_from_session 曾经谎报 completed 的后果）。
+  const interrupted = d.status === "interrupted";
   list[idx] = {
     ...prev,
-    status: "done",
+    status: interrupted ? "interrupted" : "done",
     summary: typeof d.summary === "string" ? d.summary : prev.summary,
     tokens: typeof d.tokens_used === "number" ? d.tokens_used : prev.tokens,
     turn: typeof d.turns === "number" ? d.turns : prev.turn,
@@ -343,6 +346,8 @@ export default function App() {
     api.collabModes().then((r) => setCollabModes(r.modes)).catch(() => {});
   }, []);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([]);
+  //: 同项目排队中的任务（C 项）：与后台命令同一轮询节奏
+  const [queuedTasks, setQueuedTasks] = useState<QueuedTaskInfo[]>([]);
   // 面板折叠状态：默认展开（false=展开）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toolPanelCollapsed, setToolPanelCollapsed] = useState(false);
@@ -416,11 +421,18 @@ export default function App() {
         .then(() => api.backgroundTasks())
         .then((r) => setBackgroundTasks(r.tasks))
         .catch(() => {});
+      // 排队任务与后台命令同节奏刷新；有排队时应更积极（否则「等 1 个」的
+      // 提示会长时间不变，用户以为卡住了）
+      Promise.resolve()
+        .then(() => api.queuedTasks?.())
+        .then((r) => { if (r) setQueuedTasks(r.tasks); })
+        .catch(() => {});
     };
     const schedule = () => {
       const every = document.hidden
         ? HIDDEN_MS
-        : (backgroundTasksRef.current.some((t) => t.running) ? 2000 : IDLE_MS);
+        : (backgroundTasksRef.current.some((t) => t.running) || queuedTasksRef.current.length > 0
+            ? 2000 : IDLE_MS);
       timer = window.setTimeout(() => {
         if (!document.hidden) load();
         schedule();
@@ -477,6 +489,8 @@ export default function App() {
   // 后台任务列表的 ref 镜像：轮询间隔要按「有没有任务在跑」自适应，
   // 但轮询 effect 只跑一次（不能依赖 backgroundTasks，否则每次刷新重建定时器）
   const backgroundTasksRef = useRef<BackgroundTaskInfo[]>([]);
+  //: 排队任务的 ref 镜像（轮询间隔判断用，同样不能进 effect 依赖）
+  const queuedTasksRef = useRef<QueuedTaskInfo[]>([]);
   const tabsRef = useRef<TabItem[]>([]);
   const sessionsRequestRef = useRef(0);
   // 任务启动器 ref：供 handleSSEEvent 在 task:done 时自动发送下一条（避免循环依赖）
@@ -484,6 +498,7 @@ export default function App() {
 
   useEffect(() => { chatStatesRef.current = chatStates; }, [chatStates]);
   useEffect(() => { backgroundTasksRef.current = backgroundTasks; }, [backgroundTasks]);
+  useEffect(() => { queuedTasksRef.current = queuedTasks; }, [queuedTasks]);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => { draftModelsRef.current = draftModels; }, [draftModels]);
   useEffect(() => { draftReasoningRef.current = draftReasoning; }, [draftReasoning]);
@@ -623,7 +638,20 @@ export default function App() {
       if (!resp.agents?.length) return;
       let hasRunning = false;
       for (const agent of resp.agents) {
-        if (agent.status === "completed" || agent.status === "errored" || agent.status === "closed") {
+        if (agent.status === "interrupted") {
+          // Core 重启时仍在跑的 agent：工作已被中断。不要当作完成上报
+          // （那会让看板显示“✓ 已完成”，掩盖了需要人决定的事）。
+          pushAgentEvent(sid, "completed", {
+            subagentId: agent.agent_id,
+            role: agent.role,
+            task: agent.task,
+            turns: agent.turns,
+            summary: agent.summary || "Core 重启时该子 Agent 仍在运行，工作已中断。",
+            tokens_used: agent.tokens,
+            changed_files: agent.changed_files,
+            status: "interrupted",
+          } as Record<string, unknown>);
+        } else if (agent.status === "completed" || agent.status === "errored" || agent.status === "closed") {
           pushAgentEvent(sid, "completed", {
             subagentId: agent.agent_id,
             role: agent.role,
@@ -632,6 +660,7 @@ export default function App() {
             summary: agent.summary,
             tokens_used: agent.tokens,
             changed_files: agent.changed_files,
+            status: agent.status === "errored" ? "errored" : "completed",
           } as Record<string, unknown>);
         } else if (agent.status === "running") {
           hasRunning = true;
@@ -3195,11 +3224,17 @@ export default function App() {
         currentAgentRef.current = currentAgent;
         const resp = await api.chat(sid, prompt, currentAgent, reasoningEffort);
         if (resp.queued) {
+          if (resp.position !== undefined) {
+            // 同项目被另一个会话占用 → 本次是跨会话排队，等前一个结束自动接上。
+            // 与「补充指令入队」不同：这不是当前任务的下一回合，而是一个待启动任务。
+            pushLog(resp.message || `➥ 该项目已有任务在跑，已排队（前面还有 ${resp.position - 1} 个）`);
+            patchChat(sid, { running: false, streaming: null });
+            return;
+          }
           // 后端确认入队：当前任务继续跑，不覆盖 taskIds/SSE 连接
           pushLog("➥ 补充指令已入队，将在当前任务下一回合生效");
           return;
-        }
-        const { task_id } = resp;
+        }        const { task_id } = resp;
         taskIdsRef.current.set(sid, task_id);
         if (stopRequestedRef.current.has(sid)) {
           stopRequestedRef.current.delete(sid);
@@ -4034,6 +4069,10 @@ export default function App() {
             onCloseAgent={(id) => void handleCloseAgent(id)}
             onKillBackground={(id) => void api.killBackgroundTask(id).then(() => {
               setBackgroundTasks((prev) => prev.filter((t) => t.task_id !== id));
+            }).catch(() => {})}
+            queuedTasks={queuedTasks}
+            onCancelQueued={(id) => void api.cancelQueuedTask(id).then(() => {
+              setQueuedTasks((prev) => prev.filter((t) => t.task_id !== id));
             }).catch(() => {})}
             onCompact={activeSessionId && !currentChat.running ? handlePanelCompact : undefined}
             compacting={activeSessionId ? !!compactingSessions[activeSessionId] : false}

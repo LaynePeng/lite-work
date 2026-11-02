@@ -20,7 +20,7 @@ import type { WatchSourceInfo } from "../api";
 import { ScheduleManager } from "./ScheduleManager";
 import type {
   BackgroundTaskInfo, ContextCallStats, ContextHistoryPoint, ContextMechanisms, ContextStats,
-  ContextTaskStats, LiveSpeedStats, MCPServerStatus, SubAgentProgress, TodoItem,
+  ContextTaskStats, LiveSpeedStats, MCPServerStatus, QueuedTaskInfo, SubAgentProgress, TodoItem,
 } from "../types";
 
 // ---------------------------------------------------------------- 上下文情况面板
@@ -697,26 +697,69 @@ function TodosPanel({ todos }: { todos: TodoItem[] }) {
 
 // ---------------------------------------------------------------- 后台命令面板
 
-function BackgroundPanel({ tasks, onKill }: { tasks: BackgroundTaskInfo[]; onKill: (taskId: string) => void }) {
-  if (!tasks || tasks.length === 0) {
+function BackgroundPanel({ tasks, onKill, queued, onCancelQueued }: {
+  tasks: BackgroundTaskInfo[];
+  onKill: (taskId: string) => void;
+  queued?: QueuedTaskInfo[];
+  onCancelQueued?: (taskId: string) => void;
+}) {
+  const q = queued ?? [];
+  if ((!tasks || tasks.length === 0) && q.length === 0) {
     return <div className="tool-panel-empty">暂无后台命令（Agent 异步执行时显示）</div>;
   }
+  // 按项目分组：同一个项目里只有一个在跑，其余排成队——分组才看得出「谁在等谁」
+  const byProject = new Map<string, QueuedTaskInfo[]>();
+  for (const t of q) {
+    const list = byProject.get(t.project) ?? [];
+    list.push(t);
+    byProject.set(t.project, list);
+  }
+  const shortProject = (p: string) => {
+    const parts = p.split(/[\\/]/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : p;
+  };
   return (
     <div className="bg-panel">
-      <div className="tools-panel-count">运行中 {tasks.filter((t) => t.running).length} / 共 {tasks.length}</div>
-      <ul className="bg-list">
-        {tasks.map((t) => (
-          <li key={t.task_id} className={`bg-item ${t.running ? "running" : "done"}`}>
-            <span className="bg-item-text" title={t.command}>{t.command}</span>
-            <span className="bg-item-meta">
-              {t.running ? `⏱ ${t.elapsed}s` : `✅ ${t.exit_code} (${t.elapsed}s)`}
-            </span>
-            {t.running && (
-              <button className="bg-item-kill" onClick={() => onKill(t.task_id)} title="杀掉">■</button>
-            )}
-          </li>
-        ))}
-      </ul>
+      {q.length > 0 && (
+        <>
+          <div className="tools-panel-count">排队中 {q.length}（同项目串行执行）</div>
+          <ul className="bg-list">
+            {[...byProject.entries()].map(([project, items]) => (
+              <li key={project} className="bg-queue-group">
+                <div className="bg-queue-project" title={project}>📁 {shortProject(project)}</div>
+                {items.map((t) => (
+                  <div key={t.task_id} className="bg-item queue">
+                    <span className="bg-queue-pos">{t.position}</span>
+                    <span className="bg-item-text" title={t.prompt}>{t.prompt}</span>
+                    <span className="bg-item-meta">
+                      {t.waiting_behind > 0 ? `等 ${t.waiting_behind} 个 · ${t.waiting}s` : `${t.waiting}s`}
+                    </span>
+                    <button className="bg-item-kill" onClick={() => onCancelQueued?.(t.task_id)} title="取消排队">✕</button>
+                  </div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {tasks && tasks.length > 0 && (
+        <>
+          <div className="tools-panel-count">运行中 {tasks.filter((t) => t.running).length} / 共 {tasks.length}</div>
+          <ul className="bg-list">
+            {tasks.map((t) => (
+              <li key={t.task_id} className={`bg-item ${t.running ? "running" : "done"}`}>
+                <span className="bg-item-text" title={t.command}>{t.command}</span>
+                <span className="bg-item-meta">
+                  {t.running ? `⏱ ${t.elapsed}s` : `✅ ${t.exit_code} (${t.elapsed}s)`}
+                </span>
+                {t.running && (
+                  <button className="bg-item-kill" onClick={() => onKill(t.task_id)} title="杀掉">■</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -1351,6 +1394,7 @@ function useTabStripDrag() {
 export default function ToolPanel({
   contextStats, contextHistory, running, liveSpeed, mcpServers, tools, todos, agentBoard,
   orchestrator, backgroundTasks, collapsed, onToggleCollapsed, onKillBackground,
+  queuedTasks, onCancelQueued,
   watchNotifications, watchConnected, onClearWatchNotifications, onOpenSession,
   watchSources, sessionId, onWatchChanged, watchSessionOf, onResurfaceWatch,
   activeTab, onTabChange, onCompact, compacting, onCloseAgent,
@@ -1368,6 +1412,9 @@ export default function ToolPanel({
   agentBoard?: SubAgentProgress[];
   orchestrator?: { agentId: string; running: boolean };
   backgroundTasks?: BackgroundTaskInfo[];
+  /** 同项目排队中的任务（C 项）：与后台命令合并在「后台」页签展示 */
+  queuedTasks?: QueuedTaskInfo[];
+  onCancelQueued?: (taskId: string) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onKillBackground?: (taskId: string) => void;
@@ -1409,6 +1456,7 @@ export default function ToolPanel({
   const strip = useTabStripDrag();
   const todoDone = todos.filter((t) => t.status === "completed").length;
   const runningCount = (backgroundTasks ?? []).filter((t) => t.running).length;
+  const queuedCount = (queuedTasks ?? []).length;
   const runningAgents = (agentBoard ?? []).filter((a) => a.status === "running").length;
   // 通知角标：只数「值得看」的（无变化这类不提醒，与系统通知口径一致）
   const watchUnread = (watchNotifications ?? []).filter((n) => n.status !== "unchanged").length;
@@ -1739,7 +1787,10 @@ const PanelSegment = memo(function PanelSegment({ seg }: { seg: PanelSeg }) {
       title: todos.length ? `进度 ${todoDone}/${todos.length}` : "Agent 规划多步骤任务时生成 TODO 清单" },
     { id: "agents", label: runningAgents > 0 ? `Agents (${runningAgents})` : "Agents",
       title: "多 Agent 看板：运行中/已完成 竖排交接视图" },
-    { id: "background", label: runningCount > 0 ? `后台 (${runningCount})` : "后台" },
+    // 角标同时体现「在跑的」和「在等的」：光看后台命令会漏掉排队中的任务
+    { id: "background",
+      label: (runningCount + queuedCount) > 0 ? `后台 (${runningCount + queuedCount})` : "后台",
+      title: "后台命令（Agent 异步执行）+ 同项目排队中的任务" },
     { id: "watch", label: watchUnread > 0 ? `盯梢 (${watchUnread})` : "盯梢",
       title: "盯梢/定时通知中心：调度器判定「有变化」或出错时在这里留痕" },
     { id: "tools", label: "工具" },
@@ -1788,7 +1839,8 @@ const PanelSegment = memo(function PanelSegment({ seg }: { seg: PanelSeg }) {
               : panelTab === "mcp"
                 ? <McpPanel servers={mcpServers} />
                 : panelTab === "background"
-                  ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})} />
+                  ? <BackgroundPanel tasks={backgroundTasks ?? []} onKill={onKillBackground ?? (() => {})}
+                      queued={queuedTasks} onCancelQueued={onCancelQueued} />
                   : panelTab === "watch"
                     ? <WatchPanel
                         items={watchNotifications ?? []}

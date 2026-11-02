@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..app import AgentApp
@@ -227,6 +228,12 @@ class TaskHandle:
                 records = list((snapshot.metadata or {}).get("subagent_records") or [])
                 new_id = payload.get("subagentId") or ""
                 records = [r for r in records if r.get("subagentId") != new_id]
+                # 如实落盘终态：sub_agent 已经算出 completed/errored（超时/步数耗尽/
+                # 失败都记为 errored）。此前这里硬编码 completed，导致重启恢复后
+                # 失败的子 Agent 冒充成功。
+                reported = str(payload.get("status") or "")
+                status = reported if reported in ("completed", "errored", "timeout", "closed") \
+                    else ("completed" if payload.get("error") is None else "errored")
                 records.append({
                     "subagentId": payload.get("subagentId") or "",
                     "role": payload.get("role") or "general",
@@ -237,7 +244,8 @@ class TaskHandle:
                     "tokens": payload.get("tokens_used") or 0,
                     "turns": payload.get("turns") or 0,
                     "summary": payload.get("summary") or "",
-                    "status": "completed",
+                    "status": status,
+                    "error": payload.get("error"),
                     "depth": int(payload.get("depth") or 1),
                 })
                 # 保留条数取配置（默认 20）；update_metadata 会合并到现有 metadata
@@ -403,6 +411,14 @@ class TaskHandle:
                             q.get_nowait()
                         except asyncio.QueueEmpty:
                             break
+            # 本项目空出来了：接上排队任务（C 项）。必须在 running=False 之后
+            # ——否则旧任务会把自己当成占用者，永远排不下去。
+            try:
+                mgr = self.app.__dict__.get("_task_manager")
+                if mgr is not None:
+                    mgr.drain_queues()
+            except Exception:  # noqa: BLE001 - 排空失败不影响任务收尾
+                logger.warning("[Task %s] 排空同项目队列失败", self.task_id, exc_info=True)
 
     def release(self) -> None:
         """释放任务的重对象（kernel / registry / loop / 事件归档），保留可查询的 shell。
@@ -691,18 +707,55 @@ class TaskLimitError(RuntimeError):
 
 
 class WorkspaceBusyError(RuntimeError):
-    """同项目已有任务运行中（方案 A：同项目互斥，跨项目并行）。"""
+    """同项目已有任务运行中（方案 A：同项目互斥，跨项目并行）。
+
+    只在**同会话**重复启动时抛出（那是误操作）；跨会话冲突走排队
+    （见 `TaskManager.start` 的 queue_if_busy），不再直接拒绝。
+    """
+
+
+class TaskQueued(RuntimeError):
+    """跨会话撞同项目：已入队，携带排队信息（不走 429）。"""
+
+    def __init__(self, queued: "QueuedTask") -> None:
+        super().__init__(f"已排队（前面还有 {queued.position - 1} 个任务）")
+        self.queued = queued
+
+
+@dataclass
+class QueuedTask:
+    """同项目排队等待中的一个任务（尚未创建 kernel/registry）。
+
+    只保存「怎么启动」所需的参数，不持有任何重对象——排队期间几乎零成本，
+    且进程重启后队列自然消失（重启后用户会主动重发，不假装续跑）。
+    """
+
+    task_id: str
+    session_id: str
+    prompt: str
+    agent_id: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    merge_worktree: Optional[str] = None
+    unattended_profile: Optional[str] = None
+    #: 入队时刻（monotonic，用于等待时长与超时丢弃）
+    created_at: float = field(default_factory=time.monotonic)
+    #: 排在第几位（1 = 下一个执行，返回给用户看）
+    position: int = 1
 
 
 class TaskManager:
     def __init__(self, app: AgentApp) -> None:
         self.app = app
         self.tasks: Dict[str, TaskHandle] = {}
+        # 同项目排队：{归一化的项目工作区: [QueuedTask, ...]}（先到先跑）
+        self.pending: Dict[str, List[QueuedTask]] = {}
+        self._draining = False
 
     def start(self, session_id: str, prompt: str, agent_id: Optional[str] = None,
               reasoning_effort: Optional[str] = None,
               merge_worktree: Optional[str] = None,
-              unattended_profile: Optional[str] = None) -> TaskHandle:
+              unattended_profile: Optional[str] = None,
+              queue_if_busy: bool = True) -> TaskHandle:
         # 并发护栏：放在一切重对象创建之前（占坑即拒，不浪费 worktree/kernel 构建）。
         # 定时触发路径由 _start_watch_task 的 except 兜底（记 error 推通知）
         cap = int(self.app.config.get("max_running_tasks", 0) or 0)
@@ -770,19 +823,29 @@ class TaskManager:
             task_workspace = session_ws
         # —— 同项目互斥（方案 A）——
         # 两个 Agent 同时改一个目录必打架（并发写/ git 状态互踩）。跨项目并行
-        # 不受限；同项目已有任务在跑 → 429 拒绝。worktree 隔离任务在独立副本里，
-        # 与主工作区不冲突，不参与互斥。
+        # 不受限；worktree 隔离任务在独立副本里，与主工作区不冲突，不参与互斥。
+        #
+        # 冲突处理分两种（C 项）：
+        # - **同会话**重复启动 → 仍直接拒绝。那是误操作（用户连点两下），
+        #   排队只会让它更晚才发现按错了。
+        # - **跨会话**撞同一项目 → 排队（queue_if_busy），返回排队位置，
+        #   前者结束后自动接上。此前一律 429，用户只能自己反复重试。
         if task_workspace and not worktree_name:
             base_ws = str(metadata.get("workspace") or "")
-            for other in self.tasks.values():
-                if not other.running or other.stopping:
-                    continue
-                other_ws = other.workspace or other.session_workspace or ""
-                if base_ws and other_ws and os.path.normcase(os.path.abspath(other_ws)) == \
-                        os.path.normcase(os.path.abspath(base_ws)):
+            conflict = self._busy_peer(base_ws)
+            if conflict is not None:
+                if conflict.kernel.session_id == session_id:
                     raise WorkspaceBusyError(
-                        f"该项目已有任务运行中（{other.kernel.session_id}），"
+                        f"本会话已有任务运行中（{conflict.kernel.session_id}），"
+                        "请等它结束或停止它后再发")
+                if not queue_if_busy:
+                    raise WorkspaceBusyError(
+                        f"该项目已有任务运行中（{conflict.kernel.session_id}），"
                         "请等它结束、停止它，或开启会话的隔离工作树后再试")
+                queued = self._enqueue(session_id, prompt, base_ws, agent_id,
+                                       reasoning_effort, merge_worktree,
+                                       unattended_profile)
+                raise TaskQueued(queued)
         # 按 Agent 配置裁剪工具集（build 全量 / plan 只读 / 自定义）
         # workspace：隔离时所有工具插件以 worktree 为工作区构建
         # unattended_profile：盯梢/定时等无人值守任务传权限档——没人点审批，
@@ -790,6 +853,7 @@ class TaskManager:
         registry = self.app.create_agent_registry(
             agent_id or "build", workspace=task_workspace,
             unattended_profile=unattended_profile,
+            session_id=session_id,
         )
         kernel = self.app.create_kernel(session_id, registry=registry,
                                         security_workspace=task_workspace,
@@ -830,6 +894,160 @@ class TaskManager:
         self.tasks[task_id] = handle
         handle.task = asyncio.get_event_loop().create_task(handle.run(prompt))
         return handle
+
+    # ------------------------------------------------------------ 同项目排队（C）
+
+    @staticmethod
+    def _ws_key(path: str) -> str:
+        """工作区归一化键（大小写/符号链接/相对路径差异不产生假冲突）。"""
+        if not path:
+            return ""
+        try:
+            return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+        except OSError:
+            return os.path.normcase(os.path.abspath(path))
+
+    def _busy_peer(self, base_ws: str) -> Optional[TaskHandle]:
+        """该项目下正在运行的任务（排除已停止/未启动的），没有则 None。"""
+        key = self._ws_key(base_ws)
+        if not key:
+            return None
+        for other in self.tasks.values():
+            if not other.running or other.stopping:
+                continue
+            other_ws = other.workspace or other.session_workspace or ""
+            if self._ws_key(other_ws) == key:
+                return other
+        return None
+
+    def _enqueue(self, session_id: str, prompt: str, base_ws: str,
+                 agent_id: Optional[str], reasoning_effort: Optional[str],
+                 merge_worktree: Optional[str],
+                 unattended_profile: Optional[str]) -> QueuedTask:
+        """把一个因同项目冲突的任务入队，返回其排队信息。"""
+        key = self._ws_key(base_ws) or "_"
+        q = QueuedTask(
+            task_id=uuid.uuid4().hex[:12], session_id=session_id, prompt=prompt,
+            agent_id=agent_id, reasoning_effort=reasoning_effort,
+            merge_worktree=merge_worktree, unattended_profile=unattended_profile,
+        )
+        bucket = self.pending.setdefault(key, [])
+        bucket.append(q)
+        q.position = len(bucket)
+        logger.info("[TaskManager] 会话 %s 的任务入队（项目 %s，前面 %d 个）",
+                    session_id, key, q.position - 1)
+        return q
+
+    def all_queued(self) -> List[Dict[str, Any]]:
+        """全部排队任务（跨会话，按项目分组后拍平），供后台面板展示。
+
+        只读快照：不改队列。面板按 project 分组显示「谁在等谁」。
+        """
+        out: List[Dict[str, Any]] = []
+        now = time.monotonic()
+        for key, bucket in list(self.pending.items()):
+            # 队首前面还有几个「运行中」的任务（同项目只会有一个）
+            ahead = len(self._busy_peer_ws(key))
+            for i, q in enumerate(bucket):
+                out.append({
+                    "task_id": q.task_id,
+                    "session_id": q.session_id,
+                    "prompt": q.prompt[:200],
+                    "position": i + 1,
+                    # 前面还有几个（含正在跑的那个）
+                    "waiting_behind": ahead + i,
+                    "waiting": int(now - q.created_at),
+                    "project": key,
+                })
+        return out
+
+    def queued_for(self, session_id: str) -> List[QueuedTask]:
+        """该会话在排队的任务（按项目分组后拍平，保持先到先跑顺序）。"""
+        out: List[QueuedTask] = []
+        for bucket in self.pending.values():
+            out.extend(q for q in bucket if q.session_id == session_id)
+        return out
+
+    def cancel_queued_by_id(self, task_id: str) -> bool:
+        """按排队 task_id 取消单个任务，返回是否真的移除了。"""
+        for key in list(self.pending):
+            bucket = self.pending[key]
+            for i, q in enumerate(bucket):
+                if q.task_id != task_id:
+                    continue
+                bucket.pop(i)
+                if bucket:
+                    for j, rest in enumerate(bucket, 1):
+                        rest.position = j
+                else:
+                    self.pending.pop(key, None)
+                return True
+        return False
+
+    def cancel_queued(self, session_id: str) -> int:
+        """取消该会话所有排队任务（用户点停止/删会话时用），返回取消条数。"""
+        removed = 0
+        for key in list(self.pending):
+            bucket = self.pending[key]
+            keep = [q for q in bucket if q.session_id != session_id]
+            removed += len(bucket) - len(keep)
+            if keep:
+                self.pending[key] = keep
+                for i, q in enumerate(keep, 1):
+                    q.position = i
+            else:
+                self.pending.pop(key, None)
+        return removed
+
+    def drain_queues(self) -> int:
+        """在项目空闲后接上排队任务，返回本次启动的条数。
+
+        调用点：任务结束时（TaskHandle.run 的 finally 之后）。**不在任务内部
+        直接启动**——那时旧任务还没 `running=False`，会立刻被自己判定为冲突。
+        """
+        if self._draining:
+            return 0
+        self._draining = True
+        started = 0
+        try:
+            for key in list(self.pending):
+                bucket = self.pending.get(key) or []
+                if not bucket:
+                    self.pending.pop(key, None)
+                    continue
+                # 项目仍被占用 → 停在这里，等它结束再来（一次只放行一个，
+                # 保证同项目内串行）
+                if self._busy_peer_ws(key):
+                    continue
+                head = bucket.pop(0)
+                if not bucket:
+                    self.pending.pop(key, None)
+                else:
+                    for i, q in enumerate(bucket, 1):
+                        q.position = i
+                try:
+                    self.start(head.session_id, head.prompt, agent_id=head.agent_id,
+                               reasoning_effort=head.reasoning_effort,
+                               merge_worktree=head.merge_worktree,
+                               unattended_profile=head.unattended_profile)
+                    started += 1
+                except Exception:  # noqa: BLE001 - 单个排队任务启动失败不阻塞后续
+                    logger.warning("[TaskManager] 排队任务启动失败 session=%s",
+                                   head.session_id, exc_info=True)
+        finally:
+            self._draining = False
+        return started
+
+    def _busy_peer_ws(self, key: str) -> List[TaskHandle]:
+        """该项目下仍在运行的任务列表（drain 用，按归一化键比较）。"""
+        out = []
+        for other in self.tasks.values():
+            if not other.running or other.stopping:
+                continue
+            other_ws = other.workspace or other.session_workspace or ""
+            if self._ws_key(other_ws) == key:
+                out.append(other)
+        return out
 
     def _resolve_skill_extra(self, prompt: str) -> Tuple[Optional[str], List[str], List[str]]:
         """技能权限感知的解析：/skill 显式命令 + triggers 自动匹配。

@@ -121,6 +121,58 @@ def test_selected_mode_replaces_spawn_agent_recipe(app_with_mode_plugin):
     assert "模式选择（按任务特征路由）" not in spawn.description  # 内置指引被替换
 
 
+# ---------------------------------------------------------------- 会话级模式的工具面一致性
+#
+# 回归：会话选择器选了协作模式后，system prompt 说「必须派生子 Agent」，
+# 但 spawn_agent 的工具描述仍带着全局治理档位的「不构成派生许可」——两条
+# 互相矛盾的指令让模型倾向不派生（用户反馈「选了头脑风暴但没拉起 agent」）。
+
+
+def test_session_collab_mode_reaches_spawn_agent_tool(app_with_mode_plugin):
+    """会话选定模式后，spawn_agent 工具描述必须反映会话配方，而非全局策略。"""
+    app = app_with_mode_plugin
+    app.session_store.save("s-spawn", [], {})
+    app.session_store.update_metadata("s-spawn", {"collab_mode": "meeting"})
+    # 全局策略保持 default：若工具面错误地只读全局，描述里就不会有会话配方
+    registry = app.create_agent_registry("build", session_id="s-spawn")
+    spawn = next(t for t in registry.get_tools() if t.name == "spawn_agent")
+    assert "轮流发言" in spawn.description, "spawn_agent 工具描述未携带会话选定模式的配方"
+    assert "模式选择（按任务特征路由）" not in spawn.description
+
+
+def test_session_collab_mode_clears_derivation_gate(app_with_mode_plugin):
+    """会话显式选定模式 = 用户指令，治理档位不得再说「不构成派生许可」。"""
+    app = app_with_mode_plugin
+    app.session_store.save("s-gate", [], {})
+    app.session_store.update_metadata("s-gate", {"collab_mode": "meeting"})
+    registry = app.create_agent_registry("build", session_id="s-gate")
+    spawn = next(t for t in registry.get_tools() if t.name == "spawn_agent")
+    assert "不构成派生许可" not in spawn.description, (
+        "会话已显式选定协作模式，spawn_agent 描述却仍在劝阻派生（与 system prompt 冲突）")
+    assert "协作模式" in spawn.description
+
+
+def test_no_session_collab_mode_keeps_explicit_gate(app_with_mode_plugin):
+    """没有会话级模式时，行为不变：仍是 explicit 治理档位。"""
+    app = app_with_mode_plugin
+    app.session_store.save("s-plain", [], {})
+    registry = app.create_agent_registry("build", session_id="s-plain")
+    spawn = next(t for t in registry.get_tools() if t.name == "spawn_agent")
+    assert "不构成派生许可" in spawn.description
+
+
+def test_unknown_spawn_role_is_reported(tmp_path):
+    """未知 role 必须报错，不得静默降级为 general（否则配方写错 role 无声无息）。"""
+    from litework.orchestration.sub_agent import ROLE_PROMPTS, ROLE_TOOLS
+
+    assert "critic" in ROLE_PROMPTS and "critic" in ROLE_TOOLS  # 配方依赖的 role 确实存在
+    app = AgentApp(workspace=str(tmp_path), config_dir=str(tmp_path / ".lite-work"))
+    app.refresh_model_meta = lambda: False
+    assert app.sub_agent_runner.unknown_role("no-such-role") is True
+    for known in ("general", "explorer", "tester", "critic", "refactor", "build", "plan"):
+        assert app.sub_agent_runner.unknown_role(known) is False, known
+
+
 def test_mode_plugin_hooks_fire_isolated(tmp_path):
     """插件钩子（on_agent_complete）在子 Agent 终态时触发，异常被隔离。"""
     import asyncio

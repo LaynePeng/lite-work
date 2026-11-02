@@ -100,6 +100,17 @@ class SubAgentRunner:
             pass
         return None
 
+    def unknown_role(self, role: str) -> bool:
+        """role 是否是未定义的角色名（既不在 AgentRegistry，也不在内置 ROLE_* 表）。
+
+        用于把「role 拼写错误」从静默降级 general 变成可见错误：协作模式配方
+        （recipe.md）按名字引用 role（如 critic），拼错的话此前会无声无息地
+        跑成 general，配方意图完全丢失。
+        """
+        if self._resolve_role(role) is not None:
+            return False
+        return role not in ROLE_PROMPTS and role not in ROLE_TOOLS
+
     def _resolve_adapter(self, model: Optional[str] = None):
         """子 Agent 的 LLM 适配器：model 覆盖（"provider/model" 或裸 model）→
         角色未指定时回退全局 adapter。探索类子任务路由到便宜模型的关键路径。"""
@@ -182,23 +193,13 @@ class SubAgentRunner:
             for t in self.app._all_tool_names():
                 if t not in allowed:
                     effective_perms.setdefault(t, "deny")
-        # worktree 物理隔离：工具集以 worktree 为工作区构建
-        agent_ws = workspace_override or self.app.workspace
-        registry = self.app.build_registry(
-            allowed=allowed,
-            exclude=sub_agent_excludes(sub_depth, max_spawn_depth),
-            permissions=effective_perms,
-            workspace=agent_ws,
-        )
-        sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
-        sub_kernel = self.app.create_kernel(sub_id, registry=registry,
-                                             security_workspace=agent_ws,
-                                             plugins_workspace=agent_ws)
         # 根会话标记：子 Agent 的工具 handler（spawn_agent 等）经它定位
         # 主会话的 SessionAgentManager——否则按 current_session_id（=sub_id）
         # 会新建孤立 manager，孙 agent 脱离主会话看板与通知注入。
         # fallback 链：显式传入（异步路径 manager.session_id）→ current_session_id
         # （同步路径 run_task 在主 Agent 工具执行中被 await，此刻即主会话 id）→ sub_id
+        # 必须在建 registry 之前解析：registry 的插件（spawn_agent）需要会话上下文
+        # 才能反映该会话选定的协作模式。
         root_sid = root_session_id
         if not root_sid:
             try:
@@ -206,6 +207,19 @@ class SubAgentRunner:
                 root_sid = _csi.get() or None
             except LookupError:
                 root_sid = None
+        # worktree 物理隔离：工具集以 worktree 为工作区构建
+        agent_ws = workspace_override or self.app.workspace
+        registry = self.app.build_registry(
+            allowed=allowed,
+            exclude=sub_agent_excludes(sub_depth, max_spawn_depth),
+            permissions=effective_perms,
+            workspace=agent_ws,
+            session_id=root_sid,
+        )
+        sub_id = agent_id or f"sub_{uuid.uuid4().hex[:8]}"
+        sub_kernel = self.app.create_kernel(sub_id, registry=registry,
+                                             security_workspace=agent_ws,
+                                             plugins_workspace=agent_ws)
         sub_kernel.root_session_id = root_sid or sub_id
         if record is not None:
             from .agent_manager import IsolationPlugin

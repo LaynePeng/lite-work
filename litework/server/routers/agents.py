@@ -64,6 +64,22 @@ def create_router(ctx: ServerContext) -> APIRouter:
         ctx.check_auth(request)
         return app.agents_available_tools()
 
+    @router.get("/api/agents/live")
+    async def list_all_live_agents(request: Request):
+        """全部会话的子 Agent 总览（**只读**）。
+
+        只读是刻意的边界：跨会话不做消息投递、不做唤醒、不做关闭——那些操作
+        必须回到 agent 所属的会话。此端点只解决「别的会话派的活看不到」。
+
+        内存中没有 manager 的会话不会出现（不为查询而实例化 manager，否则
+        会再造出 release_session 正要回收的东西）。
+        """
+        ctx.check_auth(request)
+        try:
+            return {"sessions": app.all_agents()}
+        except Exception:  # noqa: BLE001 - 总览失败不阻断前端
+            return {"sessions": {}}
+
     @router.post("/api/agents/save")
     async def save_agent(payload: AgentSaveRequest, request: Request):
         ctx.check_auth(request)

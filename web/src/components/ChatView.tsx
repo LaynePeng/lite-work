@@ -606,6 +606,7 @@ function SubAgentCard({ card }: { card: ToolCardInfo }) {
         <span className="subagent-status">
           {running
             ? `运行中${sa?.turn ? ` · 第 ${sa.turn} 轮` : ""}`
+            : sa?.status === "interrupted" ? "⚠ 已中断"
             : sa?.status === "error" ? "✗ 异常结束" : "✓ 已完成"}
           {sa?.tokens != null && !running ? ` · ${sa.tokens} tokens` : ""}
         </span>

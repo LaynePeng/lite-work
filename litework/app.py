@@ -321,6 +321,46 @@ class AgentApp:
             m = self.agent_managers[session_id] = SessionAgentManager(self, session_id)
         return m
 
+    # ------------------------------------------------ 跨会话 agent 查询（只读）
+    #
+    # 边界（刻意保守）：
+    # - **只提供查询**：跨会话能看到「别的会话有哪些 agent」，但 send_message /
+    #   followup_task / close_agent 仍然只能作用于本会话的 agent。
+    # - 理由：dsh-superagent 的研究结论是「所有跨 session 动作都必须是单向、
+    #   受中介、带权限语义」，它自己刻意不做自由的 agent 消息总线。开放跨会话
+    #   投递等于把「注意力成本」放大 N 倍，而我们没有 dsh 那套 Mandate 授权模型。
+    # - 因此 D 项的价值是**可发现性**（不再出现「另一个会话派的活我看不到」），
+    #   不是「通信能力」。
+
+    def all_agents(self) -> Dict[str, List[Dict[str, Any]]]:
+        """全部会话的子 Agent 清单（只读视图）：{session_id: [agent 行]}。
+
+        内存里没有 manager 的会话会被跳过（不主动实例化——那会凭空造出一堆
+        空 manager，正是 release_session 想回收的东西）。已释放会话的记录仍
+        可通过该会话的 `/api/sessions/{id}/agents` 端点从盘上恢复。
+        """
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for session_id, manager in list(self.agent_managers.items()):
+            try:
+                out[session_id] = manager.list_agents(include_closed=True)
+            except Exception:  # noqa: BLE001 - 单个会话出错不影响整体查询
+                continue
+        return out
+
+    def find_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        """按 agent_id 跨会话定位（只读）。返回含 home_session 的行，找不到为 None。
+
+        只查内存里已有的 manager：不为了查一个 id 把所有会话的 manager 建起来。
+        """
+        for session_id, manager in list(self.agent_managers.items()):
+            try:
+                for row in manager.list_agents(include_closed=True):
+                    if row.get("agent_id") == agent_id:
+                        return {**row, "home_session": session_id}
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
     # ------------------------------------------------ 会话 / 项目资源释放
     #
     # 为什么需要显式释放：「关闭对话页签」「切走项目」在前端只是视图动作，
@@ -1472,13 +1512,15 @@ class AgentApp:
 
     # ------------------------------------------------------------ 工具
 
-    def _builtin_plugins(self, workspace_override: Optional[str] = None) -> List[Plugin]:
+    def _builtin_plugins(self, workspace_override: Optional[str] = None,
+                         session_id: Optional[str] = None) -> List[Plugin]:
         """内置 Cordis 插件清单（内核装配与元信息读取共用）。
 
         workspace 可能为 None（桌面态未打开项目）：此时用家目录兜底——
         仅构造实例读取工具定义，不会真正执行文件操作。
         workspace_override（P3 worktree 隔离）：以指定目录为工作区构建全新
         插件实例（不复用缓存——缓存实例绑定主工作区，重用会破坏隔离）。
+        session_id：传给需要会话上下文的插件（如 MultiAgentPlugin）。
         """
         ws = workspace_override or self.workspace or os.path.expanduser("~")
         shell_timeout = float(self.config.get("tool_timeout", 120))
@@ -1510,7 +1552,7 @@ class AgentApp:
             OcrPlugin(ws),
             PptEditPlugin(ws),
             PlanSavePlugin(self),
-            MultiAgentPlugin(self),
+            MultiAgentPlugin(self, session_id=session_id),
             SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
@@ -1525,13 +1567,15 @@ class AgentApp:
         plugins.extend(p for p in load_tool_builtin() if p.name not in known)
         return plugins
 
-    def tool_plugins(self, workspace: Optional[str] = None) -> List[Plugin]:
+    def tool_plugins(self, workspace: Optional[str] = None,
+                     session_id: Optional[str] = None) -> List[Plugin]:
         """Cordis 风格工具插件清单（空间解耦：工具能力全部由插件提供）。
 
         优先级：用户插件 > 内置插件。同名用户插件会跳过内置版（用户可单独
         更新/覆盖内置插件），卸载用户版后自动回退内置版。
         本地插件只加载一次（缓存），避免每次建内核重复 import。
         workspace（P3）：worktree 隔离时以指定目录构建内置插件实例。
+        session_id：需要会话上下文的插件（如 spawn_agent）经它取到会话。
         """
         from .tools.plugin_loader import local_shadows_builtin
 
@@ -1541,7 +1585,7 @@ class AgentApp:
         # 版本感知覆盖生效名单：同名且 local >= builtin（本地胜出）
         local_wins: set = set()
         plugins: List[Plugin] = []
-        for p in self._builtin_plugins(workspace):
+        for p in self._builtin_plugins(workspace, session_id=session_id):
             builtin_names.add(p.name)
             lp = local_by_name.get(p.name)
             if lp is not None and local_shadows_builtin(
@@ -1582,11 +1626,15 @@ class AgentApp:
         exclude: Optional[List[str]] = None,
         permissions: Optional[Dict[str, str]] = None,
         workspace: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> ToolRegistry:
         """通过 Cordis 内核组装工具集：插件安装到引导内核，注册进 tools 服务。
 
         与 AgentLoop 一致：内核持有 tools 服务（ToolRegistry），
         插件通过依赖注入获取并注册自己的工具。
+
+        session_id：需要会话上下文的插件（如 spawn_agent 反映该会话选定的
+        协作模式）经它取到会话；不传则退回全局策略。
         """
         kernel = Kernel(session_id="tool-bootstrap")
         registry = ToolRegistry()
@@ -1596,7 +1644,7 @@ class AgentApp:
         # install(kernel) 时从 app 服务捕获 workspace，晚注册会拿到 None
         # → OfficeTools(None) 兜底到家目录（.outputs 落到 ~/.outputs 的根因）
         kernel.register_service("app", self)
-        self._install_plugins(kernel, self.tool_plugins(workspace))
+        self._install_plugins(kernel, self.tool_plugins(workspace, session_id=session_id))
         self.mcp_manager.register_tools(registry, allowed=allowed, exclude=exclude)
         return registry
 
@@ -2499,7 +2547,8 @@ class AgentApp:
         return names
 
     def create_agent_registry(self, agent_id: str, workspace: Optional[str] = None,
-                              unattended_profile: Optional[str] = None) -> ToolRegistry:
+                              unattended_profile: Optional[str] = None,
+                              session_id: Optional[str] = None) -> ToolRegistry:
         """按 Agent 配置裁剪工具集（职责域模型，参考 OpenCode：plan 只读、build 全量）。
 
         domains → allowed/permissions 换算：域 allow/ask 的工具进白名单，
@@ -2512,6 +2561,9 @@ class AgentApp:
 
         unattended_profile：**无人值守任务**（盯梢/定时）的权限档（read / read+web）。
         给了就把档位之外的域强制 deny——没人点审批，不能只靠 ask 兜着。
+
+        session_id：工具描述需要会话上下文的插件（如 spawn_agent 反映该会话选定的
+        协作模式）经它取到会话；不传则退回全局策略。
         """
         from .core.permissions import domains_to_allowed_and_permissions
 
@@ -2526,6 +2578,7 @@ class AgentApp:
             exclude=None,
             permissions=permissions,
             workspace=workspace,
+            session_id=session_id,
         )
 
     def create_loop(self, kernel: Kernel, registry: ToolRegistry, agent_id: Optional[str] = None,

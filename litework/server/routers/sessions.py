@@ -76,12 +76,19 @@ class DeleteSessionsRequest(BaseModel):
 
 
 async def _shutdown_session_agents(app, session_id: str) -> None:
-    """停止该会话全部后台子 Agent（会话删除时防泄漏）。"""
+    """停止该会话全部后台子 Agent（会话删除时防泄漏），并清掉它的排队任务。"""
     try:
         manager = app.agent_manager(session_id, create=False)
         if manager is not None:
             await manager.shutdown()
             app.agent_managers.pop(session_id, None)
+    except Exception:
+        pass
+    # 排队任务：会话没了就不该再被排空启动（否则会跑一个用户已删除的会话）
+    try:
+        tm = app.__dict__.get("_task_manager")
+        if tm is not None:
+            tm.cancel_queued(session_id)
     except Exception:
         pass
 
