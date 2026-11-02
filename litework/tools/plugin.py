@@ -39,6 +39,51 @@ TOOLS_SERVICE = "tools"
 TOOL_FILTER_SERVICE = "tool_filter"
 
 
+def _runtime_workspace(bound: Optional[str]) -> str:
+    """工具执行期的真实工作区（供内置 office/ocr 包装类使用）。
+
+    **为什么不直接用装配时传入的 workspace**：构造参数只反映装配那一刻的
+    `app.workspace`。桌面多端模式下 `POST /api/workspace` 只登记该端的
+    client-view、不写全局值（见 server/routers/workspace.py），
+    `AgentApp._builtin_plugins` 于是在全局为 None 时用 `~` 兜底
+    （`ws = workspace_override or self.workspace or ~`）——面板等非任务路径
+    构造出的插件就以家目录为工作区，项目内文件会被判「路径越界」。
+
+    优先级（与社区 email-plugin 的附件解析口径一致）：
+
+    1. `header_context["workspace"]`：当前任务钉死的工作区（worktree 隔离
+       时即工作树路径，由 AgentLoop.run_task 每任务设置）；
+    2. `bound`：装配时绑定值（单端旧语义）。
+
+    只接受**已存在的绝对路径**；相对路径一律丢弃（AgentLoop 在无项目时会
+    把 workspace 置为 "."，按 CWD 解析等于把进程目录当成工作区）。
+    会话 metadata 一级不在此处实现：包装类拿不到 session_store，而任务路径
+    已由第 1 级覆盖（TaskManager 传的 plugins_workspace 与其一致）。
+    """
+    import os as _os
+
+    def ok(raw: Any) -> str:
+        s = str(raw or "").strip()
+        if not s or not _os.path.isabs(s):
+            return ""
+        try:
+            p = _os.path.abspath(_os.path.expanduser(s))
+        except Exception:
+            return ""
+        return p if _os.path.isdir(p) else ""
+
+    try:
+        from ..core.types import header_context
+
+        ctx = header_context.get() or {}
+        ws = ok(ctx.get("workspace")) if isinstance(ctx, dict) else ""
+        if ws:
+            return ws
+    except Exception:  # 无 header_context（旧核心 / 单测）
+        pass
+    return ok(bound)
+
+
 class ToolPlugin(Plugin):
     """工具插件基类：install 时把 get_tools() 的工具注册进内核 tools 服务。
 
@@ -227,20 +272,28 @@ class WebFetchPlugin(ToolPlugin):
 
 class OcrPlugin(ToolPlugin):
     name = "ocr-plugin"
-    # 与社区 ocr-plugin v1.2.0 同源：litework/tools/ocr.py 为社区副本
+    # 与社区 ocr-plugin v1.2.1 同源：litework/tools/ocr.py 为社区副本
     # （MIT、无许可证头），版本以社区 manifest 为准；v1.2.0 重库惰性导入
-    version = "1.2.0"
+    # 1.2.1：与社区 v1.2.1 同源——执行期重解析工作区（见 _runtime_workspace）
+    version = "1.2.1"
     description = "OCR 识别：图片/PDF 页面/PPT 内嵌图片中的文字提取"
 
     def __init__(self, workspace: str) -> None:
         from .ocr import OCRTools  # 延迟导入：见文件头说明
 
         self._tools = OCRTools(workspace)
+        # 装配时绑定的工作区（可能只是家目录兜底，见 _runtime_workspace）
+        self._bound_workspace = workspace
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()
 
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
+        ws = _runtime_workspace(self._bound_workspace)
+        if ws and ws != self._bound_workspace:
+            from .ocr import OCRTools  # 延迟导入：见文件头说明
+
+            return await OCRTools(ws).execute(name, args)
         return await self._tools.execute(name, args)
 
 
@@ -262,18 +315,27 @@ class OfficePlugin(ToolPlugin):
     #        工作区根目录，中间产物写 中间产物/
     # 1.7.0：与社区 v1.7.0 同源——pandas/matplotlib/pypdf/pymupdf 惰性导入
     #        （首次调用对应工具时才加载，模块 import 保持轻量）
-    version = "1.7.0"
+    # 1.7.1：与社区 v1.7.1 同源——执行期重解析工作区（见 _runtime_workspace），
+    #        面板等非任务路径不再以家目录为工作区
+    version = "1.7.1"
     description = "办公生产力：Word/Excel/PPT/PDF 生成与读取、格式化编辑与查找替换、数据分析、图表"
 
     def __init__(self, workspace: str) -> None:
         from .office import OfficeTools  # 延迟导入：见文件头说明
 
         self._tools = OfficeTools(workspace)
+        # 装配时绑定的工作区（可能只是家目录兜底，见 _runtime_workspace）
+        self._bound_workspace = workspace
 
     def get_tools(self) -> List[ToolDefinition]:
         return self._tools.get_tools()
 
     async def execute(self, name: str, args: Dict[str, Any]) -> str:
+        ws = _runtime_workspace(self._bound_workspace)
+        if ws and ws != self._bound_workspace:
+            from .office import OfficeTools  # 延迟导入：见文件头说明
+
+            return await OfficeTools(ws).execute(name, args)
         return await self._tools.execute(name, args)
 
 

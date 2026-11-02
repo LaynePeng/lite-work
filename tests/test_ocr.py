@@ -217,6 +217,6 @@ def test_synced_copy_has_no_apache_header() -> None:
 
 
 def test_builtin_wrapper_version_matches_community() -> None:
-    """主仓库包装类版本与社区 manifest 一致（v1.2.0 惰性导入版）。"""
+    """主仓库包装类版本与社区 manifest 一致（v1.2.1 执行期工作区版）。"""
     from litework.tools.plugin import OcrPlugin
-    assert OcrPlugin.version == "1.2.0"
+    assert OcrPlugin.version == "1.2.1"

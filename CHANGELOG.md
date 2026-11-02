@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 修复（内置 office/ocr 在面板等非任务路径下以家目录为工作区）
+
+- **现象**：桌面端多窗口/多端使用时，office 工具把产物写进家目录、
+  ocr 把项目内的图片判「路径越界」，而任务里跑同样的工具却正常。
+- **根因**：内置包装类只在 `__init__` 时绑定 `workspace`，而该值来自
+  `_builtin_plugins` 的 `ws = workspace_override or self.workspace or ~`。
+  桌面多端模式下 `POST /api/workspace` 只登记该端的 client-view、**不写全局
+  `app.workspace`**，全局值常为 None → 面板路径构造出的插件以 `~` 为工作区。
+- **修复**：新增 `_runtime_workspace()`，执行期按
+  `header_context["workspace"]`（任务钉死的工作区，worktree 隔离时即工作树）
+  重新解析，未命中再回退到绑定值；相对路径/不存在目录一律丢弃
+  （`AgentLoop` 无项目时会把 workspace 置 `"."`，按 CWD 解析等于把进程目录
+  当成工作区）。
+- **同步版本**：内置 office-plugin → v1.7.1、ocr-plugin → v1.2.1，
+  与社区 lite-work-plugins 同名版本对齐（事实源仍是社区仓库）。
+
 ## [2.0.5] — 内存回收 + 盯梢通知回看 + 插件配置热生效
 
 > 本版主体：①内存回收——补上会话级与项目级的释放入口（此前只有任务级回收，
