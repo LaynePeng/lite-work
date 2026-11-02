@@ -12,6 +12,7 @@ LLM 调用(带动态 System Prompt / Token 预算裁剪 / beforeLLM 管道)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import logging
 import os
@@ -1130,22 +1131,40 @@ class AgentLoop:
         # 卡住的 hook 会把整条工具链挂死（tool:after_execute 永不发出，前端
         # 工具卡永远「运行中」）。兜底上限跟随该工具自身的 effective_timeout
         # （工具允许跑多久，结果修饰就允许多久），不额外一刀切收紧。
-        try:
-            post = await asyncio.wait_for(
-                self.kernel.after_tool.run(
-                    self.kernel.ctx,
-                    {"toolName": tool_name, "result": result_text, "args": args},
-                ),
-                timeout=effective_timeout,
+        #
+        # ⚠️ 不能直接 `wait_for(pipeline.run(...), timeout=...)`：
+        # 超时/取消时 wait_for 会丢弃那个协程对象，CPython 随即报
+        # "coroutine 'Pipeline.run' was never awaited"。它本身不致命，
+        # 但每个被拒/超时的工具都漏一个，日志被 RuntimeWarning 灌满，
+        # 真正的问题反而被淹没。改为**先包成 task 再等**：task 持有协程，
+        # 取消时由 task 负责关闭，不会出现悬空协程。
+        post_task = asyncio.ensure_future(
+            self.kernel.after_tool.run(
+                self.kernel.ctx,
+                {"toolName": tool_name, "result": result_text, "args": args},
             )
+        )
+        try:
+            post = await asyncio.wait_for(post_task, timeout=effective_timeout)
             result_text = post.get("result", result_text)
         except asyncio.TimeoutError:
             logger.warning(
                 "[AgentLoop] afterTool hook 超时（%.0fs，同工具上限），跳过结果修饰: %s",
                 effective_timeout, tool_name,
             )
+        except asyncio.CancelledError:
+            # 外层被取消（用户点停止）：把 hook task 一并收干净再往上抛，
+            # 否则它继续跑完并可能写脏已废弃的 ctx
+            post_task.cancel()
+            raise
         except Exception:
             pass
+        finally:
+            # 无论走哪条路径都确保 task 已完结，杜绝悬空协程
+            if not post_task.done():
+                post_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await post_task
 
         await self.kernel.events.emit(
             "tool:after_execute",

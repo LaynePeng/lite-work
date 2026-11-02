@@ -582,3 +582,124 @@ async def test_prune_stats_count_newly_aged_messages():
     messages.append(Message(role="user", content="更新问题 " + "x" * 400))
     await loop._trim_context(messages, stats)
     assert loop._compressed_tokens > baseline, "滑出窗口的消息属于新节省，必须计入"
+
+
+# ---------------------------------------------------------------- after_tool 协程泄漏
+
+async def test_after_tool_timeout_leaves_no_dangling_coroutine(tmp_path):
+    """afterTool hook 超时/被取消时不得留下未 await 的协程。
+
+    回归：原实现写 `await asyncio.wait_for(pipeline.run(...), timeout=...)`。
+    wait_for 在超时或外层取消时会丢弃传进去的协程对象，CPython 随即对每个
+    受影响的工具报 "coroutine 'Pipeline.run' was never awaited"。它不致命，
+    但**每个被用户拒绝/超时的工具都漏一个**，日志被 RuntimeWarning 灌满，
+    真正的问题反而被淹没（ACP 联调时就是这样被埋掉的）。
+
+    修法：先 ensure_future 包成 task 再等，task 负责关闭协程；
+    finally 里兜底 cancel + await，保证不留悬空对象。
+    """
+    import gc
+    import warnings
+
+    registry = ToolRegistry()
+
+    async def echo(args):
+        return "ok"
+
+    registry.register("echo", "回声", {"type": "object"}, echo)
+    adapter = MockLLMAdapter([
+        ("", [tool_call("echo", "{}")]),
+        ("完成", []),
+    ])
+    loop, kernel, _store = _make_loop(tmp_path, adapter, registry)
+
+    async def slow_hook(ctx, data, next_call):
+        await asyncio.sleep(30)
+        return await next_call(data)
+
+    kernel.after_tool.use(slow_hook)
+    loop.tool_timeout = 0.05        # 让 hook 必然超时
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        await loop.run_task("试试")
+        gc.collect()
+        await asyncio.sleep(0)
+
+    leaked = [w for w in caught if "never awaited" in str(w.message)]
+    assert not leaked, f"出现协程泄漏: {[str(w.message) for w in leaked]}"
+
+
+async def test_after_tool_cancel_cleans_up_task(tmp_path):
+    """外层 turn 被取消时，afterTool 的 task 必须被收干净再抛出。"""
+    registry = ToolRegistry()
+
+    async def echo(args):
+        return "ok"
+
+    registry.register("echo", "回声", {"type": "object"}, echo)
+    adapter = MockLLMAdapter([("", [tool_call("echo", "{}")]), ("完成", [])])
+    loop, kernel, _store = _make_loop(tmp_path, adapter, registry)
+
+    started = asyncio.Event()
+
+    async def hanging_hook(ctx, data, next_call):
+        started.set()
+        await asyncio.sleep(60)
+        return await next_call(data)
+
+    kernel.after_tool.use(hanging_hook)
+
+    task = asyncio.ensure_future(loop.run_task("试试"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # 取消后不应有残留的 hook 任务在跑
+    assert not [t for t in asyncio.all_tasks()
+                if t is not asyncio.current_task() and not t.done()], "hook task 残留"
+
+
+async def test_after_tool_passes_a_task_not_a_bare_coroutine(tmp_path, monkeypatch):
+    """afterTool 必须把**已包装的 Task**交给 wait_for，而不是裸协程。
+
+    回归：原实现 ``wait_for(pipeline.run(...))`` 传入的是协程对象。
+    wait_for 在超时/外层取消时会丢弃它，CPython 随即报
+    "coroutine 'Pipeline.run' was never awaited"——每个被拒绝或超时的工具
+    漏一个，日志被 RuntimeWarning 灌满（ACP 联调时真实问题就是这样被埋掉的）。
+
+    为什么断言「收到的是 Task」而不是「没有警告」：协程何时被 GC 回收取决于
+    运行环境，最小单测里抓不到那条警告（实测旧实现也能通过抓警告的测试）。
+    而「传入的是 Task 还是协程」是**两条实现路径的确定差别**：
+    Task 持有协程、取消时负责关闭；裸协程一旦被丢弃就无人回收。
+    """
+    registry = ToolRegistry()
+
+    async def echo(args):
+        return "ok"
+
+    registry.register("echo", "回声", {"type": "object"}, echo)
+    adapter = MockLLMAdapter([("", [tool_call("echo", "{}")]), ("完成", [])])
+    loop, kernel, _store = _make_loop(tmp_path, adapter, registry)
+
+    captured = []
+    real_wait_for = asyncio.wait_for
+
+    async def spy_wait_for(aw, timeout=None):
+        captured.append(type(aw).__name__)
+        return await real_wait_for(aw, timeout=timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", spy_wait_for)
+
+    async def fast_hook(ctx, data, next_call):
+        return await next_call(data)
+
+    kernel.after_tool.use(fast_hook)
+    await loop.run_task("试试")
+
+    # 只关心 afterTool 那一次调用（工具执行本身也用 wait_for 包协程，
+    # 那是注册表调用，语义不同也不在本次修复范围）
+    assert "Task" in captured, (
+        f"wait_for 未收到 Task（实际收到: {captured}）——"
+        "afterTool 的协程仍可能被丢弃而永不 await"
+    )
