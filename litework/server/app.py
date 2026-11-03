@@ -112,6 +112,13 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             sid = (sched.session_id or "").strip()
             if sid and app.session_store.load(sid) is not None:
                 return sid
+            # 会话自唤醒（schedule_wakeup）：**绝不另建会话**。
+            # 它的全部意义就是「回到原来那个对话接着干」；原会话被删了，
+            # 新建一个空会话去跑这段 prompt 等于把上下文全丢掉——宁可失败，
+            # 也不要产出一次「看起来跑了、其实什么都接不上」的唤醒。
+            if (getattr(sched, "origin", "") or "") == "session_wakeup":
+                raise RuntimeError(
+                    f"唤醒目标会话 {sid or '(空)'} 不存在（可能已被删除），已跳过本次唤醒")
             new_id = f"session_{uuid.uuid4().hex}"
             metadata: Dict[str, Any] = {
                 # 名字进 metadata.name → 会话标题直接可读，不必点进去才知道
@@ -135,10 +142,26 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             会调用它、卡在审批门 600s、然后被自动拒绝。
             返回 task_id；失败返回 None（由调度器记为 error 并推送通知）。
             """
+            def _note(sched_id: str, kind: str, detail: str) -> None:
+                """把失败/跳过原因回传给调度器（它会写进该计划的运行记录）。
+
+                不这样做的话，面板上只有笼统的「任务启动失败（会话或工作区
+                不可用／模型未配置）」——真实原因被吞掉，用户只能猜。
+                """
+                scheduler = app.watch_scheduler
+                if scheduler is not None:
+                    try:
+                        scheduler.note_start_failure(sched_id, kind=kind, detail=detail)
+                    except Exception:  # noqa: BLE001 - 记原因失败不影响主流程
+                        logger.debug("[Watch] 回传启动失败原因失败", exc_info=True)
             try:
                 session_id = _resolve_watch_session(sched)
-            except Exception:  # noqa: BLE001 - 建会话失败按启动失败处理
-                logger.warning("[Watch] 为计划 %s 准备会话失败", sched.id, exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - 建会话失败按启动失败处理
+                # 把原因带回调度器：此前只记 None，面板上永远显示笼统的
+                # 「任务启动失败（会话或工作区不可用／模型未配置）」——
+                # 真实原因（如「唤醒目标会话已被删除」）被吞掉了。
+                logger.warning("[Watch] 为计划 %s 准备会话失败: %s", sched.id, exc)
+                _note(sched.id, "error", f"准备会话失败：{exc}")
                 return None
             try:
                 handle = tasks.start(session_id, prompt, agent_id=None,
@@ -152,12 +175,16 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                                      queue_if_busy=False)
                 return handle.task_id
             except WorkspaceBusyError as exc:
-                # 同项目互斥（多端视图分离）：无人值守任务撞上在跑任务，
-                # 明确记入计划历史，而不是笼统的「启动失败」
-                logger.warning("[Watch] 计划任务被同项目互斥拒绝: %s", exc)
+                # 同项目互斥（多端视图分离）：无人值守任务撞上在跑任务。
+                # 这不是故障，是**正常的并发拒绝**——用户正在该项目里干活，
+                # 计划的节奏本就该让位。此前它和真正的启动失败共用同一条
+                # error 记录，面板上显示成「任务启动失败」，用户以为盯梢坏了。
+                logger.warning("[Watch] 计划任务被同项目互斥拒绝（本轮跳过）: %s", exc)
+                _note(sched.id, "skip", f"跳过本轮：该项目已有任务在跑")
                 return None
-            except Exception:  # noqa: BLE001 - 启动失败记入计划历史即可
+            except Exception as exc:  # noqa: BLE001 - 启动失败记入计划历史即可
                 logger.warning("[Watch] 启动计划任务失败", exc_info=True)
+                _note(sched.id, "error", f"启动失败：{type(exc).__name__}: {exc}")
                 return None
 
         try:

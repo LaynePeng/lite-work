@@ -282,10 +282,12 @@ export interface ScheduleInfo {
   id: string;
   name: string;
   enabled: boolean;
-  schedule_mode: "interval" | "daily" | "cron";
+  schedule_mode: "interval" | "daily" | "cron" | "once";
   interval_seconds: number;
   time_of_day: string;
   cron: string;
+  /** mode=once 的绝对触发时间戳（秒）；跑完自动 enabled=false */
+  run_at?: number | null;
   session_id?: string | null;
   /**
    * 主会话：盯梢结果以消息注入这个对话（用户真正在看的那个）。
@@ -301,6 +303,8 @@ export interface ScheduleInfo {
   permissions: string;
   notify: string[];
   catch_up: "once" | "all" | "skip";
+  /** 来源：空 = 常驻计划；session_wakeup = 会话自唤醒（schedule_wakeup 工具） */
+  origin?: string;
   last_run?: number | null;
   last_status?: string;
   next_run?: number | null;

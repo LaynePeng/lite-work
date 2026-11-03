@@ -25,7 +25,7 @@ DOMAIN_LABELS: Dict[str, str] = {
     "web":         "联网（webfetch / 批量抓取）",
     "office":      "办公生产力（文档/表格/PPT/PDF/OCR/图表）",
     "collab":      "多 Agent 协作（派生/消息/共享任务）",
-    "interactive": "交互（提问/待办/技能加载）",
+    "interactive": "交互（提问/待办/技能加载/定时唤醒）",
     "misc":        "其他/未分类（MCP 与插件动态工具）",
 }
 
@@ -64,6 +64,10 @@ TOOL_DOMAIN: Dict[str, str] = {
     "claim_shared_task": "collab", "complete_shared_task": "collab",
     # interactive
     "ask_user": "interactive", "todo_write": "interactive", "load_skill": "interactive",
+    # schedule_wakeup：给宿主排一个自己的闹钟，不改用户文件/不发网络请求。
+    # 归 interactive 而非 misc：misc 在无人值守档下被 deny，而「任务链」
+    # （盯梢任务给自己排下一段）正是本工具的主要用途。
+    "schedule_wakeup": "interactive",
 }
 
 # 默认域动作（内置 agent 未显式声明 domains 时的兜底）——偏安全

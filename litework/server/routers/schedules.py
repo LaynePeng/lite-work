@@ -40,6 +40,7 @@ class ScheduleCreate(BaseModel):
     session_id: Optional[str] = None
     #: 主会话：盯梢结果以消息注入该会话（用户指定的固定对话）
     main_session_id: Optional[str] = None
+    run_at: Optional[float] = None
     prompt: str = ""
     source: str = ""
     probe_config: Dict[str, Any] = Field(default_factory=dict)
@@ -55,6 +56,7 @@ class SchedulePatch(BaseModel):
     interval_seconds: Optional[int] = None
     time_of_day: Optional[str] = None
     cron: Optional[str] = None
+    run_at: Optional[float] = None
     session_id: Optional[str] = None
     main_session_id: Optional[str] = None
     prompt: Optional[str] = None
@@ -69,10 +71,11 @@ class SchedulePatch(BaseModel):
 ALLOWED_PERMISSIONS = {"read", "read+web"}
 
 #: 支持的调度模式（与 scheduler.compute_next_run 对应）
-ALLOWED_MODES = {"interval", "daily", "cron"}
+ALLOWED_MODES = {"interval", "daily", "cron", "once"}
 
 
-def _validate(mode: str, permissions: str, catch_up: str) -> None:
+def _validate(mode: str, permissions: str, catch_up: str,
+              run_at: Optional[float] = None) -> None:
     if mode not in ALLOWED_MODES:
         raise HTTPException(status_code=400, detail=f"schedule_mode 仅支持 {sorted(ALLOWED_MODES)}")
     if permissions not in ALLOWED_PERMISSIONS:
@@ -82,6 +85,11 @@ def _validate(mode: str, permissions: str, catch_up: str) -> None:
         )
     if catch_up not in {"once", "all", "skip"}:
         raise HTTPException(status_code=400, detail="catch_up 仅支持 once / all / skip")
+    if mode == "once" and not run_at:
+        # 没给 run_at 的 once 计划会**永远不触发**（compute_next_run 返回 None）。
+        # 必须建的时候就拦住——否则用户建完看到一条“启用中”的计划，却从不跑。
+        raise HTTPException(status_code=400,
+                            detail="mode=once 必须同时给 run_at（触发时间戳，秒）")
 
 
 def build_router(ctx: ServerContext) -> APIRouter:
@@ -101,7 +109,9 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/schedules")
     async def list_schedules(request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace(request)
+        # 刻意不 require_workspace：计划文件是**全局**的（~/.lite-work/schedules.json），
+        # 与当前打开哪个项目无关。多 Core 场景下，没开项目的那个 Core 以前会 409，
+        # 于是右栏「盯梢」页直接报错、看不到任何计划（用户以为盯梢坏了）。
         items = [_view(s) for s in app.schedule_store.all()]
         now = time.time()
         items.sort(key=lambda d: (not d.get("enabled"), d.get("next_run") or (now + 1e12)))
@@ -110,14 +120,12 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/watch/sources")
     async def list_sources(request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         return {"sources": app.watch_registry.describe_all()}
 
     @router.get("/api/watch/notifications")
     async def list_notifications(request: Request, after: int = 0, limit: int = 50):
         """历史通知（断线重连后补齐缺口用）。`after` = 已收到的最大通知 id。"""
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         items = app.watch_notifications.recent(after=after or None, limit=max(1, min(limit, 200)))
         return {"notifications": items}
 
@@ -125,7 +133,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def clear_notifications(request: Request):
         """清空通知历史（不影响已订阅的 SSE 连接）。"""
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         app.watch_notifications.clear()
         return {"ok": True}
 
@@ -141,7 +148,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
         这里只要支持 `after` 参数即能补齐缺口，不重复推送。
         """
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         bus = app.watch_notifications
         queue = bus.subscribe()
         # 订阅瞬间先回放缺口：订阅动作与历史快照之间可能已经有新通知，
@@ -179,7 +185,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def create_schedule(payload: ScheduleCreate, request: Request):
         ctx.check_auth(request)
         workspace = ctx.require_workspace(request)
-        _validate(payload.schedule_mode, payload.permissions, payload.catch_up)
+        _validate(payload.schedule_mode, payload.permissions, payload.catch_up, payload.run_at)
         sched = Schedule(
             name=payload.name,
             enabled=payload.enabled,
@@ -187,6 +193,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
             interval_seconds=max(60, int(payload.interval_seconds)),
             time_of_day=payload.time_of_day,
             cron=payload.cron,
+            run_at=payload.run_at,
             session_id=payload.session_id,
             main_session_id=payload.main_session_id,
             workspace=workspace,
@@ -208,7 +215,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.get("/api/schedules/{schedule_id}")
     async def get_schedule(schedule_id: str, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -217,7 +223,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.patch("/api/schedules/{schedule_id}")
     async def patch_schedule(schedule_id: str, payload: SchedulePatch, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -226,7 +231,8 @@ def build_router(ctx: ServerContext) -> APIRouter:
         mode = str(data.get("schedule_mode", sched.schedule_mode))
         perms = str(data.get("permissions", sched.permissions))
         catch = str(data.get("catch_up", sched.catch_up))
-        _validate(mode, perms, catch)
+        run_at = data.get("run_at", sched.run_at)
+        _validate(mode, perms, catch, run_at)
         if "source" in data and data["source"] and app.watch_registry.get(str(data["source"])) is None:
             raise HTTPException(status_code=400, detail=f"未知的数据源: {data['source']}")
         if "interval_seconds" in data and data["interval_seconds"] is not None:
@@ -235,6 +241,10 @@ def build_router(ctx: ServerContext) -> APIRouter:
         for key, value in data.items():
             if value is not None:
                 setattr(sched, key, value)
+        # 改了一次性计划的触发时间（或把它改回 once）：必须重新启用，
+        # 否则跑过一次后 enabled=False，改了时间也永远不会再响。
+        if run_at and not sched.enabled and "enabled" not in data:
+            sched.enabled = True
         app.schedule_store.upsert(sched)
         scheduler = app.watch_scheduler
         if scheduler is not None:
@@ -244,7 +254,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     @router.delete("/api/schedules/{schedule_id}")
     async def delete_schedule(schedule_id: str, request: Request):
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         if not app.schedule_store.delete(schedule_id):
             raise HTTPException(status_code=404, detail="计划不存在")
         scheduler = app.watch_scheduler
@@ -256,7 +265,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def run_now(schedule_id: str, request: Request):
         """立即触发一次（无论是否到期）。同样受触发租约保护，防多窗口重复跑。"""
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")
@@ -273,7 +281,6 @@ def build_router(ctx: ServerContext) -> APIRouter:
     async def reset_fingerprint(schedule_id: str, request: Request):
         """清空指纹基线：下一次探测无论是否「有变化」都会触发一次（用于首次建基线）。"""
         ctx.check_auth(request)
-        ctx.require_workspace(request)
         sched = app.schedule_store.get(schedule_id)
         if sched is None:
             raise HTTPException(status_code=404, detail="计划不存在")

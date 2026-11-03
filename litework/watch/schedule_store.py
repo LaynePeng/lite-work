@@ -104,7 +104,7 @@ class Schedule:
     enabled: bool = True
 
     # ---- 调度 ----
-    # mode: interval / daily / cron
+    # mode: interval / daily / cron / once
     schedule_mode: str = "interval"
     # interval：秒；daily/cron：与 time_of_day 配合
     interval_seconds: int = 3600
@@ -112,6 +112,10 @@ class Schedule:
     time_of_day: str = "09:00"
     # 5 段 cron（分 时 日 月 周），仅 mode=cron 时使用
     cron: str = ""
+    # once 用：**绝对时间戳**（秒）。到点跑一次后计划被删除（见
+    # WatchScheduler.fire），所以正常路径下这个字段只对「尚未触发的一次性
+    # 计划」有意义。保留 run_at 不置空是为了让「已触发」可追溯。
+    run_at: Optional[float] = None
 
     # ---- 内容 ----
     session_id: Optional[str] = None
@@ -138,6 +142,12 @@ class Schedule:
     last_status: str = ""
     runs: List[RunRecord] = field(default_factory=list)
 
+    # ---- 来源 ----
+    #: 区分「用户/插件建的常驻计划」与「会话给自己设的一次性唤醒」。
+    #: 空 = 常驻；`session_wakeup` = 会话自唤醒（绑 session_id，可被该会话
+    #: 自己的 schedule_wakeup 工具列出/取消；名额有限，见 tools/wakeup.py）。
+    origin: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -147,6 +157,7 @@ class Schedule:
             "interval_seconds": int(self.interval_seconds),
             "time_of_day": self.time_of_day,
             "cron": self.cron,
+            "run_at": self.run_at,
             "session_id": self.session_id,
             "main_session_id": self.main_session_id,
             "workspace": self.workspace,
@@ -160,6 +171,7 @@ class Schedule:
             "last_hash": self.last_hash,
             "last_status": self.last_status,
             "runs": [r.to_dict() for r in self.runs],
+            "origin": self.origin,
         }
 
     @classmethod
@@ -174,6 +186,7 @@ class Schedule:
             interval_seconds=_to_int(d.get("interval_seconds"), 3600),
             time_of_day=str(d.get("time_of_day") or "09:00"),
             cron=str(d.get("cron") or ""),
+            run_at=_to_float(d.get("run_at")),
             session_id=(str(d["session_id"]) if d.get("session_id") else None),
             main_session_id=(str(d["main_session_id"]) if d.get("main_session_id") else None),
             workspace=str(d.get("workspace") or ""),
@@ -187,6 +200,7 @@ class Schedule:
             last_hash=str(d.get("last_hash") or ""),
             last_status=str(d.get("last_status") or ""),
             runs=runs[-20:],  # 只留最近 20 次，防文件无限增长
+            origin=str(d.get("origin") or ""),
         )
 
 
@@ -194,7 +208,16 @@ class Schedule:
 
 
 class ScheduleStore:
-    """计划文件读写。构造时不触碰磁盘；load() 才读（缺失即空）。"""
+    """计划文件读写。构造时不触碰磁盘；load() 才读（缺失即空）。
+
+    **多 Core 并发安全**：每开一个窗口 = 独立 Core = 独立 ScheduleStore 实例，
+    各自持有内存副本。若写入时直接整份覆盖，"后写的那个"会**静默抹掉**别的
+    Core 新建的计划（实测：A 建 sch_a、B 建 sch_b，落盘只剩 sch_b）。
+
+    因此写入统一走 `_merge_from_disk()`：先把磁盘上**本实例不认识的**计划并进来
+    （保留其运行历史与指纹基线），再整体写回。同一 id 以内存为准（内存是本实例
+    刚改过的那个）；磁盘独有的 id 原样保留。
+    """
 
     MAX_RUNS = 20
 
@@ -202,32 +225,68 @@ class ScheduleStore:
         self.path = path
         self._items: Dict[str, Schedule] = {}
         self._loaded = False
+        #: 本实例删掉的 id（墓碑）。合并磁盘时跳过，否则 delete → save 的
+        #: `_merge_from_disk()` 会把刚删掉的那条从磁盘又“救”回来。
+        self._deleted: set = set()
+        #: 本实例最近写盘的计划 id。磁盘上一时没有它们（别的 Core 还没读到）
+        #: 时不能当成“已被别人删除”而丢掉，否则新建的计划会立刻消失。
+        self._fresh: Dict[str, None] = {}
 
     # ---- 载入 ----
 
     def load(self) -> List[Schedule]:
         self._items = {}
+        self._deleted.clear()
+        self._fresh.clear()
         if not self.path:
             self._loaded = True
+            return []
+        for sched in self._read_disk():
+            self._items[sched.id] = sched
+        self._loaded = True
+        return list(self._items.values())
+
+    def _read_disk(self) -> List[Schedule]:
+        """从磁盘解析计划列表（缺失/损坏一律返回空，不抛）。"""
+        if not self.path:
             return []
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
         except FileNotFoundError:
-            pass
+            return []
         except (OSError, json.JSONDecodeError) as exc:
             # 坏文件不能让调度器整个哑掉：记日志后按空处理（不覆盖原文件，
             # 便于用户手工抢救）
             logger.warning("读取计划文件失败（按空处理）: %s", exc)
-        else:
-            raw = data.get("schedules") if isinstance(data, dict) else data
-            if isinstance(raw, list):
-                for item in raw:
-                    if isinstance(item, dict):
-                        s = Schedule.from_dict(item)
-                        self._items[s.id] = s
-        self._loaded = True
-        return list(self._items.values())
+            return []
+        raw = data.get("schedules") if isinstance(data, dict) else data
+        if not isinstance(raw, list):
+            return []
+        return [Schedule.from_dict(item) for item in raw if isinstance(item, dict)]
+
+    def _merge_from_disk(self) -> None:
+        """把磁盘上本实例**还没有**的计划并进内存（写入前调用）。
+
+        同 id 不覆盖：内存里那份是本实例正在改的（可能刚 create/upsert），
+        磁盘那份是它写入前的旧值，覆盖回去等于撤销本次修改。
+
+        **磁盘删除优先**：磁盘上已经没有、而本实例内存里还留着的计划，
+        本实例并不"拥有"这次修改，直接丢掉。否则多 Core 下一个 Core 删掉的
+        （例如跑完的一次性计划）会被另一个 Core 的内存副本写回去——用户看到
+        那条计划删了又出现。
+
+        例外是**刚通过 upsert 进来的新计划**（`_fresh`）：另一个 Core 可能还没
+        读到它，不能因为"磁盘上暂时没有"就丢掉。
+        """
+        on_disk = self._read_disk()
+        disk_ids = {s.id for s in on_disk}
+        for sched_id in list(self._items):
+            if sched_id not in disk_ids and sched_id not in self._fresh:
+                del self._items[sched_id]
+        for sched in on_disk:
+            if sched.id not in self._items and sched.id not in self._deleted:
+                self._items[sched.id] = sched
 
     def _ensure(self) -> None:
         if not self._loaded:
@@ -246,14 +305,25 @@ class ScheduleStore:
     def upsert(self, sched: Schedule) -> Schedule:
         self._ensure()
         self._items[sched.id] = sched
+        self._deleted.discard(sched.id)
+        self._fresh[sched.id] = None
         self.save()
         return sched
 
     def delete(self, schedule_id: str) -> bool:
+        """删除一条计划。返回 True = 删除生效（含"别人已经删掉了"这种情况）。
+
+        多 Core 下同一个计划可能被两个 Core 各删一次：第二个实例内存里还有它
+        （还没合并到磁盘的删除），这里按**磁盘为准**判定——磁盘上已经没有
+        就算成功，让它也能正常收尾，而不是报"删除失败"却什么都没发生。
+        """
         self._ensure()
         if schedule_id not in self._items:
             return False
         del self._items[schedule_id]
+        # 墓碑：save() 会先合并磁盘，不记墓碑就会把刚删的那条又并回来
+        self._deleted.add(schedule_id)
+        self._fresh.pop(schedule_id, None)
         self.save()
         return True
 
@@ -262,7 +332,11 @@ class ScheduleStore:
         self._ensure()
         sched = self._items.get(schedule_id)
         if sched is None:
-            return
+            # 别的 Core 刚建的、本实例还没并进来的计划：先并再记
+            self._merge_from_disk()
+            sched = self._items.get(schedule_id)
+            if sched is None:
+                return
         sched.runs.append(rec)
         if len(sched.runs) > self.MAX_RUNS:
             sched.runs = sched.runs[-self.MAX_RUNS:]
@@ -271,9 +345,14 @@ class ScheduleStore:
         self.save()
 
     def save(self) -> None:
-        """原子写：先写同目录临时文件再 os.replace（避免半截 JSON）。"""
+        """原子写：先写同目录临时文件再 os.replace（避免半截 JSON）。
+
+        写入前先 `_merge_from_disk()`：多 Core 下各持一份内存副本，整份覆盖会
+        抹掉别的 Core 新建的计划（见类 docstring）。
+        """
         if not self.path:
             return
+        self._merge_from_disk()
         payload = {"version": 1, "schedules": [s.to_dict() for s in self._items.values()]}
         try:
             parent = os.path.dirname(self.path)

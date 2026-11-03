@@ -25,6 +25,7 @@ from .security.guard import SecurityGuard
 from .security.plugin import SecurityPlugin
 from .security.question import QuestionGate
 from .tools.ask import QuestionPlugin
+from .tools.wakeup import WakeupPlugin
 from .tools.agent_tools import MultiAgentPlugin
 from .tools.path_permissions import PathPermissionsPlugin
 from .tools.render_card import RenderCardPlugin
@@ -1562,6 +1563,9 @@ class AgentApp:
             SkillsPlugin(ws),
             self.todo_plugin,
             QuestionPlugin(self.question_gate),
+            # schedule_wakeup：会话给自己排定时唤醒。需要 session_id——唤醒必须
+            # 回到「排它的那个会话」，否则计划唤醒后无处落地。
+            WakeupPlugin(self, session_id=session_id),
             PathPermissionsPlugin(self),
             RenderCardPlugin(self),
         ]
@@ -1723,6 +1727,14 @@ class AgentApp:
 
                 registry.set_handler(
                     "ask_user", make_ask_user_handler(self.question_gate, kernel.events)
+                )
+            if registry.has("schedule_wakeup"):
+                # 绑定到**本 kernel 的会话**：唤醒计划必须以发起会话为落点，
+                # 否则唤醒后无处可回（见 tools/wakeup.py 顶部说明）。
+                from .tools.wakeup import make_wakeup_handler
+
+                registry.set_handler(
+                    "schedule_wakeup", make_wakeup_handler(self, kernel.session_id)
                 )
         else:
             kernel.register_service(TOOLS_SERVICE, ToolRegistry())

@@ -82,10 +82,12 @@ interface FormState {
   id: string | null;          // null = 新建
   name: string;
   enabled: boolean;
-  schedule_mode: "interval" | "daily" | "cron";
+  schedule_mode: "interval" | "daily" | "cron" | "once";
   interval_seconds: number;
   time_of_day: string;
   cron: string;
+  /** mode=once 的触发时间：datetime-local 控件值（本地时间，无时区后缀） */
+  runAtLocal: string;
   prompt: string;
   source: string;             // "" = 纯定时
   // 探针参数是任意 JSON（后端 Dict[str, Any]），不能收窄成 string——
@@ -109,6 +111,7 @@ const EMPTY_FORM: FormState = {
   interval_seconds: 3600,
   time_of_day: "09:00",
   cron: "0 9 * * *",
+  runAtLocal: "",
   prompt: "",
   source: "",
   probeConfig: {},
@@ -141,14 +144,35 @@ export function humanInterval(seconds: number): string {
 /** 计划的中文摘要（列表副标题）：让用户一眼看懂「多久跑一次、跑什么」。 */
 export function describeSchedule(s: ScheduleInfo, sources: WatchSourceInfo[]): string {
   let when: string;
-  if (s.schedule_mode === "daily") when = `每天 ${s.time_of_day}`;
+  if (s.schedule_mode === "once") {
+    when = s.run_at ? `一次 · ${nextRunText(s.run_at)}` : "一次（未设置时间）";
+  } else if (s.schedule_mode === "daily") when = `每天 ${s.time_of_day}`;
   else if (s.schedule_mode === "cron") when = `cron ${s.cron}`;
   else when = `每 ${humanInterval(s.interval_seconds)}`;
-
   if (!s.source) return `${when} · 定点执行`;
   const src = sources.find((x) => x.source_kind === s.source);
   const srcName = src?.display_name ?? s.source;
   return `${when} · 盯${srcName}（有变化才触发）`;
+}
+
+/**
+ * 时间戳（秒）→ `datetime-local` 控件值（本地时间，`YYYY-MM-DDTHH:MM`）。
+ * 空/非法返回空串（控件显示为空）。
+ */
+export function tsToLocalInput(ts: number | null | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** `datetime-local` 控件值（本地时间）→ 时间戳（秒）；非法返回 null。 */
+export function localInputToTs(text: string): number | null {
+  if (!text) return null;
+  const ms = new Date(text).getTime();
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
 
 /** 下次运行时间（本地时间字符串；无则不显示）。 */
@@ -221,6 +245,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       interval_seconds: s.interval_seconds,
       time_of_day: s.time_of_day,
       cron: s.cron || "0 9 * * *",
+      runAtLocal: tsToLocalInput(s.run_at),
       prompt: s.prompt,
       source: s.source,
       probeConfig: Object.fromEntries(
@@ -309,6 +334,15 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       setErr("cron 需要 5 段（分 时 日 月 周），如 0 9 * * *");
       return;
     }
+    // once 必须给触发时间：后端会拒（否则建出一条永远不跑的计划），
+    // 但前端先拦一次，避免用户填完所有字段才发现。
+    const runAt = form.schedule_mode === "once" ? localInputToTs(form.runAtLocal) : null;
+    if (form.schedule_mode === "once") {
+      if (!runAt) { setErr("请选择「只跑一次」的触发时间"); return; }
+      if (runAt <= Math.floor(Date.now() / 1000)) {
+        setErr("触发时间必须晚于现在"); return;
+      }
+    }
     // textarea 里是 JSON 文本，必须解析回真正的数组/对象再提交：
     // 直接把字符串写回后端，插件的 probe_config 解析器会拿不到预期结构（静默失效）。
     const probeConfig = normalizeProbeConfig();
@@ -320,6 +354,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       interval_seconds: form.interval_seconds,
       time_of_day: form.time_of_day,
       cron: form.cron.trim(),
+      run_at: runAt,
       prompt: form.prompt.trim(),
       source: form.source,
       probe_config: probeConfig,
@@ -402,8 +437,21 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
             <option value="interval">按间隔</option>
             <option value="daily">每天定时</option>
             <option value="cron">cron 表达式</option>
+            <option value="once">只跑一次</option>
           </select>
         </label>
+
+        {form.schedule_mode === "once" && (
+          <label className="sched-field">
+            <span>触发时间</span>
+            <input type="datetime-local" value={form.runAtLocal}
+              aria-label="触发时间"
+              onChange={(e) => setForm({ ...form, runAtLocal: e.target.value })} />
+            <span className="sched-hint">
+              到点跑一次后自动删除（不会在列表里积攒）。应用关着的话，下次启动会补跑一次。
+            </span>
+          </label>
+        )}
 
         {form.schedule_mode === "interval" && (
           <label className="sched-field">

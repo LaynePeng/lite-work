@@ -180,6 +180,11 @@ def compute_next_run(sched: Schedule, now: Optional[float] = None) -> Optional[f
     if mode == "cron":
         return cron_next_after(sched.cron, ts)
 
+    if mode == "once":
+        # 一次性：run_at 是**绝对时间戳**。已过则立即到期（catch_up 语义），
+        # 从未设过 / 已停用则永不调度。
+        return sched.run_at if sched.run_at else None
+
     logger.warning("未知的调度模式 %r（计划 %s 不调度）", mode, sched.id)
     return None
 
@@ -223,6 +228,11 @@ class WatchScheduler:
         self._stop = asyncio.Event()
         #: 正在跑的计划（防同一计划并发触发）
         self._running: set = set()
+        #: 启动器回传的失败原因：schedule_id → (kind, detail)。
+        #: kind = "skip"（正常让位：撞同项目互斥等，不是故障）/ "error"（真故障）。
+        #: 由 server 层的启动器在返回 None 前调用 note_start_failure() 写入——
+        #: 否则面板上只有笼统的「任务启动失败」，真实原因被吞掉。
+        self._start_failures: Dict[str, Tuple[str, str]] = {}
 
     # ---- 生命周期 ----
 
@@ -300,15 +310,27 @@ class WatchScheduler:
             slot = f"{int(due)}"
             approved = self.lease.acquire(schedule_id, slot)
             # 无论抢没抢到，都先推进下一次（否则会每 tick 重复尝试同一窗口）
-            self._next[schedule_id] = self._advance(sched, due)
+            nxt = self._advance(sched, due)
+            if nxt is None:
+                self._next.pop(schedule_id, None)
+            else:
+                self._next[schedule_id] = nxt
             if not approved:
                 logger.info("[Watch] 计划 %s 的本次触发已由其他实例接管，跳过", schedule_id)
                 continue
             await self.fire(sched, catch_up=False, slot=slot)
 
-    def _advance(self, sched: Schedule, from_ts: float) -> float:
-        """基于指定时刻推进下一次到期（不依赖 last_run，避免与记账耦合）。"""
+    def _advance(self, sched: Schedule, from_ts: float) -> Optional[float]:
+        """基于指定时刻推进下一次到期（不依赖 last_run，避免与记账耦合）。
+
+        返回 None = **没有下一次**（once 已到期）——调用方把该计划从到期表摘掉。
+        不能返回一个“很远的时间戳”代替 None，否则列表里会永远挂着一条
+        实际不会再跑的计划。
+        """
         mode = (sched.schedule_mode or "interval").strip().lower()
+        if mode == "once":
+            # 已经触发过 → 没有下一次；调用方把该计划从到期表摘掉
+            return None
         if mode == "interval":
             every = max(60, int(sched.interval_seconds or 3600))
             nxt = from_ts + every
@@ -329,6 +351,16 @@ class WatchScheduler:
         return from_ts + 3600
 
     # ---- 触发 ----
+
+    def note_start_failure(self, schedule_id: str, *, kind: str = "error",
+                           detail: str = "") -> None:
+        """启动器回传本次启动失败的原因（供 `_fire_task` 写进运行记录）。
+
+        `kind="skip"` 表示**正常让位**而非故障：典型是无人值守任务撞上同项目
+        互斥（用户正在那个项目里干活）。此前两者共用同一条 error 记录，面板
+        显示「任务启动失败」，用户以为盯梢坏了。
+        """
+        self._start_failures[schedule_id] = (kind, (detail or "").strip())
 
     async def fire(self, sched: Schedule, *, catch_up: bool = False, slot: str = "") -> RunRecord:
         """执行一条计划：探针（若有）→ 指纹比对 → 需要时启动 Agent 任务。
@@ -354,6 +386,15 @@ class WatchScheduler:
         if slot:
             self.lease.release(sched.id, slot)
         self.store.record_run(sched.id, rec)
+        # once：跑完即**删除**（不留在列表里当垃圾）。
+        #
+        # 先置 enabled=False 再删：万一删除写盘失败，这条也不会被下一 tick
+        # 当成仍到期而重复触发（一次性计划重复跑 = 重复唤醒，比残留一条更糟）。
+        if (sched.schedule_mode or "").strip().lower() == "once":
+            sched.enabled = False
+            self._next.pop(sched.id, None)
+            if self.store.delete(sched.id):
+                logger.info("[Watch] 一次性计划 %s 已执行完毕，已删除", sched.id)
         self._emit(sched, rec)
         return rec
 
@@ -482,7 +523,20 @@ class WatchScheduler:
         """
         if self.start_task is None:
             return RunRecord(status="error", detail="未配置任务启动器（start_task 缺失）")
+        origin = (getattr(sched, "origin", "") or "").strip()
         prompt = prompt_override or sched.prompt or f"定时任务：{sched.name or sched.id}"
+        # 会话自唤醒：必须把「你是被自己叫醒的、接着上次干」说清楚。
+        # 否则模型只看到一段孤立的 prompt，会当成新任务从零开始，把本会话
+        # 已有的进度全都重做一遍（实测过：唤醒后第一步就是重新读一遍代码库）。
+        if origin == "session_wakeup":
+            prompt = (
+                f"[定时唤醒] 这是你**之前在本会话里给自己排的唤醒**"
+                f"（「{sched.name or sched.id}」），到点了，现在由宿主自动唤醒你。\n"
+                "本会话之前的对话历史都在——**先看清已经做到哪一步，不要重做已完成的部分**。\n\n"
+                f"唤醒时写下的任务：\n{sched.prompt or prompt}\n"
+            )
+        # 本次启动前清掉上一次残留的原因，避免「上轮的失败原因」挂到本轮头上
+        self._start_failures.pop(sched.id, None)
         try:
             started = self.start_task(sched, prompt)
             # 启动器可以是同步返回 task_id，也可以是协程（server 层就是 async）：
@@ -493,8 +547,16 @@ class WatchScheduler:
             else:
                 task_id = started
             if task_id is None:
-                return RunRecord(status="error", detail="任务启动失败（会话或工作区不可用／模型未配置）")
+                # 启动器若回传了具体原因就用它（含「跳过本轮」这类非故障情形）
+                kind, why = self._start_failures.pop(sched.id, ("error", ""))
+                if kind == "skip":
+                    return RunRecord(status="skipped",
+                                     detail=why or "本轮跳过（启动器让位）")
+                return RunRecord(
+                    status="error",
+                    detail=why or "任务启动失败（会话或工作区不可用／模型未配置）")
         except Exception as exc:  # noqa: BLE001
+            self._start_failures.pop(sched.id, None)
             return RunRecord(status="error", detail=f"启动任务失败: {exc}")
         # detail 优先用探针摘要（让人在面板上直接看到「该做什么」）；
         # 探针没给摘要时退回原措辞，保持向后兼容。
@@ -547,6 +609,28 @@ class WatchScheduler:
             if not sched.enabled:
                 continue
             mode = (sched.schedule_mode or "interval").strip().lower()
+            if mode == "once":
+                # 一次性计划的「错过」必须补：它的全部意义就是「到点复活会话」。
+                # 不补的话，应用在到点时关着 → 这条唤醒就永久失效了，
+                # 而用户看到的只是一个「已过期、从没跑过」的计划。
+                # 是否真的补仍由 catch_up 决定（skip = 明确要求不补）。
+                if not sched.run_at or sched.run_at > now:
+                    continue
+                if sched.last_run and sched.last_run >= sched.run_at:
+                    continue                      # 已经跑过这个时间点
+                if (sched.catch_up or "once").strip().lower() == "skip":
+                    out.append(RunRecord(status="skipped",
+                                         detail="错过一次性唤醒（策略 skip）"))
+                    self.store.record_run(sched.id, out[-1])
+                    # 不补就**删掉**：它已经过期且永远不会再触发，留着只是
+                    # 一条死计划占着列表（与「跑完即删」同一语义）。
+                    self.store.delete(sched.id)
+                    continue
+                slot = f"catchup{int(sched.run_at)}"
+                if not self.lease.acquire(sched.id, slot):
+                    continue
+                out.append(await self.fire(sched, catch_up=True, slot=slot))
+                continue
             if mode != "interval":
                 # daily/cron 的「错过」语义模糊（用户通常不想补昨天的日报），跳过
                 continue
