@@ -97,6 +97,8 @@ interface FormState {
   permissions: string;
   notifySystem: boolean;
   catch_up: "once" | "all" | "skip";
+  /** 主会话：结果投递到这里（空 = personal 个人区汇总会话） */
+  mainSessionId: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -114,6 +116,7 @@ const EMPTY_FORM: FormState = {
   permissions: "read",
   notifySystem: false,
   catch_up: "once",
+  mainSessionId: "",
 };
 
 /** 常用间隔（秒）——比让用户填秒数友好。 */
@@ -162,6 +165,8 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  /** 可选作「主会话」的对话（当前项目的会话列表） */
+  const [sessions, setSessions] = useState<{ id: string; title: string }[]>([]);
 
   const reload = useCallback(async () => {
     try {
@@ -174,6 +179,22 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // 主会话候选：拉当前项目的会话列表。失败静默——它是可选项，
+  // 拉不到就只留「自动（个人区）」这一个选项，不影响计划本身可用。
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const list = await api.sessions();
+        if (!alive) return;
+        setSessions(list.map((s) => ({ id: s.session_id, title: s.title || s.session_id })));
+      } catch {
+        /* 可选项，失败不影响 */
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   const flash = (m: string) => {
     setNote(m);
@@ -220,6 +241,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       permissions: s.permissions,
       notifySystem: (s.notify ?? []).includes("system"),
       catch_up: s.catch_up,
+      mainSessionId: s.main_session_id ?? "",
     });
   };
 
@@ -304,6 +326,7 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
       permissions: form.permissions,
       notify: form.notifySystem ? ["in_app", "system"] : ["in_app"],
       catch_up: form.catch_up,
+      main_session_id: form.mainSessionId || null,
     };
     setBusy(true);
     setErr("");
@@ -483,6 +506,24 @@ export function ScheduleManager({ sessionId, sources, onChanged }: Props) {
           <span>触发后</span>
           <textarea rows={3} value={form.prompt} placeholder="告诉 Agent 发现变化后做什么"
             onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
+        </label>
+
+        <label className="sched-field">
+          <span>主会话</span>
+          <select value={form.mainSessionId}
+            onChange={(e) => setForm({ ...form, mainSessionId: e.target.value })}>
+            <option value="">自动（推到 personal 个人区汇总）</option>
+            {sessionId && !sessions.some((s) => s.id === sessionId) && (
+              <option value={sessionId}>当前对话</option>
+            )}
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>{s.title}</option>
+            ))}
+          </select>
+          <span className="sched-hint">
+            结果会作为一条消息投递到这个对话（下次打开就在上下文里）。
+            不选则落到 personal 个人区的「盯梢汇总」会话，不会丢失。
+          </span>
         </label>
 
         <label className="sched-field">

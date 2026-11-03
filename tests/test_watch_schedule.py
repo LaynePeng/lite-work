@@ -1072,3 +1072,105 @@ def test_notification_carries_session_id(tmp_path):
         sid = notes[0].get("session_id")
         assert sid, "通知没带 session_id：前端无法直达会话"
         assert app.session_store.load(sid) is not None
+
+
+
+# ---------------------------------------------------------------- 结论转投主会话
+
+
+async def _run_watch_task(app, client, sched):
+    """触发计划并等任务真正跑完，返回该任务的 handle。"""
+    tm = client.app.state.tasks
+    before = set(tm.tasks)
+    await app.watch_scheduler.fire(app.schedule_store.get(sched.id))
+    started = [h for tid, h in tm.tasks.items() if tid not in before]
+    assert started, "调度器没有启动任务"
+    await started[0].task
+    return started[0]
+
+
+async def test_watch_result_delivered_to_main_session(tmp_path):
+    """盯梢结论必须投递到计划指定的「主会话」，而不只留在计划会话里。
+
+    背景（用户报障）：「盯梢触发说检测到变化，但我在日常对话里看不到任何东西」。
+    结论原来只写进计划自建的一次性会话，用户得自己找到那个会话才看得见——
+    相当于没收到。
+    """
+    from tests.conftest import MockLLMAdapter
+
+    app, client = _client(tmp_path)
+    ws = str(tmp_path / "ws")
+    app.session_store.save("sess_main", [], {"workspace": ws, "name": "我的主对话"})
+    app._mock_adapter = MockLLMAdapter([("格力跌破 36.00，按预设清剩余 100 股。", [])])
+    sched = Schedule(id="sch_main", name="精确价位盯盘", enabled=True, prompt="x",
+                     main_session_id="sess_main")
+    app.schedule_store.upsert(sched)
+
+    with client:
+        handle = await _run_watch_task(app, client, sched)
+        assert handle.final_output, "任务没有记录最终回复"
+
+        manager = app.agent_manager("sess_main", create=False)
+        assert manager is not None, "主会话没拿到通知管理器"
+        notes = manager.drain_notifications()
+        assert len(notes) == 1, "结论没有投递到主会话"
+        assert "格力跌破 36.00" in notes[0]
+        assert "精确价位盯盘" in notes[0], "投递文本应带计划名，便于辨认来源"
+
+
+async def test_watch_result_falls_back_to_personal(tmp_path):
+    """计划没指定主会话 → 落到 personal 个人区的汇总会话（用户明确要求）。"""
+    from tests.conftest import MockLLMAdapter
+
+    app, client = _client(tmp_path)
+    app._mock_adapter = MockLLMAdapter([("今日无异动。", [])])
+    sched = Schedule(id="sch_personal", name="A股盯盘", enabled=True, prompt="x")
+    app.schedule_store.upsert(sched)
+
+    with client:
+        await _run_watch_task(app, client, sched)
+
+        # 找到 personal 汇总会话
+        merged = [s for s in app.session_store.list()
+                  if (s.get("metadata") or {}).get("watch_main")]
+        assert merged, "未指定主会话时应自动建立 personal 汇总会话"
+        assert "personal" in (merged[0]["metadata"].get("workspace") or "")
+        manager = app.agent_manager(merged[0]["session_id"], create=False)
+        assert manager is not None
+        notes = manager.drain_notifications()
+        assert notes and "今日无异动" in notes[0]
+
+
+async def test_personal_fallback_session_is_reused(tmp_path):
+    """personal 汇总会话必须复用：每次触发都新建会让会话列表爆炸。"""
+    from tests.conftest import MockLLMAdapter
+
+    app, client = _client(tmp_path)
+    app._mock_adapter = MockLLMAdapter([("第一次", []), ("第二次", [])])
+    sched = Schedule(id="sch_reuse2", name="盯盘", enabled=True, prompt="x")
+    app.schedule_store.upsert(sched)
+
+    with client:
+        await _run_watch_task(app, client, sched)
+        await _run_watch_task(app, client, sched)
+        merged = [s for s in app.session_store.list()
+                  if (s.get("metadata") or {}).get("watch_main")]
+        assert len(merged) == 1, f"应只有一个汇总会话，实际 {len(merged)} 个"
+
+
+async def test_manual_task_not_redelivered(tmp_path):
+    """普通对话任务（非无人值守）不转投：用户自己的任务不该被复制到别处。"""
+    from tests.conftest import MockLLMAdapter
+
+    app, client = _client(tmp_path)
+    app.session_store.save("sess_other", [], {"workspace": str(tmp_path / "ws")})
+    app._mock_adapter = MockLLMAdapter([("普通回复", [])])
+    tm = None
+    with client:
+        tm = client.app.state.tasks
+        handle = tm.start("sess_manual", "hi")   # 无 unattended_profile
+        await handle.task
+        assert handle.final_output
+        manager = app.agent_manager("sess_other", create=False)
+        assert manager is None or not manager.drain_notifications(), \
+            "普通任务不该转投到其他会话"

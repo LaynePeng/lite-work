@@ -4129,7 +4129,7 @@ export default function App() {
             watchSources={watchSources}
             sessionId={activeSessionId}
             onClearWatchNotifications={clearWatchNotifications}
-            onOpenSession={(sid) => void selectSession(sid)}
+            onOpenSession={(sid) => void openSessionWithProject(sid)}
             watchSessionOf={watchSessionOf}
             onResurfaceWatch={resurfaceWatchToast}
             collapsed={toolPanelCollapsed}
@@ -4186,8 +4186,8 @@ export default function App() {
       <WatchToaster
         items={watchToasts}
         onDismiss={dismissWatchToast}
-        onOpenSession={(sid) => void selectSession(sid)}
-        sessionOf={(scheduleId) => watchSessionOf(scheduleId)}
+        onOpenSession={(sid) => void openSessionWithProject(sid)}
+        sessionOf={(scheduleId, noticeSessionId) => watchSessionOf(scheduleId, noticeSessionId)}
         pinned={resurfacedWatch}
       />
     </div>

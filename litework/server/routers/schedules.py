@@ -38,6 +38,8 @@ class ScheduleCreate(BaseModel):
     time_of_day: str = "09:00"
     cron: str = ""
     session_id: Optional[str] = None
+    #: 主会话：盯梢结果以消息注入该会话（用户指定的固定对话）
+    main_session_id: Optional[str] = None
     prompt: str = ""
     source: str = ""
     probe_config: Dict[str, Any] = Field(default_factory=dict)
@@ -54,6 +56,7 @@ class SchedulePatch(BaseModel):
     time_of_day: Optional[str] = None
     cron: Optional[str] = None
     session_id: Optional[str] = None
+    main_session_id: Optional[str] = None
     prompt: Optional[str] = None
     source: Optional[str] = None
     probe_config: Optional[Dict[str, Any]] = None
@@ -185,6 +188,7 @@ def build_router(ctx: ServerContext) -> APIRouter:
             time_of_day=payload.time_of_day,
             cron=payload.cron,
             session_id=payload.session_id,
+            main_session_id=payload.main_session_id,
             workspace=workspace,
             prompt=payload.prompt,
             source=payload.source,

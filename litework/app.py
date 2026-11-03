@@ -2543,6 +2543,29 @@ class AgentApp:
             os.remove(path)
         return {"ok": True, "id": agent_id}
 
+    def plugin_read_only_tools(self) -> set:
+        """插件自述的**纯只读**工具名汇总（`ToolPlugin.read_only_tools`）。
+
+        这些工具在权限换算时归 `read` 域，无人值守任务（盯梢/定时）因此在
+        `read` 档下也能调用——否则插件工具一律归 `misc` 而被整体禁掉，
+        盯盘这类计划只能回「数据工具缺失」。
+
+        **只读用户插件目录的类属性**，不实例化、不执行任何插件代码：
+        权限换算在每任务启动前都会跑，这里不能有重活或副作用。声明是类属性，
+        直接读 class 即可。异常一律吞掉（插件坏掉不该让任务起不来）。
+        """
+        out: set = set()
+        try:
+            from .tools.plugin_loader import load_user_plugin_classes
+
+            for cls in load_user_plugin_classes(self.config_dir):
+                declared = getattr(cls, "read_only_tools", None)
+                if isinstance(declared, (list, tuple, set, frozenset)):
+                    out.update(str(n) for n in declared if n)
+        except Exception:  # noqa: BLE001 - 读声明失败只影响该优化，不影响安全
+            logger.debug("[App] 汇总插件只读工具声明失败", exc_info=True)
+        return out
+
     def _all_tool_names(self) -> List[str]:
         """全量工具名列表（带 TTL 缓存）。
 
@@ -2601,6 +2624,7 @@ class AgentApp:
         allowed, permissions = domains_to_allowed_and_permissions(
             profile.domains, all_names, profile.extra_tools,
             unattended_profile=unattended_profile,
+            extra_read_only=self.plugin_read_only_tools(),
         )
         return self.build_registry(
             allowed=allowed,

@@ -143,6 +143,9 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             try:
                 handle = tasks.start(session_id, prompt, agent_id=None,
                                      unattended_profile=sched.permissions or "read",
+                                     # 结论转投的主会话（空 = 任务层回退到 personal 个人区）
+                                     watch_main_session_id=sched.main_session_id or "",
+                                     watch_plan_name=sched.name or sched.id,
                                      # 无人值守不排队：撞车就记一次跳过，等下一个周期
                                      # 再来。排队会让一条本该错过就错过的计划在用户
                                      # 早已离开时突然开跑。

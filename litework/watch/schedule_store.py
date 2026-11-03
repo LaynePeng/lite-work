@@ -115,6 +115,13 @@ class Schedule:
 
     # ---- 内容 ----
     session_id: Optional[str] = None
+    #: 主会话：盯梢结果**同时投递**到这个会话（用户指定的固定对话）。
+    #:
+    #: 与 session_id 的区别：session_id 是任务**执行/落盘**的地方（可能是
+    #: 计划自建的一次性会话，没人会去看）；main_session_id 是用户真正在看的
+    #: 那个对话——结果以「消息」形式注入它，用户打开就能看到，不必去翻找。
+    #: 空 = 不投递（保持旧行为）。
+    main_session_id: Optional[str] = None
     workspace: str = ""
     prompt: str = ""
     source: str = ""                    # 空 = 纯定时；否则为 WatchSource.source_kind
@@ -141,6 +148,7 @@ class Schedule:
             "time_of_day": self.time_of_day,
             "cron": self.cron,
             "session_id": self.session_id,
+            "main_session_id": self.main_session_id,
             "workspace": self.workspace,
             "prompt": self.prompt,
             "source": self.source,
@@ -167,6 +175,7 @@ class Schedule:
             time_of_day=str(d.get("time_of_day") or "09:00"),
             cron=str(d.get("cron") or ""),
             session_id=(str(d["session_id"]) if d.get("session_id") else None),
+            main_session_id=(str(d["main_session_id"]) if d.get("main_session_id") else None),
             workspace=str(d.get("workspace") or ""),
             prompt=str(d.get("prompt") or ""),
             source=str(d.get("source") or ""),

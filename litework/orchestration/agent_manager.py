@@ -531,6 +531,32 @@ class SessionAgentManager:
         self.notifications.clear()
         return out
 
+    def push_external_notification(self, text: str, *, source: str = "watch") -> None:
+        """从**会话外部**投递一条通知（盯梢结果转投主会话）。
+
+        与 `_enqueue_notification` 的区别：那是子 Agent 的生命周期事件，
+        这是「别的任务算出来的结论」，由调度器在任务收尾后推进来。
+
+        投进同一个 `notifications` 队列而不是直接改会话消息，是为了复用既有
+        投递语义：该会话下次跑任务时在 run_task 开头注入，运行中则每轮边界
+        注入，且随消息链落盘持久化。这样一来：
+        - 用户没开着该对话也能收到（下次打开就在上下文里）；
+        - 不会为了"发条消息"去凭空启动一个 Agent 任务（省一次 LLM 调用）。
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        self.notifications.append({
+            "agent_id": "",
+            "nickname": source,
+            "role": "watch",
+            "status": "completed",
+            "summary": text[:200],
+            "changed_files": [],
+            "tokens": 0,
+            "text": text,
+        })
+
     # ------------------------------------------------------------ 查询 / 生命周期
 
     def list_agents(self, include_closed: bool = False) -> List[Dict[str, Any]]:

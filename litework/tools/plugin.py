@@ -89,12 +89,31 @@ class ToolPlugin(Plugin):
 
     - get_tools() 返回的工具：同名即覆盖内置/其他插件已有工具（更新能力）
     - removed_tools 声明要移除的工具名（内置或其他插件的），先删后注册
+    - read_only_tools 声明**纯只读**工具名：无人值守任务（盯梢/定时）因此
+      能在 read 档下调用它们（见下）
     - version: 插件版本号，空字符串表示跟随主应用版本
     """
 
     version: str = ""
     description: str = ""
     removed_tools: List[str] = []
+
+    #: **纯只读**工具名白名单（插件自述）。
+    #:
+    #: 为什么需要它：插件工具默认归 `misc` 域，而 `misc` 在无人值守档
+    #: （read / read+web）下被强制 deny——因为注册时**无法判断**一个未知
+    #: 插件工具会不会写盘/执行命令，宁可不给。结果是盯盘这类插件在盯梢任务里
+    #: 拿不到任何自己的工具，Agent 只能回「数据工具缺失」。
+    #:
+    #: 插件作者主动声明「这些工具只查询、不改状态」后，它们归入 `read` 域，
+    #: 无人值守 read 档即可使用。**不声明就仍然被禁**——安全默认不变。
+    #:
+    #: 声明要求（必须自己保证）：
+    #:   1. 不发写请求、不写盘、不写数据库、不改计划/配置；
+    #:   2. 不做跨会话/跨用户的状态变更；
+    #:   3. 单个工具内有写分支的（如 action=set_rules）**必须整条不要声明**，
+    #:      不能按 action 拆——域是工具级的。
+    read_only_tools: List[str] = []
 
     def get_tools(self) -> List[ToolDefinition]:
         raise NotImplementedError

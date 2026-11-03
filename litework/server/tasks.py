@@ -101,6 +101,17 @@ class TaskHandle:
         self.merge_worktree: Optional[str] = None
         # 已广播过的冲突文件列表（去重，避免同一集合反复推送）
         self._merge_conflicts_seen: List[str] = []
+        #: 本任务的最终回复（run_task 的返回值）。盯梢/定时任务用它把结果
+        #: 转投到用户指定的「主会话」——否则结果只留在计划自建的一次性会话里，
+        #: 用户根本不知道该去哪看。未跑完/失败时为 None。
+        self.final_output: Optional[str] = None
+        #: 盯梢/定时任务专属：结论要投递的主会话（空 = 回退 personal 个人区），
+        #: 以及计划名（投递文本的落款）。普通对话任务这两个都是空。
+        self.watch_main_session_id: str = ""
+        self.watch_plan_name: str = ""
+        #: 无人值守权限档（read / read+web）；非 None 说明这是盯梢/定时任务。
+        #: 收尾时据此决定要不要把结论转投主会话——用户手动提的任务不该复制。
+        self.unattended_profile: Optional[str] = None
 
     # ------------------------------------------------------------ SSE 订阅
 
@@ -381,7 +392,8 @@ class TaskHandle:
                 # 轻量提示：告知用户本任务注入了哪些技能（不进会话历史）
                 self._forward_event({"type": "skill:loaded",
                                      "data": {"names": getattr(self, "skill_names", []) or []}})
-            await self.loop.run_task(prompt, system_prompt=system_prompt, store_snapshot=True)
+            self.final_output, _stats = await self.loop.run_task(
+                prompt, system_prompt=system_prompt, store_snapshot=True)
         except asyncio.CancelledError:
             self._forward_event({"type": "task:error",
                                  "data": {"message": "[Stopped]: 任务被取消。"}})
@@ -392,6 +404,13 @@ class TaskHandle:
             self.running = False
             self.done = True
             self.finished_at = time.monotonic()
+            # 盯梢/定时任务：把最终结论转投到「主会话」（用户指定的固定对话）。
+            # 必须在这里做而不是在调度器里——调度器只拿到 task_id，拿不到结论；
+            # 而 final_output 要等任务跑完才有值。
+            try:
+                self._deliver_to_main_session()
+            except Exception:  # noqa: BLE001 - 转投失败绝不能影响任务收尾
+                logger.warning("[Task %s] 转投主会话失败", self.task_id, exc_info=True)
             # AI 合并任务收尾：校验合并是否真正完成（分支已并入主分支、无进行中的合并），
             # 成功则自动清理 worktree 与分支；仍有冲突则保留现场并提示用户
             if self.merge_worktree:
@@ -419,6 +438,61 @@ class TaskHandle:
                     mgr.drain_queues()
             except Exception:  # noqa: BLE001 - 排空失败不影响任务收尾
                 logger.warning("[Task %s] 排空同项目队列失败", self.task_id, exc_info=True)
+
+    def _deliver_to_main_session(self) -> None:
+        """把本任务（盯梢/定时）的最终结论投递到「主会话」。
+
+        背景：盯梢计划跑在计划自建的会话里（或用户指定的会话），用户日常盯的
+        却是另一个固定对话。早先结论只落在计划会话中，用户必须自己找到那个
+        会话才看得见——实际表现就是「它说有消息，但我没看到」。
+
+        目标会话的选择（按优先级）：
+          1. 计划上的 `main_session_id`（用户在盯梢设置里显式指定）；
+          2. 都没指定时回退到 **personal 个人区**——建/复用一个 personal 会话。
+             这样「没有明确配置」也不会静默丢弃结论，符合"默认必须有落点"。
+
+        只对**无人值守任务**生效（`unattended_profile` 非空）：用户在对话里
+        手动提的任务不该被额外复制一份到别处。
+        """
+        text = (self.final_output or "").strip()
+        if not text or not self.unattended_profile:
+            return
+        target = self._main_session_for_delivery()
+        if not target or target == self.kernel.session_id:
+            return  # 目标就是自己：结论已经在会话里了，不必再投一遍
+        manager = self.app.agent_manager(target)
+        if manager is None:
+            return
+        label = self.watch_plan_name or "盯梢"
+        manager.push_external_notification(
+            f"[盯梢完成] {label}：\n\n{text}", source=f"watch:{label}")
+        logger.info("[Task %s] 结论已投递到主会话 %s", self.task_id, target)
+
+    def _main_session_for_delivery(self) -> str:
+        """解析「主会话」：计划指定 → 否则 personal 区复用/新建。"""
+        sid = (self.watch_main_session_id or "").strip()
+        if sid and self.app.session_store.load(sid) is not None:
+            return sid
+        try:
+            from ..core.personal import ensure_personal_workspace
+
+            ws = ensure_personal_workspace()
+        except Exception:  # noqa: BLE001 - 拿不到个人区就不投递（不能乱投到别处）
+            logger.warning("[Task %s] 个人区不可用，跳过主会话投递", self.task_id)
+            return ""
+        marker = "watch_main"
+        for s in self.app.session_store.list():
+            meta = s.get("metadata") or {}
+            if meta.get(marker) and (meta.get("workspace") or "") == ws:
+                return str(s.get("session_id") or "")
+        new_id = f"session_{uuid.uuid4().hex}"
+        self.app.session_store.save(new_id, [], {
+            "name": "盯梢汇总（个人区）",
+            "workspace": ws,
+            marker: True,
+        })
+        logger.info("[Task %s] 未指定主会话，已在个人区建立 %s", self.task_id, new_id)
+        return new_id
 
     def release(self) -> None:
         """释放任务的重对象（kernel / registry / loop / 事件归档），保留可查询的 shell。
@@ -755,6 +829,8 @@ class TaskManager:
               reasoning_effort: Optional[str] = None,
               merge_worktree: Optional[str] = None,
               unattended_profile: Optional[str] = None,
+              watch_main_session_id: str = "",
+              watch_plan_name: str = "",
               queue_if_busy: bool = True) -> TaskHandle:
         # 会话 id 必须非空：空串会被 SessionStore 解析成 `sessions/.json`，
         # 任务连同结果落进一个**界面永远看不到**的隐形会话（会话列表要求
@@ -894,6 +970,11 @@ class TaskManager:
         handle.session_workspace = session_ws or ""
         handle.worktree_name = worktree_name
         handle.merge_worktree = merge_worktree
+        # 无人值守档位随 handle 留存：收尾时据此决定要不要转投主会话
+        handle.unattended_profile = unattended_profile
+        # 盯梢/定时任务：结论转投的主会话 + 计划名（普通对话任务为空）
+        handle.watch_main_session_id = watch_main_session_id
+        handle.watch_plan_name = watch_plan_name
         if merge_worktree:
             prompt = _merge_worktree_prompt(merge_worktree, prompt)
         handle.skill_extra, handle.skill_names, handle.skill_ask_names = self._resolve_skill_extra(prompt)

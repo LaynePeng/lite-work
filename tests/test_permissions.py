@@ -138,3 +138,75 @@ def test_plan_save_tool_defined_globally():
     assert len(tools) == 1 and tools[0].name == "plan_save"
     # 域映射一致
     assert TOOL_DOMAIN["plan_save"] == "plan"
+
+# ---------------------------------------------------------------- 插件只读工具声明
+
+
+def test_declared_plugin_readonly_tools_enter_read_domain():
+    """插件自述的只读工具归 read 域，无人值守 read 档可用。
+
+    背景：插件工具默认归 misc，而 misc 在无人值守档下被 deny——结果盯盘这类
+    计划在盯梢任务里调不到任何自己的工具，只能回「数据工具缺失、无法生成」。
+    插件主动声明 read_only_tools 后，这些工具在 read 档下恢复可用。
+    """
+    tools = ["read_file", "astock_quote", "astock_watch"]
+    declared = {"astock_quote"}          # 只声明读行情
+
+    allowed, _ = domains_to_allowed_and_permissions(
+        None, tools, None, "read", extra_read_only=declared,
+    )
+    assert "read_file" in allowed
+    assert "astock_quote" in allowed, "已声明的只读插件工具应可用"
+    assert "astock_watch" not in allowed, "未声明的插件工具必须仍被禁"
+
+
+def test_undeclared_plugin_tools_stay_denied():
+    """**安全默认不变**：没有声明的插件工具仍然归 misc，无人值守下被禁。
+
+    这条是关键约束——只读协议不能让所有插件工具自动获得放行。
+    """
+    tools = ["some_plugin_tool", "another_plugin_tool"]
+    allowed, perms = domains_to_allowed_and_permissions(
+        None, tools, None, "read", extra_read_only=set(),
+    )
+    assert allowed == []
+    assert perms["some_plugin_tool"] == "deny"
+    assert domain_of("some_plugin_tool") == "misc"
+
+
+def test_builtin_tool_domain_not_overridden_by_declaration():
+    """插件声明不能改写**内置工具**的域（声明只对插件工具生效）。
+
+    否则一个插件可以声明 `execute_command` 为只读，等于绕过权限模型。
+    """
+    allowed, _ = domains_to_allowed_and_permissions(
+        None, ["execute_command"], None, "read",
+        extra_read_only={"execute_command"},
+    )
+    assert "execute_command" not in allowed, "内置 execute 域不能被声明改成 read"
+    assert domain_of("execute_command", {"execute_command"}) == "execute"
+
+
+def test_app_collects_readonly_declarations_from_plugin_classes(tmp_path):
+    """AgentApp 能从用户插件目录的**类属性**汇总声明（不实例化插件）。"""
+    import textwrap
+
+    app = AgentApp(config_dir=str(tmp_path / "cfg"))
+    pdir = os.path.join(app.config_dir, "plugins", "demo")
+    os.makedirs(pdir, exist_ok=True)
+    with open(os.path.join(pdir, "plugin.py"), "w", encoding="utf-8") as f:
+        f.write(textwrap.dedent('''
+            from litework.tools.plugin import ToolPlugin
+
+            class DemoPlugin(ToolPlugin):
+                name = "demo-plugin"
+                # 只读声明
+                read_only_tools = ["demo_quote", "demo_kline"]
+
+                def get_tools(self):
+                    return []
+
+                async def execute(self, name, args):
+                    return ""
+        '''))
+    assert app.plugin_read_only_tools() == {"demo_quote", "demo_kline"}

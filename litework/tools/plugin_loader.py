@@ -350,6 +350,33 @@ def _find_plugin_classes(module: object) -> List[type]:
     return classes
 
 
+def load_user_plugin_classes(config_dir: Optional[str] = None) -> List[type]:
+    """加载用户插件目录里的 Plugin **类**（不实例化）。
+
+    为什么需要：权限换算要读插件自述的 `read_only_tools` 声明，而它只是
+    类属性——每任务启动前都实例化整套插件（含依赖安装、模块 import）代价
+    太高，且会引入副作用。这里复用同一套「发现 + import」路径，只返回类。
+
+    config_dir 缺省时由调用方（AgentApp）传入自己的数据目录；不传则返回
+    空列表（无法定位用户插件目录时**宁可不放开任何工具**，安全默认）。
+    """
+    if not config_dir:
+        return []
+    classes: List[type] = []
+    seen: set = set()
+    plugin_dir = os.path.join(config_dir, "plugins")
+    for desc in _discover_plugin_modules(plugin_dir):
+        name = desc["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        mod = _load_module(desc["spec_path"], f"litework_plugin_{name}")
+        if mod is None:
+            continue
+        classes.extend(_find_plugin_classes(mod))
+    return classes
+
+
 def load_plugins(config_dir: str) -> List[Plugin]:
     """从插件目录加载所有 Cordis 插件。
 

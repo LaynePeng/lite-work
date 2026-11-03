@@ -287,6 +287,11 @@ export interface ScheduleInfo {
   time_of_day: string;
   cron: string;
   session_id?: string | null;
+  /**
+   * 主会话：盯梢结果以消息注入这个对话（用户真正在看的那个）。
+   * 空 = 自动落到 personal 个人区的汇总会话。
+   */
+  main_session_id?: string | null;
   workspace?: string;
   prompt: string;
   /** 空 = 纯定时任务；否则为数据源 kind（如 file / url / 插件提供的 email） */

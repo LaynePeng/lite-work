@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # 职责域定义（顺序决定 UI 展示顺序）
 DOMAIN_ORDER = ["read", "plan", "edit", "execute", "git_write", "web", "office", "collab", "interactive", "misc"]
@@ -74,9 +74,22 @@ DEFAULT_DOMAIN_ACTIONS: Dict[str, str] = {
 }
 
 
-def domain_of(tool_name: str) -> str:
-    """工具 → 职责域；未知工具归 misc。"""
-    return TOOL_DOMAIN.get(tool_name, "misc")
+def domain_of(tool_name: str, extra_read_only: Optional[Any] = None) -> str:
+    """工具 → 职责域；未知工具归 misc。
+
+    `extra_read_only`：插件自述的**纯只读**工具名集合（`ToolPlugin.read_only_tools`
+    的汇总，由 AgentApp 在装配时传入）。命中的插件工具归 `read` 域而不是
+    `misc`——否则它们在无人值守档（read / read+web）下会被整体禁掉，盯盘
+    这类插件的计划任务拿不到任何自己的数据工具，只能回「工具缺失」。
+
+    安全默认不变：**未声明的插件工具仍然归 misc（无人值守下被禁）**。
+    """
+    dom = TOOL_DOMAIN.get(tool_name)
+    if dom is not None:
+        return dom
+    if extra_read_only and tool_name in extra_read_only:
+        return "read"
+    return "misc"
 
 
 # ---------------------------------------------------------------- 无人值守权限档
@@ -122,6 +135,7 @@ def domains_to_allowed_and_permissions(
     all_tool_names: List[str],
     extra_tools: Optional[List[str]] = None,
     unattended_profile: Optional[str] = None,
+    extra_read_only: Optional[Any] = None,
 ) -> tuple[List[str], Dict[str, str]]:
     """domains → (allowed, permissions) 换算，供 build_registry 使用。
 
@@ -141,7 +155,7 @@ def domains_to_allowed_and_permissions(
     allowed: List[str] = []
     permissions: Dict[str, str] = {}
     for t in all_tool_names:
-        act = resolved.get(domain_of(t), "ask")
+        act = resolved.get(domain_of(t, extra_read_only), "ask")
         if act == "deny":
             permissions[t] = "deny"
         elif act == "allow":
@@ -151,7 +165,7 @@ def domains_to_allowed_and_permissions(
             permissions[t] = "ask"
     for t in extra_tools or []:
         # 无人值守时不给 extra_tools 开口子：白名单外的工具一律不放行
-        if unattended_profile is not None and resolved.get(domain_of(t), "ask") == "deny":
+        if unattended_profile is not None and resolved.get(domain_of(t, extra_read_only), "ask") == "deny":
             continue
         if t not in allowed:
             allowed.append(t)
