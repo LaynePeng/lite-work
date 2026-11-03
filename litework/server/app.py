@@ -129,8 +129,11 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 "watch_schedule_id": sched.id,
             }
             app.session_store.save(new_id, [], metadata)
+            # 只写进内存里的 sched（调用方随后 upsert 回写计划）。
+            # **不在"任务还没启动成功"时就落盘**：否则启动失败（撞同项目互斥、
+            # 模型未配置等）会在计划上留下一个指向空会话的 session_id，下一次
+            # 触发时"看起来有会话"→ 直接拿来用 → 用户点通知"打开会话"看到空对话。
             sched.session_id = new_id
-            app.schedule_store.upsert(sched)
             logger.info("[Watch] 为计划 %s 建立会话 %s（原会话不可用）", sched.id, new_id)
             return new_id
 
@@ -154,6 +157,10 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                         scheduler.note_start_failure(sched_id, kind=kind, detail=detail)
                     except Exception:  # noqa: BLE001 - 记原因失败不影响主流程
                         logger.debug("[Watch] 回传启动失败原因失败", exc_info=True)
+            # 必须在调用 _resolve_watch_session **之前**记下原值：那个函数会就地
+            # 把 sched.session_id 改成新 id，之后再读就拿不到"原来是什么"了
+            # （曾经因此让下面 rebuilt 恒为 False，清理逻辑成了死代码）。
+            prev_session_id = (sched.session_id or "").strip()
             try:
                 session_id = _resolve_watch_session(sched)
             except Exception as exc:  # noqa: BLE001 - 建会话失败按启动失败处理
@@ -163,6 +170,29 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                 logger.warning("[Watch] 为计划 %s 准备会话失败: %s", sched.id, exc)
                 _note(sched.id, "error", f"准备会话失败：{exc}")
                 return None
+            rebuilt = session_id != prev_session_id
+
+            def _drop_rebuilt() -> None:
+                """启动失败时收拾刚补建的空会话。
+
+                留着它没有任何价值（没人会去看一个空对话），而计划上也不该
+                记它——回退到"未绑定会话"，下一轮触发会按需重新建。
+                """
+                if not rebuilt:
+                    return
+                sched.session_id = prev_session_id or None
+                try:
+                    app.session_store.delete(session_id)
+                except Exception:  # noqa: BLE001 - 清理失败不影响主流程
+                    logger.debug("[Watch] 清理本轮补建的空会话失败", exc_info=True)
+                # 必须写回 store：sched 可能是 store 里那份对象，但"清空会话"
+                # 这个改动同样要落盘，否则磁盘上仍留着悬空 id（下次触发又会
+                # 拿它去开空对话）。
+                try:
+                    app.schedule_store.upsert(sched)
+                except Exception:  # noqa: BLE001
+                    logger.debug("[Watch] 回写计划失败", exc_info=True)
+
             try:
                 handle = tasks.start(session_id, prompt, agent_id=None,
                                      unattended_profile=sched.permissions or "read",
@@ -173,19 +203,31 @@ def create_app(app: AgentApp, token: Optional[str] = None,
                                      # 再来。排队会让一条本该错过就错过的计划在用户
                                      # 早已离开时突然开跑。
                                      queue_if_busy=False)
-                return handle.task_id
             except WorkspaceBusyError as exc:
                 # 同项目互斥（多端视图分离）：无人值守任务撞上在跑任务。
                 # 这不是故障，是**正常的并发拒绝**——用户正在该项目里干活，
                 # 计划的节奏本就该让位。此前它和真正的启动失败共用同一条
                 # error 记录，面板上显示成「任务启动失败」，用户以为盯梢坏了。
                 logger.warning("[Watch] 计划任务被同项目互斥拒绝（本轮跳过）: %s", exc)
-                _note(sched.id, "skip", f"跳过本轮：该项目已有任务在跑")
+                _note(sched.id, "skip", "跳过本轮：该项目已有任务在跑")
+                _drop_rebuilt()
                 return None
             except Exception as exc:  # noqa: BLE001 - 启动失败记入计划历史即可
                 logger.warning("[Watch] 启动计划任务失败", exc_info=True)
                 _note(sched.id, "error", f"启动失败：{type(exc).__name__}: {exc}")
+                _drop_rebuilt()
                 return None
+            # 任务**真的起来了**才把（可能刚补建的）会话回写计划。
+            # 否则计划上会留一条指向不存在会话的 session_id：下次触发看着
+            # "有会话"就直接拿来用，而那个 id 早已没有文件——用户点通知
+            # 「打开会话」只能看到一个空对话（真实报障）。
+            if rebuilt:
+                try:
+                    app.schedule_store.upsert(sched)
+                    logger.info("[Watch] 计划 %s 的会话已回写: %s", sched.id, session_id)
+                except Exception:  # noqa: BLE001 - 回写失败不影响任务
+                    logger.debug("[Watch] 回写计划会话失败", exc_info=True)
+            return handle.task_id
 
         try:
             await app.start_watch_scheduler(_start_watch_task)

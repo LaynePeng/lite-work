@@ -1062,16 +1062,59 @@ def test_notification_carries_session_id(tmp_path):
     早先通知只有 schedule_id，前端另查 `/api/schedules` 快照换算会话；
     而计划未绑会话时快照里没有 session_id（它是触发瞬间才补建的），
     于是按钮永不出现——用户看到「有消息」，点开却无处可去。
+
+    关键加强：**带的必须是真实存在的会话**。曾经只断言 `sid` 非空，
+    而启动失败时那个补建的空会话也会被写进通知 → 用户点进去是空对话。
+    （本轮真实报障：「弹出盯盘弹窗，点进去是新对话页面，没有内容」。）
     """
+    from tests.conftest import MockLLMAdapter
+
     sched = Schedule(id="sch_nsid", name="N", enabled=True, prompt="x")
     app, client = _client(tmp_path, schedules=[sched])
+    # 必须让任务**真的跑起来**：会话是"任务能跑"才回写计划的
+    app._mock_adapter = MockLLMAdapter([("盯盘提醒：当前无异动。", [])])
     with client:
-        asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_nsid")))
+        asyncio.run(_fire_and_settle(app, client, "sch_nsid"))
         notes = app.watch_notifications.recent()
         assert notes, "没推送通知"
-        sid = notes[0].get("session_id")
-        assert sid, "通知没带 session_id：前端无法直达会话"
-        assert app.session_store.load(sid) is not None
+        sid = notes[-1].get("session_id")
+        # 任务确实跑起来了 → 必须能直达，且那个会话必须真实存在
+        # （只断言非空是不够的：曾经带过一个已被清掉/不存在的 id，
+        #  用户点进去就是空对话——本轮真实报障）
+        assert sid, "任务已跑完，通知却没带 session_id：前端无法直达会话"
+        assert app.session_store.load(sid) is not None, \
+            f"通知带了不存在的会话 {sid}：用户点进去会是空对话"
+
+
+def test_failed_start_notification_has_no_dangling_session(tmp_path):
+    """启动失败的通知**不得**带一个空会话的 id。
+
+    真实报障：「弹出盯盘弹窗，点击进入对话，只打开了对话但没有内容，
+    出现在新对话那个页面」。
+
+    根因：计划没绑会话 → 触发时补建一个空会话并立刻回写计划 → 紧接着
+    启动失败（撞同项目互斥 / 模型未配置）→ 通知仍带着那个空会话 id。
+    用户点「打开会话」→ 得到一个空对话，无从判断发生了什么。
+
+    修法：只有任务真的起来了才回写会话；失败时丢弃补建的空会话，
+    通知里的 session_id 留空（前端不显示「打开会话」按钮）。
+    """
+    sched = Schedule(id="sch_failn", name="F", enabled=True, prompt="x")
+    app, client = _client(tmp_path, schedules=[sched])
+    # 不给 mock adapter → 适配器缺失（「供应商未配置 API Key」），启动必失败
+    with client:
+        asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_failn")))
+        notes = app.watch_notifications.recent()
+        assert notes, "没推送通知"
+        rec = notes[-1]
+        assert rec.get("status") == "error", f"应记为失败：{rec}"
+        assert not rec.get("session_id"), \
+            f"启动失败却给通知带了会话 {rec.get('session_id')}：点进去会是空对话"
+        # 计划上也不该残留
+        assert not app.schedule_store.get("sch_failn").session_id
+        # 补建的空会话已清理，不留在磁盘上当垃圾
+        assert [s for s in app.session_store.list()
+                if (s.get("metadata") or {}).get("watch_schedule_id") == "sch_failn"] == []
 
 
 

@@ -526,3 +526,88 @@ def test_interval_plan_never_deleted(tmp_path):
     assert len(fired) == 1
     survivor = store.get("sch_iv")
     assert survivor is not None and survivor.enabled is True
+
+
+# ---------------------------------------------------------------- 悬空会话（真实报障）
+
+def _bootstrapped_client(tmp_path):
+    """真实 create_app 启动一次，拿到 lifespan 里装的 _start_watch_task。"""
+    from fastapi.testclient import TestClient
+
+    from litework.app import AgentApp
+    from litework.server.app import create_app
+
+    app = AgentApp(config_dir=str(tmp_path / "cfg"))
+    app.workspace = str(tmp_path / "ws")
+    os.makedirs(app.workspace, exist_ok=True)
+    app.schedule_store.load()
+    return app, TestClient(create_app(app, token=None))
+
+
+def test_failed_start_does_not_leave_dangling_session(tmp_path, monkeypatch):
+    """启动失败时，计划上不得留下指向空会话的 session_id。
+
+    真实报障：盯盘通知弹出来，点「打开会话」却是一个**空对话**。
+    根因链：
+
+    1. 计划没绑会话 → 触发时补建一个会话并立刻回写计划；
+    2. 紧接着任务启动失败（撞同项目互斥 / 模型未配置）；
+    3. 计划上留下了那个 session_id，但它是个空会话，之后还会被清理掉；
+    4. 用户点通知「打开会话」→ 拿到死链 → getSession 404 → 空白对话。
+
+    修法：**只有任务真的起来了**才回写计划；失败则丢弃补建的会话。
+    """
+    app, client = _bootstrapped_client(tmp_path)
+    with client:
+        sched = Schedule(id="sch_dangling", enabled=True,
+                         schedule_mode="interval", interval_seconds=300,
+                         workspace=app.workspace, prompt="x",
+                         session_id=None, main_session_id=None)
+        app.schedule_store.upsert(sched)
+
+        # 让启动必然失败（模拟撞同项目互斥这类"任务起不来"）。
+        # 必须打在 TaskManager.start 这个类方法上：lifespan 内部 new 了自己的
+        # TaskManager 实例，往 app 上塞一个替身根本不会被用到。
+        from litework.server import tasks as tasks_mod
+
+        def _boom(*_a, **_kw):
+            raise tasks_mod.WorkspaceBusyError("该项目已有任务运行中")
+
+        monkeypatch.setattr(tasks_mod.TaskManager, "start", _boom)
+        rec = asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_dangling")))
+
+        assert rec.status == "skipped", rec.detail
+        after = app.schedule_store.get("sch_dangling")
+        # 关键断言：计划上不能留悬空会话 id
+        assert not after.session_id, f"计划残留了指向空会话的 id: {after.session_id}"
+        # 补建的空会话也不该留在磁盘上
+        orphans = [s for s in app.session_store.list()
+                   if (s.get("metadata") or {}).get("watch_schedule_id") == "sch_dangling"]
+        assert orphans == [], f"残留了空会话: {orphans}"
+
+
+def test_successful_start_writes_session_back(tmp_path, monkeypatch):
+    """任务真起来了才回写会话——否则点通知仍是空对话的另一半。"""
+    app, client = _bootstrapped_client(tmp_path)
+    with client:
+        app.schedule_store.upsert(Schedule(
+            id="sch_back", enabled=True, schedule_mode="interval",
+            interval_seconds=300, workspace=app.workspace, prompt="x",
+            session_id=None))
+
+        started = {}
+        from litework.server import tasks as tasks_mod
+
+        class _Handle:
+            task_id = "task_ok"
+
+        def _ok(_self, session_id, *_a, **_kw):
+            started["sid"] = session_id
+            return _Handle()
+
+        monkeypatch.setattr(tasks_mod.TaskManager, "start", _ok)
+        rec = asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_back")))
+        assert rec.status == "ok", rec.detail
+        after = app.schedule_store.get("sch_back")
+        assert after.session_id == started["sid"]
+        assert app.session_store.load(after.session_id) is not None

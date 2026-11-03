@@ -1475,8 +1475,33 @@ export default function App() {
         } catch {
           // 旧会话或刚创建的会话没有模型覆盖时，沿用系统默认。
         }
-      } catch {
-        // 拉取失败不阻塞界面：下次激活该页签会再试一次
+      } catch (e) {
+        // 拉取失败不能静默留白：用户看到的是「点了『打开会话』却是个空白对话」，
+        // 完全无从判断是加载中、还是这个会话根本不存在。
+        // 会真实发生：盯梢计划绑定的会话被清理/删掉后，通知里的 session_id
+        // 就成了死链——点进去必然空。
+        const status = (e as { status?: number } | null)?.status;
+        if (status === 404) {
+          patchChat(sid, {
+            ...EMPTY_CHAT,
+            messages: [{
+              role: "assistant",
+              ts: Date.now(),
+              content: "⚠ 这个会话已不存在（可能已被删除，或盯梢计划指向的会话已被清理）。\n\n"
+                + "本次结果可以在右栏「盯梢」页签的历史通知里查看。",
+            }],
+          });
+        } else {
+          // 非 404（网络抖动等）：保留重试机会，但也要让用户看到失败
+          patchChat(sid, {
+            ...EMPTY_CHAT,
+            messages: [{
+              role: "assistant",
+              ts: Date.now(),
+              content: `⚠ 会话加载失败：${(e as Error)?.message ?? "未知错误"}\n\n切走再回到这个页签会重试。`,
+            }],
+          });
+        }
       } finally {
         hydratingRef.current.delete(sid);
       }
