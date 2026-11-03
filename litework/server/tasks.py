@@ -756,6 +756,12 @@ class TaskManager:
               merge_worktree: Optional[str] = None,
               unattended_profile: Optional[str] = None,
               queue_if_busy: bool = True) -> TaskHandle:
+        # 会话 id 必须非空：空串会被 SessionStore 解析成 `sessions/.json`，
+        # 任务连同结果落进一个**界面永远看不到**的隐形会话（会话列表要求
+        # session_id 非空）。盯梢计划没绑会话时曾正好走到这条路，表现为
+        # 「通知说有消息，但哪里也翻不到」。宁可在这里失败，也不制造幽灵文件。
+        if not (session_id or "").strip():
+            raise ValueError("session_id 不能为空（任务必须归属一个真实会话）")
         # 并发护栏：放在一切重对象创建之前（占坑即拒，不浪费 worktree/kernel 构建）。
         # 定时触发路径由 _start_watch_task 的 except 兜底（记 error 推通知）
         cap = int(self.app.config.get("max_running_tasks", 0) or 0)

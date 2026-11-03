@@ -479,7 +479,10 @@ export default function App() {
     return [...pinned, ...rest].slice(0, 4);
   }, [watchNotifications, dismissedWatch, resurfacedWatch]);
   const watchSessionOf = useCallback(
-    (scheduleId: string) => watchScheduleSessions[scheduleId],
+    // 通知自带的 session_id 优先（服务端在本次触发时下发，可能是触发瞬间
+    // 补建的会话——启动时拉的 /api/schedules 快照里没有它）；列表快照兜底。
+    (scheduleId: string, noticeSessionId?: string | null) =>
+      noticeSessionId || watchScheduleSessions[scheduleId],
     [watchScheduleSessions],
   );
 

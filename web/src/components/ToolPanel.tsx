@@ -788,8 +788,13 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
   sources: WatchSourceInfo[];
   sessionId?: string | null;
   onChanged?: () => void;
-  /** schedule_id → session_id（详情卡「打开会话」用） */
-  sessionOf?: (scheduleId: string) => string | undefined;
+  /**
+   * schedule_id → session_id（详情卡「打开会话」用）。
+   *
+   * 第二个入参是通知自带的 `session_id`：服务端可能在本次触发时才补建会话
+   * 并回写计划，那个 id 只在这条通知里，计划快照中没有。
+   */
+  sessionOf?: (scheduleId: string, noticeSessionId?: string | null) => string | undefined;
   /** 重新浮出右下角提示条（详情卡「重新弹出提示」用） */
   onResurface?: (id: number) => void;
 }) {
@@ -821,7 +826,9 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
   }
   const notable = items.filter((n) => n.status !== "unchanged").length;
   const opened = openedId === null ? null : items.find((n) => n.id === openedId) ?? null;
-  const openedSession = opened && sessionOf ? sessionOf(opened.schedule_id) : undefined;
+  const openedSession = opened && sessionOf
+    ? sessionOf(opened.schedule_id, opened.session_id)
+    : undefined;
   return (
     <div className="watch-panel">
       {plans}

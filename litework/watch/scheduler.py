@@ -519,6 +519,11 @@ class WatchScheduler:
         try:
             self.notify({
                 "schedule_id": sched.id,
+                # 会话 id 随通知下发：前端「打开会话」据此跳转。不能只靠前端
+                # 启动时拉的 /api/schedules 快照——计划未绑会话时那条快照里
+                # 没有 session_id，而本次触发会由启动器补建会话并回写计划；
+                # 只读快照的话按钮永远不出现（用户看到「有消息」却无处可看）。
+                "session_id": sched.session_id or "",
                 "name": sched.name or sched.id,
                 "status": rec.status,
                 "detail": rec.detail,

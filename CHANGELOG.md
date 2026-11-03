@@ -2,6 +2,38 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.1.1]
+
+### 修复（盯梢触发后「有消息」却查无结果）
+
+用户报障：「盯梢触发，也显示会有消息，但是并没有消息发出来」。实际是**结果
+写进了一个界面上不存在的会话**——三个环节同时成立才表现为「什么都没有」：
+
+1. 计划没绑会话时，`server/app.py` 的启动器把 `sched.session_id or ""`（空串）
+   交给 `TaskManager.start()`；
+2. `SessionStore._file_path("")` 把它解析成 `sessions/.json`，任务结果连同整份
+   消息链一起落进这个**幽灵文件**（现场实测 139 条消息、200KB+）；
+3. `/api/sessions` 要求 `session_id` 与 `metadata.workspace` 都非空，空 id 的
+   会话**永远不会被列出来**——文件存在，界面上却不存在。
+
+通知条只显示「任务是否启动成功」，而任务确实启动并跑完了，所以用户看到的是
+「提示说有消息，点开/翻遍侧栏都没有」。**与「对话框是否打开」无关**：没有
+任何「会话没开就不推送」的逻辑，是写进了虚空。
+
+- `server/app.py` 新增 `_resolve_watch_session()`：触发时若计划没有可用会话，
+  **当场建一个真实会话**（`metadata.name` = `盯梢：<计划名>`、带 `workspace`
+  与 `watch_schedule_id`）并回写计划——结果有归属，侧栏点得进去。
+- `server/tasks.py` 的 `start()` 拒绝空 `session_id`：从源头堵死幽灵会话，
+  宁可显式失败也不制造看不见的文件。
+- `watch/scheduler.py` 的通知体补 `session_id`；此前前端只能拿启动时的
+  `/api/schedules` 快照换算会话，而补建的会话不在那份快照里，导致
+  **「打开会话」按钮永不出现**。
+- 前端 `App.tsx` / `useWatchNotifications.ts` / `WatchToaster.tsx` /
+  `ToolPanel.tsx`：通知自带 `session_id` 优先，计划快照仅作兜底。
+- 回归用例（`tests/test_watch_schedule.py`）3 条：任务结果必须在
+  `/api/sessions` 里可见、已绑会话不得重复新建、通知必须携带 `session_id`。
+  已用**回退修复**的方式验证过——3 条里 2 条会 FAIL，确认不是空跑。
+
 ## [2.1.0]
 
 > 本版主体：多 Agent 的四项可靠性修补——**选中的协作模式此前不会影响

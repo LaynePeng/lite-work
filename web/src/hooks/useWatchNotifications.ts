@@ -22,6 +22,14 @@ export interface WatchNotification {
   id: number;
   at: number;
   schedule_id: string;
+  /**
+   * 本次触发写入的会话 id（服务端随通知下发）。
+   *
+   * 优先用它做「打开会话」跳转，其次退回计划列表快照（`watchSessionOf`）：
+   * 计划未绑会话时，服务端会在触发瞬间补建一个会话并回写计划——启动时拉的
+   * 那份 /api/schedules 快照里没有它，只有这条通知带着最新的 id。
+   */
+  session_id?: string | null;
   name: string;
   /** ok / changed / unchanged / error / skipped */
   status: string;

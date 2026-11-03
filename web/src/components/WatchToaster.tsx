@@ -21,8 +21,13 @@ interface Props {
   items: WatchNotification[];
   onDismiss: (id: number) => void;
   onOpenSession?: (sessionId: string) => void;
-  /** schedule_id → session_id（用于「查看」跳转；缺省则不显示按钮） */
-  sessionOf?: (scheduleId: string) => string | undefined;
+  /**
+   * schedule_id → session_id（用于「查看」跳转；缺省则不显示按钮）。
+   *
+   * 第二个入参是通知自带的 `session_id`：服务端可能在本次触发时才补建会话
+   * 并回写计划，那个 id 只在这条通知里，计划快照中没有。
+   */
+  sessionOf?: (scheduleId: string, noticeSessionId?: string | null) => string | undefined;
   /** 钉住不自动收起的 id（从盯梢页签「重新弹出」的条目：用户要看，别 6 秒就没了） */
   pinned?: number[];
 }
@@ -83,7 +88,7 @@ export function WatchToaster({ items, onDismiss, onOpenSession, sessionOf, pinne
     <div className="watch-toaster" role="status" aria-live="polite">
       {items.map((n) => {
         const tone = notificationTone(n.status);
-        const sessionId = sessionOf?.(n.schedule_id);
+        const sessionId = sessionOf?.(n.schedule_id, n.session_id);
         return (
           <div key={n.id} className={`watch-toast ${tone}`}>
             <div className="watch-toast-head">

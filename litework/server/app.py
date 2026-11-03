@@ -11,8 +11,9 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,6 +95,38 @@ def create_app(app: AgentApp, token: Optional[str] = None,
         await app.mcp_manager.start()
         # 盯梢 / 定时调度器：探针 → 指纹 → 按需唤 LLM。
         # 启动时按各计划的 catch_up 策略补跑错过的触发（默认只补一次）。
+        def _resolve_watch_session(sched) -> str:
+            """计划要写的会话 id：**必须是真实存在的会话文件**。
+
+            历史缺陷（用户报「盯梢触发也显示有消息，但没有消息发出来」）：
+            走 `sched.session_id or ""`，计划没绑会话时传空串进 TaskManager →
+            任务在一个 session_id 为空的「隐形会话」里跑完，结果落进
+            `sessions/.json`。而会话列表要求 metadata.workspace 非空且
+            session_id 非空，这个文件**永远不会出现在界面上**，用户只能看到
+            通知条说「已触发」，点开却什么也没有。
+
+            这里的修法是：没绑会话时**惰性建一个真实会话**并回写计划，让
+            结果有归属、能在「会话」里看到（前端通知的「打开会话」按钮也
+            才拿得到 session_id）。
+            """
+            sid = (sched.session_id or "").strip()
+            if sid and app.session_store.load(sid) is not None:
+                return sid
+            new_id = f"session_{uuid.uuid4().hex}"
+            metadata: Dict[str, Any] = {
+                # 名字进 metadata.name → 会话标题直接可读，不必点进去才知道
+                # 是哪个计划跑出来的
+                "name": f"盯梢：{sched.name or sched.id}",
+                "workspace": sched.workspace or app.workspace or "",
+                # 标记来源：会话列表/详情可据此区分「人开的会话」与「计划跑出来的」
+                "watch_schedule_id": sched.id,
+            }
+            app.session_store.save(new_id, [], metadata)
+            sched.session_id = new_id
+            app.schedule_store.upsert(sched)
+            logger.info("[Watch] 为计划 %s 建立会话 %s（原会话不可用）", sched.id, new_id)
+            return new_id
+
         async def _start_watch_task(sched, prompt):
             """把一条计划变成真正的一次 Agent 任务（调 TaskManager）。
 
@@ -103,7 +136,12 @@ def create_app(app: AgentApp, token: Optional[str] = None,
             返回 task_id；失败返回 None（由调度器记为 error 并推送通知）。
             """
             try:
-                handle = tasks.start(sched.session_id or "", prompt, agent_id=None,
+                session_id = _resolve_watch_session(sched)
+            except Exception:  # noqa: BLE001 - 建会话失败按启动失败处理
+                logger.warning("[Watch] 为计划 %s 准备会话失败", sched.id, exc_info=True)
+                return None
+            try:
+                handle = tasks.start(session_id, prompt, agent_id=None,
                                      unattended_profile=sched.permissions or "read",
                                      # 无人值守不排队：撞车就记一次跳过，等下一个周期
                                      # 再来。排队会让一条本该错过就错过的计划在用户

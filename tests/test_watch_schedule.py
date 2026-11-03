@@ -986,3 +986,89 @@ def test_watch_events_stream_replays_backlog(tmp_path):
 
 
 
+
+
+# ---------------------------------------------------------------- 结果必须落在可见会话里
+
+
+def test_watch_task_gets_real_visible_session(tmp_path):
+    """盯梢任务必须写进**真实存在且界面可见**的会话（用户报障的直接回归）。
+
+    事故现象：「盯梢触发说检测到变化，也显示有消息，但哪里都翻不到消息」。
+
+    根因是两层同时成立：
+    1. 计划没绑会话时，启动器把 `sched.session_id or ""`（空串）交给
+       TaskManager → SessionStore 把空串解析成 `sessions/.json`，任务结果
+       连同 139 条消息一起落进这个文件；
+    2. `/api/sessions` 要求 `session_id` 与 `metadata.workspace` 都非空，
+       空 id 的会话**永远不会出现在列表里**——文件存在，界面上却不存在。
+
+    这条用例锁住修复后的不变量：任务跑完后计划上有 session_id、该会话在磁盘上
+    真实存在、且能被 `/api/sessions` 列出来（用户真的能在侧栏点进去看）。
+
+    注意：空会话同样不会被列出（列表要求有用户消息）——这不是缺陷，只是
+    「结果还没产生」。所以用例必须让任务**真的跑完**再断言，否则测的是
+    「建了个空壳」，掩盖真实路径。
+    """
+    from tests.conftest import MockLLMAdapter
+
+    sched = Schedule(id="sch_vis", name="盯部署", enabled=True, prompt="x")
+    # 刻意不给 session_id 与 workspace，验证兜底路径也不产生幽灵会话
+    app, client = _client(tmp_path, schedules=[sched])
+    app._mock_adapter = MockLLMAdapter([("盯盘提醒：当前无异动。", [])])
+    with client:
+        assert app.watch_scheduler is not None
+        asyncio.run(_fire_and_settle(app, client, "sch_vis"))
+
+        saved = app.schedule_store.get("sch_vis")
+        assert saved is not None and saved.session_id, \
+            "计划仍无 session_id：结果无处可归属"
+        assert app.session_store.load(saved.session_id) is not None, \
+            "会话文件不存在：结果写进了虚空"
+        # 真正的判据是「界面看得见」——列表按 session_id 非空 + workspace 过滤
+        listed = {s["session_id"] for s in client.get("/api/sessions").json()}
+        assert saved.session_id in listed, \
+            "会话未出现在 /api/sessions：用户界面上找不到这份结果"
+
+
+async def _fire_and_settle(app, client, schedule_id: str):
+    """触发一条计划并等它启动的任务真正跑完（否则会话还是空的）。"""
+    tm = client.app.state.tasks
+    before = set(tm.tasks)
+    await app.watch_scheduler.fire(app.schedule_store.get(schedule_id))
+    started = [h for tid, h in tm.tasks.items() if tid not in before]
+    assert started, "调度器没有启动任务（会话归属无从验证）"
+    await started[0].task
+
+
+def test_watch_task_reuses_existing_session(tmp_path):
+    """计划已绑会话时不得新建：否则每次触发都多一个会话文件。"""
+    app, client = _client(tmp_path)
+    app.session_store.save("session_existing", [],
+                           {"workspace": str(tmp_path / "ws"), "name": "已有会话"})
+    app.schedule_store.upsert(Schedule(id="sch_reuse", name="R", enabled=True,
+                                       prompt="x", session_id="session_existing"))
+    with client:
+        asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_reuse")))
+        assert app.schedule_store.get("sch_reuse").session_id == "session_existing"
+    # 会话列表里只有我们手工建的那一个（没有多出来的幽灵会话）
+    ids = [s["session_id"] for s in app.session_store.list()]
+    assert ids == ["session_existing"]
+
+
+def test_notification_carries_session_id(tmp_path):
+    """通知必须带 session_id——前端的「打开会话」按钮靠它。
+
+    早先通知只有 schedule_id，前端另查 `/api/schedules` 快照换算会话；
+    而计划未绑会话时快照里没有 session_id（它是触发瞬间才补建的），
+    于是按钮永不出现——用户看到「有消息」，点开却无处可去。
+    """
+    sched = Schedule(id="sch_nsid", name="N", enabled=True, prompt="x")
+    app, client = _client(tmp_path, schedules=[sched])
+    with client:
+        asyncio.run(app.watch_scheduler.fire(app.schedule_store.get("sch_nsid")))
+        notes = app.watch_notifications.recent()
+        assert notes, "没推送通知"
+        sid = notes[0].get("session_id")
+        assert sid, "通知没带 session_id：前端无法直达会话"
+        assert app.session_store.load(sid) is not None
