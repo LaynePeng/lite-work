@@ -9,6 +9,30 @@
 // 注意：这里没有调用 app.requestSingleInstanceLock()。每次从系统启动应用都会
 // 创建独立的 Electron 进程与本地 Core，可分别绑定不同项目。
 const { app, BrowserWindow, Menu, net, session, shell, dialog, ipcMain, Tray, nativeImage } = require("electron");
+
+// 从终端（或任何捕获了 stdout 的父进程）启动时，父进程退出/关闭管道后
+// 每次写控制台都会抛 EPIPE。Electron 把主进程未捕获异常弹成
+// 「Uncaught Exception」并结束进程——用户看到的就是「整个应用打不开」。
+// 日志失败绝不能影响应用本身：文件日志照写，控制台通道坏掉就静静放弃。
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    // 没有可用的输出通道可以报告，忽略；writeLog 仍会落盘。
+    stream.on("error", () => {});
+  }
+}
+
+// `lite-work --version` 只应打印版本后退出。不拦截的话它会拉起整个应用
+// （Core + 窗口），既不符合命令行预期，父进程一关 stdout 就触发上面的 EPIPE。
+// 放在 node-pty 等重依赖之前：即使原生模块有问题，查版本也不该失败。
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  try {
+    process.stdout.write(`lite-work ${app.getVersion()}\n`);
+  } catch {
+    /* stdout 不可用也不影响退出 */
+  }
+  app.exit(0);
+}
+
 const { spawn } = require("child_process");
 const pty = require("node-pty");
 const fs = require("fs");
@@ -49,7 +73,11 @@ function writeLog(level, ...messages) {
   const text = messages.map((message) => (
     message instanceof Error ? message.stack || message.message : String(message)
   )).join(" ");
-  console[level](`[lite-work] ${text}`);
+  try {
+    console[level](`[lite-work] ${text}`);
+  } catch {
+    // stdout 已断开（EPIPE）：只写文件日志，不能让主进程崩掉。
+  }
   try {
     const line = `${new Date().toISOString()} ${level.toUpperCase()} ${text}\n`;
     // mkdir 只在首次执行：此前每行日志都 mkdirSync + rotateLogFile（4 次
@@ -432,7 +460,11 @@ function spawnCoreOnce({ python, projectRoot, env, workspace, lanShare, port }) 
 
     const onData = (buf) => {
       const text = buf.toString();
-      process.stdout.write(text);
+      try {
+        process.stdout.write(text);
+      } catch {
+        // 父进程的管道已关闭（EPIPE）：文件日志仍会逐行写入。
+      }
       for (const line of text.split(/\r?\n/)) {
         if (line) writeLog("log", `Core: ${line}`);
       }

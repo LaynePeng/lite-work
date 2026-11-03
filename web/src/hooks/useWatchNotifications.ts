@@ -37,11 +37,20 @@ export interface WatchNotification {
   task_id?: string | null;
   /** 计划的 notify 配置，如 ["in_app", "system"] */
   notify?: string[];
+  /**
+   * 历史回放标记（服务端在重连补缺口时加的）。
+   *
+   * 回放条目只用于补齐面板列表，**不该重新弹提示**：否则每次开窗/刷新都会
+   * 把昨天的通知当成刚发生的事再提醒一遍——哪怕计划早已停用。
+   */
+  replay?: boolean;
 }
 
 export interface WatchNotificationsApi {
-  /** 最近通知（新→旧） */
+  /** 最近通知（新→旧，含历史回放；面板列表用） */
   items: WatchNotification[];
+  /** 本次页面生命周期内**新到**的通知（不含历史/回放；右下角提示条用） */
+  liveItems: WatchNotification[];
   /** SSE 是否已连上 */
   connected: boolean;
   /** 清空本地与远端历史 */
@@ -90,6 +99,7 @@ const KEEP = 50;
 
 export function useWatchNotifications(pollHistory = true): WatchNotificationsApi {
   const [items, setItems] = useState<WatchNotification[]>([]);
+  const [liveItems, setLiveItems] = useState<WatchNotification[]>([]);
   const [connected, setConnected] = useState(false);
   const seenRef = useRef<Set<number>>(new Set());
   const lastIdRef = useRef<number>(0);
@@ -97,18 +107,24 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
   const timerRef = useRef<number | null>(null);
   const closedRef = useRef(false);
 
-  const accept = useCallback((n: WatchNotification) => {
+  /**
+   * `live=false`：历史/回放——只进面板列表，不弹提示。
+   * `live=true`：本条在页面打开后新到——进列表并弹提示。
+   */
+  const accept = useCallback((n: WatchNotification, live = true) => {
     if (!n || typeof n.id !== "number") return;
     if (seenRef.current.has(n.id)) return;   // 去重：回放与实时可能重叠
     seenRef.current.add(n.id);
     if (n.id > lastIdRef.current) lastIdRef.current = n.id;
     setItems((prev) => [n, ...prev].slice(0, KEEP));
+    if (live) setLiveItems((prev) => [n, ...prev].slice(0, KEEP));
   }, []);
 
   const clear = useCallback(() => {
     seenRef.current = new Set();
     lastIdRef.current = 0;
     setItems([]);
+    setLiveItems([]);
     void fetch(apiUrl("/api/watch/notifications/clear"), {
       method: "POST",
       headers: authHeaders(),
@@ -127,7 +143,9 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
     es.onopen = () => setConnected(true);
     es.onmessage = (e) => {
       try {
-        accept(JSON.parse(e.data) as WatchNotification);
+        const n = JSON.parse(e.data) as WatchNotification;
+        // 服务端标记了 replay 的是历史回放：只补列表，不重新弹提示
+        accept(n, !n.replay);
       } catch {
         /* 忽略坏帧 */
       }
@@ -144,15 +162,17 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
 
   useEffect(() => {
     closedRef.current = false;
+    // 先连 SSE（不能等历史请求：远程模式下它卡住会一起拖住实时通知）。
+    // 连上瞬间服务端会回放历史，那些帧带 replay 标记，只进面板不弹提示。
     connect();
-    // 首次拉一次历史：覆盖「页面在盯梢触发之前就已打开」的场景
+    // 并行补一次历史：面板列表要完整（历史与 SSE 回放按 id 去重）
     if (pollHistory) {
       void fetch(apiUrl("/api/watch/notifications?limit=50"), { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           const list: WatchNotification[] = d?.notifications ?? [];
-          // 历史是旧→新，倒序喂给 accept（它按 id 去重，顺序不影响最终展示）
-          for (const n of [...list].reverse()) accept(n);
+          // 历史是旧→新；accept 每次前插，按原顺序喂完就是新→旧
+          for (const n of list) accept(n, false);
         })
         .catch(() => {
           /* 历史拉取失败不影响实时订阅 */
@@ -166,7 +186,7 @@ export function useWatchNotifications(pollHistory = true): WatchNotificationsApi
     };
   }, [connect, accept, pollHistory]);
 
-  return { items, connected, clear };
+  return { items, liveItems, connected, clear };
 }
 
 /** 弹系统通知（桌面端；浏览器需用户已授权）。失败静默。 */

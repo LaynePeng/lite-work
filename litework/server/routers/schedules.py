@@ -158,7 +158,12 @@ def build_router(ctx: ServerContext) -> APIRouter:
         async def _stream():
             try:
                 for item in backlog:
-                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    # 标记「这是历史回放」：前端据此只补列表、不重新弹提示。
+                    # 不标记的话每次打开/刷新窗口都会把旧通知当成刚发生的
+                    # 事再弹一遍（用户报「盯梢关了还提醒」）。
+                    replay = dict(item)
+                    replay["replay"] = True
+                    yield f"data: {json.dumps(replay, ensure_ascii=False)}\n\n"
                 while True:
                     if await request.is_disconnected():
                         break

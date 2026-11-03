@@ -73,14 +73,15 @@ export function WatchToaster({ items, onDismiss, onOpenSession, sessionOf, pinne
     };
   }, [items, onDismiss, pinned]);
 
-  // 系统通知：每条只弹一次
+  // 系统通知：每条只弹一次。「重新弹出」是用户主动回看，不再响系统通知。
   useEffect(() => {
+    const pinnedIds = new Set(pinned ?? []);
     for (const n of items) {
       if (sysShown.current.has(n.id)) continue;
       sysShown.current.add(n.id);
-      if (wantsSystemNotification(n)) showSystemNotification(n);
+      if (!pinnedIds.has(n.id) && wantsSystemNotification(n)) showSystemNotification(n);
     }
-  }, [items]);
+  }, [items, pinned]);
 
   if (!items.length) return null;
 

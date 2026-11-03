@@ -83,6 +83,61 @@ def test_store_unknown_type_defaults(tmp_path):
     assert isinstance(s.interval_seconds, int)
 
 
+def test_store_stale_instance_cannot_resurrect_disabled_plan(tmp_path):
+    """多 Core 回归：B 写运行记录时，不能用旧内存副本把 A 的「停用」写回启用。
+
+    用户报障「盯梢已经关了，提醒还在来」。项目里每个窗口 = 独立 Core，
+    各自持一份计划副本；B 只写运行期字段时，配置必须以磁盘为准。
+    """
+    path = str(tmp_path / "schedules.json")
+    a = ScheduleStore(path)
+    a.load()
+    a.upsert(Schedule(id="sch_x", enabled=True, prompt="x"))
+
+    b = ScheduleStore(path)          # 第二个窗口（独立 Core）的旧副本
+    b.load()
+    assert b.get("sch_x").enabled is True
+
+    # A 窗口停用
+    sched = a.get("sch_x")
+    sched.enabled = False
+    a.upsert(sched)
+
+    # B 仍按旧副本跑了一轮并记账
+    b.record_run("sch_x", RunRecord(status="ok", detail="旧副本跑完"))
+
+    again = ScheduleStore(path)
+    again.load()
+    reloaded = again.get("sch_x")
+    assert reloaded.enabled is False, "别的 Core 的旧副本把停用状态推翻了"
+    # 运行记录不能因为合并配置而丢
+    assert len(reloaded.runs) == 1
+    assert reloaded.runs[0].detail == "旧副本跑完"
+
+
+def test_store_reload_if_changed_picks_up_external_edit(tmp_path):
+    """调度器 tick 前要知道别的 Core 改了什么（停用/改名/删除）。"""
+    path = str(tmp_path / "schedules.json")
+    a = ScheduleStore(path)
+    a.load()
+    a.upsert(Schedule(id="sch_x", enabled=True, name="旧名"))
+
+    b = ScheduleStore(path)
+    b.load()
+    assert b.reload_if_changed() is False       # 没变化不重复解析
+
+    sched = a.get("sch_x")
+    sched.enabled = False
+    sched.name = "新名"
+    a.upsert(sched)
+
+    assert b.reload_if_changed() is True
+    assert b.get("sch_x").enabled is False
+    assert b.get("sch_x").name == "新名"
+    # 再调一次：签名已同步，不再算变化
+    assert b.reload_if_changed() is False
+
+
 def test_run_history_is_capped(tmp_path):
     store = ScheduleStore(str(tmp_path / "s.json"))
     store.load()
@@ -401,6 +456,25 @@ def test_disabled_schedule_never_fires(tmp_path):
     sch._next["sch_d"] = time.time() - 1
     asyncio.run(sch.tick())
     assert calls == []
+
+
+def test_tick_sees_disable_from_another_instance(tmp_path):
+    """另一个窗口停用后，本实例下一次 tick 必须让位（用户报「关了还提醒」）。"""
+    sch, store, calls = _make_scheduler(tmp_path)
+    store.upsert(Schedule(id="sch_t", enabled=True, prompt="go",
+                          schedule_mode="interval", interval_seconds=60))
+    sch._next["sch_t"] = time.time() - 1          # 已到期
+
+    # 另一个 Core（自己的内存副本）点了「停用」
+    other = ScheduleStore(store.path)
+    other.load()
+    sched = other.get("sch_t")
+    sched.enabled = False
+    other.upsert(sched)
+
+    asyncio.run(sch.tick())
+    assert calls == [], "本实例仍拿旧副本触发了已停用的计划"
+    assert sch.store.get("sch_t").enabled is False, "停用状态被本实例覆盖回启用"
 
 
 def test_catch_up_skip_policy(tmp_path):

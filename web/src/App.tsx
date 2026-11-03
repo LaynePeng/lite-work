@@ -455,7 +455,12 @@ export default function App() {
   }, []);
 
   // ---- 盯梢通知（应用级 SSE；与任务 SSE 相互独立）----
-  const { items: watchNotifications, connected: watchConnected, clear: clearWatchNotifications } = useWatchNotifications();
+  const {
+    items: watchNotifications,
+    liveItems: liveWatchNotifications,
+    connected: watchConnected,
+    clear: clearWatchNotifications,
+  } = useWatchNotifications();
   //: 展示中的 toast id（用户关掉或超时后移除；历史仍在 watchNotifications 里）
   const [dismissedWatch, setDismissedWatch] = useState<number[]>([]);
   const [watchScheduleSessions, setWatchScheduleSessions] = useState<Record<string, string>>({});
@@ -472,12 +477,15 @@ export default function App() {
     setResurfacedWatch((prev) => (prev.includes(id) ? prev : [...prev, id]));
   }, []);
   const watchToasts = useMemo(() => {
-    const visible = watchNotifications.filter((n) => !dismissedWatch.includes(n.id));
+    // 只弹本次页面打开后**新到**的通知：历史/回放条目已进面板列表，若也弹
+    // 提示，用户每次开窗都会看到早已停用的计划「又提醒了一次」。
+    // 手动从面板「重新弹出」的旧条目是显式操作，仍然置顶展示。
+    const live = liveWatchNotifications.filter((n) => !resurfacedWatch.includes(n.id));
+    const pinned = watchNotifications.filter((n) => resurfacedWatch.includes(n.id));
     // 手动「重新弹出」的排最前：它可能已经很旧，不置顶会被下面 4 条上限挤掉
-    const pinned = visible.filter((n) => resurfacedWatch.includes(n.id));
-    const rest = visible.filter((n) => !resurfacedWatch.includes(n.id));
-    return [...pinned, ...rest].slice(0, 4);
-  }, [watchNotifications, dismissedWatch, resurfacedWatch]);
+    const visible = [...pinned, ...live].filter((n) => !dismissedWatch.includes(n.id));
+    return visible.slice(0, 4);
+  }, [watchNotifications, liveWatchNotifications, dismissedWatch, resurfacedWatch]);
   const watchSessionOf = useCallback(
     // 通知自带的 session_id 优先（服务端在本次触发时下发，可能是触发瞬间
     // 补建的会话——启动时拉的 /api/schedules 快照里没有它）；列表快照兜底。

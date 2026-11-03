@@ -35,6 +35,14 @@ logger = logging.getLogger("litework.watch.store")
 # 取 10 分钟 > 审批门 600s，避免「审批还没结束就被别人抢跑」。
 DEFAULT_LEASE_TTL = 600.0
 
+#: 「运行期」字段：由调度器在真的跑这条计划时写入。
+#:
+#: 多 Core 合并磁盘时，**配置**（enabled / 间隔 / 提示词…）以磁盘为准，
+#: 这些运行期字段以内存为准。若整份记录都以内存为准，A 窗口刚停用的计划
+#: 会被 B 窗口写运行记录时用旧副本覆盖回 enabled=True——用户看到「盯梢关了
+#: 还提醒」，且面板上又变回启用。
+RUNTIME_FIELDS = ("runs", "last_run", "last_status", "last_hash")
+
 
 def wall_now() -> float:
     """当前墙上时间（秒）。统一出口，便于测试替换。"""
@@ -231,6 +239,9 @@ class ScheduleStore:
         #: 本实例最近写盘的计划 id。磁盘上一时没有它们（别的 Core 还没读到）
         #: 时不能当成“已被别人删除”而丢掉，否则新建的计划会立刻消失。
         self._fresh: Dict[str, None] = {}
+        #: 上次读到/写入的磁盘签名（mtime_ns, size）。用于判断「别的 Core 改过
+        #: 计划文件」，见 reload_if_changed()。
+        self._disk_sig: Optional[tuple] = None
 
     # ---- 载入 ----
 
@@ -244,7 +255,37 @@ class ScheduleStore:
         for sched in self._read_disk():
             self._items[sched.id] = sched
         self._loaded = True
+        self._disk_sig = self._stat_sig()
         return list(self._items.values())
+
+    def _stat_sig(self) -> Optional[tuple]:
+        if not self.path:
+            return None
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def reload_if_changed(self) -> bool:
+        """磁盘计划文件被别的 Core 改过时，把变更并入内存。
+
+        每开一个窗口 = 独立 Core = 独立 ScheduleStore 副本。没有这一步，
+        A 窗口点「停用」只在 A 生效：B 仍按旧配置触发（用户报「盯梢关了
+        还提醒」），并且 B 写运行记录时会把内存里的旧 `enabled=True`
+        整份写回磁盘，把停用状态也一起推翻。
+
+        返回 True = 磁盘有变化、内存已更新。用 mtime+size 判断，未变化时
+        不重复解析 JSON（调度器每 15s 调一次）。
+        """
+        if not self.path:
+            return False
+        sig = self._stat_sig()
+        if sig is None or sig == self._disk_sig:
+            return False
+        self._merge_from_disk()
+        self._disk_sig = sig
+        return True
 
     def _read_disk(self) -> List[Schedule]:
         """从磁盘解析计划列表（缺失/损坏一律返回空，不抛）。"""
@@ -266,27 +307,35 @@ class ScheduleStore:
         return [Schedule.from_dict(item) for item in raw if isinstance(item, dict)]
 
     def _merge_from_disk(self) -> None:
-        """把磁盘上本实例**还没有**的计划并进内存（写入前调用）。
-
-        同 id 不覆盖：内存里那份是本实例正在改的（可能刚 create/upsert），
-        磁盘那份是它写入前的旧值，覆盖回去等于撤销本次修改。
+        """把磁盘变更并入内存（写入前、以及调度 tick 前调用）。
 
         **磁盘删除优先**：磁盘上已经没有、而本实例内存里还留着的计划，
         本实例并不"拥有"这次修改，直接丢掉。否则多 Core 下一个 Core 删掉的
         （例如跑完的一次性计划）会被另一个 Core 的内存副本写回去——用户看到
-        那条计划删了又出现。
+        那条计划删了又出现。刚 upsert、还没成功落盘的（`_fresh`）例外。
 
-        例外是**刚通过 upsert 进来的新计划**（`_fresh`）：另一个 Core 可能还没
-        读到它，不能因为"磁盘上暂时没有"就丢掉。
+        **同 id 的字段级取舍**：本实例刚 upsert 过（`_fresh`）→ 配置以内存为准
+        （本次修改）；否则本实例只写运行期字段（`record_run`/`_set_hash`）→
+        配置以磁盘为准，只把运行期字段叠回去。若一律以内存为准，另一个 Core
+        刚停用的计划会被这里用旧副本写回 enabled=True。
         """
         on_disk = self._read_disk()
-        disk_ids = {s.id for s in on_disk}
+        disk_by_id = {s.id: s for s in on_disk}
         for sched_id in list(self._items):
-            if sched_id not in disk_ids and sched_id not in self._fresh:
+            if sched_id not in disk_by_id and sched_id not in self._fresh:
                 del self._items[sched_id]
-        for sched in on_disk:
-            if sched.id not in self._items and sched.id not in self._deleted:
-                self._items[sched.id] = sched
+        for sched_id, disk_sched in disk_by_id.items():
+            if sched_id in self._deleted:
+                continue
+            local = self._items.get(sched_id)
+            if local is None:
+                self._items[sched_id] = disk_sched
+                continue
+            if sched_id in self._fresh:
+                continue
+            for name in RUNTIME_FIELDS:
+                setattr(disk_sched, name, getattr(local, name))
+            self._items[sched_id] = disk_sched
 
     def _ensure(self) -> None:
         if not self._loaded:
@@ -362,6 +411,10 @@ class ScheduleStore:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             os.replace(tmp, self.path)
+            # 已经落盘：`_fresh` 的「防止被当成别人删除」使命结束。
+            # 不清的话，别的 Core 后续删掉这条计划时会被本实例重新写回来。
+            self._fresh.clear()
+            self._disk_sig = self._stat_sig()
         except OSError as exc:
             # 与 BackgroundRegistry 同约定：持久化失败绝不冒泡影响调度
             logger.warning("写入计划文件失败: %s", exc)

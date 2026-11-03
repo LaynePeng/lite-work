@@ -281,6 +281,24 @@ class WatchScheduler:
         else:
             self._next[schedule_id] = nxt
 
+    def _sync_after_external_change(self) -> None:
+        """磁盘变更并入内存后修正到期表。
+
+        只补「本实例还不认识」的计划、摘掉已停用/已删除的，**不动**已经在
+        等的那一次到期（重算可能把马上要跑的计划推到下一个周期，漏掉一次）。
+        """
+        now = wall_now()
+        for sched in self.store.all():
+            if not sched.enabled:
+                self._next.pop(sched.id, None)
+            elif sched.id not in self._next:
+                nxt = compute_next_run(sched, now)
+                if nxt is not None:
+                    self._next[sched.id] = nxt
+        for schedule_id in list(self._next):
+            if self.store.get(schedule_id) is None:
+                self._next.pop(schedule_id, None)
+
     # ---- 主循环 ----
 
     async def _loop(self) -> None:
@@ -296,6 +314,11 @@ class WatchScheduler:
 
     async def tick(self) -> None:
         """检查一次是否有计划到期并触发。单测直接调这个（不必等循环）。"""
+        # 别的窗口（独立 Core）可能刚停用/删除/新建了计划：先并进内存。
+        # 不做这一步，本实例会拿旧副本继续触发——用户已经点了「停用」，
+        # 提醒却还在来（并且写运行记录时会把停用状态覆盖回磁盘）。
+        if self.store.reload_if_changed():
+            self._sync_after_external_change()
         now = wall_now()
         for schedule_id, due in list(self._next.items()):
             if due > now:
