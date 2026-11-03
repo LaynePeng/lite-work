@@ -2,6 +2,22 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [未发布]
+
+### 修复（release CI 在 `npm ci` 偶发崩溃）
+
+macOS release job 报 `npm error Exit handler never called!` 直接失败，而
+**同一份配置的 v2.1.0 是通过的**——属于不修就随机复发的那类。
+
+- 根因：根 `postinstall` 是 `npm install --prefix web`，等于在 npm 自己的
+  生命周期钩子里再起一个 npm 进程；npm 10 对此有已知的偶发崩溃。
+- 改为 `node scripts/postinstall.mjs`：CI（`CI=true`）时**直接跳过**——
+  release 工作流本来就显式跑 `npm --prefix web ci`，跳过后不损失任何东西，
+  还少一次重复安装；本地开发（无 `CI`）行为不变，仍是 `npm install` 一条命令够用。
+- release 工作流把 `npm ci && npm --prefix web ci` 拆成两条独立步骤：合成一条
+  时 CI 日志看不出是哪一半挂的（v2.1.1 只报了 npm 自身崩溃）。macOS / Windows 同步。
+- 回归用例：`tests/js/postinstall.test.mjs`（CI 跳过判定 + `CI=false` 不被误判）。
+
 ## [2.1.1]
 
 ### 新增（会话可以给自己排定时唤醒：`schedule_wakeup`）

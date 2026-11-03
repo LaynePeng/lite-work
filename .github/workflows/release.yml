@@ -48,9 +48,16 @@ jobs:
       - name: Install Python packaging dependencies
         shell: bash
         run: python -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e ".[package]"
-      - name: Install JavaScript dependencies
+      # 根依赖与前端依赖拆成两条：合成一条 `npm ci && npm --prefix web ci`
+      # 时，CI 里看不出是哪一半挂了（v2.1.1 就只报了 "Exit handler never
+      # called!"）。CI=true 会让根 postinstall 跳过它自己的 web 安装，
+      # 所以下面这条 web ci 是唯一一次安装，不会重复。
+      - name: Install root dependencies
         shell: bash
-        run: npm ci && npm --prefix web ci
+        run: npm ci
+      - name: Install frontend dependencies
+        shell: bash
+        run: npm --prefix web ci
       - name: Cache diagram-to-office node_modules
         uses: actions/cache@v6
         with:
@@ -95,9 +102,13 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${npm_version}"
             exit 1
           fi
-      - name: Install JavaScript dependencies
+      # 与 macOS 同理：拆开跑，并靠 CI=true 让根 postinstall 不再嵌套调 npm
+      - name: Install root dependencies
         shell: pwsh
-        run: npm ci; npm --prefix web ci
+        run: npm ci
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm --prefix web ci
       - name: Cache diagram-to-office node_modules
         uses: actions/cache@v6
         with:
