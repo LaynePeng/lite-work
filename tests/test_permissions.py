@@ -210,3 +210,78 @@ def test_app_collects_readonly_declarations_from_plugin_classes(tmp_path):
                     return ""
         '''))
     assert app.plugin_read_only_tools() == {"demo_quote", "demo_kline"}
+
+
+def _write_demo_plugin(app, declared: str) -> None:
+    """在用户插件目录里写一个声明 read_only_tools 的插件（仅测试用）。"""
+    import textwrap
+
+    pdir = os.path.join(app.config_dir, "plugins", "demo")
+    os.makedirs(pdir, exist_ok=True)
+    with open(os.path.join(pdir, "plugin.py"), "w", encoding="utf-8") as f:
+        f.write(textwrap.dedent(f'''
+            from litework.tools.plugin import ToolPlugin
+
+            class DemoPlugin(ToolPlugin):
+                name = "demo-plugin"
+                read_only_tools = [{declared}]
+
+                def get_tools(self):
+                    return []
+
+                async def execute(self, name, args):
+                    return ""
+        '''))
+
+
+def test_app_readonly_declarations_cached_and_invalidated(tmp_path, monkeypatch):
+    """读声明必须缓存；装/删插件后立即失效（不能等 TTL）。
+
+    回归点：此前每次 `create_agent_registry`（**每个任务启动**都调）都会把
+    全部用户插件模块重新 import 一遍——既慢（本机 5 个插件约 12ms/次），
+    又会重复执行插件模块的顶层代码。
+    """
+    from litework.tools import plugin_loader
+
+    calls = {"n": 0}
+    real = plugin_loader.load_user_plugin_classes
+
+    def counted(config_dir=None):
+        calls["n"] += 1
+        return real(config_dir)
+
+    monkeypatch.setattr(plugin_loader, "load_user_plugin_classes", counted)
+
+    app = AgentApp(config_dir=str(tmp_path / "cfg"))
+    _write_demo_plugin(app, '"demo_quote", "demo_kline"')
+
+    assert app.plugin_read_only_tools() == {"demo_quote", "demo_kline"}
+    assert app.plugin_read_only_tools() == {"demo_quote", "demo_kline"}
+    assert calls["n"] == 1, "第二次调用应命中缓存，不再 import 插件模块"
+
+    # 安装/删除/覆盖插件走同一条失效路径 → 下个任务立刻看到新声明
+    app._invalidate_plugin_cache()
+    assert app.plugin_read_only_tools() == {"demo_quote", "demo_kline"}
+    assert calls["n"] == 2, "缓存失效后应重新读取声明"
+
+
+def test_app_readonly_declarations_ttl_backstop(tmp_path):
+    """不走安装入口的外部改动（手改插件目录）由 TTL 兜底。"""
+    import time
+
+    from litework.app import TOOL_NAMES_TTL
+
+    app = AgentApp(config_dir=str(tmp_path / "cfg"))
+    _write_demo_plugin(app, '"demo_quote"')
+    assert app.plugin_read_only_tools() == {"demo_quote"}
+
+    # 手工把缓存时间戳拨到过期，模拟「时间流逝超过 TTL」
+    ts, names = app._plugin_read_only_cache  # type: ignore[misc]
+    app._plugin_read_only_cache = (ts - TOOL_NAMES_TTL - 1, names)
+
+    _write_demo_plugin(app, '"demo_kline", "demo_volume"')
+    # 同一秒内改同长度文件会被 .pyc 失效判定（mtime 秒级 + 大小）当成没改过，
+    # 复用旧字节码——那是解释器行为，不是本缓存的锅。把 mtime 拨到未来避开。
+    future = time.time() + 5
+    os.utime(os.path.join(app.config_dir, "plugins", "demo", "plugin.py"), (future, future))
+    assert app.plugin_read_only_tools() == {"demo_kline", "demo_volume"}, "TTL 到期应重新读声明"

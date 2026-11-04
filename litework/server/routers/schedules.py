@@ -73,6 +73,11 @@ ALLOWED_PERMISSIONS = {"read", "read+web"}
 #: 支持的调度模式（与 scheduler.compute_next_run 对应）
 ALLOWED_MODES = {"interval", "daily", "cron", "once"}
 
+#: 允许被 PATCH 成 null 的字段。其余字段的 None 视为「本次没传」——
+#: Pydantic 的 Optional 无法区分省略与显式 null，前端「自动（个人区）」正是
+#: 用 null 表达「清掉这个绑定」，一律忽略的话用户就再也改不回来了。
+NULLABLE_FIELDS = {"session_id", "main_session_id"}
+
 
 def _validate(mode: str, permissions: str, catch_up: str,
               run_at: Optional[float] = None) -> None:
@@ -244,11 +249,14 @@ def build_router(ctx: ServerContext) -> APIRouter:
             data["interval_seconds"] = max(60, int(data["interval_seconds"]))
 
         for key, value in data.items():
-            if value is not None:
-                setattr(sched, key, value)
-        # 改了一次性计划的触发时间（或把它改回 once）：必须重新启用，
-        # 否则跑过一次后 enabled=False，改了时间也永远不会再响。
-        if run_at and not sched.enabled and "enabled" not in data:
+            if value is None and key not in NULLABLE_FIELDS:
+                continue
+            setattr(sched, key, value)
+        # 只有**显式改了排期**（时间或模式）才重新启用。此前只要计划上有
+        # run_at 就无条件启用：用户手停的一条一次性计划，改个名字就被悄悄
+        # 重新排上——而 run_at 还是旧值（可能已过期），下一 tick 立刻跑。
+        if ("run_at" in data or "schedule_mode" in data) and run_at \
+                and not sched.enabled and "enabled" not in data:
             sched.enabled = True
         app.schedule_store.upsert(sched)
         scheduler = app.watch_scheduler

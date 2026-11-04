@@ -103,6 +103,11 @@ jobs:
       # 「共享端口随机 → 重启后手机书签失效」。
       - name: Electron LAN share tests (node:test)
         run: node --test tests/js/lan.test.mjs
+      # 根 postinstall 的 CI 跳过判定：CI 里再嵌套调 npm，npm 10 会偶发
+      # "Exit handler never called!" 把 release job 打死（v2.1.1 踩过）。
+      # 用例只 import 脚本、不真的装包。
+      - name: Root postinstall tests (node:test)
+        run: node --test tests/js/postinstall.test.mjs
       # Core 退出判定：区分「主动回收」与「意外崩溃」。
       # 回归「Core 就绪后崩溃完全静默——不写日志也不通知窗口，用户只看到
       # 界面不动，线上闪退长期查无实据」。

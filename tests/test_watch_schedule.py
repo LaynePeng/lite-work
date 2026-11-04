@@ -637,6 +637,49 @@ def test_routes_crud_and_validation(tmp_path):
         assert client.get(f"/api/schedules/{sid}").status_code == 404
 
 
+def test_patch_unrelated_field_keeps_disabled_once_plan_disabled(tmp_path):
+    """改名字不该把用户手停的一次性计划重新启用。
+
+    回归点：PATCH 的「重新启用」条件只看 `run_at` 非空，而一次性计划必然带着
+    run_at（旧值，可能已过期）——用户停用后随手改个名字，计划就被悄悄排回去，
+    下一 tick 立刻补跑一次。
+    """
+    app, client = _client(tmp_path)
+    with client:
+        r = client.post("/api/schedules", json={
+            "name": "叫醒", "schedule_mode": "once",
+            "run_at": time.time() + 3600, "prompt": "继续",
+        })
+        assert r.status_code == 200
+        sid = r.json()["schedule"]["id"]
+        assert client.patch(f"/api/schedules/{sid}", json={"enabled": False}).status_code == 200
+        assert client.get(f"/api/schedules/{sid}").json()["schedule"]["enabled"] is False
+
+        assert client.patch(f"/api/schedules/{sid}", json={"name": "改个名"}).status_code == 200
+        assert app.schedule_store.get(sid).enabled is False, "改名字把停用的一次性计划复活了"
+
+        # 显式重排时间 = 用户要求重新排期，这时才该自动启用
+        assert client.patch(f"/api/schedules/{sid}",
+                            json={"run_at": time.time() + 7200}).status_code == 200
+        assert app.schedule_store.get(sid).enabled is True
+
+
+def test_patch_can_clear_main_session_binding(tmp_path):
+    """「主会话」要能改回自动：前端发 null，后端不能当成「没传」忽略。"""
+    app, client = _client(tmp_path)
+    with client:
+        r = client.post("/api/schedules", json={
+            "name": "盯部署", "prompt": "x", "main_session_id": "s_main",
+        })
+        assert r.status_code == 200
+        sid = r.json()["schedule"]["id"]
+        assert app.schedule_store.get(sid).main_session_id == "s_main"
+
+        assert client.patch(f"/api/schedules/{sid}",
+                            json={"main_session_id": None}).status_code == 200
+        assert app.schedule_store.get(sid).main_session_id is None
+
+
 def test_routes_reject_unsafe_permissions(tmp_path):
     """无人值守计划不能要写/执行权限——没人会点审批。"""
     _, client = _client(tmp_path)
@@ -1291,3 +1334,27 @@ async def test_manual_task_not_redelivered(tmp_path):
         manager = app.agent_manager("sess_other", create=False)
         assert manager is None or not manager.drain_notifications(), \
             "普通任务不该转投到其他会话"
+
+
+def test_pending_notifications_are_capped(tmp_path):
+    """待注入通知必须有上限：长期没人打开的会话不能无限堆结论。
+
+    这些通知会在会话下次跑任务时被**逐条**注入上下文。默认落点「盯梢汇总
+    （个人区）」恰恰是个常年不跑任务的会话——按小时盯盘几个月后，用户在那儿
+    发一句话就会一次性注入上千条历史结论（体积与计费双重爆炸）。
+    """
+    from litework.app import AgentApp
+    from litework.orchestration.agent_manager import SessionAgentManager
+
+    app = AgentApp(config_dir=str(tmp_path / "cfg"))
+    mgr = app.agent_manager("sess_cap")
+    assert mgr is not None
+
+    cap = SessionAgentManager.MAX_PENDING_NOTIFICATIONS
+    for i in range(cap + 5):
+        mgr.push_external_notification(f"第 {i} 次盯梢结论", source="watch:cap")
+
+    assert len(mgr.notifications) == cap
+    texts = [n["text"] for n in mgr.notifications]
+    assert texts[0].startswith("第 5 次"), "超限应丢最旧的，保留最新的"
+    assert texts[-1].startswith(f"第 {cap + 4} 次")

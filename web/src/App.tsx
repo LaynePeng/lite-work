@@ -1500,13 +1500,16 @@ export default function App() {
             }],
           });
         } else {
-          // 非 404（网络抖动等）：保留重试机会，但也要让用户看到失败
+          // 非 404（网络抖动等）：保留重试机会，但也要让用户看到失败。
+          // 注意：状态一旦进 chatStates，切走再切回来**不会**重试（ensureSessionLoaded
+          // 见到已有状态就早退）——别再写“切回来会重试”，那是句假话。
           patchChat(sid, {
             ...EMPTY_CHAT,
             messages: [{
               role: "assistant",
               ts: Date.now(),
-              content: `⚠ 会话加载失败：${(e as Error)?.message ?? "未知错误"}\n\n切走再回到这个页签会重试。`,
+              content: `⚠ 会话加载失败：${(e as Error)?.message ?? "未知错误"}\n\n`
+                + "刷新页面、或关闭该页签后重新打开会重新拉取。",
             }],
           });
         }

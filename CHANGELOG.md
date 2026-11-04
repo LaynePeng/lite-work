@@ -2,7 +2,7 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [2.1.2]
 
 ### 修复（release CI 在 `npm ci` 偶发崩溃）
 
@@ -17,6 +17,37 @@ macOS release job 报 `npm error Exit handler never called!` 直接失败，而
 - release 工作流把 `npm ci && npm --prefix web ci` 拆成两条独立步骤：合成一条
   时 CI 日志看不出是哪一半挂的（v2.1.1 只报了 npm 自身崩溃）。macOS / Windows 同步。
 - 回归用例：`tests/js/postinstall.test.mjs`（CI 跳过判定 + `CI=false` 不被误判）。
+
+### 修复（计划编辑的三处边界）
+
+- **改名字会把停用的一次性计划悄悄复活**：PATCH 的「重新启用」条件只看
+  `run_at` 非空，而一次性计划必然带着它（旧值，可能已过期）——用户手停后
+  随手改个名字，下一 tick 就补跑一次。现在只有显式改 `run_at` / `schedule_mode`
+  才重新启用。
+- **「主会话」选了就改不回自动**：前端选「自动（个人区）」发 `null`，后端把
+  `null` 当成「本次没传」直接忽略。PATCH 现在允许把 `session_id` /
+  `main_session_id` 显式清空。
+- **会话加载失败的提示在说谎**：原文写「切走再回到这个页签会重试」，实际上
+  状态已进 `chatStates`，再切回来走的是早退分支、不会重试。改为提示刷新页面
+  或关闭页签重开。
+- CI 补跑 `tests/js/postinstall.test.mjs`：用例写了但工作流没跑，等于没有。
+
+### 修复（盯梢结论在主会话里无限堆积）
+
+盯梢结论默认投递到 personal 区的「盯梢汇总」会话；那个会话常年不跑任务，
+`notifications` 队列（会话下次跑任务时**逐条**注入上下文）因此只增不减：
+按小时盯盘几个月就是上千条完整结论，内存一直涨，用户哪天在那儿发一句话，
+全部历史结论会一次性注入——体积与计费同时爆。现在队列上限 50 条，超限丢
+最旧的（结论仍在盯梢通知面板与计划运行历史里可查）。
+
+### 性能（插件只读声明不再每任务重读一遍插件模块）
+
+`plugin_read_only_tools()` 在**每个任务启动前**都会跑（`create_agent_registry`），
+而它此前每次都要把全部用户插件模块重新 import 一遍才能读到 `read_only_tools`
+类属性（本机 5 个插件实测 12ms/次、冷启动 100ms），还会重复执行插件模块的
+顶层代码。现在结果带 60 秒 TTL 缓存（与 `_all_tool_names` 同口径）：命中约
+0ms；安装 / 删除 / 覆盖插件经 `_invalidate_plugin_cache()` 立即失效，外部
+手改插件目录最多延迟一分钟生效。
 
 ## [2.1.1]
 

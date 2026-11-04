@@ -237,6 +237,15 @@ def _safe_nickname(name: str) -> Optional[str]:
 class SessionAgentManager:
     """会话级多 Agent 管理：spawn / 限额 / 通知队列 / 查询 / 落盘恢复。"""
 
+    #: 待注入通知的保留上限（按条数）。
+    #:
+    #: 这些通知会在会话下次跑任务时**逐条**注入上下文（见 agent_loop 的
+    #: `_inject_agent_notifications`）。长期没人打开的会话——典型是盯梢结果的
+    #: 默认落点「盯梢汇总（个人区）」——每次触发都追加一条完整结论，没有上限
+    #: 就是内存只增不减；用户下次开口时几千条一起注入，体积与计费都会失控。
+    #: 超限丢最旧的：那些结论仍能在盯梢通知面板与计划运行历史里查到。
+    MAX_PENDING_NOTIFICATIONS = 50
+
     def __init__(self, app, session_id: str) -> None:
         self.app = app
         self.session_id = session_id
@@ -480,13 +489,23 @@ class SessionAgentManager:
 
     # ------------------------------------------------------------ 通知
 
+    def _append_notification(self, item: Dict[str, Any]) -> None:
+        """入队一条待注入通知；超过上限时丢最旧的（防内存与上下文双重爆炸）。"""
+        over = len(self.notifications) - self.MAX_PENDING_NOTIFICATIONS + 1
+        if over > 0:
+            del self.notifications[:over]
+            logger.warning(
+                "[AgentManager] 待注入通知超过上限 %d 条，丢弃最旧的 %d 条（session=%s）",
+                self.MAX_PENDING_NOTIFICATIONS, over, self.session_id)
+        self.notifications.append(item)
+
     def _enqueue_notification(self, record: AgentRecord) -> None:
         """终态 → 通知队列（完成即通知模型的数据源）。"""
         if record.status == "closed":
             if record.closed_by != "user":
                 return  # 编排者自己 close_agent 的：它知道，不算交付
             # 用户从看板手动取消：编排者完全不知情，必须通知（否则它以为任务还在跑）
-            self.notifications.append({
+            self._append_notification({
                 "agent_id": record.agent_id,
                 "nickname": record.nickname,
                 "role": record.role,
@@ -502,7 +521,7 @@ class SessionAgentManager:
             })
             return
         files = f"（改动文件：{', '.join(record.changed_files[:10])}）" if record.changed_files else ""
-        self.notifications.append({
+        self._append_notification({
             "agent_id": record.agent_id,
             "nickname": record.nickname,
             "role": record.role,
@@ -546,7 +565,7 @@ class SessionAgentManager:
         text = (text or "").strip()
         if not text:
             return
-        self.notifications.append({
+        self._append_notification({
             "agent_id": "",
             "nickname": source,
             "role": "watch",

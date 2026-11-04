@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple
 
 from .core.agent_loop import AgentLoop
 from .core.agent_profile import AgentProfile, AgentRegistry
@@ -232,6 +232,10 @@ class AgentApp:
         self._tool_names_cache: Optional[Tuple[float, List[str]]] = None
         # 工具 schema 缓存（摘要类辅助调用复用，避免每次压缩重装全部插件）
         self._tool_schema_cache: Optional[Tuple[float, List[Any]]] = None
+        # 插件自述只读工具名缓存 (monotonic_ts, names)：读声明要 import 用户插件
+        # 模块（会执行模块顶层代码），不能每个任务都重来一遍。装/删/覆盖经
+        # _invalidate_plugin_cache 立即失效，外部手改插件目录靠 TTL 兜底。
+        self._plugin_read_only_cache: Optional[Tuple[float, FrozenSet[str]]] = None
         # 按 workspace（绝对路径）为键的 ShellPlugin 实例表：缓存键就是目录，
         # 切换工作区不可能再拿到旧目录的实例——「切换后 cwd 陈旧」这一类 bug
         # 从结构上消失（与 OpenCode 的 InstanceStore「按目录缓存实例」同构）。
@@ -2071,6 +2075,8 @@ class AgentApp:
         self._plugins_list_cache = None
         self._tool_names_cache = None
         self._tool_schema_cache = None
+        # 只读声明来自插件类属性：新装的插件要立刻能被无人值守任务用上
+        self._plugin_read_only_cache = None
 
     def plugins_import_zip(self, data: bytes, name: Optional[str] = None,
                            overwrite: bool = False) -> List[Dict[str, Any]]:
@@ -2555,17 +2561,24 @@ class AgentApp:
             os.remove(path)
         return {"ok": True, "id": agent_id}
 
-    def plugin_read_only_tools(self) -> set:
+    def plugin_read_only_tools(self) -> FrozenSet[str]:
         """插件自述的**纯只读**工具名汇总（`ToolPlugin.read_only_tools`）。
 
         这些工具在权限换算时归 `read` 域，无人值守任务（盯梢/定时）因此在
         `read` 档下也能调用——否则插件工具一律归 `misc` 而被整体禁掉，
         盯盘这类计划只能回「数据工具缺失」。
 
-        **只读用户插件目录的类属性**，不实例化、不执行任何插件代码：
-        权限换算在每任务启动前都会跑，这里不能有重活或副作用。声明是类属性，
-        直接读 class 即可。异常一律吞掉（插件坏掉不该让任务起不来）。
+        **只读用户插件目录的类属性**，不实例化插件，但读取声明本身需要 import
+        插件模块（会执行模块顶层代码），所以结果带 TTL 缓存：权限换算在每任务
+        启动前都会跑，不能每次重新 import。安装/删除/覆盖插件经
+        `_invalidate_plugin_cache` 立即失效；外部手改插件目录靠 TTL 兜底
+        （与 `_all_tool_names` 同一口径）。异常一律吞掉（插件坏掉不该让任务
+        起不来），且**不写缓存**，让下个任务还有重试机会。
         """
+        cache = self._plugin_read_only_cache
+        now = time.monotonic()
+        if cache is not None and now - cache[0] < TOOL_NAMES_TTL:
+            return cache[1]
         out: set = set()
         try:
             from .tools.plugin_loader import load_user_plugin_classes
@@ -2576,7 +2589,10 @@ class AgentApp:
                     out.update(str(n) for n in declared if n)
         except Exception:  # noqa: BLE001 - 读声明失败只影响该优化，不影响安全
             logger.debug("[App] 汇总插件只读工具声明失败", exc_info=True)
-        return out
+            return frozenset()
+        names = frozenset(out)
+        self._plugin_read_only_cache = (now, names)
+        return names
 
     def _all_tool_names(self) -> List[str]:
         """全量工具名列表（带 TTL 缓存）。
