@@ -336,6 +336,8 @@ class WatchSourceRegistry:
         import importlib.util
         import sys
 
+        from ..tools.plugin_loader import _refresh_plugin_bytecode
+
         added = 0
         for entry in sorted(os.listdir(plugin_dir)):
             full = os.path.join(plugin_dir, entry)
@@ -351,6 +353,11 @@ class WatchSourceRegistry:
                 continue
             mod_name = f"litework_watchsrc_{os.path.basename(module_file)}_{abs(hash(full)) & 0xFFFF:x}"
             try:
+                # 字节码缓存校正**必须在 import 之前**：覆盖安装若与原文件等长且
+                # 同秒写盘，CPython 会认为旧 .pyc 仍是新鲜的（它只比对 mtime 秒级
+                # + 大小），盯梢源同样会「升了版行为没变」。见 plugin_loader 里
+                # _refresh_plugin_bytecode 的说明。
+                _refresh_plugin_bytecode(os.path.dirname(os.path.abspath(module_file)))
                 spec = importlib.util.spec_from_file_location(mod_name, module_file)
                 if spec is None or spec.loader is None:
                     continue

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import logging
@@ -299,12 +300,156 @@ def _plugin_libs_dir(spec_path: str) -> Optional[str]:
     return libs if os.path.isdir(libs) else None
 
 
+# ---------------------------------------------------------------- 插件字节码缓存（.pyc）
+
+#: 源文件内容哈希基线；放在插件自己的 __pycache__ 里，随缓存目录一起被丢弃
+_SOURCE_STAMP_NAME = ".source-hashes.json"
+
+
+def _local_source_files(plugin_dir: str) -> List[str]:
+    """插件目录**直接**包含的 .py 源文件。
+
+    不递归：目录插件的模块就是平铺在插件目录下的（astock-plugin 那几十个
+    astock_*.py 即如此）；libs/ 里的第三方依赖不归这里管。
+    """
+    try:
+        entries = sorted(os.listdir(plugin_dir))
+    except OSError:
+        return []
+    out: List[str] = []
+    for entry in entries:
+        if entry.startswith("."):
+            continue
+        full = os.path.join(plugin_dir, entry)
+        if entry.endswith(".py") and os.path.isfile(full):
+            out.append(full)
+    return out
+
+
+def _file_digest(path: str) -> Optional[str]:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _read_source_stamp(path: str) -> Dict[str, str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_source_stamp(path: str, stamps: Dict[str, str]) -> None:
+    """原子写入基线（tmp + replace）：写一半的 JSON 会让下次判定变成「全变了」。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(stamps, f, ensure_ascii=False, indent=0)
+        os.replace(tmp, path)
+    except OSError:
+        logger.debug("[PluginLoader] 写入字节码基线失败: %s", path, exc_info=True)
+        try:
+            os.remove(path + ".tmp")
+        except OSError:
+            pass
+
+
+def _refresh_plugin_bytecode(plugin_dir: str) -> bool:
+    """按**内容哈希**校正插件目录的 .pyc，返回是否清掉了过期字节码。
+
+    **为什么必须自己判**：CPython 判定 .pyc 新鲜只看源文件的「mtime（秒级）+ 大小」。
+    覆盖安装插件时新文件常与旧文件**大小相同、又在同一秒写盘**，旧 .pyc 因此被判为
+    新鲜——import 直接执行旧字节码，而版本号（读 plugin.json / 类属性）已经是新的。
+    症状就是「升了版、日志说已加载、无任何报错，行为一点没变」。
+    实测（astock-plugin v2.5.x 事故）：等长改写 + 同秒写盘 → 清空 sys.modules 后重新
+    import 仍拿到旧代码；隔 20ms 再写就正常。
+
+    `__pycache__/.source-hashes.json` 存上次的哈希：与基线不一致就删掉该模块的 .pyc
+    （下次 import 自然重新编译）；源文件没变则零删除、零编译，不拖慢加载。
+    """
+    sources = _local_source_files(plugin_dir)
+    if not sources:
+        return False
+    stamps: Dict[str, str] = {}
+    for path in sources:
+        digest = _file_digest(path)
+        if digest is not None:
+            stamps[os.path.basename(path)] = digest
+    if not stamps:
+        return False
+
+    pycache = os.path.join(plugin_dir, "__pycache__")
+    stamp_path = os.path.join(pycache, _SOURCE_STAMP_NAME)
+    old = _read_source_stamp(stamp_path)
+    if stamps != old:
+        # 先落基线再清理：即便清理失败，也不会每次都重复同一轮判断
+        _write_source_stamp(stamp_path, stamps)
+    changed = {name[:-3] for name, digest in stamps.items() if old.get(name) != digest}
+    try:
+        pycs = [n for n in os.listdir(pycache) if n.endswith(".pyc")]
+    except OSError:
+        return False  # 没有缓存目录，就不可能有陈旧 .pyc
+
+    stems = {name[:-3] for name in stamps}
+    stale = [n for n in pycs if n.split(".", 1)[0] not in stems
+             or n.split(".", 1)[0] in changed]
+    for name in stale:
+        try:
+            os.remove(os.path.join(pycache, name))
+        except OSError:
+            logger.debug("[PluginLoader] 删除过期字节码失败: %s", name, exc_info=True)
+    if stale:
+        importlib.invalidate_caches()
+    return bool(stale)
+
+
+def _purge_plugin_modules(plugin_dir: str) -> List[str]:
+    """移出 sys.modules 里**来自该插件目录**的兄弟模块，返回被清的名字。
+
+    入口模块（plugin.py）由宿主以 `litework_plugin_*` 之类的名字注册，正被 exec，
+    不能清；只清「文件就落在该目录下」的模块——`litework.*`、标准库、site-packages
+    一律不动。只在源码变更时调用（见 _refresh_plugin_bytecode），正常加载零开销。
+    """
+    here = os.path.abspath(plugin_dir)
+    dropped: List[str] = []
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("litework"):
+            continue
+        file = getattr(mod, "__file__", None)
+        if not file:
+            continue
+        try:
+            if os.path.dirname(os.path.abspath(file)) != here:
+                continue
+        except OSError:
+            continue
+        sys.modules.pop(name, None)
+        dropped.append(name)
+    if dropped:
+        importlib.invalidate_caches()
+    return dropped
+
+
 def _load_module(spec_path: str, module_name: str) -> Optional[object]:
     """动态导入 Python 模块，返回模块对象或 None。
 
     按 importlib 推荐模式注册进 sys.modules（exec 前注册，失败回滚）——
     inspect.getfile / 异常 traceback 等都依赖模块可查；协作模式插件的
     recipe.md 定位（inspect.getfile(type(self))）同样依赖这一点。
+
+    升级生效需要过两层缓存，缺一层都是「装了新版行为没变」：
+
+    ① `.pyc` 字节码 —— CPython 只看 mtime（秒级）+ 大小，覆盖安装很容易骗过它；
+    ② `sys.modules` 兄弟模块 —— 入口重 exec 了，插件里 `import astock_*` 仍命中旧对象。
+    只在**检测到源码真的变了**时处理，正常加载路径不受影响。
     """
     try:
         spec = importlib.util.spec_from_file_location(module_name, spec_path)
@@ -312,6 +457,10 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
             return None
         mod = importlib.util.module_from_spec(spec)
         plugin_dir = os.path.dirname(os.path.abspath(spec_path))
+        if _refresh_plugin_bytecode(plugin_dir):
+            dropped = _purge_plugin_modules(plugin_dir)
+            logger.info("[PluginLoader] %s 源码已变更：已丢弃过期字节码并重载 %d 个兄弟模块",
+                        os.path.basename(plugin_dir), len(dropped))
         # sys.path 顺序：libs（wheels 解压出的依赖，优先）→ 插件目录（相对导入）
         libs = _plugin_libs_dir(spec_path)
         if libs and libs not in sys.path:
