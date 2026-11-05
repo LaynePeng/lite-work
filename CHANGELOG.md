@@ -4,6 +4,21 @@
 
 ## [2.1.3]
 
+### 修复（对话框上传附件一律失败）
+
+现象：点 📎 选文件、拖拽文件、粘贴截图全部失效，输入框里出现
+`⚠ 文件上传失败：xxx（400 缺少文件字段 file）`。
+
+- 根因在前端统一请求函数 `req()`：v2.0.0 为加鉴权头改为「默认头 → 令牌 →
+  调用方覆盖」合并，默认头里写死的 `Content-Type: application/json` 一并生效。
+  上传走 `FormData`，浏览器只有在**没被指定** Content-Type 时才会自己生成
+  `multipart/form-data; boundary=…`；被覆盖成 `application/json` 后 boundary
+  消失，后端 `request.form()` 解析不出任何字段，于是 400。
+- 修法：`req()` 判定 body 是 `FormData` 时不写 Content-Type，交给浏览器；
+  上传超时单独给 180s（原来共用 15s，50MB 上限下慢网会把仍在传输的文件掐断）。
+- 回归用例：`web/src/api.upload.test.ts`（FormData 请求不得带 Content-Type 且
+  必须保留 `X-Client-Id`；普通 JSON 请求仍带 `application/json`）。
+
 ### 修复（插件覆盖安装后不生效，必须重启）
 
 现象：覆盖安装新版插件后，版本号已是新的、日志也写着「已加载」、无任何报错，

@@ -17,6 +17,8 @@ export class ApiError extends Error {
 }
 
 const TIMEOUT = 15000;
+// 文件上传：50MB 上限 + 慢网，15s 默认超时会把还在传的文件直接掐断。
+const UPLOAD_TIMEOUT = 180000;
 // 联网类操作（社区清单拉取 / 插件·技能下载安装）走单独的长超时：
 // 慢网下载 zipball 合法耗时远超 15s。后端已把网络调用移出事件循环并设了
 // connect/read 超时兜底，这里给足余量，避免「后端还在下、前端先中断」。
@@ -352,12 +354,16 @@ function friendlyError(err: unknown, timeoutMs: number): Error {
 async function req<T>(url: string, init?: RequestInit, timeoutMs = TIMEOUT): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // FormData 的 Content-Type（含 multipart boundary）必须由浏览器自己生成：
+  // 只要手写 Content-Type（默认的 application/json 也算），boundary 就丢了，
+  // 后端解析不出文件字段，上传一律 400「缺少文件字段 file」。
+  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
   try {
     const res = await fetch(apiUrl(url), {
       ...init,
       // 现有调用方只传 method/body；headers 合并顺序：默认 → 令牌 → 调用方覆盖
       headers: {
-        "Content-Type": "application/json",
+        ...(isForm ? {} : { "Content-Type": "application/json" }),
         ...authHeaders(),
         ...(init?.headers as Record<string, string> | undefined),
       },
@@ -864,11 +870,9 @@ export const api = {
   uploadFile: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return req<{ path: string; name: string; size: number }>("/api/upload", {
-      method: "POST",
-      body: form,
-      headers: {}, // 让浏览器自动设置 multipart boundary
-    });
+    // 不传 headers：Content-Type 交给浏览器按 FormData 生成（含 boundary），见 req()
+    return req<{ path: string; name: string; size: number }>(
+      "/api/upload", { method: "POST", body: form }, UPLOAD_TIMEOUT);
   },
   fileDownloadUrl: (path: string) =>
     `/api/files/download?path=${encodeURIComponent(path)}`,
