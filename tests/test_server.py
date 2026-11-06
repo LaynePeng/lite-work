@@ -106,8 +106,7 @@ async def test_resolve_dist_dir_env_override(tmp_path, monkeypatch):
 
 
 async def test_index_html_not_cached(tmp_path):
-    """index.html 必须 no-store：它是「资源清单指针」，被缓存会让覆盖安装后
-    仍加载旧 hash 的 js/css（界面停留在上一版）。"""
+    """index.html 必须 no-store，否则覆盖安装后仍加载旧 hash 的资源。"""
     from litework.server.app import _serve_index
 
     dist = tmp_path / "dist"
@@ -117,7 +116,7 @@ async def test_index_html_not_cached(tmp_path):
     resp = await _serve_index(str(dist))
     assert resp.headers["cache-control"] == "no-store"
 
-    # 缺 index.html 时退回提示 JSON（不是 500）
+    # 缺 index.html 退提示 JSON，不是 500
     empty = tmp_path / "empty"
     empty.mkdir()
     resp = await _serve_index(str(empty))
@@ -126,11 +125,7 @@ async def test_index_html_not_cached(tmp_path):
 
 
 async def test_safe_dist_file_blocks_traversal(tmp_path):
-    """SPA fallback 不得读到 dist 之外的文件（路径穿越）。
-
-    回归「任意文件读取」：join 不归一化，`../` 叠够可读整盘（含 config.json）。
-    校验必须在归一化之后做——编码/反斜杠变体绕过字面量黑名单。
-    """
+    """SPA fallback 不得读到 dist 之外的文件（路径穿越 → 任意文件读取）。"""
     from litework.server.app import _safe_dist_file
 
     dist = tmp_path / "proj" / "web" / "dist"
@@ -140,10 +135,9 @@ async def test_safe_dist_file_blocks_traversal(tmp_path):
     (tmp_path / "proj" / "secret.txt").write_text("TOP-SECRET", encoding="utf-8")
 
     d = str(dist)
-    # 正常资源照常返回
     assert _safe_dist_file(d, "assets/app.js") is not None
 
-    # 明文 / URL 编码 / 反斜杠 三类穿越全部拒绝
+    # 明文 / URL 编码 / 反斜杠 三类穿越均须拒绝
     for bad in ("../secret.txt", "assets/../../secret.txt",
                 "%2e%2e/secret.txt", "..\\secret.txt"):
         assert _safe_dist_file(d, bad) is None, f"穿越未被拦截: {bad}"

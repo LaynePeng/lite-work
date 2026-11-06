@@ -368,26 +368,18 @@ async def _serve_index(dist_dir: str):
 
 
 def _safe_dist_file(dist_dir: str, path: str) -> Optional[str]:
-    """把请求路径解析成 dist 内的真实文件；越界（路径穿越）一律返回 None。
+    """把请求路径解析成 dist 内的真实文件；越界（路径穿越）返回 None。
 
-    `os.path.join(dist_dir, path)` 不做归一化，`..` 会原样保留：
-    `GET /../package.json` → `<repo>/web/package.json`，`../` 叠够多层就能读到
-    文件系统任意位置（含 ~/.lite-work/config.json 的 API Key）。URL 编码
-    （`%2e%2e`）与反斜杠（`..%5c`）同样能绕过字面量检查，因此**不能**用
-    「路径里含 `..` 就拒绝」这类黑名单，必须归一化后校验前缀。
-
-    realpath 同时解掉 `..` 与符号链接；normcase 抹平 Windows 的大小写/短名
-    差异（`PROGRA~1` 与 `Program Files`）。越界返回 None 由调用方回退
-    index.html——既不泄露「文件存在」，也不改变 SPA 深链行为。
+    `os.path.join` 不归一化，`..` 原样保留（`GET /../package.json` 命中父目录），
+    URL 编码与反斜杠变体也能绕过字面量检查，因此必须归一化后校验前缀。
+    越界返回 None 由调用方回退 index.html——不泄露文件存在性，不改变深链行为。
     """
     try:
         root = os.path.realpath(dist_dir)
         target = os.path.realpath(os.path.join(root, path))
     except (OSError, ValueError):
         return None
-    # normcase 只用于比较：Windows 下它会把路径转小写，据此返回路径会改写
-    # 原始大小写（大小写敏感的文件系统上指向不存在的文件），因此比较用 _key，
-    # 返回仍用 realpath 的结果。
+    # normcase 仅用于比较（Windows 会转小写，据此返回会改写真实大小写）
     root_key = os.path.normcase(root)
     target_key = os.path.normcase(target)
     # 用 sep 收尾，避免 /www/dist-evil 被误判为 /www/dist 的子路径

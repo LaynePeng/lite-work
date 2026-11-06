@@ -6,42 +6,30 @@
 
 ### 安全（SPA 静态托管可读任意文件）
 
-`GET /../package.json` 能读到 dist 的父目录文件，`../` 叠够层数即可读取
-**整盘任意文件**——实测在本机取到了 `pyproject.toml`、`C:\Windows\win.ini`，
-以及 `~/.lite-work/config.json`（含 LLM API Key）。桌面版默认 `--no-token`，
-本机任意进程与可达该端口的设备都能触发。
+`GET /../package.json` 可读到 dist 之外的**整盘任意文件**（实测取到
+`~/.lite-work/config.json` 含 API Key）；桌面版默认 `--no-token`，本机任意进程可达。
 
-- 根因：`spa_fallback` 用 `os.path.join(dist_dir, path)` 拼路径且不做归一化，
-  `..` 原样保留；`%2e%2e`、`..%5c` 等编码变体同样有效。
-- 修法：新增 `_safe_dist_file`——`realpath` 归一化（同时解掉 `..` 与符号链接）、
-  `normcase` 抹平 Windows 大小写/短名差异，再用 `root + os.sep` 校验前缀
-  （避免 `dist-evil` 被误判为 `dist` 子路径）。越界返回 None 并回退
-  `index.html`，既不泄露文件存在性，也不改变 SPA 深链行为。
-- 刻意不用「路径含 `..` 就拒绝」的黑名单：编码/反斜杠变体绕过，且有
-  合法文件名风险。
-- 回归：`test_safe_dist_file_blocks_traversal`（11 种穿越变体 + 兄弟目录误判）。
+- 根因：`spa_fallback` 用 `os.path.join(dist_dir, path)` 不归一化，`..` 原样保留，
+  `%2e%2e`、`..%5c` 等编码变体同样有效。
+- 修法：新增 `_safe_dist_file`，`realpath` 归一化后按 `root + os.sep` 校验前缀
+  （`normcase` 仅用于比较）；越界回退 `index.html`，不泄露文件存在性。
+  不用「含 `..` 就拒」的黑名单——编码变体可绕过。
+- 回归：`test_safe_dist_file_blocks_traversal`。
 
 ### 修复（Windows 孤儿后台进程回收静默失效）
 
-`_pid_alive` 用 `subprocess.run(..., text=True)` 读 `tasklist`：中文系统 `tasklist`
-输出 OEM 代码页（cp936），按 UTF-8 解码抛 `UnicodeDecodeError`，读取线程异常
-退出把 `stdout` 置为 `None`，随后 `str(pid) in out` 抛 `TypeError`。该异常在启动
-路径被 try/except 兜住，表现为「回收从来不生效、后台命令进程长期泄漏」。
+`_pid_alive` 用 `text=True` 读 `tasklist`，中文系统输出 cp936 而非 UTF-8，解码抛
+`UnicodeDecodeError` → 读取线程退出把 `stdout` 置 `None` → `in None` 抛 `TypeError`，
+被启动路径 try/except 兜住，表现为回收从不生效、后台命令进程泄漏。
 
-- 修法：`errors="replace"`（PID 是 ASCII，替换字符不影响判定）+ `out or ""`
-  兜底；无法确认存活时按「不存在」处理，宁可跳过也不误杀。
-- POSIX 分支未改动。
+- 修法：`errors="replace"` + `out or ""` 兜底；无法确认存活按「不存在」处理，
+  宁可跳过也不误杀。POSIX 分支未动。
 
 ### 修复（覆盖安装后界面仍是上一版）
 
-现象：装完新版本、版本号也对，但界面行为还是旧的（v2.1.5 实测：工具卡没跟气泡
-对齐、`execute_command` 仍默认展开）。磁盘上 `index-<hash>.js/css` 已经全新，
-问题出在 Chromium 的**启发式缓存**：
+`index.html` 只给 `Last-Modified` + `ETag` 未给 `Cache-Control`，Chromium 走启发式
+缓存，覆盖安装后仍拿旧 `index.html` → 加载旧 hash 资源。
 
-- `index.html` 是「资源清单指针」（只引用 `index-<hash>.js` / `index-<hash>.css`），
-  但静态托管只给了 `Last-Modified` + `ETag`、没给 `Cache-Control`，Chromium
-  据 `Last-Modified` 自行推算新鲜期，覆盖安装后仍拿旧 `index.html` → 加载旧 hash
-  的资源。
 - 修法：`_serve_index` 给 `index.html` 加 `Cache-Control: no-store`。hash 命名的
   资源本身不发这个头，缓存收益不受影响（同一 hash 内容不会变）。
 - 回归：`test_index_html_not_cached`。
