@@ -21,6 +21,17 @@
   合法文件名风险。
 - 回归：`test_safe_dist_file_blocks_traversal`（11 种穿越变体 + 兄弟目录误判）。
 
+### 修复（Windows 孤儿后台进程回收静默失效）
+
+`_pid_alive` 用 `subprocess.run(..., text=True)` 读 `tasklist`：中文系统 `tasklist`
+输出 OEM 代码页（cp936），按 UTF-8 解码抛 `UnicodeDecodeError`，读取线程异常
+退出把 `stdout` 置为 `None`，随后 `str(pid) in out` 抛 `TypeError`。该异常在启动
+路径被 try/except 兜住，表现为「回收从来不生效、后台命令进程长期泄漏」。
+
+- 修法：`errors="replace"`（PID 是 ASCII，替换字符不影响判定）+ `out or ""`
+  兜底；无法确认存活时按「不存在」处理，宁可跳过也不误杀。
+- POSIX 分支未改动。
+
 ### 修复（覆盖安装后界面仍是上一版）
 
 现象：装完新版本、版本号也对，但界面行为还是旧的（v2.1.5 实测：工具卡没跟气泡

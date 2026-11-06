@@ -404,11 +404,20 @@ def _pid_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         try:
+            # tasklist 输出的是 OEM 代码页（中文系统 cp936），不是 UTF-8。
+            # text=True 默认按 locale/UTF-8 解码，遇到中文字节会抛
+            # UnicodeDecodeError，子进程读取线程把 stdout 置为 None，
+            # 随后 `str(pid) in out` 抛 TypeError——孤儿回收整条路径失效
+            # （被 Startup 的 try/except 兜住，表现为「回收静默不工作」）。
+            # errors="replace" 兜底：PID 是 ASCII，替换字符不影响判定。
             out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
-                                 capture_output=True, text=True, timeout=10).stdout
+                                 capture_output=True, text=True,
+                                 errors="replace", timeout=10).stdout
         except (OSError, subprocess.SubprocessError):
             return False
-        return str(pid) in out
+        # stdout 仍可能为 None（读取线程异常退出）：无法确认存活时按「不存在」
+        # 处理，宁可跳过回收也不误杀（kill_process_tree 是不可逆的）。
+        return str(pid) in (out or "")
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
