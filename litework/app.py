@@ -50,6 +50,7 @@ from .core.metrics import ToolMetrics
 from .core.proxy import (market_httpx_kwargs, proxy_env, proxy_for,
                          proxy_mounts, ssl_verify_for)
 from .tools.registry import ToolRegistry
+from .tools.loadout import ToolLoadout
 from .tools.shell import BackgroundRegistry, reclaim_orphaned_tasks
 from .watch import (Schedule, ScheduleStore, WatchNotificationBus, WatchScheduler,
                     WatchSourceRegistry, TriggerLease)
@@ -1658,9 +1659,85 @@ class AgentApp:
         # install(kernel) 时从 app 服务捕获 workspace，晚注册会拿到 None
         # → OfficeTools(None) 兜底到家目录（.outputs 落到 ~/.outputs 的根因）
         kernel.register_service("app", self)
-        self._install_plugins(kernel, self.tool_plugins(workspace, session_id=session_id))
+        plugins = self.tool_plugins(workspace, session_id=session_id)
+        self._install_plugins(kernel, plugins)
         self.mcp_manager.register_tools(registry, allowed=allowed, exclude=exclude)
+        registry.loadout = self.build_loadout(plugins, registry)
+        # load_tools 在装配阶段注册（而不是 AgentLoop 构造时）：/api/tools 与
+        # 真实请求都从 build_registry 取工具，晚注册会让它「存在但看不见」
+        self._register_load_tools(registry)
         return registry
+
+    @staticmethod
+    def _register_load_tools(registry: ToolRegistry) -> None:
+        """把 load_tools 元工具注册进 registry（幂等）。
+
+        只在真有按需组时注册：`deferred_tools=false` 的部署不会多出这个工具，
+        也就不会在提示词里解释一个用不上的东西。
+        """
+        loadout = registry.loadout
+        if loadout is None or not loadout.enabled or not loadout.groups:
+            return
+        if registry.has("load_tools"):
+            return
+        from .core.system_prompt import tool_snippet as _snippet
+        group_names = sorted(loadout.groups)
+
+        async def _load(args: Dict[str, Any]) -> str:
+            raw = str(args.get("group") or "").strip()
+            group = loadout.load(raw)
+            if group is None:
+                pending = ", ".join(f"`{n}`" for n in group_names)
+                return f"[Error]: 未知的工具组 {raw!r}。可用组：{pending}"
+            lines = [f"[已装载工具组 `{group.name}`] {group.summary}", "",
+                     "该组工具（现在可直接调用）："]
+            for name in group.tools:
+                tool = next((t for t in registry.get_tools() if t.name == name), None)
+                desc = _snippet(tool) if tool is not None else ""
+                lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+            return "\n".join(lines)
+
+        registry.register(
+            "load_tools",
+            "装载一个按需工具组（office/email/astock/watch/multi-agent/ppt-edit/ocr），"
+            "装载后该组工具在后续轮次可直接调用。领域工具默认不装载，"
+            "需要时先调用本工具（一次可装一组）。",
+            {
+                "type": "object",
+                "properties": {
+                    "group": {
+                        "type": "string",
+                        "enum": group_names,
+                        "description": "要装载的工具组名；摘要见 System Prompt 的「按需工具组」段",
+                    },
+                },
+                "required": ["group"],
+            },
+            _load,
+        )
+        logger.info("[App] 已注册 load_tools（按需工具组: %s）", ", ".join(group_names))
+
+    def build_loadout(self, plugins: List[Plugin], registry: ToolRegistry) -> "ToolLoadout":
+        """构造按需工具组的装载视图（只在 registry 里真正注册成功的工具才计入）。
+
+        组边界取自插件名：新增工具自动归组，不用维护工具名清单。MCP 工具不进
+        按需组（其名在连接前不可知，且默认调用需审批，保持常驻更可预测）。
+        """
+        plugin_tools: Dict[str, List[str]] = {}
+        for plugin in plugins:
+            # Plugin 基类无 get_tools（纯钩子插件），只有 ToolPlugin 才提供工具
+            get_tools = getattr(plugin, "get_tools", None)
+            if not callable(get_tools):
+                continue
+            try:
+                names = [t.name for t in get_tools()]
+            except Exception:                       # noqa: BLE001 - 插件异常不影响装配
+                continue
+            plugin_tools[getattr(plugin, "name", "")] = [n for n in names if registry.has(n)]
+        return ToolLoadout.from_plugin_tools(
+            plugin_tools,
+            enabled=bool(self.config.get("deferred_tools", True)),
+        )
 
     def _install_plugins(self, kernel: Kernel, plugins: List[Plugin]) -> List[str]:
         """装配插件清单；**单个插件失败不影响其余**。

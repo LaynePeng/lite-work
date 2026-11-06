@@ -241,8 +241,18 @@ class OpenAICompatAdapter(BaseLLMAdapter):
         else:
             payload["temperature"] = self.temperature
         if tools:
+            # 显式列三个字段而不是 t.__dict__：ToolDefinition 未来加字段（如展示用
+            # 的摘要/分组）不应泄漏进 function schema —— OpenAI 会因未知键报 400。
             payload["tools"] = [
-                {"type": "function", "function": t.__dict__} for t in tools
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in tools
             ]
         return payload
 

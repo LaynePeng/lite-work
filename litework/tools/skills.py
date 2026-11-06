@@ -29,6 +29,11 @@ from .install_progress import checkpoint
 
 logger = logging.getLogger("litework.tools.skills")
 
+# 技能索引里 description 的展示上限。frontmatter 允许到 1024（DESC_MAX_LEN），
+# 但那种长度是「给人看的完整说明」，塞进 System Prompt 索引会占掉大半行——
+# 索引的作用只是让模型判断「该不该加载」，一行足够，正文里有全文。
+SKILL_INDEX_DESC_MAX = 200
+
 # OpenCode 同款名称规范（不符仅告警不拒绝，避免阻断导入第三方技能）
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 NAME_MAX_LEN = 64
@@ -52,6 +57,26 @@ USER_ROOT_SUFFIXES = (
     (".claude/skills", False),
     (".config/opencode/skills", False),
 )
+
+
+def _index_description(description: str) -> str:
+    """技能索引里的一行描述：超长时按标点截断，语义保持可读。
+
+    frontmatter 允许 description 到 1024 字符（规范上限），但索引只用于「判断
+    该不该加载这个技能」——一行就够，全文在 SKILL.md 正文里。截断只在展示层
+    做，不改用户的技能文件（社区技能与上游保持一致，见 AGENTS.md §6）。
+    """
+    text = re.sub(r"\s+", " ", description or "").strip()
+    if len(text) <= SKILL_INDEX_DESC_MAX:
+        return text
+    head = text[:SKILL_INDEX_DESC_MAX]
+    # 优先在句末断（英文技能多是 "…. Use when…" 结构，句号切分最自然）
+    for sep in ("。", ". ", "; "):
+        idx = head.rfind(sep)
+        if idx > SKILL_INDEX_DESC_MAX // 2:
+            return head[:idx + len(sep)].strip()
+    idx = head.rfind(" ")
+    return (head[:idx] if idx > 0 else head).rstrip() + "…"
 
 
 def _safe_name(name: str) -> Optional[str]:
@@ -626,7 +651,7 @@ class SkillsTools:
         rows = []
         for skill in self.list_skills():
             description = skill["description"] or "使用该技能目录中的 SKILL.md"
-            rows.append(f"- {skill['name']}: {description}")
+            rows.append(f"- {skill['name']}: {_index_description(description)}")
         return "\n".join(rows) or "（当前没有发现可用技能）"
 
     # ------------------------------------------------------------ 管理（仅可写根）

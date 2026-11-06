@@ -410,7 +410,7 @@ class AgentLoop:
                 # 阶段一：LLM 调用（流式，内部 emit llm:stream；瞬时故障指数退避重试）
                 try:
                     content, tool_calls, usage = await self._call_llm_with_retry(
-                        processed, tools, meter)
+                        processed, self._request_tools(tools), meter)
                 except AgentLoop._LLMCallFailure as failure:
                     logger.warning("[AgentLoop] LLM 调用失败: %s", failure.message)
                     messages.append(Message(role="assistant",
@@ -572,6 +572,7 @@ class AgentLoop:
             system_prompt = await asyncio.to_thread(
                 SystemPromptBuilder.build,
                 self.workspace, tools, skill_index=self._filtered_skill_index(),
+                loadout=getattr(self.registry, "loadout", None),
             )
         if not messages or messages[0].role != "system":
             messages.insert(0, Message(role="system", content=system_prompt))
@@ -652,6 +653,24 @@ class AgentLoop:
                 if decision is None and self._compaction_reason is None:
                     self._compaction_reason = "pruned"
         return payload
+
+    def _not_loaded_hint(self, tool_name: str) -> Optional[str]:
+        """该工具属于未装载的按需组时，返回自解释提示；否则 None。"""
+        loadout = getattr(self.registry, "loadout", None)
+        if loadout is None:
+            return None
+        return loadout.unavailable_hint(tool_name)
+
+    def _request_tools(self, tools: List[ToolDefinition]) -> List[ToolDefinition]:
+        """本次请求要发的工具集：按 loadout 摘掉未装载的按需组。
+
+        每轮重新算（而不是在 run_task 开头算一次）：模型调 load_tools 后，
+        **下一轮**就要看到新装载的工具。已完成装载的组单调保留，不会来回抖。
+        """
+        loadout = getattr(self.registry, "loadout", None)
+        if loadout is None:
+            return tools
+        return loadout.select(tools)
 
     async def _call_llm_with_retry(
         self, processed: List[Message], tools: List[ToolDefinition],
@@ -1062,6 +1081,12 @@ class AgentLoop:
         denial = self.denied_tools.get(tool_name)
         if denial is not None and not self.registry.has(tool_name):
             return denial
+
+        # 1.6 按需工具未装载：工具确实存在，只是本轮没发 schema → 给装载指引，
+        #     同样不能用「未注册」措辞（会被误读为笔误）
+        not_loaded = self._not_loaded_hint(tool_name)
+        if not_loaded is not None:
+            return not_loaded
 
         # 2. JSON 容错解析（失败回填给 LLM 自愈）
         ok, args, error = safe_json_parse(call.arguments)

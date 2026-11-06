@@ -334,6 +334,7 @@ class TaskHandle:
                 agent_prompt=agent_prompt,
                 skill_extra=getattr(self, "skill_extra", None),
                 skill_index=self._filtered_skill_index(),
+                loadout=getattr(self.registry, "loadout", None),
             )
             # 隔离工作树模式：明确告知 Agent 它在隔离副本里干活（改动不会被主工作区看到）
             if self.worktree_name:

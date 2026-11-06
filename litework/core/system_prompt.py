@@ -9,9 +9,10 @@ git 状态等会随时间变化的信息由 git_status 工具按需获取。
 from __future__ import annotations
 
 import platform
+import re
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .types import ToolDefinition
 
@@ -74,8 +75,83 @@ INTERMEDIATE_ARTIFACTS_RULE = """### 中间产物与收尾清理（必须遵守�
   的交付物与应有的代码改动——干净收尾，不留垃圾。绝不删除用户的既有文件。"""
 
 
+# 工具行摘要（snippet）的人工覆盖表：name → 一行摘要。
+# 默认由 description 自动摘（首句 / 首个分句，≤ SNIPPET_MAX_CHARS），只在自动摘
+# 出来没用时（如 astock_watch 的「盯盘与自选股管理。」丢掉 action 列表）才在这里补。
+TOOL_SNIPPETS: Dict[str, str] = {
+    "astock_watch": "盯盘规则与自选股管理（status/plan/set_rules/start/stop）",
+    "spawn_agent": "派生一个子 Agent 并行执行任务（结果异步送达）",
+}
+
+# 一行摘要的字符上限。60 大约是一句话的信息量，超过就只截到最近的标点，
+# 保证「一眼知道这工具干什么」而不复述参数细节——细节在 tool schema 里。
+SNIPPET_MAX_CHARS = 60
+
+# 摘要截断时优先在这些标点处断开（按顺序尝试），避免把词组切成半个
+_SNIPPET_BREAKS = ("。", "；", "，", "、", ", ", " ")
+
+
+def tool_snippet(tool: ToolDefinition) -> str:
+    """工具的一行摘要：System Prompt 工具清单用，**不替代** tool schema 的 description。
+
+    为什么需要：tool schema 已经把完整 description 投喂给模型，System Prompt 的
+    工具清单若再贴一遍全文，同一段文字每次请求都要付两遍钱（lite-work 现状：
+    93 个工具 ≈ 11.4k tokens，其中绝大部分与 schema 重复）。这里只留「一行
+    能定位工具」的信息，完整语义交给 schema（pi 的 promptSnippet 同思路）。
+    """
+    override = TOOL_SNIPPETS.get(tool.name)
+    if override:
+        return override
+    text = re.sub(r"[*`>#]", "", tool.description or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return "—"
+    # 首句：句号/分号在合理长度内出现就以它断（整句语义完整）
+    for sep in ("。", "；"):
+        idx = text.find(sep)
+        if 0 < idx <= SNIPPET_MAX_CHARS:
+            return text[:idx + 1]
+    if len(text) <= SNIPPET_MAX_CHARS:
+        return text
+    # 超长：退到最近的逗号/顿号/空格，避免半个词
+    for sep in _SNIPPET_BREAKS:
+        idx = text.rfind(sep, 0, SNIPPET_MAX_CHARS)
+        if idx > SNIPPET_MAX_CHARS // 2:
+            return text[:idx] + "…"
+    return text[:SNIPPET_MAX_CHARS] + "…"
+
+
 class SystemPromptBuilder:
     """静态 System Prompt 组装器：同一任务内所有 LLM 调用共享同一份 system 内容。"""
+
+    @staticmethod
+    def _pending_groups_section(loadout: Optional[Any]) -> str:
+        """「按需工具组」段：告诉模型哪些领域工具要先 load_tools 装载。
+
+        这段是渐进式披露的**路由信息**——没有它模型不知道自己缺工具，
+        只会看到「可用工具」里没有 office 就以为做不到。组清单是静态的
+        （不随装载变化），保证缓存前缀稳定。
+        """
+        if loadout is None:
+            return ""
+        groups = loadout.pending_groups() if hasattr(loadout, "pending_groups") else []
+        if not groups:
+            return ""
+        lines = [
+            "",
+            "",
+            "### 按需工具组 (On-Demand Tool Groups)",
+            "下列领域工具**默认不装载**（不占上下文）。需要其中任何能力时，",
+            "先调用 `load_tools(group=\"组名\")` 装载该组，再调用具体工具；",
+            "一次可装一组，装载后本任务内一直可用。",
+        ]
+        for group in groups:
+            tools_preview = "、".join(group.tools[:6])
+            if len(group.tools) > 6:
+                tools_preview += f" 等 {len(group.tools)} 个"
+            lines.append(f"- **{group.name}**：{group.summary}")
+            lines.append(f"  含：{tools_preview}")
+        return "\n".join(lines)
 
     @staticmethod
     def _git_info(cwd: str) -> str:
@@ -137,7 +213,8 @@ class SystemPromptBuilder:
 
     @classmethod
     def build(cls, cwd: str, tools: List[ToolDefinition], agent_prompt: Optional[str] = None,
-              skill_extra: Optional[str] = None, skill_index: Optional[str] = None) -> str:
+              skill_extra: Optional[str] = None, skill_index: Optional[str] = None,
+              loadout: Optional[Any] = None) -> str:
         """构建任务级静态 System Prompt。
 
         agent_prompt：Agent 专属角色提示（如 Plan 的规划型人格）。注入位置在
@@ -147,9 +224,18 @@ class SystemPromptBuilder:
         skill_extra：本任务显式/自动命中的技能内容（/skill 命令或 triggers
         匹配），追加到技能索引段之后。任务级注入——不进会话历史，任务内
         所有调用共享（缓存前缀稳定），任务结束即消失。
+        loadout：按需工具组视图（tools/loadout.py）。有按需组时追加
+        「按需工具组」段，告诉模型哪些领域能力要先 load_tools 装载。
         """
         os_name = f"{platform.system()} {platform.release()} ({platform.machine()})"
-        tools_summary = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
+        # 按需工具不在「可用工具」里逐条列（它们在「按需工具组」段按组说明），
+        # 否则同一批工具名在 prompt 里出现两遍。骨架工具才逐条列。
+        deferred_names = set()
+        if loadout is not None and getattr(loadout, "enabled", False):
+            deferred_names = set(getattr(loadout, "tool_group", {}) or {})
+        listed = [t for t in tools if t.name not in deferred_names]
+        tools_summary = "\n".join(f"- **{t.name}**: {tool_snippet(t)}" for t in listed)
+        pending_section = cls._pending_groups_section(loadout)
         project_instructions = cls._project_instructions(cwd)
         skill_index = skill_index if skill_index is not None else ""
         if not skill_index:
@@ -199,7 +285,7 @@ class SystemPromptBuilder:
 - **当前工作目录**: `{cwd}`
 
 ### 可用工具 (Available Tools)
-{tools_summary}
+{tools_summary}{pending_section}
 
 ### 工作规则 (Operating Rules)
 1. 修改代码前，先用工具探查代码库结构与相关文件内容，不要盲目猜测；

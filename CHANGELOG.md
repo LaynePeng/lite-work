@@ -4,6 +4,59 @@
 
 ## [2.1.4]
 
+### 性能（渐进式工具披露：领域工具按需装载）
+
+参考 pi 的 `prepareLoadout`，把「特定任务才用」的领域工具从每轮请求里摘出去。
+实测 93 个工具的 schema 常驻 **28221 tokens**，其中 `parameters` 占 75%
+（40629 字符）——压缩描述收益有限，必须少发工具。
+
+- 新增 `litework/tools/loadout.py`：组边界取自插件名（`office-plugin` →
+  `office`），新增工具自动归组，不用维护工具名清单。
+- **骨架常驻**：文件/编辑/命令/git/搜索/AST/联网/代码审查/todo/提问/技能/唤醒；
+  **领域按需**：office、astock、email、watch、multi-agent、ppt-edit、ocr。
+- 新增 `load_tools(group)` 元工具（enum 限定组名，接受组名/插件名/别名）。
+  装载后本任务内单调保留，`System Prompt` 的组清单是静态的。
+- 未装载时调用直接给装载指引（`[Tool Not Loaded] … 请先 load_tools`），
+  不复用「未注册」措辞——那会被模型误读成工具名笔误而重试。
+- **实测收益：schema 28221 → 4883 tokens（首轮省 23338）**；
+  配合工具描述去重，System Prompt 31816 → 15569 字符（-51%）。
+- 开关：设置项 `deferred_tools: false` 一键退回全体常驻（等价旧行为）。
+- 设计稿：`docs/deferred-tools-design.md`；回归：`tests/test_deferred_tools.py`（17 例，
+  含「registry 语义不变」「装载后可用」「未装载给指引」「按需工具不重复列」）。
+
+### 性能（System Prompt 与 tool schema 不再重复投喂工具描述）
+
+同一段工具描述此前每次请求都要付两遍钱：一遍在 `tools[].function.description`
+（工具 schema，OpenAI/Anthropic 都需要），一遍在 System Prompt 的「可用工具」
+清单里（`- **name**: {完整 description}`）。参考 pi 的 `promptSnippet` 机制，
+清单改为只留一行摘要。
+
+- 新增 `litework/core/system_prompt.py::tool_snippet()`：按句号/分号/逗号断句，
+  上限 `SNIPPET_MAX_CHARS = 60` 字符，剥离 Markdown 标记；自动摘要不合格时
+  用 `TOOL_SNIPPETS` 人工覆盖（当前 `astock_watch` / `spawn_agent` 两条）。
+- 实测（93 个工具）：工具清单段 15659 → 5413 字符，**约 11.4k → 3.5k tokens，
+  每次请求省 ~7.9k tokens**；完整 System Prompt 31816 → 21570 字符。
+- 工具 schema 一侧**不变**：完整 description 仍原样发给模型，语义细节不缩水。
+
+### 修复（OpenAI 适配器把 ToolDefinition 内部字段泄漏进 function schema）
+
+`openai_compat.py` 用 `t.__dict__` 直接当 `function` 体，`ToolDefinition` 今后
+新增任何展示用字段都会进 schema —— OpenAI 对未知键返回 400。改为显式只序列化
+`name` / `description` / `parameters`。
+
+- 回归用例：`tests/test_system_prompt_snippet.py`（8 例，含「清单用摘要、schema
+  用全文」的对照断言）。
+
+### 性能（技能索引与 Agent 提示词瘦身）
+
+- **技能索引**：`SkillsTools.index()` 的 description 展示上限收到 200 字符
+  （`SKILL_INDEX_DESC_MAX`），按句末/空格断句。frontmatter 仍允许到 1024，
+  截断只在展示层做——不改用户的技能文件（社区技能与上游一致，见 AGENTS.md §6）。
+  `academic-paper-strategist` 单条曾占 1024 字符。实测索引 5450 → 2374 字符。
+- **BUILD_PROMPT** 922 → 589 字符：删掉与外层重复的内容（`apply_search_replace`/
+  `read_file` 的用法已在「工作规则」、`ask_user` 的选项规则已在工具 schema、
+  汇报四段式已在 `FINAL_REPORT_REQUIREMENT`）。角色定位与工作流保留。
+
 ### 修复（覆盖安装后插件兄弟模块未重新加载）
 
 现象与 2.1.3 修的那个相同：覆盖安装后版本号已是新的、日志写着「已加载」、

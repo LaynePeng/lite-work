@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from ..core.types import ToolDefinition
 
@@ -19,6 +19,10 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, ToolDefinition] = {}
         self._handlers: Dict[str, Handler] = {}
+        # 按需工具组的装载视图（None = 不做渐进式披露，全部常驻）。
+        # 由 AgentApp.build_registry 装配后赋值；本类语义不受它影响——
+        # 注册/执行/存在性查询永远按全量来，只有「本次请求发哪些」用它。
+        self.loadout: Optional[Any] = None
 
     def register(self, name: str, description: str, parameters: Dict[str, Any], handler: Handler) -> None:
         self._tools[name] = ToolDefinition(name=name, description=description, parameters=parameters)
