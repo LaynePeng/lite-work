@@ -64,14 +64,37 @@ def _make_plugin(tmp_path) -> str:
     return pdir
 
 
+def _wait_for_fresh_second(margin: float = 0.02) -> None:
+    """等到刚跨过整秒边界，留出 margin 秒余量。
+
+    「同秒改写」是用例前提，但 stat 与 write 若正好跨过秒边界，前提就不成立。
+    实测约 8% 概率随机失败（`1793934951.96 → 1793934952.02`）。CPython 判字节码
+    新鲜只看整秒，所以只要前后两次 stat 落在同一个整秒内就满足构造条件。
+    """
+    import time
+
+    now = time.time()
+    frac = now - int(now)
+    # 离下一个整秒不足 margin*2 就等过去：等完 stat/write/stat 全落在新的一秒里
+    if frac > 1.0 - margin * 2:
+        time.sleep(1.0 - frac + margin)
+
+
 def _assert_same_second_overwrite(path: str, text: str, old_text: str) -> None:
     """等长 + 同秒改写（这正是骗过 CPython 的组合，测试必须真的构造出来）。"""
     assert len(text) == len(old_text), "用例前提：新旧内容等长"
-    st0 = os.stat(path)
-    _write(path, text)
-    st1 = os.stat(path)
-    assert st1.st_size == st0.st_size, "用例前提：改写后大小不变"
-    assert int(st1.st_mtime) == int(st0.st_mtime), "用例前提：改写落在同一秒内"
+    # 跨秒重试：即便等过边界，极端负载下仍可能被调度拖延。失败就把内容改回去
+    # 再等下一个整秒，不让「前提没构造出来」冒充「被测行为不对」。
+    for _attempt in range(5):
+        _wait_for_fresh_second()
+        st0 = os.stat(path)
+        _write(path, text)
+        st1 = os.stat(path)
+        assert st1.st_size == st0.st_size, "用例前提：改写后大小不变"
+        if int(st1.st_mtime) == int(st0.st_mtime):
+            return
+        _write(path, old_text)  # 跨秒了，恢复原内容给下一次尝试
+    raise AssertionError("连续 5 次都没能在同一秒内完成改写（时钟异常？）")
 
 
 def test_stale_bytecode_is_dropped_when_source_changes(tmp_path):
