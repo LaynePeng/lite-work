@@ -171,3 +171,68 @@ def test_watch_source_loader_refreshes_bytecode(tmp_path):
     assert reg2.load_from_dir(os.path.join(str(tmp_path), "plugins")) == 1
     assert reg2.get("probe-kind-NEW") is not None, \
         "盯梢源取到旧字节码 → 升级后仍在跑旧探针"
+
+
+def test_missing_pycache_is_treated_as_changed(tmp_path):
+    """**覆盖安装**的真实路径：装完目录里没有 __pycache__，也必须校正兄弟模块。
+
+    回归背景（v2.1.4）：v2.1.3 加这道校验时，「有 pycache 且 .pyc 陈旧」能处理，
+    但覆盖安装走的是 `delete_plugin`（rmtree 整目录）+ `copytree`
+    （`ignore_patterns("__pycache__")`）——装完一个缓存文件都不剩。
+    旧实现此时 `os.listdir(pycache)` 抛 OSError → 直接 return False →
+    上层不 purge 兄弟模块 → 「装了新版，入口是新的，`import astock_*` 仍是旧的」。
+    这条路径正是最主流的升级方式，却恰好没被覆盖。
+    """
+    pdir = os.path.join(str(tmp_path), "plugins", "cache-probe")
+    _write(os.path.join(pdir, "cp_missing_sib.py"), SIBLING_OLD)
+    _write(os.path.join(pdir, "plugin.py"),
+           "import cp_missing_sib\n"
+           "from litework.tools.plugin import ToolPlugin\n"
+           "\n"
+           "class SiblingProbe(ToolPlugin):\n"
+           "    name = 'sibling-probe'\n"
+           "    version = '1.0.0'\n"
+           "    def get_tools(self):\n"
+           "        return []\n"
+           "    async def execute(self, name, args):\n"
+           "        return cp_missing_sib.marker()\n")
+    entry = os.path.join(pdir, "plugin.py")
+
+    mod1 = plugin_loader._load_module(entry, "litework_plugin_missing_pyc")
+    assert mod1 is not None
+    assert mod1.cp_missing_sib.marker() == "OLD"
+    pycache = os.path.join(pdir, "__pycache__")
+    assert os.path.isdir(pycache), "首次 import 应产生缓存目录"
+
+    # 模拟真实安装器：整个目录删掉重建（copytree 忽略 __pycache__）
+    import shutil
+    shutil.rmtree(pdir)
+    _write(os.path.join(pdir, "cp_missing_sib.py"), SIBLING_NEW)
+    _write(entry,
+           "import cp_missing_sib\n"
+           "from litework.tools.plugin import ToolPlugin\n"
+           "\n"
+           "class SiblingProbe(ToolPlugin):\n"
+           "    name = 'sibling-probe'\n"
+           "    version = '1.0.0'\n"
+           "    def get_tools(self):\n"
+           "        return []\n"
+           "    async def execute(self, name, args):\n"
+           "        return cp_missing_sib.marker()\n")
+    assert not os.path.exists(pycache), "覆盖安装后不该有 __pycache__（用例前提）"
+
+    # ⚠️ 这里**不要**先单独调 _refresh_plugin_bytecode 做断言：它会写基线并顺手
+    # makedirs 建出 __pycache__，等 _load_module 内部再判断时就成了「缓存存在且
+    # 基线一致」→ 不 purge，用例反而测不出东西（这个坑实际踩过一次）。
+    # 只验证用户可见行为：覆盖安装后加载到的必须是新版。
+    mod2 = plugin_loader._load_module(entry, "litework_plugin_missing_pyc")
+    assert mod2 is not None
+    assert mod2.cp_missing_sib.marker() == "NEW", \
+        "覆盖安装后兄弟模块仍是旧对象（真实事故：装完要重启才生效）"
+
+
+def test_missing_pycache_fresh_install_also_purges(tmp_path):
+    """全新安装（目录里从没跑过）同样返回 True —— purge 对空 sys.modules 无害。"""
+    pdir = _make_plugin(tmp_path)
+    assert not os.path.exists(os.path.join(pdir, "__pycache__"))
+    assert plugin_loader._refresh_plugin_bytecode(pdir) is True

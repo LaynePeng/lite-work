@@ -2,6 +2,33 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.1.4]
+
+### 修复（覆盖安装后插件兄弟模块未重新加载）
+
+现象与 2.1.3 修的那个相同：覆盖安装后版本号已是新的、日志写着「已加载」、
+无任何报错，但工具行为仍是上一版，只有重启 Core 才好。2.1.3 的校正只覆盖了
+「目录里有 `__pycache__`、且其中 `.pyc` 陈旧」，漏掉了覆盖安装实际走的路径：
+
+1. `delete_plugin()` → `shutil.rmtree(插件目录)`，`__pycache__` 一并删掉；
+2. `_copy_plugin_entry()` → `copytree(..., ignore_patterns("__pycache__"))`。
+
+装完目录里没有 `__pycache__`。此时 `_refresh_plugin_bytecode` 里
+`os.listdir(pycache)` 抛 `OSError` 就 `return False`，`_load_module` 据此不执行
+`_purge_plugin_modules`，`sys.modules` 里指向已删旧目录的兄弟模块继续生效——
+入口与版本号是新的，插件内部 `import astock_*` 拿到的还是旧对象。
+
+- 修法：进 `_refresh_plugin_bytecode` 时若目录里没有 `__pycache__`，返回 `True`。
+  该状态必须在 `_write_source_stamp` 之前取样，因为那次调用会 `makedirs` 建出
+  目录，晚一步判断就恒为 True。
+- `os.listdir` 失败的兜底从「直接 return False」改为「按空缓存继续判断」。
+- 日志文案从「源码已变更」改为「需要重载」：触发原因现在有源码变更、全新或
+  覆盖安装两类。
+- 回归用例：`tests/test_plugin_bytecode_refresh.py::test_missing_pycache_is_treated_as_changed`
+  与 `::test_missing_pycache_fresh_install_also_purges`，按真实安装器行为构造
+  （整目录 rmtree + 重建、不留 `__pycache__`）。移除本修复后这 2 例失败，
+  2.1.3 的 4 例仍通过。
+
 ## [2.1.3]
 
 ### 修复（对话框上传附件一律失败）

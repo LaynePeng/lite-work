@@ -374,10 +374,24 @@ def _refresh_plugin_bytecode(plugin_dir: str) -> bool:
 
     `__pycache__/.source-hashes.json` 存上次的哈希：与基线不一致就删掉该模块的 .pyc
     （下次 import 自然重新编译）；源文件没变则零删除、零编译，不拖慢加载。
+
+    **「没有 __pycache__」必须当作「变了」，不能当作「没变」（v2.1.4 修）**：
+    覆盖安装走的是 `delete_plugin`（rmtree 整个插件目录）+ `copytree`
+    （`ignore_patterns("__pycache__")`），装完目录里**一个缓存文件都没有**。
+    此前的实现只在「目录里已有 .pyc」时才可能返回 True，于是这条最主流的
+    升级路径恒返回 False → 上层不 purge 兄弟模块 → 「装了新版，入口是新的，
+    插件内部 `import astock_*` 仍拿到旧对象」。v2.1.3 加这道校验时漏了这一支，
+    等于把最常见的场景放过去了。
+
+    因此：进函数时若目录里没有 `__pycache__`，一律判定需要校正并返回 True。
+    注意 `_write_source_stamp` 会 `makedirs` 顺手建出目录，所以这个状态
+    **必须在写基线之前**取样。
     """
     sources = _local_source_files(plugin_dir)
     if not sources:
         return False
+    # ⚠️ 必须在 _write_source_stamp（内部 makedirs）之前取
+    had_pycache = os.path.isdir(os.path.join(plugin_dir, "__pycache__"))
     stamps: Dict[str, str] = {}
     for path in sources:
         digest = _file_digest(path)
@@ -396,7 +410,7 @@ def _refresh_plugin_bytecode(plugin_dir: str) -> bool:
     try:
         pycs = [n for n in os.listdir(pycache) if n.endswith(".pyc")]
     except OSError:
-        return False  # 没有缓存目录，就不可能有陈旧 .pyc
+        pycs = []  # 读失败按「没有缓存」处理，走下面的 had_pycache 判定
 
     stems = {name[:-3] for name in stamps}
     stale = [n for n in pycs if n.split(".", 1)[0] not in stems
@@ -408,6 +422,12 @@ def _refresh_plugin_bytecode(plugin_dir: str) -> bool:
             logger.debug("[PluginLoader] 删除过期字节码失败: %s", name, exc_info=True)
     if stale:
         importlib.invalidate_caches()
+    # 进函数时连 __pycache__ 都没有 ⇒ 全新/覆盖安装 ⇒ 兄弟模块同样可能是旧的。
+    # 这时即便没有 .pyc 可删，也必须让上层执行 purge（返回值是 purge 的唯一开关）。
+    if not had_pycache:
+        logger.debug("[PluginLoader] %s 无字节码缓存（新装/覆盖装），按需重载兄弟模块",
+                     os.path.basename(plugin_dir))
+        return True
     return bool(stale)
 
 
@@ -459,7 +479,9 @@ def _load_module(spec_path: str, module_name: str) -> Optional[object]:
         plugin_dir = os.path.dirname(os.path.abspath(spec_path))
         if _refresh_plugin_bytecode(plugin_dir):
             dropped = _purge_plugin_modules(plugin_dir)
-            logger.info("[PluginLoader] %s 源码已变更：已丢弃过期字节码并重载 %d 个兄弟模块",
+            # 触发原因有两类：源码变更（字节码/兄弟模块都陈旧），或全新/覆盖安装
+            # （装完没有 __pycache__，兄弟模块可能指向已删除的旧目录）。两者都要 purge。
+            logger.info("[PluginLoader] %s 需要重载：已丢弃过期字节码并重载 %d 个兄弟模块",
                         os.path.basename(plugin_dir), len(dropped))
         # sys.path 顺序：libs（wheels 解压出的依赖，优先）→ 插件目录（相对导入）
         libs = _plugin_libs_dir(spec_path)
