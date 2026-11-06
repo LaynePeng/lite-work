@@ -2,6 +2,22 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [未发布]
+
+### 修复（覆盖安装后界面仍是上一版）
+
+现象：装完新版本、版本号也对，但界面行为还是旧的（v2.1.5 实测：工具卡没跟气泡
+对齐、`execute_command` 仍默认展开）。磁盘上 `index-<hash>.js/css` 已经全新，
+问题出在 Chromium 的**启发式缓存**：
+
+- `index.html` 是「资源清单指针」（只引用 `index-<hash>.js` / `index-<hash>.css`），
+  但静态托管只给了 `Last-Modified` + `ETag`、没给 `Cache-Control`，Chromium
+  据 `Last-Modified` 自行推算新鲜期，覆盖安装后仍拿旧 `index.html` → 加载旧 hash
+  的资源。
+- 修法：`_serve_index` 给 `index.html` 加 `Cache-Control: no-store`。hash 命名的
+  资源本身不发这个头，缓存收益不受影响（同一 hash 内容不会变）。
+- 回归：`test_index_html_not_cached`。
+
 ## [2.1.5]
 
 ### 性能（渲染进程瘦身：折叠修复 + 按需渲染 + 分包）

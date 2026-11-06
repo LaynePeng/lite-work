@@ -105,6 +105,26 @@ async def test_resolve_dist_dir_env_override(tmp_path, monkeypatch):
     assert _resolve_dist_dir() == str(custom)
 
 
+async def test_index_html_not_cached(tmp_path):
+    """index.html 必须 no-store：它是「资源清单指针」，被缓存会让覆盖安装后
+    仍加载旧 hash 的 js/css（界面停留在上一版）。"""
+    from litework.server.app import _serve_index
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>new-build</html>", encoding="utf-8")
+
+    resp = await _serve_index(str(dist))
+    assert resp.headers["cache-control"] == "no-store"
+
+    # 缺 index.html 时退回提示 JSON（不是 500）
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    resp = await _serve_index(str(empty))
+    assert resp.status_code == 200
+    assert b"web" in resp.body
+
+
 async def test_max_running_tasks_guard(tmp_path, monkeypatch):
     """并发护栏：达到 max_running_tasks 即拒（占坑即拒，不建任何重对象）。"""
     from litework.server.tasks import TaskManager, TaskLimitError

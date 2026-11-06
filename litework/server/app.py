@@ -357,7 +357,12 @@ def create_app(app: AgentApp, token: Optional[str] = None,
 async def _serve_index(dist_dir: str):
     index_path = os.path.join(dist_dir, "index.html")
     if os.path.isfile(index_path):
-        return FileResponse(index_path)
+        # index.html 是「资源清单指针」：它引用的是 index-<hash>.js/css。
+        # 不设 no-store 时 Chromium 会走启发式缓存（仅有 Last-Modified/ETag），
+        # 覆盖安装后仍拿着旧的 index.html → 加载旧 hash 的资源，界面停留在上一版，
+        # 而磁盘上的文件其实已经全新（v2.1.5 升级实测踩到）。资源本身按 hash
+        # 命名，缓存旧 index.html 毫无收益，因此一律不缓存。
+        return FileResponse(index_path, headers={"Cache-Control": "no-store"})
     return JSONResponse({"message": "lite-work 后端已就绪（前端未构建，运行 npm run build:web）"},
                         status_code=200)
 
