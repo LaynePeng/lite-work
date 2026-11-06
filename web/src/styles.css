@@ -116,6 +116,23 @@ button {
   position: relative;
 }
 
+/* 懒加载分块的占位：全屏 modal 用透明遮罩挡住误点，页签内组件给轻提示。
+   两类 chunk 都是本地产物，加载一般 <100ms，占位只做防闪烁用。 */
+.lazy-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(5, 8, 14, 0.35);
+}
+
+.lazy-fallback {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
 /* ============================== 布局分隔条 ============================== */
 
 .resizer {
@@ -2682,6 +2699,19 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   overflow-anchor: none;
 }
 
+/* 单轮容器：屏幕外的轮次跳过布局与绘制。
+   contain-intrinsic-size 给一个估算高度（auto 关键字让浏览器记住上次实测值），
+   否则未渲染的轮次高度按 0 计，滚动条总长度会跳变。
+   流式轮次（.turn-item-live）不加——它每帧都在长高，跳过布局反而干扰贴底。 */
+.turn-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+}
+
+.turn-item-live {
+  content-visibility: visible;
+}
+
 .session-badge {
   text-align: center;
   font-size: 11px;
@@ -3589,6 +3619,24 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 
 .tool-block .tool-result {
   color: var(--text-0);
+}
+
+/* 超长工具结果的分段展开按钮（默认只渲染前 4000 字符） */
+.tool-result-more {
+  display: block;
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2);
+  transition: all 0.15s;
+}
+
+.tool-result-more:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* 审批卡片 */

@@ -36,6 +36,10 @@ export interface RenderTurn {
   assistant?: Msg;
   /** 流式轮次的回合号（仅 key 以 streaming- 开头的轮次有值） */
   streamTurn?: number;
+  /** 该轮折算的原始消息条数（user/assistant/tool 各计 1）。
+   *  折叠按消息数滑窗时需要按轮累计真实条数——不能按 turn 数估
+   *  （高工具密度会话里 1 轮可含几十条消息）。 */
+  msgCount?: number;
 }
 
 /** cardId → 所在 turn/items 的位置（跨批次 tool 回填索引） */
@@ -90,17 +94,17 @@ function consume(cache: TurnsCache, messages: Msg[], start: number): void {
     const m = messages[i];
     if (m.role === "user") {
       cache.openTurnIdx = null;
-      turns.push({ key: `u-${turns.length}`, user: m, items: [] });
+      turns.push({ key: `u-${turns.length}`, user: m, items: [], msgCount: 1 });
     } else if (m.role === "assistant") {
       const toolCalls = m.tool_calls ?? [];
       if (toolCalls.length === 0) {
         cache.openTurnIdx = null;
-        turns.push({ key: `a-${turns.length}`, items: [], assistant: m });
+        turns.push({ key: `a-${turns.length}`, items: [], assistant: m, msgCount: 1 });
         continue;
       }
       // 延续开放轮（不可变更新：新 items 数组 + 新 turn 对象）或新建
       const turnIdx = cache.openTurnIdx ?? (() => {
-        turns.push({ key: `t-${turns.length}`, items: [] });
+        turns.push({ key: `t-${turns.length}`, items: [], msgCount: 0 });
         return turns.length - 1;
       })();
       cache.openTurnIdx = turnIdx;
@@ -118,7 +122,7 @@ function consume(cache: TurnsCache, messages: Msg[], start: number): void {
         pending.set(card.id, { turnIdx, itemIdx: items.length });
         items.push({ type: "tool", id: card.id, card });
       }
-      turns[turnIdx] = { ...turns[turnIdx], items };
+      turns[turnIdx] = { ...turns[turnIdx], items, msgCount: (turns[turnIdx].msgCount ?? 0) + 1 };
     } else if (m.role === "tool") {
       const loc = m.tool_call_id ? pending.get(m.tool_call_id) : undefined;
       if (!loc) continue; // 孤儿结果（找不到对应 tool_call）：跳过，与原实现一致
@@ -129,7 +133,7 @@ function consume(cache: TurnsCache, messages: Msg[], start: number): void {
       const newCard: ToolCardInfo = { ...item.card, result: m.content ?? "", status: cardStatusOf(m.content ?? "") };
       const newItems = turn.items.slice();
       newItems[loc.itemIdx] = { type: "tool", id: item.id, card: newCard };
-      turns[loc.turnIdx] = { ...turn, items: newItems };
+      turns[loc.turnIdx] = { ...turn, items: newItems, msgCount: (turn.msgCount ?? 0) + 1 };
     }
   }
 }

@@ -2,14 +2,18 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "../api";
 import AppIcon from "./AppIcon";
-import TerminalPanel from "./TerminalPanel";
 import type { RecentProject, SessionInfo, TreeEntry, WorktreeStatus } from "../types";
 import { baseName } from "../lib/path";
 import { isTextLikePath, resolveOpenTarget } from "../lib/fileOpen";
+import { lazyChunk } from "../lib/lazyChunk";
+
+// xterm 只在「终端」页签用，却因静态 import 进了首屏主 chunk（约 300KB）。
+// 懒加载后首次点开终端才拉取；不预加载——大多数会话从不打开终端。
+const TerminalPanel = lazyChunk(() => import("./TerminalPanel"));
 
 export type SidebarTab = "sessions" | "tasks" | "files" | "rules" | "terminal";
 
@@ -1503,7 +1507,9 @@ export default function Sidebar({
 
       {tab === "terminal" && (
         <div className="sidebar-terminal">
-          <TerminalPanel workspace={workspace} />
+          <Suspense fallback={<div className="terminal-empty">终端加载中…</div>}>
+            <TerminalPanel workspace={workspace} />
+          </Suspense>
         </div>
       )}
 

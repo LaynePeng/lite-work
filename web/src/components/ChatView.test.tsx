@@ -282,36 +282,45 @@ function makeLongMessages(turns: number): Msg[] {
   return msgs;
 }
 
-describe("ChatView 超长会话折叠（P1）", () => {
-  it("超过 500 turn：折叠更早历史 + 占位条", () => {
-    // 320 对问答 = 640 个 RenderTurn（user 和纯 assistant 各成一个 turn）
+describe("ChatView 超长会话折叠（滑窗语义）", () => {
+  it("超过 500 轮：只折叠溢出的轮次（不是一律只留 300）", () => {
+    // 320 对问答 = 640 个 RenderTurn，溢出 140 → 只折叠最早 140 轮
     render(
       <ChatView {...baseProps} messages={makeLongMessages(320)} streaming={null} />
     );
-    // 640 - 300 = 340 个 turn 被折叠
-    expect(screen.getByRole("button", { name: /查看更早的 340 轮对话/ })).toBeInTheDocument();
-    // 保留区从 turn 340 开始 = 「问题 170」（每对问答占 2 个 turn）
-    expect(screen.getByText("问题 170")).toBeInTheDocument();
-    expect(screen.queryByText("问题 169")).not.toBeInTheDocument();
-    // 最近的轮次可见
+    expect(screen.getByRole("button", { name: /查看更早的 140 条消息（140 轮）/ })).toBeInTheDocument();
+    // 保留区从 turn 140 开始 = 「问题 70」（每对问答占 2 个 turn）
+    expect(screen.getByText("问题 70")).toBeInTheDocument();
+    expect(screen.queryByText("问题 69")).not.toBeInTheDocument();
     expect(screen.getByText("问题 319")).toBeInTheDocument();
   });
 
-  it("点击占位条：展开 300 个 turn，剩余折叠数递减", async () => {
+  it("恰好第 501 条消息：只折叠最早的 1 轮（滑窗，不会整段消失）", () => {
+    // 500 条（250 对问答）+ 1 条 = 501 条 → 溢出 1 轮
+    const msgs = makeLongMessages(250);
+    msgs.push({ role: "user", content: "问题 多出来的一条" } as Msg);
+    render(
+      <ChatView {...baseProps} messages={msgs} streaming={null}
+        foldTurns={1000} foldMessages={500} />
+    );
+    expect(screen.getByRole("button", { name: /查看更早的 1 条消息（1 轮）/ })).toBeInTheDocument();
+    // 关键回归：内容不会被整段折叠掉
+    expect(screen.getByText("问题 249")).toBeInTheDocument();
+    expect(screen.queryByText("问题 0")).not.toBeInTheDocument();
+  });
+
+  it("点击占位条：每次多展开 300 轮", async () => {
     const user = userEvent.setup();
     render(
       <ChatView {...baseProps} messages={makeLongMessages(320)} streaming={null} />
     );
-    await user.click(screen.getByRole("button", { name: /查看更早的 340 轮对话/ }));
-    // 340 - 300 = 40 仍折叠
-    expect(screen.getByRole("button", { name: /查看更早的 40 轮对话/ })).toBeInTheDocument();
-    // 展开区已包含更早内容（turn 40 对应「问题 20」）
-    expect(screen.getByText("问题 20")).toBeInTheDocument();
-    expect(screen.queryByText("问题 19")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /查看更早的 140 条消息（140 轮）/ }));
+    // 140 轮全部展开完，占位条消失
+    expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
+    expect(screen.getByText("问题 0")).toBeInTheDocument();
   });
 
   it("500 turn 以内：不折叠，无占位条", () => {
-    // 250 对问答 = 500 turn，恰好不超过阈值
     render(
       <ChatView {...baseProps} messages={makeLongMessages(250)} streaming={null} />
     );
@@ -320,8 +329,8 @@ describe("ChatView 超长会话折叠（P1）", () => {
     expect(screen.getByText("问题 249")).toBeInTheDocument();
   });
 
-  it("消息数阈值：轮数不多但消息数超限也折叠（高工具密度场景，v1.6.0）", () => {
-    // 71 轮远低于轮数阈值，但 1 轮内塞入大量工具调用 → 消息数超限
+  it("消息数阈值：轮数远低于阈值但消息数超限也折叠（高工具密度）", () => {
+    // 150 轮 × 3 条消息 = 450 条；把阈值压到 300 → 折掉最早的若干轮
     const msgs: Msg[] = [];
     for (let i = 0; i < 150; i++) {
       msgs.push({ role: "user", content: `问题 ${i}` } as Msg);
@@ -331,59 +340,62 @@ describe("ChatView 超长会话折叠（P1）", () => {
       } as unknown as Msg);
       msgs.push({ role: "tool", tool_call_id: `c${i}`, content: `结果 ${i}` } as unknown as Msg);
     }
-    // 150 轮（每轮 user + assistant+tool）→ totalTurns = 150 > 保底 100，折叠可触发
-    // 消息总数 450 > 100（显式传小阈值）→ 走消息数折叠分支
     render(
       <ChatView
         {...baseProps} messages={msgs} streaming={null}
-        foldTurns={500} foldMessages={100}
+        foldTurns={500} foldMessages={300}
       />
     );
-    expect(screen.getByRole("button", { name: /查看更早的/ })).toBeInTheDocument();
-    // 保底：至少保留 100 轮（300 轮中折叠 200，修复前权重法只留约 16 轮）
-    expect(screen.getByRole("button", { name: /查看更早的 200 轮对话/ })).toBeInTheDocument();
-    expect(screen.queryByText("结果 0")).not.toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: /查看更早的/ });
+    expect(btn).toBeInTheDocument();
+    // 关键回归：不能因为「保底 100 轮」把折叠降级为 0（真实数据 69/69 都没折叠）
+    expect(btn.textContent).not.toMatch(/查看更早的 0 /);
+    // 最新一轮始终可见（工具卡默认收起，故断言用户消息）
+    expect(screen.getByText("问题 149")).toBeInTheDocument();
+    expect(screen.queryByText("问题 0")).not.toBeInTheDocument();
   });
 
-  it("默认消息数阈值（600）：未超限则不折叠", () => {
-    // 299 对问答 = 598 条消息 ≤ 600，598 turn 也 ≤ 500? 598 > 500 会按轮数折叠——
-    // 因此用 250 对（500 turn / 500 条）恰好双双不超
+  it("绝不把内容整段折叠掉：极少轮次 + 超多消息时至少留一轮", () => {
+    // 34 轮 × 42 条 ≈ 1413 条消息（复刻真实会话形态）
+    const msgs: Msg[] = [];
+    for (let i = 0; i < 34; i++) {
+      for (let j = 0; j < 42; j++) {
+        msgs.push({ role: "user", content: `问题 ${i}-${j}` } as Msg);
+      }
+    }
+    render(<ChatView {...baseProps} messages={msgs} streaming={null} />);
+    // 有折叠但保留区非空
+    expect(screen.getByRole("button", { name: /查看更早的/ })).toBeInTheDocument();
+    expect(screen.getByText("问题 33-41")).toBeInTheDocument();
+  });
+
+  it("默认消息数阈值（500）：未超限则不折叠", () => {
     render(
       <ChatView {...baseProps} messages={makeLongMessages(250)} streaming={null}
-        foldTurns={500} foldMessages={600} />
+        foldTurns={500} foldMessages={500} />
     );
     expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
   });
 
-  // 超时放宽到 20s：本用例含 4 次全量渲染 + 4 次展开点击，慢速 CI runner
-  // （2 核 Ubuntu）实测约 6.4s，超过默认 5s 上限会被误判失败。
-  // 仅本用例放宽，不放宽全局——避免掩盖其他真正变慢的测试。
-  it("1000 turn：首屏折叠 700 轮，逐级展开（300/轮）直到全部可见", { timeout: 20000 }, async () => {
-    // 500 对问答 = 1000 turn（对应 ~/.lite-work/sessions/session_demo_fold_1000turns.json）
+  // 超时放宽到 20s：本用例含多次全量渲染 + 展开点击，慢速 CI runner
+  // （2 核 Ubuntu）实测会超过默认 5s 上限。
+  it("1000 turn：首屏只折叠溢出的 500 轮，一次点击即全部展开", { timeout: 20000 }, async () => {
     const user = userEvent.setup();
     render(
       <ChatView {...baseProps} messages={makeLongMessages(500)} streaming={null} />
     );
-    // 首屏：折叠 1000 - 300 = 700 轮，仅保留最近 300 轮（turn 700 起 = 问题 350）
-    expect(screen.getByRole("button", { name: /查看更早的 700 轮对话/ })).toBeInTheDocument();
-    expect(screen.getByText("问题 350")).toBeInTheDocument();
-    expect(screen.queryByText("问题 349")).not.toBeInTheDocument();
+    // 1000 turn，溢出 500 → 折叠 500 轮（turn 500 起 = 问题 250）
+    expect(screen.getByRole("button", { name: /查看更早的 500 条消息（500 轮）/ })).toBeInTheDocument();
+    expect(screen.getByText("问题 250")).toBeInTheDocument();
+    expect(screen.queryByText("问题 249")).not.toBeInTheDocument();
     expect(screen.getByText("问题 499")).toBeInTheDocument();
 
-    // 第 1 次展开：+300 → 折叠 400 轮（turn 400 起 = 问题 200）
-    await user.click(screen.getByRole("button", { name: /查看更早的 700 轮对话/ }));
-    expect(screen.getByRole("button", { name: /查看更早的 400 轮对话/ })).toBeInTheDocument();
-    expect(screen.getByText("问题 200")).toBeInTheDocument();
-    expect(screen.queryByText("问题 199")).not.toBeInTheDocument();
+    // 一次点击展开 300 → 剩 200
+    await user.click(screen.getByRole("button", { name: /查看更早的 500 条消息（500 轮）/ }));
+    expect(screen.getByRole("button", { name: /查看更早的 200 条消息（200 轮）/ })).toBeInTheDocument();
 
-    // 第 2 次展开：+300 → 折叠 100 轮（turn 100 起 = 问题 50）
-    await user.click(screen.getByRole("button", { name: /查看更早的 400 轮对话/ }));
-    expect(screen.getByRole("button", { name: /查看更早的 100 轮对话/ })).toBeInTheDocument();
-    expect(screen.getByText("问题 50")).toBeInTheDocument();
-    expect(screen.queryByText("问题 49")).not.toBeInTheDocument();
-
-    // 第 3 次展开：+300 → 全部可见（问题 0 出现，占位条消失）
-    await user.click(screen.getByRole("button", { name: /查看更早的 100 轮对话/ }));
+    // 再点一次 → 全部可见
+    await user.click(screen.getByRole("button", { name: /查看更早的 200 条消息（200 轮）/ }));
     expect(screen.queryByRole("button", { name: /查看更早的/ })).not.toBeInTheDocument();
     expect(screen.getByText("问题 0")).toBeInTheDocument();
     expect(screen.getByText("问题 499")).toBeInTheDocument();
@@ -398,15 +410,20 @@ describe("ChatView", () => {
     expect(screen.getByText("lite-work", { exact: false })).toBeInTheDocument();
   });
 
-  it("渲染用户/助手气泡与工具卡片（历史消息分组）", () => {
+  it("渲染用户/助手气泡与工具卡片（历史消息分组）", async () => {
+    const user = userEvent.setup();
     render(
       <ChatView {...baseProps} messages={makeMsgs()} streaming={null} />
     );
     expect(screen.getByText("帮我读取配置文件")).toBeInTheDocument();
     expect(screen.getByText(/读取完成，共 20 行。/)).toBeInTheDocument();
-    // execute_command 为重要工具 → 独立 ToolCard，默认展开参数与结果
+    // execute_command 独立成卡（不并入紧凑的工具活动行），但**默认收起**——
+    // 命令输出往往几十 KB，全展开会显著拖慢长会话（用户明确要求点击才展开）
     const card = screen.getByText("execute_command", { exact: false }).closest(".tool-card") as HTMLElement;
     expect(card).toBeTruthy();
+    expect(within(card).queryByText("参数")).not.toBeInTheDocument();
+    // 点击头部后展开参数与结果
+    await user.click(within(card).getByRole("button"));
     expect(within(card).getByText("参数")).toBeInTheDocument();
     expect(within(card).getByText(/\[Command OK\]/)).toBeInTheDocument();
   });
@@ -462,6 +479,9 @@ describe("ChatView", () => {
       <ChatView {...baseProps} messages={makeMsgs()} streaming={null} />
     );
     const header = screen.getByText("execute_command", { exact: false }).closest(".tool-card-header") as HTMLElement;
+    // 默认收起 → 首次点击展开
+    expect(within(header.parentElement as HTMLElement).queryByText("参数")).not.toBeInTheDocument();
+    await user.click(header);
     expect(within(header.parentElement as HTMLElement).getByText("参数")).toBeInTheDocument();
     await user.click(header);
     expect(within(header.parentElement as HTMLElement).queryByText("参数")).not.toBeInTheDocument();

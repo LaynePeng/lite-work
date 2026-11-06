@@ -149,10 +149,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "reducer_model": "",
     "reducer_provider": "",
     # 聊天区展示折叠阈值（数据不删，仅 UI 折叠）：轮数或消息数任一超限即折叠。
+    # 滑窗语义：超出多少就折叠最早的多少（500 条时只折最早几条，不会整段消失）。
     # 高工具密度会话里 1 轮可含几十个工具卡片，只按轮数阈值会形同虚设，
     # 因此补充消息数维度（v1.6.0）。
     "chat_fold_turns": 500,
-    "chat_fold_messages": 600,
+    "chat_fold_messages": 500,
     # 界面偏好（侧栏 / 右栏宽度 px、侧栏页签）：由前端经 POST /api/config 保存。
     # 存后端而非 localStorage —— 桌面端本地 Core 每次启动端口随机（serve --port 0），
     # 渲染层 origin 随之变化，localStorage 按 origin 隔离会被当「新站点」而读不回

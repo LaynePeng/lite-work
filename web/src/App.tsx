@@ -2,27 +2,19 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { api, type WatchSourceInfo, type PptAnnotation } from "./api";
-import AboutModal from "./components/AboutModal";
 import ChatView, { QuestionBar } from "./components/ChatView";
 import Composer, { REASONING_EFFORT_OPTIONS } from "./components/Composer";
 import ConnectScreen from "./components/ConnectScreen";
 import ErrorBoundary from "./components/ErrorBoundary";
-import MobileApp from "./components/MobileApp";
-import NewTaskWizard, { type NewTaskConfig } from "./components/NewTaskWizard";
+import { type NewTaskConfig } from "./components/NewTaskWizard";
 import PendingQueue from "./components/PendingQueue";
-import PhoneConnectModal from "./components/PhoneConnectModal";
-import CoreModal from "./components/CoreModal";
-import FileViewer from "./components/FileViewer";
-import PptEditor from "./components/PptEditor";
-import PptTemplatePicker from "./components/PptTemplatePicker";
-import ProjectPicker from "./components/ProjectPicker";
-import SettingsModal from "./components/SettingsModal";
 import Sidebar, { type SidebarTab } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ToolPanel, { type PanelTabId } from "./components/ToolPanel";
 import { WatchToaster } from "./components/WatchToaster";
+import { lazyChunk } from "./lib/lazyChunk";
 import { useResizable } from "./hooks/useResizable";
 import { useWatchNotifications, type WatchNotification } from "./hooks/useWatchNotifications";
 import type { ApprovalDraft, JudgeOpinion, AgentInfo, AppConfig, BackgroundTaskInfo, ChatSessionState, CollabMode, ComposerDraft, ContextStats, ContextTaskStats, CoreLostInfo, LLMConfig, LLMProviderMeta, MCPServerStatus, Msg, PendingApprovalInfo, QueuedTaskInfo, ServerStatus, SessionInfo, SessionModel, SseConnState, SubAgentProgress, SubAgentStep, TabItem, ToolCardInfo, WorkItem } from "./types";
@@ -33,6 +25,27 @@ import { connectEventStream, SSE_CLOSED, type EventStream } from "./lib/sse";
 import { resolveChatTab } from "./lib/chatTabTarget";
 import { buildPptApplyPrompt } from "./lib/pptApplyPrompt";
 import { useIsMobile } from "./hooks/useIsMobile";
+
+// 分块加载：这些组件只在特定交互/设备上才用到，静态 import 会让它们
+// 全部进入首屏主 chunk（xterm、PPT 编辑器、各类 modal 加起来几 MB），
+// 首屏解析时间全花在「本次会话根本不会打开」的代码上。
+const MobileApp = lazyChunk(() => import("./components/MobileApp"));
+const NewTaskWizard = lazyChunk(() => import("./components/NewTaskWizard"));
+const SettingsModal = lazyChunk(() => import("./components/SettingsModal"));
+const ProjectPicker = lazyChunk(() => import("./components/ProjectPicker"));
+const PptEditor = lazyChunk(() => import("./components/PptEditor"));
+const PptTemplatePicker = lazyChunk(() => import("./components/PptTemplatePicker"));
+const FileViewer = lazyChunk(() => import("./components/FileViewer"));
+const AboutModal = lazyChunk(() => import("./components/AboutModal"));
+const CoreModal = lazyChunk(() => import("./components/CoreModal"));
+const PhoneConnectModal = lazyChunk(() => import("./components/PhoneConnectModal"));
+
+/** 懒加载组件的占位：全屏 modal 用空白遮罩，页签内组件用轻提示。 */
+function LazyFallback({ label }: { label?: string }) {
+  return label
+    ? <div className="lazy-fallback">{label}</div>
+    : <div className="lazy-mask" />;
+}
 
 interface StreamingState {
   items: WorkItem[];
@@ -3743,7 +3756,8 @@ export default function App() {
   // 窄屏 + 非 Electron → 两页移动布局（会话列表 + 聊天）。桌面树零改动。
   if (isMobile) {
     return (
-      <MobileApp
+      <Suspense fallback={<div className="lazy-mask" />}>
+        <MobileApp
         workspaceName={status?.workspace?.split(/[\\/]/).filter(Boolean).pop() ?? "未打开项目"}
         version={status?.version ?? "?"}
         workspaceIsGit={recentProjects.find((pr) => pr.path === status?.workspace)?.is_git ?? false}
@@ -3826,7 +3840,8 @@ export default function App() {
         onSettingsSaved={() => { void refreshAll(); }}
         watchToasts={watchToasts}
         onDismissWatchToast={dismissWatchToast}
-      />
+        />
+      </Suspense>
     );
   }
 
@@ -3949,24 +3964,30 @@ export default function App() {
           onOpenTemplate={openTemplateTab}
         />
         {activeTab?.kind === "file" ? (
-          <FileViewer tab={activeTab} />
+          <Suspense fallback={<LazyFallback label="文件加载中…" />}>
+            <FileViewer tab={activeTab} />
+          </Suspense>
         ) : activeTab?.kind === "ppt" ? (
           <ErrorBoundary name="PPT 编辑器">
-            <PptEditor
-              key={activeTab.pptProject}
-              project={activeTab.pptProject ?? ""}
-              source={activeTab.title}
-              onRequestApply={handlePptApply}
-            />
+            <Suspense fallback={<LazyFallback label="PPT 编辑器加载中…" />}>
+              <PptEditor
+                key={activeTab.pptProject}
+                project={activeTab.pptProject ?? ""}
+                source={activeTab.title}
+                onRequestApply={handlePptApply}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : activeTab?.kind === "ppt-tpl" ? (
           <ErrorBoundary name="PPT 模板">
-            <PptTemplatePicker
-              key={activeTab.pptSource ?? "new"}
-              sourcePath={activeTab.pptSource}
-              onCancel={() => closeTab(activeTab.id)}
-              onCreated={(r) => void onTemplateCreated(activeTab.id, r)}
-            />
+            <Suspense fallback={<LazyFallback label="PPT 模板加载中…" />}>
+              <PptTemplatePicker
+                key={activeTab.pptSource ?? "new"}
+                sourcePath={activeTab.pptSource}
+                onCancel={() => closeTab(activeTab.id)}
+                onCreated={(r) => void onTemplateCreated(activeTab.id, r)}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : (
           <>
@@ -4185,6 +4206,9 @@ export default function App() {
         </>
       )}
       </div>
+      {/* 弹层区：懒加载组件的 Suspense 边界。fallback 用空白遮罩——
+          这些组件加载极快（本地 chunk），闪一下提示文案反而更扰人。 */}
+      <Suspense fallback={<div className="lazy-mask" />}>
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
@@ -4218,6 +4242,7 @@ export default function App() {
           onSelect={(p) => void selectProject(p)}
         />
       )}
+      </Suspense>
       {/* 盯梢通知（右下角）：应用级 SSE，与当前是否有任务无关 */}
       <WatchToaster
         items={watchToasts}

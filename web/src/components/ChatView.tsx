@@ -3,6 +3,7 @@
 //
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { cloneElement } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -222,8 +223,35 @@ function flattenText(node: React.ReactNode): string {
   return "";
 }
 
-/** 代码块增强：语言标签 + 一键复制 + 超长折叠（> 24 行默认收起，可展开）。
- *  与 rehype-highlight 协作：children 仍是高亮后的元素，原样透传进 <pre>。 */
+/** 代码块增强：语言标签 + 一键复制 + 超长折叠。
+ *  折叠态（> 24 行）只保留首屏 COLLAPSE_LINES 行**已高亮**的节点——
+ *  CSS 只裁视觉、节点照样全进 DOM（实测 1 行代码高亮后约 18 个节点，
+ *  上千行的会话这是主要 DOM 开销）。这里按文本行数裁剪 React 树，
+ *  既省节点又保住语法配色。 */
+const COLLAPSE_LINES = 16;
+
+/** 按行数裁剪已高亮的 React 节点树（保留前 maxLines 行，其余丢弃）。 */
+function sliceHighlighted(node: React.ReactNode, budget: { lines: number }): React.ReactNode {
+  if (budget.lines <= 0) return null;
+  if (typeof node === "string") {
+    const parts = node.split("\n");
+    if (parts.length - 1 <= budget.lines) {
+      budget.lines -= parts.length - 1;
+      return node;
+    }
+    const kept = parts.slice(0, budget.lines + 1).join("\n");
+    budget.lines = 0;
+    return kept;
+  }
+  if (typeof node === "number") return node;
+  if (Array.isArray(node)) return node.map((n) => sliceHighlighted(n, budget));
+  if (node && typeof node === "object" && "props" in node) {
+    const el = node as React.ReactElement<{ children?: React.ReactNode }>;
+    return cloneElement(el, undefined, sliceHighlighted(el.props.children, budget));
+  }
+  return node;
+}
+
 function CodeBlock({ lang, code, children }: {
   lang?: string;
   code: string;
@@ -256,7 +284,9 @@ function CodeBlock({ lang, code, children }: {
           </button>
         )}
       </div>
-      <pre>{children}</pre>
+      <pre>{collapsible && !open
+        ? sliceHighlighted(children, { lines: COLLAPSE_LINES })
+        : children}</pre>
     </div>
   );
 }
@@ -498,11 +528,24 @@ function isRichResult(result: string): boolean {
   return new RegExp("```(" + langs + ")[ \\t]*\\r?\\n[\\s\\S]*?```", "i").test(result);
 }
 
+/** 工具结果超过该字符数时默认只渲染前 RESULT_PREVIEW_MAX 字符（点击「展开全部」再全渲染）。
+ *  命令输出/文件读取常见几十 KB，整段进 DOM 既费节点也费布局——而绝大多数
+ *  时候用户只需要看开头几行。 */
+const RESULT_MAX_CHARS = 8000;
+const RESULT_PREVIEW_CHARS = 4000;
+
 function ToolCard({ card, onEmailDraftConfirm }: { card: ToolCardInfo; onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void }) {
   const richResult = isRichResult(card.result ?? "");
+  // 独立成卡（而非并入紧凑的工具活动行）：命令 / MCP / diff / 富结果 / 异常。
+  // 注意「独立成卡」≠「默认展开」——命令输出默认收起，点击头部才展开。
   const important = card.name === "execute_command" || card.name.startsWith("mcp_") || isFileDiff(card.result ?? "") || richResult || card.status === "error" || card.status === "cancelled";
-  // 只有 diff / 富结果 / 异常默认展开；普通调用保持为紧凑的一行
-  const [open, setOpen] = useState(() => important);
+  // 只有 diff / 富结果 / 异常默认展开；命令与普通调用保持为紧凑的一行
+  const autoOpen = isFileDiff(card.result ?? "") || richResult || card.status === "error" || card.status === "cancelled";
+  const [open, setOpen] = useState(() => autoOpen);
+  // 超长结果：默认只渲染前 RESULT_PREVIEW_CHARS，避免整段输出进 DOM
+  const fullResult = card.result ?? "";
+  const truncated = fullResult.length > RESULT_MAX_CHARS && !richResult && !isFileDiff(fullResult);
+  const [showFullResult, setShowFullResult] = useState(false);
 
   useEffect(() => {
     if (isFileDiff(card.result ?? "") || isRichResult(card.result ?? "") || card.status === "error" || card.status === "cancelled") setOpen(true);
@@ -551,7 +594,26 @@ function ToolCard({ card, onEmailDraftConfirm }: { card: ToolCardInfo; onEmailDr
             <div className="tool-block-label">参数</div>
             <pre>{JSON.stringify(card.args, null, 2)}</pre>
           </div>
-          {card.result && <div className="tool-block"><div className="tool-block-label">结果</div><DiffStats text={card.result} />{richResult ? <Markdown text={card.result} onEmailDraftConfirm={onEmailDraftConfirm} /> : <DiffPre text={card.result} />}</div>}
+          {card.result && (
+            <div className="tool-block">
+              <div className="tool-block-label">结果</div>
+              <DiffStats text={fullResult} />
+              {richResult ? (
+                <Markdown text={fullResult} onEmailDraftConfirm={onEmailDraftConfirm} />
+              ) : (
+                <>
+                  <DiffPre text={truncated && !showFullResult ? fullResult.slice(0, RESULT_PREVIEW_CHARS) : fullResult} />
+                  {truncated && (
+                    <button className="tool-result-more" onClick={() => setShowFullResult((v) => !v)}>
+                      {showFullResult
+                        ? "收起（只显示前 4000 字符）"
+                        : `展开全部（共 ${fullResult.length.toLocaleString()} 字符）`}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -758,9 +820,13 @@ const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm }
   turn: RenderTurn; sessionId: string;
   onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
 }) {
+  const streaming = turn.key.startsWith("streaming-");
   return (
-    <div>
-      {turn.key.startsWith("streaming-") ? (
+    // turn-item：屏幕外的轮次靠 content-visibility:auto 跳过布局与绘制。
+    // 长会话里通常只有 2-3 轮在视口内，其余全在付 layout/paint 成本。
+    // 正在增长的流式轮次不加（高度每帧都变，跳过布局反而干扰贴底）。
+    <div className={`turn-item${streaming ? " turn-item-live" : ""}`}>
+      {streaming ? (
         <StreamingTurn items={turn.items} sessionId={sessionId} turn={turn.streamTurn} />
       ) : (
         <>
@@ -862,17 +928,58 @@ function EmptyState({ currentAgent, onSend, onOpenTemplate }: {
 /** 贴底判定阈值（px）：距底部小于该值视为"在底部" */
 const STICK_THRESHOLD_PX = 48;
 
-/** 超长会话折叠（P1）：超过该轮次开始折叠中间历史（数据不删，仅 UI 折叠） */
+// ------------------------------------------------------------ 超长会话折叠
+// 语义是**滑窗**：阈值内全渲染；超出一条就折叠最靠前的一条，超出 N 条就折叠
+// 最靠前的 N 条（折叠量 = 溢出量，而不是「一律只留最近 300」）。
+// 两个维度取更激进的那个：轮数阈值照顾「很多短轮次」，消息数阈值照顾
+// 「一条指令 + 几百次工具调用」（实测 1413 条消息只折算出 34 轮——只按轮数
+// 阈值的话永远不会触发，这是 v1.6.0 之前折叠在主场景失效的原因）。
+/** 折叠轮数阈值（超过即折叠最早的多余轮次） */
 const FOLD_THRESHOLD = 500;
-/** 折叠的消息数阈值：高工具密度会话里 1 轮可含几十张工具卡片，只按轮数
- *  阈值会形同虚设（实测 973 条消息仅折算 71 轮），故补充消息数维度（v1.6.0） */
-const FOLD_MESSAGES = 600;
-/** 折叠时始终渲染的最近轮次数 */
-const KEEP_RECENT = 300;
-/** 点击占位条每次展开的轮次数 */
+/** 折叠消息数阈值（1 轮可含几十条工具消息，故必须单独有一条消息维度） */
+const FOLD_MESSAGES = 500;
+/** 点击占位条每次多展开的轮数 */
 const EXPAND_STEP = 300;
-/** 消息数触发折叠时，最少保留的轮次数（防止高工具密度下"几乎全部折叠"） */
-const KEEP_RECENT_MIN_TURNS = 100;
+
+/**
+ * 算出要折叠掉的前缀轮次数（0 = 不折叠）。
+ *
+ * 滑窗语义：溢出多少折多少，不是「一律只留最近 N」——
+ * 501 条消息时只折叠最早的 1 条，510 条时折叠最早的 10 条。
+ *
+ * 两个维度独立计算后取更激进者：轮数（很多短轮次）/ 消息数（工具密集，
+ * 1413 条消息只折算出 34 轮——只看轮数永远不会触发）。
+ * 结果夹在 [0, total-1]：至少保留一轮，**绝不允许把内容全部折叠掉**
+ * （历史事故：500 条时整段被折叠，界面空白看不到任何消息）。
+ */
+export function computeFoldFrom(
+  turns: { msgCount?: number }[],
+  foldTurns: number,
+  foldMessages: number,
+): number {
+  const total = turns.length;
+  if (total <= 1) return 0;
+  let from = 0;
+
+  // 轮数维度：超出的轮次折掉
+  if (foldTurns > 0 && total > foldTurns) {
+    from = total - foldTurns;
+  }
+
+  // 消息数维度：从最新一轮往前累计，装不下就把更早的整轮折掉
+  if (foldMessages > 0) {
+    let acc = 0;
+    let cut = 0;
+    for (let i = total - 1; i >= 0; i--) {
+      const count = turns[i].msgCount ?? 1;
+      if (acc + count > foldMessages) { cut = i + 1; break; }
+      acc += count;
+    }
+    from = Math.max(from, cut);
+  }
+
+  return Math.min(from, total - 1);
+}
 
 export default function ChatView({
   sessionId,
@@ -977,11 +1084,15 @@ export default function ChatView({
     }];
   }, [turns, streaming]);
 
-  // ------------------------------------------------------------ 超长会话折叠（P1）
-  // 数据不删，仅 UI 折叠：超过 FOLD_THRESHOLD 轮时，只渲染最近
-  // KEEP_RECENT(+expanded) 轮，更早的折叠为占位条（点击 +EXPAND_STEP）。
-  // 折叠发生在追加消息跨过阈值的时刻，贴底逻辑（scrollTop = scrollHeight）
-  // 自动适配变小的总高度；用户上翻浏览的多在保留区内，不受打扰。
+  // ------------------------------------------------------------ 超长会话折叠
+  // 滑窗语义：阈值内全部渲染；溢出多少就折叠最早的多少（不是「一律只留最近
+  // 300 轮」——那会让 501 条时突然砍掉 201 条）。数据不删，仅 UI 折叠。
+  //
+  // 两个维度独立算、取更激进的那个：
+  //   - 轮数：totalTurns - foldTurns（照顾「很多短轮次」）
+  //   - 消息数：从尾部累计 msgCount（照顾「一条指令 + 几百次工具调用」，
+  //     这种会话 1413 条消息只折算出 34 轮，只看轮数永远不会触发）
+  // 折叠量夹在 [0, totalTurns-1]：至少留一轮，绝不把内容全折叠掉。
   const [foldExpanded, setFoldExpanded] = useState(0);
   // 审批卡分页索引：多个审批同时挂起时，用单个弹层 + 序号标签切换。
   // 此前每张待审批各自渲染一个全屏遮罩，多个遮罩互相覆盖——只有最后一张
@@ -993,32 +1104,16 @@ export default function ChatView({
     setActiveApprovalIdx(0);
   }, [sessionId]); // 切换会话重置展开与审批分页状态
   const totalTurns = displayTurns.length;
-  // 折叠条件：轮数或消息数任一超限（v1.6.0 起支持消息数维度，可在设置中配置）。
-  // 高工具密度会话里 1 轮可含几十张工具卡片：973 条消息只折算出 71 轮，
-  // 只按轮数阈值会形同虚设——因此消息数超限时按「每轮消息权重」保留尾部。
-  const messagesOver = foldMessages > 0 && messages.length > foldMessages;
-  const foldFrom = totalTurns > foldTurns
-    // 轮数超限：维持原有口径（保留最近 KEEP_RECENT+expanded 轮）
-    ? Math.max(0, totalTurns - KEEP_RECENT - foldExpanded)
-    : messagesOver
-      ? (() => {
-          // 消息数超限：从尾部累计「每轮权重」（1 + 工具卡片×2 ≈ 该轮的消息数），
-          // 保留约 40% 阈值量的消息，其余折叠；点击占位条仍可逐级展开
-          const keepWeight = Math.max(50, Math.floor(foldMessages * 0.4)) + foldExpanded * 2;
-          let acc = 0;
-          let idx = 0;
-          for (let i = displayTurns.length - 1; i >= 0; i--) {
-            const weight = 1 + (displayTurns[i].items?.length ?? 0) * 2;
-            if (acc + weight > keepWeight) { idx = i + 1; break; }
-            acc += weight;
-            idx = i;
-          }
-          // 保底：无论权重怎么算，至少保留 KEEP_RECENT_MIN_TURNS 轮（或全部），
-          // 防止高工具密度（每轮几十张卡片）把可见区压到只剩几轮
-          return Math.min(idx, Math.max(0, displayTurns.length - KEEP_RECENT_MIN_TURNS - foldExpanded));
-        })()
-      : 0;
+  // 展开 = 把滑窗往前推 foldExpanded 轮（每次点击 +EXPAND_STEP）。
+  // 不算进阈值里，是因为阈值是用户设的语义（「超 500 条才折叠」），
+  // 展开只是临时多看几轮，不该改动这个判定。
+  const foldFrom = Math.max(0, computeFoldFrom(displayTurns, foldTurns, foldMessages) - foldExpanded);
   const renderTurns = foldFrom > 0 ? displayTurns.slice(foldFrom) : displayTurns;
+  // 折叠量以「消息数」还是「轮数」计——占位条文案要说清折叠的是哪一种，
+  // 否则高工具密度会话（3 轮折了 400 条）会显示「折叠 3 轮」让人以为没生效。
+  const foldedMsgCount = foldFrom > 0
+    ? displayTurns.slice(0, foldFrom).reduce((n, t) => n + (t.msgCount ?? 1), 0)
+    : 0;
 
   // 贴底状态只由真实用户滚动事件改变。此前用 Virtuoso 的
   // atBottomStateChange 时，流式内容快速长高会让"距底部距离"瞬间
@@ -1135,9 +1230,9 @@ export default function ChatView({
             <button
               className="folded-divider"
               onClick={() => setFoldExpanded((e) => e + EXPAND_STEP)}
-              title="展开更早的对话（每次 300 轮）"
+              title="展开更早的对话（每次 300 条）"
             >
-              ▲ 查看更早的 {foldFrom} 轮对话
+              ▲ 查看更早的 {foldedMsgCount} 条消息（{foldFrom} 轮）
             </button>
           )}
           {renderTurns.map((t) => (

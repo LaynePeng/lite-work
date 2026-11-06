@@ -225,7 +225,7 @@ export default function SettingsModal({
   const [rrSaved, setRrSaved] = useState(false);
   // 综合设置：聊天区展示折叠阈值（轮数/消息数任一超限即折叠，数据不删仅 UI 折叠）
   const [foldTurns, setFoldTurns] = useState<number>(500);
-  const [foldMessages, setFoldMessages] = useState<number>(600);
+  const [foldMessages, setFoldMessages] = useState<number>(500);
   const [foldSaved, setFoldSaved] = useState(false);
   // 综合设置：定价数据源状态（models.dev + 定价插件各官方源）。
   // 同步是逐源手动触发的（不自动联网），因此每源单独维护「同步中/结果」。
@@ -3384,7 +3384,7 @@ export default function SettingsModal({
                   <input
                     type="number" className="form-input" min={100} max={20000}
                     value={foldMessages}
-                    onChange={(e) => setFoldMessages(Math.max(100, parseInt(e.target.value, 10) || 600))}
+                    onChange={(e) => setFoldMessages(Math.max(100, parseInt(e.target.value, 10) || 500))}
                   />
                 </div>
               </div>
