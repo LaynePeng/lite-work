@@ -2,8 +2,7 @@
 // Copyright (c) 2026 lite-work contributors
 //
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { cloneElement } from "react";
+import { cloneElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -528,9 +527,9 @@ function isRichResult(result: string): boolean {
   return new RegExp("```(" + langs + ")[ \\t]*\\r?\\n[\\s\\S]*?```", "i").test(result);
 }
 
-/** 工具结果超过该字符数时默认只渲染前 RESULT_PREVIEW_MAX 字符（点击「展开全部」再全渲染）。
- *  命令输出/文件读取常见几十 KB，整段进 DOM 既费节点也费布局——而绝大多数
- *  时候用户只需要看开头几行。 */
+/** 工具结果超过 RESULT_MAX_CHARS 时，默认只渲染前 RESULT_PREVIEW_CHARS 字符
+ *  （点「展开全部」再全渲染）。命令输出/文件读取常见几十 KB，整段进 DOM
+ *  既费节点也费布局——而绝大多数时候用户只需要看开头几行。 */
 const RESULT_MAX_CHARS = 8000;
 const RESULT_PREVIEW_CHARS = 4000;
 
@@ -606,7 +605,7 @@ function ToolCard({ card, onEmailDraftConfirm }: { card: ToolCardInfo; onEmailDr
                   {truncated && (
                     <button className="tool-result-more" onClick={() => setShowFullResult((v) => !v)}>
                       {showFullResult
-                        ? "收起（只显示前 4000 字符）"
+                        ? "收起"
                         : `展开全部（共 ${fullResult.length.toLocaleString()} 字符）`}
                     </button>
                   )}
@@ -816,16 +815,18 @@ function StreamingTurn({ items, sessionId, turn, onEmailDraftConfirm }: { items:
 // 单轮渲染组件：props 只有 turn 对象本身。流式刷新（~80ms/次）时
 // 历史 turns 引用不变（useMemo 缓存），memo 直接跳过重渲染，
 // 只有正在增长的流式轮次重新渲染——长会话也不怕
-const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm }: {
+const TurnItem = memo(function TurnItem({ turn, sessionId, onEmailDraftConfirm, live = false }: {
   turn: RenderTurn; sessionId: string;
   onEmailDraftConfirm?: (edits: { id: string; to: string; cc?: string; bcc?: string; subject: string; body: string; html: string }) => void;
+  /** 强制真实渲染（跳过 content-visibility 的高度估算）：流式轮次与末尾几轮 */
+  live?: boolean;
 }) {
   const streaming = turn.key.startsWith("streaming-");
   return (
     // turn-item：屏幕外的轮次靠 content-visibility:auto 跳过布局与绘制。
     // 长会话里通常只有 2-3 轮在视口内，其余全在付 layout/paint 成本。
-    // 正在增长的流式轮次不加（高度每帧都变，跳过布局反而干扰贴底）。
-    <div className={`turn-item${streaming ? " turn-item-live" : ""}`}>
+    // 正在增长的流式轮次与末尾轮次不加（高度估算会干扰贴底）。
+    <div className={`turn-item${streaming || live ? " turn-item-live" : ""}`}>
       {streaming ? (
         <StreamingTurn items={turn.items} sessionId={sessionId} turn={turn.streamTurn} />
       ) : (
@@ -940,6 +941,12 @@ const FOLD_THRESHOLD = 500;
 const FOLD_MESSAGES = 500;
 /** 点击占位条每次多展开的轮数 */
 const EXPAND_STEP = 300;
+
+/** 末尾多少轮强制真实渲染（跳过 content-visibility 的高度估算）。
+ *  贴底是 scrollTop = scrollHeight：底部轮次若用估算高度，滚到底后会因
+ *  真实高度不同而继续长高（表现为「贴底了又飘一截」）。末尾轮次本来就在
+ *  视口附近、必然要布局，标记 live 不损失收益。 */
+const TAIL_LIVE_TURNS = 3;
 
 /**
  * 算出要折叠掉的前缀轮次数（0 = 不折叠）。
@@ -1074,13 +1081,17 @@ export default function ChatView({
     return built.turns;
   }, [messages]);
 
-  // 流式内容并入末尾轮次：与历史轮次同一渲染通道，滚动逻辑统一处理
+  // 流式内容并入末尾轮次：与历史轮次同一渲染通道，滚动逻辑统一处理。
+  // msgCount 按「1 条 assistant + 每个工具项各 1 条」估：折叠判定按消息数
+  // 滑窗，若把这一轮当成 1 条，工具密集的流式轮会被显著低估（展开历史时
+  // 保留区算多了，等落盘后才突然开始折叠）。
   const displayTurns = useMemo<RenderTurn[]>(() => {
     if (!streaming) return turns;
     return [...turns, {
       key: `streaming-${streaming.turn ?? 0}`,
       items: streaming.items,
       streamTurn: streaming.turn,
+      msgCount: 1 + streaming.items.length,
     }];
   }, [turns, streaming]);
 
@@ -1103,7 +1114,6 @@ export default function ChatView({
     setFoldExpanded(0);
     setActiveApprovalIdx(0);
   }, [sessionId]); // 切换会话重置展开与审批分页状态
-  const totalTurns = displayTurns.length;
   // 展开 = 把滑窗往前推 foldExpanded 轮（每次点击 +EXPAND_STEP）。
   // 不算进阈值里，是因为阈值是用户设的语义（「超 500 条才折叠」），
   // 展开只是临时多看几轮，不该改动这个判定。
@@ -1230,17 +1240,23 @@ export default function ChatView({
             <button
               className="folded-divider"
               onClick={() => setFoldExpanded((e) => e + EXPAND_STEP)}
-              title="展开更早的对话（每次 300 条）"
+              title="展开更早的对话（每次 300 轮）"
             >
               ▲ 查看更早的 {foldedMsgCount} 条消息（{foldFrom} 轮）
             </button>
           )}
-          {renderTurns.map((t) => (
+          {renderTurns.map((t, i) => (
             <TurnItem
               key={t.key}
               turn={t}
               sessionId={sessionId}
               onEmailDraftConfirm={handleEmailDraftConfirm}
+              // 末尾几轮强制真实渲染：贴底是 scrollTop = scrollHeight，
+              // 而屏外轮次的高度来自 contain-intrinsic-size 的估算值——
+              // 底部区域若也在估算，滚到底后会因真实高度不同而继续长高，
+              // 表现为「贴底了又往上飘一截」。末尾轮次永远在视口附近，
+              // 本来就要布局，标记为 live 不损失 content-visibility 的收益。
+              live={i >= renderTurns.length - TAIL_LIVE_TURNS}
             />
           ))}
           {skillLoaded && skillLoaded.length > 0 && (

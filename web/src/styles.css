@@ -2702,7 +2702,8 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
 /* 单轮容器：屏幕外的轮次跳过布局与绘制。
    contain-intrinsic-size 给一个估算高度（auto 关键字让浏览器记住上次实测值），
    否则未渲染的轮次高度按 0 计，滚动条总长度会跳变。
-   流式轮次（.turn-item-live）不加——它每帧都在长高，跳过布局反而干扰贴底。 */
+   .turn-item-live（流式轮次 + 末尾 3 轮）不启用——它们的高度每帧在变或
+   直接影响贴底（scrollTop = scrollHeight），按估算值算会「贴底后继续飘」。 */
 .turn-item {
   content-visibility: auto;
   contain-intrinsic-size: auto 200px;
@@ -3411,6 +3412,18 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
   gap: 5px;
   margin-bottom: 12px;
   padding: 0 max(24px, calc((100% - 820px) / 2));
+}
+
+/* 工具卡与助手气泡左对齐且同宽上限。
+   气泡在 .msg-row 里被 头像 26px + gap 12px 推到 38px 处，宽度上限 76%
+   （.msg-col）；而卡片此前从最左 0 起、上限 820px——比气泡宽出 200px 左右，
+   长条命令卡显得突兀。这里补上同样的左偏移与宽度上限。
+   用 max-width 而非 width：短内容卡片仍按内容收缩，只有长内容才吃到上限。 */
+.work-timeline .tool-card,
+.work-timeline .tool-activity,
+.work-timeline .rich-card {
+  margin-left: 38px;
+  max-width: 76%;
 }
 
 .work-item-group {
@@ -10819,6 +10832,13 @@ body.resizing-row * { cursor: row-resize !important; user-select: none !importan
    而表格 / 图表 / 图解 / 卡片网格等富块又会反向外扩撑破屏幕。 */
 .mobile-app .msg-row { padding: 0 10px; }
 .mobile-app .work-timeline { padding: 0 10px; }
+/* 桌面的「工具卡对齐气泡」左偏移在手机上要撤掉：窄屏气泡已拉满整行
+   （上面 .msg-col flex:1 1 0），再缩 38px 反而让卡片比气泡窄一截。 */
+.mobile-app .work-timeline .tool-card,
+.mobile-app .work-timeline .tool-activity,
+.mobile-app .work-timeline .rich-card {
+  margin-left: 0;
+}
 .mobile-app .work-item-group,
 .mobile-app .tool-card,
 .mobile-app .tool-activity,

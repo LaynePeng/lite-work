@@ -30,6 +30,15 @@
   现在 `sliceHighlighted` 按行数裁剪已高亮的 React 树，保留语法配色但只留首屏。
 - **`content-visibility: auto`**：屏幕外的轮次跳过布局与绘制（长会话通常只有
   2-3 轮在视口内）。流式轮次排除在外，避免干扰贴底。
+- **工具卡与气泡宽度对齐**：`.work-timeline` 里的卡片此前从最左 0 起、
+  上限 820px，而助手气泡被「头像 26px + gap 12px」推到 38px 处、上限 76%
+  ——命令卡比气泡宽出约 200px。现补上同样的 `margin-left: 38px` 与
+  `max-width: 76%`（移动端撤销，窄屏气泡本就占满整行）。
+- 末尾 3 轮与流式轮次标记为 `.turn-item-live`（不参与高度估算）：贴底是
+  `scrollTop = scrollHeight`，底部若用 `contain-intrinsic-size` 的估算值，
+  滚到底后会因真实高度不同继续长高（表现为「贴底了又飘一截」）。
+- 流式轮次的 `msgCount` 按「1 条 assistant + 每个工具项 1 条」计：原来当 1 条，
+  工具密集的进行中轮次会被显著低估，落盘后保留区突然变窄。
 - **分包懒加载**：主 chunk **1323 → 797 KB（-40%）**。`TerminalPanel`（xterm，
   335KB）、`SettingsModal`（87KB）、`PptEditor`、`MobileApp`、`FilePicker`、
   各类 modal 改为动态 import + `Suspense`——全仓此前只有 mermaid 一处懒加载。

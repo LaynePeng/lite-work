@@ -403,6 +403,32 @@ describe("ChatView 超长会话折叠（滑窗语义）", () => {
 });
 
 describe("ChatView", () => {
+  it("content-visibility：末尾 3 轮强制真实渲染（贴底不能基于高度估算）", () => {
+    render(
+      <ChatView {...baseProps} messages={makeLongMessages(10)} streaming={null} />
+    );
+    const items = document.querySelectorAll(".turn-item");
+    // 20 个 turn（每对问答 2 个）
+    expect(items.length).toBe(20);
+    const live = Array.from(items).filter((el) => el.classList.contains("turn-item-live"));
+    // 末尾 3 轮 live，其余可用 content-visibility 估算
+    expect(live.length).toBe(3);
+    expect(live).toEqual(Array.from(items).slice(-3));
+  });
+
+  it("流式轮次也强制真实渲染（高度每帧在变）", () => {
+    render(
+      <ChatView
+        {...baseProps}
+        messages={makeLongMessages(3)}
+        streaming={{ items: [{ type: "text", id: "s1", content: "生成中" }], turn: 1 }}
+      />
+    );
+    const items = document.querySelectorAll(".turn-item");
+    const last = items[items.length - 1];
+    expect(last.classList.contains("turn-item-live")).toBe(true);
+  });
+
   it("空会话渲染欢迎态（无消息气泡）", () => {
     render(
       <ChatView {...baseProps} messages={[]} streaming={null} />
