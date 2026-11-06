@@ -125,6 +125,54 @@ async def test_index_html_not_cached(tmp_path):
     assert b"web" in resp.body
 
 
+async def test_safe_dist_file_blocks_traversal(tmp_path):
+    """SPA fallback 不得读到 dist 之外的文件。
+
+    回归的是「任意文件读取」：`os.path.join(dist, path)` 不归一化，
+    `GET /../package.json` 会命中 dist 的父目录；叠够 `../` 可读整盘
+    （含 ~/.lite-work/config.json 的 API Key）。URL 编码与反斜杠变体
+    同样要挡住——所以校验必须在归一化之后做，而非匹配字面量 `..`。
+    """
+    from litework.server.app import _safe_dist_file
+
+    root = tmp_path / "proj"
+    dist = root / "web" / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    # dist 之外的同名文件——正是穿越要偷的目标
+    (root / "secret.txt").write_text("TOP-SECRET", encoding="utf-8")
+    (root / "web" / "package.json").write_text("{}", encoding="utf-8")
+
+    d = str(dist)
+    # 正常资源照常返回
+    assert _safe_dist_file(d, "index.html") == os.path.join(
+        os.path.realpath(d), "index.html")
+    assert _safe_dist_file(d, "assets/app.js") is not None
+
+    # 以下全部必须被拒（None）：明文 ..、URL 编码、反斜杠、多重前缀
+    for bad in [
+        "../secret.txt",
+        "../../secret.txt",
+        "../package.json",
+        "assets/../../secret.txt",
+        "..%2fsecret.txt",
+        "%2e%2e/secret.txt",
+        "%2e%2e%2fsecret.txt",
+        "..\\secret.txt",
+        "....//secret.txt",
+        "assets/%2e%2e/%2e%2e/secret.txt",
+        "../../../../../../../../etc/passwd",
+    ]:
+        assert _safe_dist_file(d, bad) is None, f"穿越未被拦截: {bad}"
+
+    # 前缀相近的兄弟目录不能被误判为 dist 内部（dist-evil 不是 dist）
+    evil = root / "web" / "dist-evil"
+    evil.mkdir()
+    (evil / "leak.txt").write_text("LEAK", encoding="utf-8")
+    assert _safe_dist_file(d, "../dist-evil/leak.txt") is None
+
+
 async def test_max_running_tasks_guard(tmp_path, monkeypatch):
     """并发护栏：达到 max_running_tasks 即拒（占坑即拒，不建任何重对象）。"""
     from litework.server.tasks import TaskManager, TaskLimitError

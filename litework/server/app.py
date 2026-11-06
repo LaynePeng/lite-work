@@ -346,8 +346,8 @@ def create_app(app: AgentApp, token: Optional[str] = None,
         async def spa_fallback(path: str, request: Request):
             if path.startswith("api/"):
                 raise HTTPException(status_code=404, detail="Not Found")
-            file_path = os.path.join(dist_dir, path)
-            if os.path.isfile(file_path):
+            file_path = _safe_dist_file(dist_dir, path)
+            if file_path:
                 return FileResponse(file_path)
             return await _serve_index(dist_dir)
 
@@ -365,6 +365,35 @@ async def _serve_index(dist_dir: str):
         return FileResponse(index_path, headers={"Cache-Control": "no-store"})
     return JSONResponse({"message": "lite-work 后端已就绪（前端未构建，运行 npm run build:web）"},
                         status_code=200)
+
+
+def _safe_dist_file(dist_dir: str, path: str) -> Optional[str]:
+    """把请求路径解析成 dist 内的真实文件；越界（路径穿越）一律返回 None。
+
+    `os.path.join(dist_dir, path)` 不做归一化，`..` 会原样保留：
+    `GET /../package.json` → `<repo>/web/package.json`，`../` 叠够多层就能读到
+    文件系统任意位置（含 ~/.lite-work/config.json 的 API Key）。URL 编码
+    （`%2e%2e`）与反斜杠（`..%5c`）同样能绕过字面量检查，因此**不能**用
+    「路径里含 `..` 就拒绝」这类黑名单，必须归一化后校验前缀。
+
+    realpath 同时解掉 `..` 与符号链接；normcase 抹平 Windows 的大小写/短名
+    差异（`PROGRA~1` 与 `Program Files`）。越界返回 None 由调用方回退
+    index.html——既不泄露「文件存在」，也不改变 SPA 深链行为。
+    """
+    try:
+        root = os.path.realpath(dist_dir)
+        target = os.path.realpath(os.path.join(root, path))
+    except (OSError, ValueError):
+        return None
+    # normcase 只用于比较：Windows 下它会把路径转小写，据此返回路径会改写
+    # 原始大小写（大小写敏感的文件系统上指向不存在的文件），因此比较用 _key，
+    # 返回仍用 realpath 的结果。
+    root_key = os.path.normcase(root)
+    target_key = os.path.normcase(target)
+    # 用 sep 收尾，避免 /www/dist-evil 被误判为 /www/dist 的子路径
+    if target_key == root_key or not target_key.startswith(root_key + os.sep):
+        return None
+    return target if os.path.isfile(target) else None
 
 
 def _resolve_dist_dir() -> str:

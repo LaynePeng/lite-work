@@ -2,7 +2,24 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [未发布]
+## [2.1.6]
+
+### 安全（SPA 静态托管可读任意文件）
+
+`GET /../package.json` 能读到 dist 的父目录文件，`../` 叠够层数即可读取
+**整盘任意文件**——实测在本机取到了 `pyproject.toml`、`C:\Windows\win.ini`，
+以及 `~/.lite-work/config.json`（含 LLM API Key）。桌面版默认 `--no-token`，
+本机任意进程与可达该端口的设备都能触发。
+
+- 根因：`spa_fallback` 用 `os.path.join(dist_dir, path)` 拼路径且不做归一化，
+  `..` 原样保留；`%2e%2e`、`..%5c` 等编码变体同样有效。
+- 修法：新增 `_safe_dist_file`——`realpath` 归一化（同时解掉 `..` 与符号链接）、
+  `normcase` 抹平 Windows 大小写/短名差异，再用 `root + os.sep` 校验前缀
+  （避免 `dist-evil` 被误判为 `dist` 子路径）。越界返回 None 并回退
+  `index.html`，既不泄露文件存在性，也不改变 SPA 深链行为。
+- 刻意不用「路径含 `..` 就拒绝」的黑名单：编码/反斜杠变体绕过，且有
+  合法文件名风险。
+- 回归：`test_safe_dist_file_blocks_traversal`（11 种穿越变体 + 兄弟目录误判）。
 
 ### 修复（覆盖安装后界面仍是上一版）
 
