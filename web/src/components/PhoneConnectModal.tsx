@@ -95,7 +95,7 @@ export default function PhoneConnectModal({ onClose }: { onClose: () => void }) 
     void QRCode.toDataURL(`${displayUrl}/#litework-token=${token}`, {
       width: 240,
       margin: 1,
-      color: { dark: "#0d1117", light: "#ffffff" },
+      color: { dark: "#111111", light: "#ffffff" },
     })
       .then((data) => {
         if (alive) setQr(data);

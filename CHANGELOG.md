@@ -2,6 +2,24 @@
 
 所有显著变更记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.2.0]
+
+### 界面（瑞士风格整体重构）
+
+深色 VS Code 风基底整体切换为瑞士平面设计风格
+（Swiss / International Typographic Style）：纸白基底、墨黑 1px 网格、
+单一红色强调（#e63312）、Helvetica 字阶、去渐变与彩色投影。
+
+- `styles.css`：重写 `:root` 设计令牌（--bg-* 纸白阶 / --border 墨黑 /
+  --accent 瑞士红，--grad 兼容性收敛为纯色）；批量清洗 300+ 处散落的
+  深色 / 蓝紫 / 光晕硬编码色值；补齐历史遗留的未定义变量
+  （--text / --bg / --text-secondary，旧代码靠继承侥幸工作）；
+- 图标与启动链路：AppIcon / favicon / Electron loading 页 / PWA
+  manifest（theme-color、color-scheme）同步纸白体系；
+- 图表与富围栏：RichBlocks 调色板、热力图发散色阶（红-灰-绿）、
+  导出卡片样式；TerminalPanel 主题、ToolPanel Agent 头像色板；
+- 终端 / PPT 画布保留深底（终端惯例）。
+
 ## [2.1.6]
 
 ### 安全（SPA 静态托管可读任意文件）

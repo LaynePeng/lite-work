@@ -432,29 +432,29 @@ function buildTableHtml(spec: TableSpec): string {
 <style>
 * { box-sizing: border-box; }
 body {
-  margin: 0; padding: 30px 26px 46px; background: #0d1117; color: #e6edf3;
+  margin: 0; padding: 30px 26px 46px; background: #f5f4f0; color: #111111;
   font-family: -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased;
 }
 h1 { font-size: 17px; font-weight: 600; margin: 0 0 14px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
-  text-align: left; font-size: 12px; font-weight: 500; color: #6e7a8c;
-  padding: 9px 12px; border-bottom: 1px solid #262e3f; white-space: nowrap;
+  text-align: left; font-size: 12px; font-weight: 700; color: #767471; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 9px 12px; border-bottom: 1px solid #111111; white-space: nowrap;
 }
-td { padding: 8px 12px; color: #a8b3c0; border-bottom: 1px solid #1c2330; }
-tr:nth-child(even) td { background: rgba(230, 237, 243, .03); }
+td { padding: 8px 12px; color: #3d3d3d; border-bottom: 1px solid #dad8d1; }
+tr:nth-child(even) td { background: #edece7; }
 tr:last-child td { border-bottom: 0; }
 td.num {
-  text-align: right; color: #e6edf3; font-weight: 600;
+  text-align: right; color: #111111; font-weight: 700;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .btn {
   font: inherit; font-size: 12.5px; padding: 6px 14px; cursor: pointer;
-  border: 1px solid #262e3f; border-radius: 8px; background: #1c2330; color: #a8b3c0;
+  border: 1px solid #111111; border-radius: 0; background: #edece7; color: #3d3d3d;
   margin-bottom: 14px;
 }
-.btn:hover { background: #21283a; color: #e6edf3; }
+.btn:hover { background: #e63312; color: #fff; }
 @media print {
   body { background: #fff; color: #000; padding: 0; }
   th { color: #555; } td { color: #222; border-color: #ddd; }
@@ -585,7 +585,7 @@ export function EmailDraftBlock({ spec, onConfirm }: {
   return (
     <div style={{ maxWidth: 720, margin: "10px 0", border: "1px solid var(--border)",
                   borderRadius: 10, overflow: "hidden", background: "var(--bg-0)" }}>
-      <div style={{ padding: "10px 14px", background: "var(--accent, #4f8cff)", color: "#fff", fontWeight: 600,
+      <div style={{ padding: "10px 14px", background: "var(--accent, #e63312)", color: "#fff", fontWeight: 600,
                     fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>📧 邮件草稿 · {spec.id}</span>
         <span style={{ fontSize: 11, opacity: 0.9, background: "rgba(255,255,255,0.2)",
@@ -611,7 +611,7 @@ export function EmailDraftBlock({ spec, onConfirm }: {
           suppressContentEditableWarning
           spellCheck={false}
           style={{ border: "1px dashed var(--border)", borderRadius: 6, padding: 12,
-                   background: "#fff", color: "#222", minHeight: 80, fontSize: 14,
+                   background: "#fff", color: "#111111", minHeight: 80, fontSize: 14,
                    lineHeight: 1.7, outline: "none", maxHeight: 360, overflow: "auto" }}
         />
         {spec.attachments && spec.attachments.length > 0 && (
@@ -1490,15 +1490,15 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
 
 // ---------------------------------------------------------------- 图表渲染（SVG 自绘）
 
-const PALETTE = ["#4f8cff", "#8b5cf6", "#3fb950", "#e3b341", "#f778ba", "#39c5cf", "#ff7b72", "#d2a8ff"];
+const PALETTE = ["#e63312", "#111111", "#767471", "#b8860b", "#007a33", "#c2610c", "#d32b0e", "#5b5955"];
 // 图表内的「结构性」颜色走主题变量（而非硬编码 hex）：网格/刻度/正文随主题
 // 自动适配，与 OpenIntelligentUI design-system 的做法一致；PALETTE 作为
 // 数据系列色板保留字面量（需要彼此可区分的稳定色相）。
-const C_GRID = "var(--border, #262e3f)";
-const C_DIM = "var(--text-2, #6e7a8c)";
-const C_MAIN = "var(--text-0, #e6edf3)";
+const C_GRID = "var(--border, #111111)";
+const C_DIM = "var(--text-2, #767471)";
+const C_MAIN = "var(--text-0, #111111)";
 /** 分片/节点的背景描边色（与气泡底色一致，用于切开相邻扇形与数据点）。 */
-const C_SURFACE = "var(--bg-1, #161b22)";
+const C_SURFACE = "var(--bg-1, #edece7)";
 
 function fmtNum(n: number): string {
   const abs = Math.abs(n);
@@ -2073,13 +2073,12 @@ function heatColor(t: number, mode: "sequential" | "diverging"): string {
     Math.round(a[2] + (b[2] - a[2]) * u),
   ];
   if (mode === "diverging") {
-    // #f85149(红 -1) → #2a3242(中性 0) → #3fb950(绿 +1)
-    const RED = [248, 81, 73], MID = [42, 50, 66], GREEN = [63, 185, 80];
+    const RED = [230, 51, 18], MID = [224, 226, 220], GREEN = [0, 122, 51];
     const [r, g, b] = c <= 0.5 ? lerp(RED, MID, c * 2) : lerp(MID, GREEN, (c - 0.5) * 2);
     return `rgb(${r},${g},${b})`;
   }
-  // 靛蓝顺序色阶：#1c2330 → #8b5cf6
-  const [r, g, b] = lerp([28, 35, 48], [139, 92, 246], c);
+  // 顺序色阶：纸白 → 墨黑（瑞士灰阶）
+  const [r, g, b] = lerp([224, 226, 220], [17, 17, 17], c);
   return `rgb(${r},${g},${b})`;
 }
 
@@ -2120,7 +2119,7 @@ function HeatmapChart({ spec }: { spec: ChartSpec }) {
                     <text
                       x={padL + ci * cell + cell / 2} y={padT + ri * cell + cell / 2 + 3.5}
                       textAnchor="middle" fontSize={10.5} fontWeight={600}
-                      style={{ fill: dark ? "#fff" : "var(--text-0, #e6edf3)", pointerEvents: "none" }}
+                      style={{ fill: dark ? "#fff" : "var(--text-0, #111111)", pointerEvents: "none" }}
                     >{fmtNum(v)}</text>
                   )}
                 </g>
@@ -2271,7 +2270,7 @@ function WaterfallChart({ spec, compact }: { spec: ChartSpec; compact?: boolean 
         const cx = padL + slot * (i + 0.5);
         const y1 = Y(b.from), y2 = Y(b.to);
         const top = Math.min(y1, y2), h = Math.max(2, Math.abs(y2 - y1));
-        const color = b.total ? "#8b5cf6" : b.delta >= 0 ? "#3fb950" : "#f85149";
+        const color = b.total ? "#111111" : b.delta >= 0 ? "#007a33" : "#e63312";
         return (
           <g key={i}>
             <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={2} fill={color} fillOpacity={b.total ? 0.95 : 0.85}>
@@ -2616,7 +2615,7 @@ function progressTone(v: number): "bad" | "warn" | "good" {
 /** 图形图解渲染：部件分色 SVG + 点击高亮（其余变暗）+ 说明区。
  *  安全线：只渲染白名单原语（解析器已 clamp 坐标 / 清洗 path d），
  *  不插入任何用户文本进 SVG 属性，无脚本。 */
-const DIAGRAM_COLORS = ["#4f8cff", "#3fb950", "#d29922", "#f778ba", "#39c5cf", "#ff7b72", "#d2a8ff", "#e3b341"];
+const DIAGRAM_COLORS = ["#e63312", "#111111", "#b8860b", "#007a33", "#767471", "#c2610c", "#d32b0e", "#8a6d1d"];
 
 /** hex 主题色 → 低饱和填充色（同色 12% 透明度叠在暗底上≈浅色底纹）。 */
 function softFill(color: string): string {
@@ -2645,7 +2644,7 @@ function renderShape(s: DiagramShape, color: string, key: number, compact = fals
           key={key}
           x={s.x}
           y={s.y}
-          fill="var(--text-0, #e6edf3)"
+          fill="var(--text-0, #111111)"
           fontSize={compact ? Math.round((s.size ?? 13) * 1.15) : (s.size ?? 13)}
           fontWeight={600}
           textAnchor={s.anchor ?? "middle"}
@@ -2948,7 +2947,7 @@ export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
                 <polyline
                   points={e.pts.map((p) => p.join(",")).join(" ")}
                   fill="none"
-                  stroke="var(--text-2, #6e7a8c)"
+                  stroke="var(--text-2, #767471)"
                   strokeWidth={1.6}
                   strokeLinejoin="round"
                 />
@@ -2962,13 +2961,13 @@ export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
                   const s = 6;
                   const p1 = `${x2 - s * Math.cos(ang - 0.45)},${y2 - s * Math.sin(ang - 0.45)}`;
                   const p2 = `${x2 - s * Math.cos(ang + 0.45)},${y2 - s * Math.sin(ang + 0.45)}`;
-                  return <polygon points={`${x2},${y2} ${p1} ${p2}`} fill="var(--text-2, #6e7a8c)" />;
+                  return <polygon points={`${x2},${y2} ${p1} ${p2}`} fill="var(--text-2, #767471)" />;
                 })()}
                 {e.label && (
                   <text
                     x={(e.pts[0][0] + e.pts[e.pts.length - 1][0]) / 2}
                     y={(e.pts[0][1] + e.pts[e.pts.length - 1][1]) / 2 - 4}
-                    textAnchor="middle" fontSize={10.5} fill="var(--text-2, #6e7a8c)"
+                    textAnchor="middle" fontSize={10.5} fill="var(--text-2, #767471)"
                     style={{ pointerEvents: "none" }}
                   >{e.label}</text>
                 )}
@@ -2989,11 +2988,11 @@ export function LayoutBlock({ spec }: { spec: LayoutSpec }) {
                 <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={10}
                   fill={softFill(color)} stroke={color} strokeWidth={dimmed ? 1.5 : 2.4} />
                 <text x={n.x + n.w / 2} y={n.y + n.h / 2} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={13} fontWeight={600} fill="var(--text-0, #e6edf3)"
+                  fontSize={13} fontWeight={600} fill="var(--text-0, #111111)"
                   style={{ pointerEvents: "none" }}>{n.label}</text>
                 {n.meta && (
                   <text x={n.x + n.w / 2} y={n.y + n.h - 8} textAnchor="middle"
-                    fontSize={9.5} fill="var(--text-2, #6e7a8c)"
+                    fontSize={9.5} fill="var(--text-2, #767471)"
                     style={{ pointerEvents: "none" }}>{n.meta}</text>
                 )}
               </g>

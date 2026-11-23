@@ -16,12 +16,12 @@ function CoreLogo({ size = 18 }: { size?: number }) {
     <svg width={size} height={size} viewBox="0 0 24 24" className="core-logo" aria-hidden>
       <defs>
         <linearGradient id="coreGrad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#4f8cff" />
-          <stop offset="1" stopColor="#8b5cf6" />
+          <stop offset="0" stopColor="#e63312" />
+          <stop offset="1" stopColor="#111111" />
         </linearGradient>
       </defs>
       <circle cx="12" cy="12" r="9" fill="none" stroke="url(#coreGrad)" strokeWidth="2.5" />
-      <circle cx="12" cy="12" r="4" fill="none" stroke="#3fb950" strokeWidth="2.5" />
+      <circle cx="12" cy="12" r="4" fill="none" stroke="#007a33" strokeWidth="2.5" />
     </svg>
   );
 }
@@ -201,8 +201,8 @@ export default function CoreModal({ onClose }: { onClose: () => void }) {
               >
                 <span className="core-opt-icon local">
                   <svg viewBox="0 0 24 24" aria-hidden>
-                    <rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="#3fb950" strokeWidth="2" />
-                    <path d="M8 5V3h8v2" fill="none" stroke="#3fb950" strokeWidth="2" />
+                    <rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="#007a33" strokeWidth="2" />
+                    <path d="M8 5V3h8v2" fill="none" stroke="#007a33" strokeWidth="2" />
                   </svg>
                 </span>
                 <span className="core-opt-text">
@@ -224,7 +224,7 @@ export default function CoreModal({ onClose }: { onClose: () => void }) {
                   <span className="core-opt-icon remote">
                     <svg viewBox="0 0 24 24" aria-hidden>
                       <path d="M7 18a4 4 0 0 1 0-8 5.5 5.5 0 0 1 10.7-1.5A4 4 0 0 1 17 18H7z"
-                        fill="none" stroke="#79c0ff" strokeWidth="2" />
+                        fill="none" stroke="#e63312" strokeWidth="2" />
                     </svg>
                   </span>
                   <span className="core-opt-text">

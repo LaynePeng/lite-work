@@ -1,14 +1,14 @@
-{
+﻿{
   "name": "lite-work",
   "short_name": "lite-work",
-  "description": "轻量多 Agent 工作台：任务、对话与交付物随身携带",
+  "description": "杞婚噺澶?Agent 宸ヤ綔鍙帮細浠诲姟銆佸璇濅笌浜や粯鐗╅殢韬惡甯?,
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0d1117",
-  "theme_color": "#0d1117",
+  "background_color": "#f5f4f0",
+  "theme_color": "#f5f4f0",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },

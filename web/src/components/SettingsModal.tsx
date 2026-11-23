@@ -2432,7 +2432,7 @@ export default function SettingsModal({
                                         {pluginActionMsg[item.name]?.key === s.key && (
                                           <span style={{
                                             fontSize: 11.5,
-                                            color: pluginActionMsg[item.name]?.ok ? "var(--green, #3fb950)" : "var(--red, #f85149)",
+                                            color: pluginActionMsg[item.name]?.ok ? "var(--green, #007a33)" : "var(--red, #e63312)",
                                             whiteSpace: "pre-wrap", flex: 1, minWidth: 200,
                                           }}>
                                             {pluginActionMsg[item.name]?.message}
@@ -3176,7 +3176,7 @@ export default function SettingsModal({
                     onChange={(e) => setAutoApprove(e.target.checked)}
                   />
                   自动放行工具审批
-                  {autoApprove && <b style={{ color: "#f85149" }}>（高危：所有工具免审批直接执行）</b>}
+                  {autoApprove && <b style={{ color: "#e63312" }}>（高危：所有工具免审批直接执行）</b>}
                 </label>
               </div>
               <div className="timeout-grid" style={{ marginTop: 10 }}>
@@ -3575,7 +3575,7 @@ export default function SettingsModal({
                       })}
                       {collabMsg && (
                         <div className={`mcp-empty-inline ${collabMsg.ok ? "" : "mcp-error"}`}
-                          style={{ color: collabMsg.ok ? undefined : "#f85149" }}>
+                          style={{ color: collabMsg.ok ? undefined : "#e63312" }}>
                           {collabMsg.ok ? "✔ " : "✗ "}{collabMsg.text}
                         </div>
                       )}

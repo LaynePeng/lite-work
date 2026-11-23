@@ -23,7 +23,7 @@ export default function TerminalPanel({ workspace }: { workspace: string | null 
       cursorBlink: true,
       fontSize: 12,
       fontFamily: "SFMono-Regular, Menlo, Consolas, monospace",
-      theme: { background: "#0d1117", foreground: "#d1d5db", cursor: "#7aa2f7" },
+      theme: { background: "#111111", foreground: "#d1d5db", cursor: "#e63312" },
       scrollback: 5000,
     });
     const fit = new FitAddon();

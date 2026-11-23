@@ -2,77 +2,64 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="color-scheme" content="dark" />
+<meta name="color-scheme" content="light" />
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 20px; background: #0d1117; color: #e6edf3;
-    font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    gap: 20px; background: #f5f4f0; color: #111111;
+    font-family: "Helvetica Neue", Helvetica, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
   }
-  .logo {
-    width: 76px; height: 76px;
-    filter: drop-shadow(0 8px 40px rgba(79, 140, 255, 0.35));
-  }
-  .title { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  .logo { width: 76px; height: 76px; }
+  .title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
   .spinner {
-    width: 34px; height: 34px; border: 3px solid #21283a;
-    border-top-color: #4f8cff; border-radius: 50%;
+    width: 34px; height: 34px; border: 3px solid #e4e2dc;
+    border-top-color: #e63312; border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .status { font-size: 13px; color: #a8b3c0; min-height: 20px; }
-  .progress { width: 240px; height: 5px; border-radius: 3px; background: #21283a; overflow: hidden; }
+  .status { font-size: 12px; color: #767471; min-height: 20px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .progress { width: 240px; height: 4px; background: #e4e2dc; overflow: hidden; }
   .progress-fill {
-    width: 0; height: 100%; border-radius: 3px;
-    background: linear-gradient(90deg, #4f8cff, #8b5cf6);
+    width: 0; height: 100%;
+    background: #e63312;
     transition: width 0.4s ease;
   }
   .error {
     display: none; flex-direction: column; align-items: center; gap: 12px;
-    font-size: 13px; color: #ffa198;
+    font-size: 13px; color: #d32b0e;
   }
   .error button {
-    padding: 8px 22px; border-radius: 8px; border: none; cursor: pointer;
-    background: linear-gradient(135deg, #4f8cff, #8b5cf6); color: #fff; font-size: 14px;
+    padding: 8px 22px; border-radius: 0; border: 1px solid #111111; cursor: pointer;
+    background: #e63312; color: #fff; font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
   }
 </style>
 </head>
 <body>
-  <!-- 应用图标（与 scripts/app-icon.svg 同源：渐变底 + 闪电 ⚡ + 齿轮 ⚙） -->
+  <!-- 应用图标（瑞士风格：纸白底 + 墨黑描边 + 红方块） -->
   <div class="logo">
     <svg viewBox="0 0 1024 1024" width="76" height="76" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="loading-logo-bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#4F8CFF"/>
-          <stop offset="0.55" stop-color="#6C7BFF"/>
-          <stop offset="1" stop-color="#8B5CF6"/>
-        </linearGradient>
-        <linearGradient id="loading-logo-gloss" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
-          <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.04"/>
-          <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-        </linearGradient>
-      </defs>
-      <rect x="0" y="0" width="1024" height="1024" rx="190" fill="url(#loading-logo-bg)"/>
-      <rect x="0" y="0" width="1024" height="560" rx="190" fill="url(#loading-logo-gloss)"/>
-      <path d="M635 90 L370 440 L465 440 L355 670 L710 360 L590 360 L695 90 Z" fill="#ffffff"/>
-      <g transform="translate(512 830)">
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(45)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(90)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(135)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(180)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(225)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(270)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="#ffffff" transform="rotate(315)"/>
-        <circle r="105" fill="#ffffff"/>
-        <circle r="42" fill="url(#loading-logo-bg)"/>
+      <rect x="0" y="0" width="1024" height="1024" rx="0" fill="#111111"/>
+      <rect x="40" y="40" width="944" height="944" fill="#f5f4f0"/>
+      <rect x="40" y="40" width="200" height="200" fill="#e63312"/>
+      <path d="M635 90 L370 440 L465 440 L355 670 L710 360 L590 360 L695 90 Z" fill="#111111"/>
+      <g transform="translate(512 830)" fill="#111111">
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(45)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(90)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(135)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(180)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(225)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(270)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(315)"/>
+        <circle r="105" fill="#111111"/>
+        <circle r="42" fill="#f5f4f0"/>
       </g>
     </svg>
   </div>
-  <div class="title">lite-work</div>
+  <div class="title">lite—work</div>
   <div class="spinner"></div>
   <div class="progress"><div class="progress-fill" id="fill"></div></div>
   <div class="status" id="status">正在启动内核…</div>
