@@ -43,6 +43,10 @@
   --green-line: rgba(63, 185, 80, 0.4);
   /* 结构令牌：边框粗度（主题可加粗）/ 硬投影偏移 */
   --frame-w: 1px;
+  /* 幽灵令牌补定义：多处 var(--text-3)/var(--text-muted) 被引用但从未定义，
+     此前靠继承 text-0 侥幸显示；各主题显式给值。 */
+  --text-3: #6e7a8c;
+  --text-muted: #6e7a8c;
 }
 
 :root[data-theme="swiss"] {
@@ -75,6 +79,8 @@
   --accent-glow: rgba(230, 51, 18, 0.18);
   --green-tint: rgba(0, 122, 51, 0.12);
   --green-line: rgba(0, 122, 51, 0.45);
+  --text-3: #767471;
+  --text-muted: #767471;
 }
 
 /* ============================================================
@@ -111,26 +117,106 @@
   --green-tint: rgba(123, 212, 74, 0.15);
   --green-line: rgba(17, 17, 17, 0.4);
   --frame-w: 2px;
+  --text-3: #6b6b6b;
+  --text-muted: #6b6b6b;
 }
 
-/* Neubrutalism 硬覆盖：粗边 + 硬投影（按钮/卡片类组件体现最明显） */
+/* ============================================================
+   主题强化层（令牌之上的排版/结构硬覆盖）
+   令牌管颜色，这一层管「气质」——字级/字重/描边粗细/投影形态/hover 语言。
+   选择器一律 :root[data-theme] 前缀，特异性高于后面的组件基线，
+   不依赖文件顺序；三个主题各自成段互不复用。
+   ============================================================ */
+
+/* ---------- Neubrutalism：字要吼、边要厚、投影是硬的 ---------- */
+
 :root[data-theme="neubrutalism"] button { text-transform: none; }
 :root[data-theme="neubrutalism"] ::-webkit-scrollbar-thumb { border-radius: 0; }
-:root[data-theme="neubrutalism"] body { color-scheme: light; }
-:root[data-theme="neubrutalism"] button,
+:root[data-theme="neubrutalism"] body {
+  color-scheme: light;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+/* 品牌字：去掉渐变裁字（黄底渐变字不可读），换 900 黑大写 */
+:root[data-theme="neubrutalism"] .brand-name {
+  background: none;
+  -webkit-text-fill-color: #111111;
+  font-weight: 900;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+/* 标题层级放大 + 加粗 + 大写：粗野主义的字重要「吼」出来 */
+:root[data-theme="neubrutalism"] .md h1,
+:root[data-theme="neubrutalism"] .md h2 {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+:root[data-theme="neubrutalism"] .md h1 { font-size: 1.6em; }
+:root[data-theme="neubrutalism"] .md h2 { font-size: 1.4em; border-bottom-width: 2px; }
+
+/* 组件容器：直角 + 2px 墨黑描边 */
+:root[data-theme="neubrutalism"] .bubble,
+:root[data-theme="neubrutalism"] .composer,
+:root[data-theme="neubrutalism"] .modal,
+:root[data-theme="neubrutalism"] .session-item.active,
+:root[data-theme="neubrutalism"] .task-card,
+:root[data-theme="neubrutalism"] .btn-project-entry,
+:root[data-theme="neubrutalism"] .mcp-status-item,
+:root[data-theme="neubrutalism"] .md-code,
+:root[data-theme="neubrutalism"] .md pre,
+:root[data-theme="neubrutalism"] .theme-option,
 :root[data-theme="neubrutalism"] .sidebar-tabs button,
 :root[data-theme="neubrutalism"] .panel-tab,
 :root[data-theme="neubrutalism"] .settings-tab,
 :root[data-theme="neubrutalism"] .btn,
-:root[data-theme="neubrutalism"] .composer {
+:root[data-theme="neubrutalism"] .agent-btn,
+:root[data-theme="neubrutalism"] .btn-upload,
+:root[data-theme="neubrutalism"] .model-select {
   border-width: 2px;
   border-color: #111111;
+  border-radius: 0;
 }
+
+/* 大块面容器：硬投影（纯偏移、零模糊） */
+:root[data-theme="neubrutalism"] .composer,
+:root[data-theme="neubrutalism"] .modal,
+:root[data-theme="neubrutalism"] .btn-send,
+:root[data-theme="neubrutalism"] .agent-btn.active,
+:root[data-theme="neubrutalism"] .task-card.active {
+  box-shadow: 5px 5px 0 #111111;
+}
+
+/* 发送键：亮黄块 + 黑描边 + 黑符号（黄底白符号不可读） */
+:root[data-theme="neubrutalism"] .btn-send { background: #ffd75e; color: #111111; }
+:root[data-theme="neubrutalism"] .btn-send.btn-stop { background: #ff5977; color: #111111; }
+:root[data-theme="neubrutalism"] .stop-icon { background: #111111; }
+:root[data-theme="neubrutalism"] .agent-btn.active { color: #111111; border-color: #111111; }
+
+/* hover：整体位移 + 投影拉长（新粗野主义的标准交互语言） */
 :root[data-theme="neubrutalism"] .btn:hover,
-:root[data-theme="neubrutalism"] .agent-btn:hover {
+:root[data-theme="neubrutalism"] .agent-btn:hover,
+:root[data-theme="neubrutalism"] .btn-project-entry:hover,
+:root[data-theme="neubrutalism"] .theme-option:hover {
   box-shadow: 4px 4px 0 #111111;
   transform: translate(-2px, -2px);
+  border-color: #111111;
 }
+:root[data-theme="neubrutalism"] .btn-send:hover:not(:disabled) {
+  filter: none;
+  box-shadow: 7px 7px 0 #111111;
+  transform: translate(-2px, -2px);
+}
+
+/* 聚焦态：黑描边 + 硬投影替换发光；输入文字跟随基础字号 */
+:root[data-theme="neubrutalism"] .composer:focus-within {
+  border-color: #111111;
+  box-shadow: 5px 5px 0 #111111;
+}
+:root[data-theme="neubrutalism"] .composer textarea { font-size: 15px; }
 
 /* ============================================================
    Bauhaus（包豪斯）：米白底 + 红黄蓝三原色 + 几何构成
@@ -166,28 +252,207 @@
   --green-tint: rgba(43, 125, 67, 0.12);
   --green-line: rgba(26, 26, 26, 0.4);
   --frame-w: 1.5px;
+  --text-3: #6e6e6e;
+  --text-muted: #6e6e6e;
 }
 
-/* Bauhaus 硬覆盖：几何线条 + 扁平三原色点缀 */
+/* ---------- Bauhaus：几何构成 + 三原色分工 + 扁平零投影 ---------- */
+
 :root[data-theme="bauhaus"] button { text-transform: none; }
 :root[data-theme="bauhaus"] ::-webkit-scrollbar-thumb { border-radius: 0; }
-:root[data-theme="bauhaus"] body { color-scheme: light; }
+:root[data-theme="bauhaus"] body {
+  color-scheme: light;
+  /* Futura 观感：字距收紧，标题字重对比拉开 */
+  letter-spacing: 0.1px;
+}
+
+/* 品牌字：红蓝双色横向条纹（构成主义封面语言）替换渐变字 */
+:root[data-theme="bauhaus"] .brand-name {
+  background: linear-gradient(90deg, #d02b2b 0 50%, #2653c1 50% 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* 标题：标题黑重 + 字距拓宽（包豪斯海报排版） */
+:root[data-theme="bauhaus"] .md h1,
+:root[data-theme="bauhaus"] .md h2 {
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+:root[data-theme="bauhaus"] .md h1 { font-size: 1.5em; }
+:root[data-theme="bauhaus"] .md h2 { font-size: 1.28em; }
+
+/* 组件容器：直角 + 1.5px 描边（--frame-w，比 swiss 细半档） */
+:root[data-theme="bauhaus"] .bubble,
+:root[data-theme="bauhaus"] .composer,
+:root[data-theme="bauhaus"] .modal,
+:root[data-theme="bauhaus"] .session-item.active,
+:root[data-theme="bauhaus"] .task-card,
+:root[data-theme="bauhaus"] .btn-project-entry,
+:root[data-theme="bauhaus"] .mcp-status-item,
+:root[data-theme="bauhaus"] .md-code,
+:root[data-theme="bauhaus"] .md pre,
+:root[data-theme="bauhaus"] .theme-option,
+:root[data-theme="bauhaus"] .sidebar-tabs button,
+:root[data-theme="bauhaus"] .panel-tab,
+:root[data-theme="bauhaus"] .settings-tab,
+:root[data-theme="bauhaus"] .btn,
+:root[data-theme="bauhaus"] .agent-btn,
+:root[data-theme="bauhaus"] .btn-upload,
+:root[data-theme="bauhaus"] .model-select {
+  border-width: 1.5px;
+  border-color: #1a1a1a;
+  border-radius: 0;
+}
+
+/* 扁平：去掉一切模糊投影，弹窗改用实线框 + 米白底 */
+:root[data-theme="bauhaus"] .modal {
+  box-shadow: none;
+  border: 2px solid #1a1a1a;
+}
+:root[data-theme="bauhaus"] .brand-logo { box-shadow: none; }
+
+/* 发送键：包豪斯蓝圆 + 白符号（呼应圆形几何） */
+:root[data-theme="bauhaus"] .btn-send {
+  background: #2653c1;
+  color: #f4efe6;
+  border-radius: 50%;
+}
+:root[data-theme="bauhaus"] .btn-send.btn-stop { background: #d02b2b; }
+
+/* 交互语言：红底线指示 active，黄块表 hover */
 :root[data-theme="bauhaus"] .sidebar-tabs button.active {
   background: var(--accent);
   color: #f4efe6;
 }
-:root[data-theme="bauhaus"] .panel-tab.active {
-  color: var(--accent-2);
-}
-:root[data-theme="bauhaus"] .btn:hover {
-  background: var(--yellow);
-  color: #1a1a1a;
+:root[data-theme="bauhaus"] .panel-tab.active { color: var(--accent-2); }
+:root[data-theme="bauhaus"] .btn:hover { background: var(--yellow); color: #1a1a1a; }
+:root[data-theme="bauhaus"] .theme-option.active {
+  border-color: #d02b2b;
+  box-shadow: inset 0 0 0 2px #d02b2b;
 }
 
-/* Swiss 专属硬覆盖（令牌不够用的场景） */
+/* 用户气泡：红色左边线（包豪斯信笺） */
+:root[data-theme="bauhaus"] .user-bubble {
+  border-color: #1a1a1a;
+  border-left: 4px solid #d02b2b;
+}
+:root[data-theme="bauhaus"] .assistant-bubble { border-color: #1a1a1a; }
+
+/* 会话/任务卡：active 蓝色左边线 */
+:root[data-theme="bauhaus"] .session-item.active {
+  border-color: #1a1a1a;
+  border-left: 4px solid #2653c1;
+}
+:root[data-theme="bauhaus"] .task-card.active { border-left: 4px solid #d02b2b; }
+:root[data-theme="bauhaus"] .mcp-dot { border-radius: 0; }
+
+/* ============================================================
+   Swiss 专属硬覆盖（令牌不够用的场景）
+   ============================================================ */
 :root[data-theme="swiss"] button { text-transform: none; }
 :root[data-theme="swiss"] ::-webkit-scrollbar-thumb { border-radius: 0; }
 :root[data-theme="swiss"] body { color-scheme: light; }
+
+:root[data-theme="swiss"] .brand-name {
+  background: none;
+  -webkit-text-fill-color: #111111;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+:root[data-theme="swiss"] .md h1,
+:root[data-theme="swiss"] .md h2,
+:root[data-theme="swiss"] .md h3 {
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+:root[data-theme="swiss"] .md h1 { font-size: 1.5em; }
+:root[data-theme="swiss"] .md h2 {
+  font-size: 1.3em;
+  border-bottom: 2px solid #111111;
+}
+
+:root[data-theme="swiss"] .bubble,
+:root[data-theme="swiss"] .composer,
+:root[data-theme="swiss"] .modal,
+:root[data-theme="swiss"] .session-item.active,
+:root[data-theme="swiss"] .task-card,
+:root[data-theme="swiss"] .btn-project-entry,
+:root[data-theme="swiss"] .mcp-status-item,
+:root[data-theme="swiss"] .md-code,
+:root[data-theme="swiss"] .md pre,
+:root[data-theme="swiss"] .sidebar-tabs button,
+:root[data-theme="swiss"] .panel-tab,
+:root[data-theme="swiss"] .settings-tab,
+:root[data-theme="swiss"] .btn,
+:root[data-theme="swiss"] .agent-btn,
+:root[data-theme="swiss"] .btn-upload,
+:root[data-theme="swiss"] .model-select {
+  border-color: #111111;
+  border-radius: 0;
+}
+
+:root[data-theme="swiss"] .modal { box-shadow: none; border: 1px solid #111111; }
+:root[data-theme="swiss"] .brand-logo { box-shadow: none; }
+
+:root[data-theme="swiss"] .btn-send {
+  background: #111111;
+  color: #f5f4f0;
+}
+:root[data-theme="swiss"] .btn-send:hover:not(:disabled) {
+  filter: none;
+  background: #e63312;
+}
+
+:root[data-theme="swiss"] .sidebar-tabs button.active {
+  background: #e63312;
+  color: #f5f4f0;
+}
+:root[data-theme="swiss"] .panel-tab.active {
+  color: #e63312;
+  border-bottom-color: #e63312;
+}
+
+:root[data-theme="swiss"] .btn:hover,
+:root[data-theme="swiss"] .btn-project-entry:hover,
+:root[data-theme="swiss"] .agent-btn:hover {
+  border-color: #111111;
+  color: #111111;
+}
+:root[data-theme="swiss"] .composer:focus-within {
+  border-color: #111111;
+  box-shadow: none;
+}
+
+:root[data-theme="swiss"] .session-item.active { border-left: 3px solid #e63312; }
+:root[data-theme="swiss"] .task-card.active { border-left: 3px solid #e63312; }
+:root[data-theme="swiss"] .recent-project-item.active { box-shadow: inset 3px 0 0 #e63312; }
+
+:root[data-theme="swiss"] .user-bubble {
+  border: 1px solid #111111;
+  border-left: 3px solid #e63312;
+}
+:root[data-theme="swiss"] .assistant-bubble { border: none; }
+
+:root[data-theme="swiss"] .md-code,
+:root[data-theme="swiss"] .md pre { background: #111111; }
+:root[data-theme="swiss"] .md pre code { color: #f5f4f0; }
+:root[data-theme="swiss"] .md-code .md-code-bar {
+  background: #111111;
+  border-bottom: 1px solid #f5f4f0;
+}
+:root[data-theme="swiss"] .md-code .md-code-lang { color: #ffd0c5; }
+:root[data-theme="swiss"] .md code {
+  background: rgba(17, 17, 17, 0.08);
+  color: #111111;
+}
+
+:root[data-theme="swiss"] .theme-swatch { border-radius: 0; }
 
 * {
   box-sizing: border-box;
