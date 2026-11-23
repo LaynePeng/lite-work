@@ -163,6 +163,25 @@ function writeClientConfig(mutate) {
   return cfg;
 }
 
+// 标题栏窗口控件（Windows/Linux titleBarOverlay）与窗口底色随 UI 主题切换
+// （THEME_COLORS 查表）。macOS 走红绿灯、无 overlay，仅更新窗口底色。
+function applyTitleBarTheme(win, theme) {
+  if (!win || win.isDestroyed()) return;
+  const colors = THEME_COLORS[theme] || THEME_COLORS.classic;
+  win.setBackgroundColor(colors.bg);
+  if (process.platform === "darwin") return;
+  win.setTitleBarOverlay({
+    color: colors.bg,
+    symbolColor: colors.symbol,
+    height: 38,
+  });
+}
+
+ipcMain.handle("set-title-bar-theme", (event, theme) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  applyTitleBarTheme(win, theme);
+});
+
 ipcMain.handle("get-core-mode", () => {
   const cfg = loadClientConfig();
   const remote = !!cfg.coreUrl;
@@ -241,13 +260,40 @@ function lanAddressesNow() {
   return lanAddresses(os.networkInterfaces());
 }
 
+// 各主题的窗口底色 / 标题栏控件配色（与 web styles.css 令牌同源）。
+// 注意位置在 applyTitleBarTheme 之后是刻意的：函数体只在启动完成后执行，
+// const THEME_COLORS 的 TDZ 不影响调用时引用。
+const THEME_COLORS = {
+  classic: { bg: "#0d1117", symbol: "#e6edf3" },
+  swiss: { bg: "#f5f4f0", symbol: "#111111" },
+  neubrutalism: { bg: "#fdf6e3", symbol: "#111111" },
+  bauhaus: { bg: "#f4efe6", symbol: "#1a1a1a" },
+};
+
+/** 启动主题（~/.lite-work/config.json 的 ui_prefs.theme）：决定窗口底色 /
+ *  标题栏控件 / 加载页皮肤。读取失败一律按 classic。 */
+function readStartTheme() {
+  try {
+    const cfgPath = path.join(os.homedir(), ".lite-work", "config.json");
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const t = cfg?.ui_prefs?.theme;
+      if (t && THEME_COLORS[t]) return t;
+    }
+  } catch { /* 忽略 */ }
+  return "classic";
+}
+
 function createWindow(url) {
+  const startTheme = readStartTheme();
+  const startColors = THEME_COLORS[startTheme];
+
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: "#0d1117",
+    backgroundColor: startColors.bg,
     // 无边框窗口：三平台统一隐藏系统标题栏。
     // - macOS：hidden 保留内嵌红绿灯，用 trafficLightPosition 微调位置（原 hiddenInset 效果）；
     // - Windows/Linux：原生不认 hiddenInset，会保留整套标题栏 + 窗口内菜单栏（"窗口套窗口"），
@@ -257,7 +303,11 @@ function createWindow(url) {
     ...(process.platform === "darwin"
       ? { trafficLightPosition: { x: 18, y: 18 } }
       : {
-          titleBarOverlay: { color: "#0d1117", symbolColor: "#e6edf3", height: 38 },
+          titleBarOverlay: {
+            color: startColors.bg,
+            symbolColor: startColors.symbol,
+            height: 38,
+          },
           // 隐藏窗口内那条原生菜单栏（文件/编辑/视图/窗口/帮助）；菜单本身仍保留，
           // 快捷键（Ctrl+C/V、Ctrl+Shift+I、F11 等）照常可用，Alt 可临时唤出。
           autoHideMenuBar: true,
@@ -277,6 +327,7 @@ function createWindow(url) {
   window.maximize();
   window.once("ready-to-show", () => window.show());
   window.loadURL(url);
+
   window.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target);
     return { action: "deny" };
@@ -744,7 +795,9 @@ async function probeLocalCore(winId) {
 }
 
 async function createLocalWindow(workspace = null) {
-  const loadingUrl = `file://${path.join(__dirname, "loading.html")}`;
+  // 加载页带上启动主题（与 createWindow 同源读取 config.ui_prefs.theme）
+  const theme = readStartTheme();
+  const loadingUrl = `file://${path.join(__dirname, "loading.html")}?theme=${theme}`;
   const window = createWindow(loadingUrl);
   try {
     const instance = await spawnLocalCore(workspace);

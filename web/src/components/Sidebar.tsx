@@ -1518,12 +1518,12 @@ export default function Sidebar({
           <svg width="14" height="14" viewBox="0 0 24 24" className="core-logo" aria-hidden>
             <defs>
               <linearGradient id="coreGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stopColor="#e63312" />
-                <stop offset="1" stopColor="#111111" />
+                <stop offset="0" stopColor="var(--accent)" />
+                <stop offset="1" stopColor="var(--accent-2)" />
               </linearGradient>
             </defs>
             <circle cx="12" cy="12" r="9" fill="none" stroke="url(#coreGrad)" strokeWidth="2.5" />
-            <circle cx="12" cy="12" r="4" fill="none" stroke="#007a33" strokeWidth="2.5" />
+            <circle cx="12" cy="12" r="4" fill="none" stroke="var(--green)" strokeWidth="2.5" />
           </svg>
           <span>Core</span>
           {coreMode === "remote" || !coreMode ? (

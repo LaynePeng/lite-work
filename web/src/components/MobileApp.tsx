@@ -6,6 +6,7 @@
 // 只简化布局层级，不简化能力（审批卡、邮件草稿、worktree 评审与桌面同一通道）。
 
 import { useEffect, useState } from "react";
+import type { UiTheme } from "../App";
 import ChatView, { QuestionBar } from "./ChatView";
 import Composer from "./Composer";
 import NewTaskWizard, { type NewTaskConfig } from "./NewTaskWizard";
@@ -87,6 +88,8 @@ export interface MobileAppProps {
   onOpenSettings: () => void;
   onCloseSettings: () => void;
   onSettingsSaved: () => void;
+  uiTheme: UiTheme;
+  onUiThemeChange: (t: UiTheme) => void;
   watchToasts: WatchNotification[];
   onDismissWatchToast: (id: number) => void;
 }
@@ -550,7 +553,7 @@ export default function MobileApp(props: MobileAppProps) {
         />
       )}
       {props.settingsOpen && (
-        <SettingsModal onClose={props.onCloseSettings} onSaved={props.onSettingsSaved} />
+        <SettingsModal onClose={props.onCloseSettings} onSaved={props.onSettingsSaved} theme={props.uiTheme} onThemeChange={props.onUiThemeChange} />
       )}
       <WatchToaster items={props.watchToasts} onDismiss={props.onDismissWatchToast} />
     </div>

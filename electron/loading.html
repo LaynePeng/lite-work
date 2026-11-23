@@ -2,64 +2,109 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="color-scheme" content="light" />
+<meta name="color-scheme" content="dark light" />
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
+
+  /* 主题令牌（默认 classic；与主界面 styles.css 各套 :root 同源取值） */
+  html {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --dim: #a8b3c0;
+    --track: #21283a;
+    --bar: linear-gradient(90deg, #4f8cff, #8b5cf6);
+    --bar-radius: 3px;
+    --font: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    --logo-bg: linear-gradient(135deg, #4f8cff, #8b5cf6);
+    --logo-mark: #ffffff;
+    --err: #ffa198;
+    --err-btn: linear-gradient(135deg, #4f8cff, #8b5cf6);
+    --err-btn-fg: #ffffff;
+  }
+  html[data-theme="swiss"] {
+    --bg: #f5f4f0; --fg: #111111; --dim: #767471; --track: #e4e2dc;
+    --bar: #e63312; --bar-radius: 0;
+    --font: "Helvetica Neue", Helvetica, -apple-system, "PingFang SC", sans-serif;
+    --logo-bg: #f5f4f0; --logo-mark: #111111;
+    --err: #d32b0e; --err-btn: #e63312; --err-btn-fg: #ffffff;
+  }
+  html[data-theme="neubrutalism"] {
+    --bg: #fdf6e3; --fg: #111111; --dim: #6b6b6b; --track: #f3e9c9;
+    --bar: #ffd75e; --bar-radius: 0;
+    --font: "Space Grotesk", "Segoe UI", -apple-system, "PingFang SC", sans-serif;
+    --logo-bg: #ffd75e; --logo-mark: #111111;
+    --err: #ff5977; --err-btn: #ffd75e; --err-btn-fg: #111111;
+  }
+  html[data-theme="bauhaus"] {
+    --bg: #f4efe6; --fg: #1a1a1a; --dim: #6e6e6e; --track: #e3dacb;
+    --bar: linear-gradient(90deg, #d02b2b, #2653c1); --bar-radius: 0;
+    --font: "Futura", "Century Gothic", "Helvetica Neue", -apple-system, "PingFang SC", sans-serif;
+    --logo-bg: linear-gradient(180deg, #d02b2b, #2653c1); --logo-mark: #f4efe6;
+    --err: #d02b2b; --err-btn: #2653c1; --err-btn-fg: #f4efe6;
+  }
+
   body {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 20px; background: #f5f4f0; color: #111111;
-    font-family: "Helvetica Neue", Helvetica, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    gap: 20px;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--font);
+    transition: background 0.15s, color 0.15s;
   }
   .logo { width: 76px; height: 76px; }
-  .title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .title { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
   .spinner {
-    width: 34px; height: 34px; border: 3px solid #e4e2dc;
-    border-top-color: #e63312; border-radius: 50%;
+    width: 34px; height: 34px; border: 3px solid var(--track);
+    border-top-color: var(--fg); border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .status { font-size: 12px; color: #767471; min-height: 20px; text-transform: uppercase; letter-spacing: 0.08em; }
-  .progress { width: 240px; height: 4px; background: #e4e2dc; overflow: hidden; }
+  .status { font-size: 13px; color: var(--dim); min-height: 20px; }
+  .progress { width: 240px; height: 5px; border-radius: var(--bar-radius); background: var(--track); overflow: hidden; }
+  html[data-theme="swiss"] .progress,
+  html[data-theme="neubrutalism"] .progress,
+  html[data-theme="bauhaus"] .progress { height: 4px; }
   .progress-fill {
-    width: 0; height: 100%;
-    background: #e63312;
+    width: 0; height: 100%; border-radius: var(--bar-radius);
+    background: var(--bar);
     transition: width 0.4s ease;
   }
   .error {
     display: none; flex-direction: column; align-items: center; gap: 12px;
-    font-size: 13px; color: #d32b0e;
+    font-size: 13px; color: var(--err);
   }
   .error button {
-    padding: 8px 22px; border-radius: 0; border: 1px solid #111111; cursor: pointer;
-    background: #e63312; color: #fff; font-size: 13px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 8px 22px; border-radius: 8px; border: none; cursor: pointer;
+    background: var(--err-btn); color: var(--err-btn-fg); font-size: 14px;
+  }
+  html[data-theme="swiss"] .error button,
+  html[data-theme="neubrutalism"] .error button,
+  html[data-theme="bauhaus"] .error button {
+    border-radius: 0; border: 1px solid var(--fg); font-size: 13px; font-weight: 700;
   }
 </style>
 </head>
 <body>
-  <!-- 应用图标（瑞士风格：纸白底 + 墨黑描边 + 红方块） -->
+  <!-- 应用图标：颜色取主题令牌（CSS 变量可直接用于 SVG fill） -->
   <div class="logo">
     <svg viewBox="0 0 1024 1024" width="76" height="76" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <rect x="0" y="0" width="1024" height="1024" rx="0" fill="#111111"/>
-      <rect x="40" y="40" width="944" height="944" fill="#f5f4f0"/>
-      <rect x="40" y="40" width="200" height="200" fill="#e63312"/>
-      <path d="M635 90 L370 440 L465 440 L355 670 L710 360 L590 360 L695 90 Z" fill="#111111"/>
-      <g transform="translate(512 830)" fill="#111111">
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(45)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(90)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(135)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(180)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(225)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(270)"/>
-        <rect x="-20" y="-160" width="40" height="85" rx="0" fill="#111111" transform="rotate(315)"/>
-        <circle r="105" fill="#111111"/>
-        <circle r="42" fill="#f5f4f0"/>
+      <rect x="0" y="0" width="1024" height="1024" rx="140" fill="var(--logo-bg)"/>
+      <path d="M635 90 L370 440 L465 440 L355 670 L710 360 L590 360 L695 90 Z" fill="var(--logo-mark)"/>
+      <g transform="translate(512 830)">
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(45)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(90)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(135)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(180)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(225)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(270)"/>
+        <rect x="-20" y="-160" width="40" height="85" rx="10" fill="var(--logo-mark)" transform="rotate(315)"/>
+        <circle r="105" fill="var(--logo-mark)"/>
+        <circle r="42" fill="var(--logo-bg)"/>
       </g>
     </svg>
   </div>
-  <div class="title">lite—work</div>
+  <div class="title">lite-work</div>
   <div class="spinner"></div>
   <div class="progress"><div class="progress-fill" id="fill"></div></div>
   <div class="status" id="status">正在启动内核…</div>
@@ -68,7 +113,13 @@
     <button onclick="location.reload()">重试</button>
   </div>
   <script>
-    // 由 Electron 注入的加载页：轮询后端就绪状态
+    // 主题由 URL ?theme= 指定（主进程读 config.ui_prefs 后拼进来）
+    const VALID = ["classic", "swiss", "neubrutalism", "bauhaus"];
+    try {
+      const t = new URLSearchParams(location.search).get("theme");
+      if (t && VALID.includes(t)) document.documentElement.dataset.theme = t;
+    } catch (e) { /* 解析失败保持默认 classic */ }
+
     let step = 0;
     const steps = [
       "正在启动内核…", "加载安全策略…", "准备代码工具…", "连接模型服务…", "即将就绪…",

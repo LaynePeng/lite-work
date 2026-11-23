@@ -1490,7 +1490,7 @@ export function tryParseRichBlock(lang: string, raw: string): RichSegment | null
 
 // ---------------------------------------------------------------- 图表渲染（SVG 自绘）
 
-const PALETTE = ["#e63312", "#111111", "#767471", "#b8860b", "#007a33", "#c2610c", "#d32b0e", "#5b5955"];
+const PALETTE = ["var(--accent)", "var(--accent-2)", "var(--text-2)", "var(--yellow)", "var(--green)", "var(--orange)", "var(--red)", "var(--text-1)"];
 // 图表内的「结构性」颜色走主题变量（而非硬编码 hex）：网格/刻度/正文随主题
 // 自动适配，与 OpenIntelligentUI design-system 的做法一致；PALETTE 作为
 // 数据系列色板保留字面量（需要彼此可区分的稳定色相）。
@@ -2119,7 +2119,7 @@ function HeatmapChart({ spec }: { spec: ChartSpec }) {
                     <text
                       x={padL + ci * cell + cell / 2} y={padT + ri * cell + cell / 2 + 3.5}
                       textAnchor="middle" fontSize={10.5} fontWeight={600}
-                      style={{ fill: dark ? "#fff" : "var(--text-0, #111111)", pointerEvents: "none" }}
+                      style={{ fill: dark ? "#fff" : "var(--text-0)", pointerEvents: "none" }}
                     >{fmtNum(v)}</text>
                   )}
                 </g>
@@ -2270,7 +2270,7 @@ function WaterfallChart({ spec, compact }: { spec: ChartSpec; compact?: boolean 
         const cx = padL + slot * (i + 0.5);
         const y1 = Y(b.from), y2 = Y(b.to);
         const top = Math.min(y1, y2), h = Math.max(2, Math.abs(y2 - y1));
-        const color = b.total ? "#111111" : b.delta >= 0 ? "#007a33" : "#e63312";
+        const color = b.total ? "var(--text-0)" : b.delta >= 0 ? "var(--green)" : "var(--red)";
         return (
           <g key={i}>
             <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={2} fill={color} fillOpacity={b.total ? 0.95 : 0.85}>
@@ -2615,11 +2615,12 @@ function progressTone(v: number): "bad" | "warn" | "good" {
 /** 图形图解渲染：部件分色 SVG + 点击高亮（其余变暗）+ 说明区。
  *  安全线：只渲染白名单原语（解析器已 clamp 坐标 / 清洗 path d），
  *  不插入任何用户文本进 SVG 属性，无脚本。 */
-const DIAGRAM_COLORS = ["#e63312", "#111111", "#b8860b", "#007a33", "#767471", "#c2610c", "#d32b0e", "#8a6d1d"];
+const DIAGRAM_COLORS = ["var(--accent)", "var(--accent-2)", "var(--yellow)", "var(--green)", "var(--text-2)", "var(--orange)", "var(--red)", "var(--text-1)"];
 
-/** hex 主题色 → 低饱和填充色（同色 12% 透明度叠在暗底上≈浅色底纹）。 */
+/** 主题色（hex 或 var()）→ 低饱和填充（同色 12% alpha）。color-mix 对两种
+ *  写法都成立；8 位 hex 拼接（#rrggbb1f）对 var() 无效（会拼出非法值）。 */
 function softFill(color: string): string {
-  return `${color}1f`; // 8 位 hex：末两位 ≈12% alpha
+  return `color-mix(in srgb, ${color} 12%, transparent)`;
 }
 
 function renderShape(s: DiagramShape, color: string, key: number, compact = false) {

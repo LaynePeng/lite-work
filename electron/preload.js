@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld("liteWork", {
   getLanShare: () => ipcRenderer.invoke("get-lan-share"),
   /** 开关局域网共享（写 client.json；需重启 Core 生效） */
   setLanShare: (enabled) => ipcRenderer.invoke("set-lan-share", enabled),
+  /** 标题栏窗口控件配色跟随 UI 主题（classic 深色 / swiss 纸白） */
+  setTitleBarTheme: (theme) => ipcRenderer.invoke("set-title-bar-theme", theme),
   /**
    * 从某内网地址探测本 Core 是否可达（主进程发起，流经真实网卡）。
    * 返回 { ok, reason, target?, error?, version? }；reason 见 types.ts 的 ProbeResult。

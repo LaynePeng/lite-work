@@ -96,7 +96,32 @@ const isSidebarTab = (v: unknown): v is SidebarTab =>
 // 不存 localStorage——桌面端 Core 每次启动端口随机（--port 0），渲染层 origin 随之
 // 变化，localStorage 按 origin 隔离会读不回（「改了、重开又变回去」）。localStorage
 // 只保留两类**非配置**用途：输入历史（数据）与跨整页重载的一次性意图（本文件两个 KEY）。
-type UiPrefs = { sidebar?: number; toolPanel?: number; sidebarTab?: SidebarTab };
+type UiPrefs = { sidebar?: number; toolPanel?: number; sidebarTab?: SidebarTab; theme?: UiTheme };
+
+export const UI_THEMES = ["classic", "swiss", "neubrutalism", "bauhaus"] as const;
+export type UiTheme = (typeof UI_THEMES)[number];
+const isUiTheme = (v: unknown): v is UiTheme =>
+  typeof v === "string" && (UI_THEMES as readonly string[]).includes(v);
+
+/** 各主题的 PWA theme-color / Electron 窗口底色（与 styles.css 令牌同源）。 */
+const THEME_META_COLORS: Record<UiTheme, string> = {
+  classic: "#0d1117",
+  swiss: "#f5f4f0",
+  neubrutalism: "#fdf6e3",
+  bauhaus: "#f4efe6",
+};
+
+/** 主题切换：html[data-theme] 作用域变量（styles.css 各套 :root），立即生效。
+ *  同步 PWA theme-color meta（浏览器地址栏配色）与 Windows 标题栏
+ *  窗口控件（Electron titleBarOverlay，浏览器环境无此 API 静默跳过）。 */
+export function applyTheme(theme: UiTheme) {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", THEME_META_COLORS[theme]);
+  try {
+    window.electronAPI?.setTitleBarTheme?.(theme);
+  } catch { /* 非 Electron 环境 */ }
+}
 
 const EMPTY_CHAT: ChatSessionState = {
   messages: [],
@@ -381,6 +406,7 @@ export default function App() {
   const prefsRef = useRef<UiPrefs>({});
   const prefsHydratedRef = useRef(false);
   const [prefsReady, setPrefsReady] = useState(false);
+  const [theme, setThemeState] = useState<UiTheme>("classic");
   const persistPrefs = useCallback((patch: Partial<UiPrefs>) => {
     const next: UiPrefs = { ...prefsRef.current, ...patch };
     // 显式传 undefined = 清除该键（双击分隔条重置回默认）
@@ -390,6 +416,11 @@ export default function App() {
     prefsRef.current = next;
     void api.updateConfig({ ui_prefs: next }).catch(() => { /* 落盘失败不阻塞 UI */ });
   }, []);
+  const setTheme = useCallback((t: UiTheme) => {
+    setThemeState(t);
+    applyTheme(t);
+    persistPrefs({ theme: t });
+  }, [persistPrefs]);
   // 侧栏页签也是配置：变化即写后端（hydrate 前不写；与已存值相同则不重写）
   useEffect(() => {
     if (!prefsReady || prefsRef.current.sidebarTab === sidebarTab) return;
@@ -803,8 +834,13 @@ export default function App() {
             sidebar: typeof raw.sidebar === "number" ? raw.sidebar : undefined,
             toolPanel: typeof raw.toolPanel === "number" ? raw.toolPanel : undefined,
             sidebarTab: isSidebarTab(raw.sidebarTab) ? raw.sidebarTab : undefined,
+            theme: isUiTheme(raw.theme) ? raw.theme : undefined,
           };
           if (prefsRef.current.sidebarTab) setSidebarTab(prefsRef.current.sidebarTab);
+          if (prefsRef.current.theme) {
+            setThemeState(prefsRef.current.theme);
+            applyTheme(prefsRef.current.theme);
+          }
         }
         // 后端无该键 / 键为空（全新安装）：以默认页签为基准，避免上面的 effect
         // 把「默认值」误判成用户改动而写回
@@ -3838,6 +3874,8 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         onCloseSettings={() => setShowSettings(false)}
         onSettingsSaved={() => { void refreshAll(); }}
+        uiTheme={theme}
+        onUiThemeChange={setTheme}
         watchToasts={watchToasts}
         onDismissWatchToast={dismissWatchToast}
         />
@@ -4213,6 +4251,8 @@ export default function App() {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onSaved={() => { void refreshAll(); }}
+          theme={theme}
+          onThemeChange={setTheme}
         />
       )}
       {showPhoneConnect && <PhoneConnectModal onClose={() => setShowPhoneConnect(false)} />}

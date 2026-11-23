@@ -719,10 +719,10 @@ describe("Markdown 交互式图解（```interactive 分块点击切换）", () =
     expect(texts[0].textContent).toBe("引擎");
     // XSS 清洗：script 标签被剥，长度截断
     expect(texts[1].textContent).not.toContain("script");
-    // rect 低饱和填充（非 none）
+    // rect 低饱和填充（非 none；color-mix 跟主题 var() 兼容）
     const rect = container.querySelector(".md-diagram-svg rect");
     expect(rect?.getAttribute("fill")).not.toBe("none");
-    expect(rect?.getAttribute("fill")).toMatch(/^#[0-9a-f]{8}$/i);
+    expect(rect?.getAttribute("fill")).toMatch(/^color-mix\(in srgb, var\(--[a-z0-9-]+\) 12%, transparent\)$/);
   });
 
   it("组合：shapes 里的非白名单原语被清洗（同 diagram 安全规则）", () => {

@@ -137,6 +137,8 @@ function baseProps(over: Partial<MobileAppProps> = {}): MobileAppProps {
     onOpenSettings: vi.fn(),
     onCloseSettings: vi.fn(),
     onSettingsSaved: vi.fn(),
+    uiTheme: "classic" as const,
+    onUiThemeChange: vi.fn(),
     watchToasts: [],
     onDismissWatchToast: vi.fn(),
     ...over,

@@ -230,8 +230,9 @@ export interface AppConfig {
    * 桌面端 Core 每次启动端口随机（serve --port 0），渲染层 origin 随之变化，
    * localStorage 按 origin 隔离会读不回（表现为「改了、重开又变回去」）。
    * `sidebarTab` 用宽松 string，取值合法性由前端校验（isSidebarTab）。
+   * `theme`：UI 主题（classic 深色 / swiss 瑞士纸白），合法性由前端校验。
    */
-  ui_prefs?: { sidebar?: number; toolPanel?: number; sidebarTab?: string };
+  ui_prefs?: { sidebar?: number; toolPanel?: number; sidebarTab?: string; theme?: string };
   // 多智能体配置（docs/multi-agent-design.md §3）
   max_parallel_agents?: number;
   agent_total_limit?: number;

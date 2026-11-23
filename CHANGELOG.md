@@ -4,21 +4,29 @@
 
 ## [2.2.0]
 
-### 界面（瑞士风格整体重构）
+### 界面（多主题：经典深色 + 瑞士 + 新粗野主义 + 包豪斯）
 
-深色 VS Code 风基底整体切换为瑞士平面设计风格
-（Swiss / International Typographic Style）：纸白基底、墨黑 1px 网格、
-单一红色强调（#e63312）、Helvetica 字阶、去渐变与彩色投影。
+主题体系令牌化并新增三套可选主题：
+- **瑞士风格**（Swiss）：纸白基底 + 墨黑 1px 网格 + 瑞士红 #e63312；
+- **新粗野主义**（Neubrutalism）：亮黄基底 + 墨黑 2px 粗边 + 硬投影；
+- **包豪斯**（Bauhaus）：米白基底 + 红黄蓝三原色几何构成。
 
-- `styles.css`：重写 `:root` 设计令牌（--bg-* 纸白阶 / --border 墨黑 /
-  --accent 瑞士红，--grad 兼容性收敛为纯色）；批量清洗 300+ 处散落的
-  深色 / 蓝紫 / 光晕硬编码色值；补齐历史遗留的未定义变量
-  （--text / --bg / --text-secondary，旧代码靠继承侥幸工作）；
-- 图标与启动链路：AppIcon / favicon / Electron loading 页 / PWA
-  manifest（theme-color、color-scheme）同步纸白体系；
-- 图表与富围栏：RichBlocks 调色板、热力图发散色阶（红-灰-绿）、
-  导出卡片样式；TerminalPanel 主题、ToolPanel Agent 头像色板；
-- 终端 / PPT 画布保留深底（终端惯例）。
+经典深色（VS Code 暗色 + 蓝紫渐变）保留为默认主题，设置 → 综合设置 →
+外观可即时切换（2×2 主题卡 + 风格色板预览），偏好存后端
+config.ui_prefs.theme（重启保持）。
+
+- `styles.css` 重构为令牌化多主题：规则层颜色一律 `var(--token)`，
+  `:root` = classic 值、`:root[data-theme="…"]` = 各主题值；
+  批量清洗 300+ 处散落的深色/蓝紫/光晕硬编码；补齐历史遗留的
+  未定义变量（--text / --bg / --text-secondary）；
+- 主题切换全链路联动：Electron 标题栏窗口控件（Windows/Linux
+  titleBarOverlay，新增 `set-title-bar-theme` IPC + THEME_COLORS 查表）、
+  窗口底色（backgroundColor）、启动加载页（?theme= 参数，令牌化四皮肤）、
+  PWA theme-color meta；启动时按 config 预置，切换时实时刷新；
+- 图标与图表：AppIcon/loading Logo/Sidebar/CoreModal 内联 SVG、
+  RichBlocks 图表调色板与 diagram 低饱和填充（color-mix，兼容 var()）、
+  ToolPanel Agent 头像色板全部改为主题令牌，随切换自动换色；
+- 终端 / PPT 画布各主题下均保持深底（终端惯例）。
 
 ## [2.1.6]
 

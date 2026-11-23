@@ -84,13 +84,13 @@ beforeEach(() => {
 
 describe("SettingsModal · 故障隔离", () => {
   it("正常：模型页显示供应商", async () => {
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     expect(await screen.findByText("DeepSeek")).toBeTruthy();
   });
 
   it("模型配置加载失败：显示可见错误 + 重试按钮", async () => {
     (api.llmProviders as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     await waitFor(() => {
       expect(screen.getByText(/模型配置加载失败/)).toBeTruthy();
     });
@@ -99,7 +99,7 @@ describe("SettingsModal · 故障隔离", () => {
 
   it("MCP 状态失败不连累模型页（回归：原 Promise.all 会整组丢弃）", async () => {
     (api.mcpStatus as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("mcp down"));
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     // 模型页仍渲染出供应商
     expect(await screen.findByText("DeepSeek")).toBeTruthy();
     // 且没有把模型配置标成失败
@@ -112,7 +112,7 @@ describe("SettingsModal · 故障隔离", () => {
       calls.push(source);
       return { id: source, ok: true, models: source === "models_dev" ? 100 : 2 };
     });
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     fireEvent.click(await screen.findByText(/立即同步定价数据/));
     // 逐源顺序：models.dev → 插件声明的官方源
     await waitFor(() => {
@@ -124,13 +124,13 @@ describe("SettingsModal · 故障隔离", () => {
   });
 
   it("定价数据过期：提示「建议同步」（非阻塞、不强制）", async () => {
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     expect((await screen.findAllByText(/建议同步/)).length).toBeGreaterThan(0);
   });
 
   it("价格检查过期窗口：回显配置值，可设为 0（永不过期）并保存", async () => {
     (api.config as ReturnType<typeof vi.fn>).mockResolvedValue({ pricing_check_ttl_days: 30 });
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
 
     const input = await screen.findByTitle(/0 = 永不过期/) as HTMLInputElement;
     // 回显 config 里的 30 天（config 是异步拉的）
@@ -149,7 +149,7 @@ describe("SettingsModal · 故障隔离", () => {
 
   it("插件列表失败：可见错误 + 重试，且模型页不受影响", async () => {
     (api.plugins as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("plugin exploded"));
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     expect(await screen.findByText("DeepSeek")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText(/插件列表加载失败/)).toBeTruthy();
@@ -167,7 +167,7 @@ describe("SettingsModal · 拉取模型列表", () => {
     (api.llmModels as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true, models: ["m-b", "m-a"], message: "",
     });
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     fireEvent.click(await screen.findByText("⟳ 拉取模型列表"));
     // testing-library 对多行 placeholder 做空白归一化（换行折叠为空格），用 \s+ 正则定位
     const ta = await screen.findByPlaceholderText(/deepseek-chat\s+deepseek-reasoner/) as HTMLTextAreaElement;
@@ -184,7 +184,7 @@ describe("SettingsModal · 拉取模型列表", () => {
     (api.llmModels as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: false, models: [], message: "HTTP 401",
     });
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     fireEvent.click(await screen.findByText("⟳ 拉取模型列表"));
     expect(await screen.findByText(/无法读取模型列表：HTTP 401/)).toBeTruthy();
     // 同上：多行 placeholder 用 \s+ 正则定位（空白归一化）
@@ -205,7 +205,7 @@ describe("SettingsModal · 思考模式推理回传", () => {
         exclude_providers: ["glm"],
       },
     });
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     const sel = await screen.findByTestId("rr-mode") as HTMLSelectElement;
     expect(sel.value).toBe("never");
     expect(await screen.findByDisplayValue("custom_abc")).toBeTruthy();
@@ -214,13 +214,13 @@ describe("SettingsModal · 思考模式推理回传", () => {
   });
 
   it("缺省（后端未配）回落到 auto 且名单为空", async () => {
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     const sel = await screen.findByTestId("rr-mode") as HTMLSelectElement;
     expect(sel.value).toBe("auto");
   });
 
   it("保存：走 LLM 专用通道，名单按行拆分并去掉空行", async () => {
-    render(<SettingsModal onClose={() => {}} onSaved={() => {}} />);
+    render(<SettingsModal onClose={() => {}} onSaved={() => {}} theme="classic" onThemeChange={() => {}} />);
     fireEvent.change(await screen.findByTestId("rr-mode"), { target: { value: "always" } });
     fireEvent.change(await screen.findByPlaceholderText("custom_1788492302820"), {
       target: { value: "custom_a\n\ncustom_b" },

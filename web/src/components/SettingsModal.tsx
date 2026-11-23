@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { parseHeaderText } from "../lib/headerText";
 import type { InstallJobStatus, InstallPluginPayload, InstallSkillPayload } from "../api";
+import type { UiTheme } from "../App";
 import type { BuiltinPluginInfo, CollabMode, CommunityManifest, LLMConfig, LLMProviderMeta, LLMProviderSettings, MCPServerConfig, MCPServerStatus, PluginInfo, PricingStatus, SkillInfo } from "../types";
 import { ICON_CHOICES } from "../lib/agentMeta";
 
@@ -188,9 +189,14 @@ function InstallProgressCard({ job, onControl }: {
 export default function SettingsModal({
   onClose,
   onSaved,
+  theme,
+  onThemeChange,
 }: {
   onClose: () => void;
   onSaved: () => void;
+  /** 当前 UI 主题（App 持有并持久化到后端 config） */
+  theme: UiTheme;
+  onThemeChange: (t: UiTheme) => void;
 }) {
   const [providers, setProviders] = useState<LLMProviderMeta[]>([]);
   const [activeProvider, setActiveProvider] = useState("");
@@ -2432,7 +2438,7 @@ export default function SettingsModal({
                                         {pluginActionMsg[item.name]?.key === s.key && (
                                           <span style={{
                                             fontSize: 11.5,
-                                            color: pluginActionMsg[item.name]?.ok ? "var(--green, #007a33)" : "var(--red, #e63312)",
+                                            color: pluginActionMsg[item.name]?.ok ? "var(--green)" : "var(--red)",
                                             whiteSpace: "pre-wrap", flex: 1, minWidth: 200,
                                           }}>
                                             {pluginActionMsg[item.name]?.message}
@@ -2878,6 +2884,32 @@ export default function SettingsModal({
             <div className={`settings-section settings-tabpanel ${activeTab === "general" ? "active" : ""}`}>
               <h3>综合设置</h3>
 
+              {/* —— 外观：UI 主题（立即生效，持久化到后端 config.ui_prefs）—— */}
+              <div className="mcp-section-head">
+                <span>外观</span>
+              </div>
+              <div className="theme-picker">
+                {([
+                  ["classic", "经典深色", "VS Code 暗色基底 + 蓝紫渐变强调"],
+                  ["swiss", "瑞士风格", "纸白基底 + 墨黑网格 + 瑞士红强调"],
+                  ["neubrutalism", "新粗野主义", "亮黄基底 + 墨黑粗边 + 硬投影"],
+                  ["bauhaus", "包豪斯", "米白基底 + 红黄蓝三原色几何"],
+                ] as const).map(([value, name, desc]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`theme-option ${theme === value ? "active" : ""}`}
+                    onClick={() => onThemeChange(value)}
+                  >
+                    <span className={`theme-swatch theme-swatch-${value}`} aria-hidden />
+                    <span className="theme-option-text">
+                      <b>{name}</b>
+                      <small>{desc}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               {/* —— 网络与代理（出网分流）—— */}
               <div className="mcp-section-head">
                 <span>网络与代理</span>
@@ -3176,7 +3208,7 @@ export default function SettingsModal({
                     onChange={(e) => setAutoApprove(e.target.checked)}
                   />
                   自动放行工具审批
-                  {autoApprove && <b style={{ color: "#e63312" }}>（高危：所有工具免审批直接执行）</b>}
+                  {autoApprove && <b style={{ color: "var(--red)" }}>（高危：所有工具免审批直接执行）</b>}
                 </label>
               </div>
               <div className="timeout-grid" style={{ marginTop: 10 }}>
@@ -3575,7 +3607,7 @@ export default function SettingsModal({
                       })}
                       {collabMsg && (
                         <div className={`mcp-empty-inline ${collabMsg.ok ? "" : "mcp-error"}`}
-                          style={{ color: collabMsg.ok ? undefined : "#e63312" }}>
+                          style={{ color: collabMsg.ok ? undefined : "var(--red)" }}>
                           {collabMsg.ok ? "✔ " : "✗ "}{collabMsg.text}
                         </div>
                       )}

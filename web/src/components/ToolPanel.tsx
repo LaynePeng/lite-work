@@ -937,7 +937,7 @@ function WatchPanel({ items, connected, onClear, onOpenSession, sources, session
 // ---------------------------------------------------------------- Agents 看板（竖排 kanban）
 
 // agent 配色板（对齐 Claude Code per-agent color）：按 role+nickname 稳定哈希取色
-const AGENT_PALETTE = ["#e63312", "#111111", "#b8860b", "#007a33", "#c2610c", "#767471", "#d32b0e", "#8a6d1d"];
+const AGENT_PALETTE = ["var(--accent)", "var(--accent-2)", "var(--yellow)", "var(--green)", "var(--orange)", "var(--text-2)", "var(--red)", "var(--text-1)"];
 function agentColor(key: string): string {
   let h = 0;
   for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
