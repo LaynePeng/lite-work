@@ -119,7 +119,7 @@ export function applyTheme(theme: UiTheme) {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", THEME_META_COLORS[theme]);
   try {
-    window.electronAPI?.setTitleBarTheme?.(theme);
+    window.liteWork?.setTitleBarTheme?.(theme);
   } catch { /* 非 Electron 环境 */ }
 }
 

@@ -621,6 +621,8 @@ export interface LiteWorkBridge {
   coreRemove: (url: string) => Promise<{ ok: boolean; cores?: CoreEntry[] }>;
   /** 切换连接（url 空 = 回本地），成功后应用自动重启。返回 { ok, restarting } */
   coreSwitch: (url: string) => Promise<{ ok: boolean; error?: string; restarting?: boolean }>;
+  /** 标题栏窗口控件配色跟随 UI 主题（Windows/Linux titleBarOverlay） */
+  setTitleBarTheme?: (theme: "classic" | "swiss" | "neubrutalism" | "bauhaus") => void;
 }
 
 /** 已保存的远程 Core 配置（client.json cores 数组项） */
