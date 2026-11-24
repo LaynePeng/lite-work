@@ -286,8 +286,15 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
-          # Git tag 不一定都对应 GitHub Release，版本范围以已发布的 Release 为准。
-          previous="$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          # Git tag 不一定都对应 GitHub Release，版本范围以已发布的 Release 为准；
+          # draft 不算——撤回的 draft（如 v2.2.0）引用的 tag 可能已一并删除，
+          # 会让下面的 git log 因未知 revision 直接失败（exit 128，v2.2.1 发版踩过）。
+          previous="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          # 基点 tag 在仓库里解析不了时兜底补拉一次，仍拿不到就退回全量历史。
+          if [ -n "$previous" ] && ! git rev-parse --verify --quiet "${previous}^{commit}" >/dev/null 2>&1; then
+            git fetch origin "+refs/tags/${previous}:refs/tags/${previous}" >/dev/null 2>&1 || true
+            git rev-parse --verify --quiet "${previous}^{commit}" >/dev/null 2>&1 || previous=""
+          fi
           if [ -z "$previous" ]; then
             range_label="项目首次 GitHub Release（完整项目历史）"
           else
